@@ -76,6 +76,8 @@ Guidance:
 - Other fixes: pin a supported runtime (Node >= 22), add/correct the start script, add a minimal Dockerfile only if buildpacks can't handle it, ensure a build step exists.
 - After each change call redeploy. If it succeeds, stop.
 - If the app truly cannot run without external secrets/services you cannot provide (a required API key, a database URL you don't have), call give_up with a precise, copy-pasteable instruction for the user's own coding agent.
+- If the repo is a library/SDK/CLI with no web server entrypoint (e.g. a Python package with only setup.py/pyproject and no Flask/FastAPI/Django, or an npm library with no server), do NOT add a web server or redeploy — immediately call give_up explaining it is not a deployable web app.
+- If a Vite/Vue/React app is up but rejects the request with "Blocked request"/"allowedHosts", fix it: set preview.allowedHosts and server.allowedHosts to true in vite.config, and make the start/preview command bind 0.0.0.0 and use $PORT (or build to static and serve the dist output).
 - Act only through tools. Do not emit prose.`;
 
 export async function repairDeploy(opts: {

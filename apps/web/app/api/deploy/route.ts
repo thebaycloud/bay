@@ -97,6 +97,25 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
     });
 }
 
+// After a deploy passes Cloud Run's health check, actually fetch the app: a
+// server can "listen" yet still reject the real request (e.g. Vite preview host
+// allowlisting), which we must catch and repair.
+async function probeApp(url: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 20000);
+    const r = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(to);
+    const body = (await r.text()).slice(0, 3000);
+    if (r.status >= 500) return { ok: false, reason: `App is up but returns HTTP ${r.status}: ${body.replace(/\s+/g, " ").slice(0, 240)}` };
+    if (/blocked request|allowedhosts|is not allowed|cannot get \/|application error|internal server error/i.test(body))
+      return { ok: false, reason: `App started but rejected the request: "${body.replace(/\s+/g, " ").slice(0, 240)}"` };
+    return { ok: true };
+  } catch {
+    return { ok: true }; // network/timeout (likely cold start) — don't false-fail
+  }
+}
+
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const url = normalizeRepo(String(body.repo ?? ""));
@@ -159,7 +178,13 @@ export async function POST(req: Request) {
             const o = await gcloudDeploy(deployArgs, log);
             clearInterval(hb);
             const svc = JSON.parse(o.slice(o.indexOf("{")));
-            return { ok: true, url: svc?.status?.url ?? "" };
+            const liveUrl = svc?.status?.url ?? "";
+            if (liveUrl) {
+              log("verifying the app responds…");
+              const probe = await probeApp(liveUrl);
+              if (!probe.ok) return { ok: false, error: probe.reason };
+            }
+            return { ok: true, url: liveUrl };
           } catch (e) {
             clearInterval(hb);
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
