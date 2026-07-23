@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Instrument_Serif } from "next/font/google";
+import { SessionWrapper } from "@/components/SessionWrapper";
 import "./globals.css";
 
 const instrumentSerif = Instrument_Serif({
@@ -27,7 +28,7 @@ export default function RootLayout({
       lang="en"
       className={`${GeistSans.variable} ${GeistMono.variable} ${instrumentSerif.variable}`}
     >
-      <body>{children}</body>
+      <body><SessionWrapper>{children}</SessionWrapper></body>
     </html>
   );
 }

@@ -224,6 +224,27 @@ table.dg tr:hover td { background: var(--paper); }
 .job-row .ib { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line); background: var(--paper); color: var(--ink-2); }
 .job-row .ib:hover { color: var(--ink); border-color: var(--ink-2); }
 
+/* auth pages */
+.authpage { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; position: relative; z-index: 1; padding: 20px; }
+.authbox { width: min(360px, 100%); border: 1px solid var(--line); background: var(--card); padding: 32px 28px; }
+.authbrand { display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-weight: 600; font-size: 14px; letter-spacing: .02em; margin-bottom: 22px; }
+.authbrand .logo { width: 24px; height: 24px; background: var(--fill); color: var(--fill-fg); display: grid; place-items: center; }
+.authbox h1 { font-family: var(--mono); font-size: 20px; font-weight: 500; letter-spacing: -.02em; margin: 0 0 18px; }
+.authbox form { display: flex; flex-direction: column; gap: 10px; }
+.authbox input { border: 1px solid var(--line-2); background: var(--paper); outline: none; font-family: var(--mono); font-size: 13px; color: var(--ink); padding: 10px 12px; }
+.authbox input:focus { border-color: var(--ink-2); }
+.authbox .btn.primary { justify-content: center; height: 38px; margin-top: 4px; }
+.autherr { color: #c0564b; font-size: 12px; font-family: var(--mono); }
+.authoauth { display: flex; flex-direction: column; gap: 8px; margin: 18px 0; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.authoauth .btn { justify-content: center; height: 36px; gap: 8px; }
+.authoauth .btn[disabled] { opacity: .5; cursor: not-allowed; }
+.authoauth .soon { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; border: 1px solid var(--line-2); padding: 1px 5px; color: var(--faint); }
+.authalt { font-size: 12.5px; color: var(--ink-2); text-align: center; }
+.authalt a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line-2); }
+
+.usermenu { display: flex; align-items: center; gap: 8px; }
+.usermenu .ue { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* split */
 .split { display: grid; grid-template-columns: 1.1fr .9fr; }
 .split .panel { background: var(--card); }
