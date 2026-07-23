@@ -166,6 +166,19 @@ function spaDockerfile(outdir: string): string {
   ].join("\n");
 }
 
+// Give the app a <slug>.supersonic.cv address (the wildcard *.supersonic.cv
+// CNAME + this per-app mapping is what routes it). SSL provisions async.
+async function createDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
+  try {
+    await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", slug, "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT]);
+    log(`Mapped ${slug}.supersonic.cv (SSL provisioning, live in ~15 min)`);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/already exists/i.test(m)) { log(`${slug}.supersonic.cv already mapped`); return; }
+    log(`! custom domain skipped: ${m.replace(/\s+/g, " ").slice(0, 100)}`);
+  }
+}
+
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const url = normalizeRepo(String(body.repo ?? ""));
@@ -282,6 +295,7 @@ export async function POST(req: Request) {
           else { send({ type: "error", message: fixed.summary }); return; }
         }
         log(`Live at ${result.url}`);
+        await createDomainMapping(slug, log);
         send({ type: "done", slug, url: result.url });
       } catch (e) {
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });
