@@ -3,12 +3,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
 import { repairDeploy } from "@/lib/agent";
 import { currentUserId } from "@/lib/session";
+import { pgConfig } from "@/lib/pg-config";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -83,11 +84,8 @@ function normalizeRepo(raw: string): string {
 
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
 function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string }> {
-  const cfgPath = join(process.cwd(), ".pg.json");
-  if (!existsSync(cfgPath)) {
-    return Promise.reject(new Error("Shared Postgres isn't ready yet — the instance may still be provisioning."));
-  }
-  const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as { connectionName: string; user: string; password: string };
+  let cfg;
+  try { cfg = pgConfig(); } catch (e) { return Promise.reject(e); }
   const dbName = slug.replace(/-/g, "_").slice(0, 60);
   return capture("gcloud", ["sql", "databases", "create", dbName, "--instance=supersonic-shared-pg", "--project", PROJECT])
     .catch((e: Error) => { if (/already exists/i.test(e.message)) return ""; throw e; })
