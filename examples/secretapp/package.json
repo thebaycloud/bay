@@ -1,0 +1,8 @@
+{
+  "name": "secretapp",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": "22" },
+  "dependencies": { "resend": "^4.0.0" }
+}
