@@ -11,13 +11,14 @@ export default function Signup() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [invite, setInvite] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true); setErr("");
-    const r = await (await fetch("/api/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, email, password }) })).json();
+    const r = await (await fetch("/api/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, email, password, invite }) })).json();
     if (r.error) { setErr(r.error); setBusy(false); return; }
     const res = await signIn("credentials", { email, password, redirect: false });
     setBusy(false);
@@ -34,6 +35,7 @@ export default function Signup() {
           <input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           <input type="password" placeholder="password (min 6 chars)" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input placeholder="invite code" value={invite} onChange={(e) => setInvite(e.target.value)} />
           {err && <div className="autherr">✕ {err}</div>}
           <button className="btn primary" type="submit" disabled={busy}>{busy ? "…" : "Create account"}</button>
         </form>

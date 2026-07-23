@@ -4,7 +4,10 @@ import bcrypt from "bcryptjs";
 import { findUserByEmail, createUser } from "@/lib/users";
 
 export async function POST(req: Request) {
-  const { email, name, password } = await req.json().catch(() => ({}));
+  const { email, name, password, invite } = await req.json().catch(() => ({}));
+  if (process.env.SIGNUP_INVITE_CODE && String(invite ?? "") !== process.env.SIGNUP_INVITE_CODE) {
+    return Response.json({ error: "invalid or missing invite code" }, { status: 403 });
+  }
   if (!email || !password) return Response.json({ error: "email and password are required" }, { status: 400 });
   if (String(password).length < 6) return Response.json({ error: "password must be at least 6 characters" }, { status: 400 });
   try {
