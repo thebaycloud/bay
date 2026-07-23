@@ -12,7 +12,7 @@ import { DatabasePanel } from "./DatabasePanel";
 
 interface ServiceInfo {
   slug: string; url: string; ready: boolean; region: string;
-  created: string; revision: string; image: string; envKeys: string[]; cloudsql: string;
+  created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string;
 }
 
 const services = [
@@ -23,7 +23,7 @@ const services = [
 ];
 
 export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo | null }) {
-  const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "" };
+  const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "" };
   const domain = d.url.replace(/^https?:\/\//, "") || `${appName}.supersonic.cv`;
   const hasDb = Boolean(d.cloudsql);
   const dbName = hasDb ? d.cloudsql.split(":").pop() ?? "attached" : "";
@@ -91,7 +91,9 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
           <div className="status" style={{ color: d.ready ? "var(--live)" : "var(--ink-2)", borderColor: d.ready ? "color-mix(in srgb, var(--live) 30%, var(--border))" : "var(--line-2)" }}>
             <span className="d" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />{d.ready ? "Live" : "Down"}
           </div>
-          <button className="btn" onClick={() => location.reload()}><RefreshCw size={13} />Refresh</button>
+          {d.repo
+            ? <Link href={`/new?repo=${encodeURIComponent(d.repo)}`} className="btn"><RefreshCw size={13} />Redeploy</Link>
+            : <button className="btn" onClick={() => location.reload()}><RefreshCw size={13} />Refresh</button>}
         </header>
 
         <div className="content">

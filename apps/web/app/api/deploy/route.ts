@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
@@ -116,6 +116,44 @@ async function probeApp(url: string): Promise<{ ok: boolean; reason?: string }> 
   }
 }
 
+// A failed `gcloud run deploy --source` only says "Build failed; check logs".
+// Pull the actual Cloud Build output so the repair agent fixes the real error.
+async function fetchBuildError(): Promise<string> {
+  try {
+    const list = await capture("gcloud", ["builds", "list", "--region", REGION, "--project", PROJECT, "--limit", "1", "--format=value(id)"]);
+    const id = list.trim().split("\n")[0];
+    if (!id) return "";
+    const raw = await capture("gcloud", ["beta", "builds", "log", id, "--region", REGION, "--project", PROJECT]);
+    const lines = raw.split("\n").map((l) => l.replace(/^Step #\d+ - "[^"]*":\s?/, "").replace(/\r/g, "").trimEnd()).filter((l) => l.trim());
+    const errs = lines.filter((l) => /error|fail|not found|cannot|npm ERR|\berror TS\d|Error:|exit code|Module not found|ENOENT|EACCES|SyntaxError|TypeError|denied/i.test(l));
+    return (errs.length ? errs : lines).slice(-30).join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// SPAs (Vite/CRA) are static sites, not servers. Build them and serve the
+// output on $PORT instead of trying to run a dev/preview server.
+function spaDockerfile(outdir: string): string {
+  return [
+    "FROM node:22-slim AS build",
+    "WORKDIR /app",
+    "COPY package*.json ./",
+    "RUN npm install",
+    "COPY . .",
+    "RUN npm run build",
+    "",
+    "FROM node:22-slim",
+    "WORKDIR /app",
+    "RUN npm install -g serve",
+    `COPY --from=build /app/${outdir} ./public`,
+    "ENV PORT=8080",
+    "EXPOSE 8080",
+    'CMD ["sh","-c","serve -s public -l ${PORT}"]',
+    "",
+  ].join("\n");
+}
+
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const url = normalizeRepo(String(body.repo ?? ""));
@@ -144,7 +182,13 @@ export async function POST(req: Request) {
         if (s.cache) log(`Provision ${s.cache} cache`);
         if (s.secretsNeeded?.length) log(`Will ask for secrets: ${s.secretsNeeded.join(", ")}`);
 
-        const extraEnv: string[] = [];
+        if (/vite|create react app|\bspa\b/i.test(s.framework) && !existsSync(join(dir, "Dockerfile"))) {
+          const outdir = /create react app/i.test(s.framework) ? "build" : "dist";
+          writeFileSync(join(dir, "Dockerfile"), spaDockerfile(outdir));
+          log(`SPA detected — building to static and serving ${outdir}/ on $PORT`);
+        }
+
+        const extraEnv: string[] = [`SUPERSONIC_REPO=${url}`];
         let cloudsql: string | null = null;
         if (s.database?.engine === "postgres") {
           log("Provisioning Postgres…");
@@ -172,10 +216,10 @@ export async function POST(req: Request) {
         if (cloudsql) deployArgs.push(`--set-cloudsql-instances=${cloudsql}`);
         if (extraEnv.length) deployArgs.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
 
-        const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
+        const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
           const hb = setInterval(() => log("building container…"), 6000);
           try {
-            const o = await gcloudDeploy(deployArgs, log);
+            const o = await gcloudDeploy(args, log);
             clearInterval(hb);
             const svc = JSON.parse(o.slice(o.indexOf("{")));
             const liveUrl = svc?.status?.url ?? "";
@@ -187,8 +231,22 @@ export async function POST(req: Request) {
             return { ok: true, url: liveUrl };
           } catch (e) {
             clearInterval(hb);
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            let err = e instanceof Error ? e.message : String(e);
+            if (/build failed/i.test(err)) {
+              log("fetching the real build log for the agent…");
+              const buildLog = await fetchBuildError();
+              if (buildLog) err = `Cloud Build failed. Actual build output:\n${buildLog}`;
+            }
+            return { ok: false, error: err };
           }
+        };
+        const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
+          let res = await attempt(deployArgs);
+          if (!res.ok && /clear-base-image/i.test(res.error ?? "")) {
+            log("switching build type — clearing base image and retrying…");
+            res = await attempt([...deployArgs, "--clear-base-image"]);
+          }
+          return res;
         };
 
         log(`Deploying ${slug} to Cloud Run…`);

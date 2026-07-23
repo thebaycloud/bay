@@ -11,7 +11,7 @@ import { resolve, relative, join } from "node:path";
 
 const PROJECT = "supersonic-deploy-prod";
 const LOCATION = "us-central1";
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-2.5-pro";
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv;
 
 let cachedToken: { value: string; at: number } | null = null;
@@ -28,7 +28,7 @@ function getToken(): Promise<string> {
 
 async function gemini(body: unknown): Promise<any> {
   const token = await getToken();
-  const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
+  const url = `https://${LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
   const r = await fetch(url, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json();
   if (j.error) throw new Error(j.error.message);
@@ -60,10 +60,25 @@ function listFiles(dir: string): string[] {
   return out.slice(0, 200);
 }
 
+const ALLOWED_CMD = /^(npm|npx|pnpm|yarn|node|tsc|corepack)\b/;
+function runCommand(dir: string, command: string): Promise<string> {
+  return new Promise((resolve) => {
+    const cmd = command.trim();
+    if (!ALLOWED_CMD.test(cmd)) { resolve("refused: only npm / npx / pnpm / yarn / node / tsc commands are allowed"); return; }
+    const p = spawn(cmd, { cwd: dir, env: ENV, shell: true, timeout: 240000 });
+    let out = "";
+    p.stdout.on("data", (d: Buffer) => (out += d));
+    p.stderr.on("data", (d: Buffer) => (out += d));
+    p.on("error", (e) => resolve("error: " + e.message));
+    p.on("close", (code) => resolve(`exit ${code}\n${out.slice(-4000)}`));
+  });
+}
+
 const TOOLS = [
   { name: "list_files", description: "List the repo's files.", parameters: { type: "object", properties: {} } },
   { name: "read_file", description: "Read a file's contents.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
   { name: "write_file", description: "Create or overwrite a file with new contents.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
+  { name: "run_command", description: "Run a shell command inside the repo (only npm / npx / pnpm / yarn / node / tsc). Use 'npm install' to regenerate a broken/out-of-sync lockfile — the usual fix for npm ci errors. Returns exit code + output.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
   { name: "redeploy", description: "Redeploy to Cloud Run and return the result. Slow (~2 min). Call after making changes.", parameters: { type: "object", properties: {} } },
   { name: "give_up", description: "Stop and tell the user exactly what they must fix themselves (e.g. a required secret).", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
 ];
@@ -78,6 +93,7 @@ Guidance:
 - If the app truly cannot run without external secrets/services you cannot provide (a required API key, a database URL you don't have), call give_up with a precise, copy-pasteable instruction for the user's own coding agent.
 - If the repo is a library/SDK/CLI with no web server entrypoint (e.g. a Python package with only setup.py/pyproject and no Flask/FastAPI/Django, or an npm library with no server), do NOT add a web server or redeploy — immediately call give_up explaining it is not a deployable web app.
 - If a Vite/Vue/React app is up but rejects the request with "Blocked request"/"allowedHosts", fix it: set preview.allowedHosts and server.allowedHosts to true in vite.config, and make the start/preview command bind 0.0.0.0 and use $PORT (or build to static and serve the dist output).
+- You can run shell commands with run_command (only npm / npx / pnpm / yarn / node / tsc). To fix an "npm ci" failure from an out-of-sync or missing lockfile, run "npm install" to regenerate package-lock.json. NEVER hand-edit lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml) — always regenerate them with the package manager.
 - Act only through tools. Do not emit prose.`;
 
 export async function repairDeploy(opts: {
@@ -128,6 +144,7 @@ export async function repairDeploy(opts: {
         if (name === "list_files") result = listFiles(dir).join("\n");
         else if (name === "read_file") { result = readFileSync(safe(dir, args.path), "utf8").slice(0, 8000); log(`agent · read ${args.path}`); }
         else if (name === "write_file") { writeFileSync(safe(dir, args.path), args.content ?? ""); changes.push(args.path); log(`agent · patched ${args.path}`); result = "written"; }
+        else if (name === "run_command") { log(`agent · run ${String(args.command || "").slice(0, 60)}`); result = await runCommand(dir, String(args.command || "")); }
         else if (name === "give_up") { log(`agent · handing back to you`); return { ok: false, changes, summary: args.reason ?? "needs manual fix" }; }
         else if (name === "redeploy") {
           if (redeploys >= MAX_REDEPLOYS) { result = "redeploy limit reached — call give_up"; }

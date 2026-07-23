@@ -33,6 +33,7 @@ export interface ServiceInfo {
   image: string;
   envKeys: string[];
   cloudsql: string;
+  repo: string;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -61,7 +62,8 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
     created: s.metadata?.creationTimestamp ?? "",
     revision: s.status?.latestReadyRevisionName ?? s.status?.latestCreatedRevisionName ?? "",
     image: c.image ?? "",
-    envKeys: (c.env ?? []).map((e: any) => e.name).filter(Boolean),
+    envKeys: (c.env ?? []).map((e: any) => e.name).filter((n: string) => n && n !== "SUPERSONIC_REPO"),
     cloudsql: ann["run.googleapis.com/cloudsql-instances"] ?? "",
+    repo: (c.env ?? []).find((e: any) => e.name === "SUPERSONIC_REPO")?.value ?? "",
   };
 }

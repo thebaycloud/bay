@@ -1,0 +1,7 @@
+{
+  "name": "tsbroken",
+  "private": true,
+  "scripts": { "gcp-build": "tsc", "start": "node dist/index.js" },
+  "engines": { "node": "22" },
+  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^22.0.0" }
+}

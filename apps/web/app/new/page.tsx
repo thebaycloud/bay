@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Zap, ArrowRight, ArrowLeft, Copy, Github, Link2, FolderUp, RotateCcw, KeyRound } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -31,6 +31,11 @@ export default function NewApp() {
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const r = new URLSearchParams(window.location.search).get("repo");
+    if (r) { setRepo(r.replace(/^https?:\/\//, "")); setDoor("url"); }
+  }, []);
 
   function reset() {
     setPhase("idle"); setLogs([]); setDetected(null); setSecretsNeeded([]); setSecretVals({});
