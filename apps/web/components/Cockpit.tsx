@@ -14,7 +14,7 @@ import { JobsPanel } from "./JobsPanel";
 
 interface ServiceInfo {
   slug: string; url: string; ready: boolean; region: string;
-  created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string; storageBucket: string;
+  created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string; storageBucket: string; owner: string;
 }
 
 const services = [
@@ -25,7 +25,7 @@ const services = [
 ];
 
 export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo | null }) {
-  const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "" };
+  const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: "" };
   const domain = d.url.replace(/^https?:\/\//, "") || `${appName}.supersonic.cv`;
   const hasDb = Boolean(d.cloudsql);
   const hasStorage = Boolean(d.storageBucket);

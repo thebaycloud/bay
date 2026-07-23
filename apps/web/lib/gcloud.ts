@@ -21,7 +21,10 @@ export interface AppSummary {
   ready: boolean;
   region: string;
   image: string;
+  owner: string;
 }
+
+const OWNER_LABEL = "supersonic-owner";
 
 export interface ServiceInfo {
   slug: string;
@@ -35,19 +38,28 @@ export interface ServiceInfo {
   cloudsql: string;
   repo: string;
   storageBucket: string;
+  owner: string;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export async function listServices(): Promise<AppSummary[]> {
+export async function listServices(ownerId?: string): Promise<AppSummary[]> {
   const out = await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=json"]);
   const arr = JSON.parse(out) as any[];
-  return arr.map((s) => ({
-    slug: s.metadata?.name ?? "",
-    url: s.status?.url ?? "",
-    ready: (s.status?.conditions ?? []).find((c: any) => c.type === "Ready")?.status === "True",
-    region: REGION,
-    image: s.spec?.template?.spec?.containers?.[0]?.image ?? "",
-  }));
+  return arr
+    .filter((s) => !ownerId || s.metadata?.labels?.[OWNER_LABEL] === ownerId)
+    .map((s) => ({
+      slug: s.metadata?.name ?? "",
+      url: s.status?.url ?? "",
+      ready: (s.status?.conditions ?? []).find((c: any) => c.type === "Ready")?.status === "True",
+      region: REGION,
+      image: s.spec?.template?.spec?.containers?.[0]?.image ?? "",
+      owner: s.metadata?.labels?.[OWNER_LABEL] ?? "",
+    }));
+}
+
+export async function ownsApp(slug: string, ownerId: string): Promise<boolean> {
+  if (!ownerId) return false;
+  try { return (await describeService(slug)).owner === ownerId; } catch { return false; }
 }
 
 export async function describeService(slug: string): Promise<ServiceInfo> {
@@ -67,6 +79,7 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
     cloudsql: ann["run.googleapis.com/cloudsql-instances"] ?? "",
     repo: (c.env ?? []).find((e: any) => e.name === "SUPERSONIC_REPO")?.value ?? "",
     storageBucket: (c.env ?? []).find((e: any) => e.name === "STORAGE_BUCKET")?.value ?? "",
+    owner: s.metadata?.labels?.[OWNER_LABEL] ?? "",
   };
 }
 

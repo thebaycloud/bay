@@ -2,11 +2,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { getPool, dbNameForSlug } from "@/lib/db";
+import { ownsApp } from "@/lib/gcloud";
+import { currentUserId } from "@/lib/session";
 
 export async function GET(req: Request, { params }: { params: { slug: string } }) {
+  const slug = decodeURIComponent(params.slug);
+  const uid = await currentUserId();
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
   const url = new URL(req.url);
   const table = url.searchParams.get("table");
-  const db = dbNameForSlug(decodeURIComponent(params.slug));
+  const db = dbNameForSlug(slug);
   try {
     const pool = getPool(db);
     if (table) {
@@ -30,9 +35,12 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
 }
 
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
+  const slug = decodeURIComponent(params.slug);
+  const uid = await currentUserId();
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
   const body = await req.json().catch(() => ({}));
   const q = String(body.sql ?? "").trim().replace(/;+\s*$/, "");
-  const db = dbNameForSlug(decodeURIComponent(params.slug));
+  const db = dbNameForSlug(slug);
   if (!/^select\b/i.test(q)) return Response.json({ error: "only SELECT queries are allowed" }, { status: 400 });
   if (q.includes(";")) return Response.json({ error: "one statement only" }, { status: 400 });
   try {

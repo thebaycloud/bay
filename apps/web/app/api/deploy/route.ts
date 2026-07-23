@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
 import { repairDeploy } from "@/lib/agent";
+import { currentUserId } from "@/lib/session";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -172,6 +173,7 @@ export async function POST(req: Request) {
   const url = normalizeRepo(String(body.repo ?? ""));
   const slug = cloudRunName(url);
   const secrets = (body.secrets ?? {}) as Record<string, string>;
+  const ownerId = await currentUserId();
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -237,6 +239,7 @@ export async function POST(req: Request) {
         ];
         if (cloudsql) deployArgs.push(`--set-cloudsql-instances=${cloudsql}`);
         if (extraEnv.length) deployArgs.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
+        if (ownerId) deployArgs.push(`--update-labels=supersonic-owner=${ownerId}`);
 
         const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
           const hb = setInterval(() => log("building container…"), 6000);
