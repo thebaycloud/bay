@@ -1,0 +1,9 @@
+{
+  "name": "supersonic",
+  "version": "0.1.0",
+  "description": "Deploy anything to Supersonic in one command.",
+  "bin": { "supersonic": "./index.js" },
+  "type": "commonjs",
+  "engines": { "node": ">=20" },
+  "files": ["index.js"]
+}
