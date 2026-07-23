@@ -89,3 +89,50 @@ export async function listBucketObjects(bucket: string): Promise<{ name: string;
     name: o.name, size: Number(o.size ?? 0), updated: o.updated, contentType: o.contentType ?? "",
   }));
 }
+
+export interface Job { id: string; label: string; schedule: string; uri: string; state: string; lastAttempt: string; }
+
+export async function listJobs(slug: string): Promise<Job[]> {
+  const out = await capture(["scheduler", "jobs", "list", "--location", REGION, "--project", PROJECT, "--format=json"]);
+  const arr = JSON.parse(out) as any[];
+  const prefix = `${slug}--`;
+  return arr
+    .map((j) => ({ id: (j.name || "").split("/").pop() as string, raw: j }))
+    .filter((x) => x.id.startsWith(prefix))
+    .map((x) => ({
+      id: x.id,
+      label: x.id.replace(prefix, ""),
+      schedule: x.raw.schedule || "",
+      uri: x.raw.httpTarget?.uri || "",
+      state: x.raw.state || "",
+      lastAttempt: x.raw.lastAttemptTime || "",
+    }));
+}
+
+async function retryMutate<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      if (i < tries - 1 && /ABORTED|sync mutate|cannot be queued/i.test(m)) {
+        await new Promise((r) => setTimeout(r, 4000));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+export async function createJob(slug: string, name: string, schedule: string, uri: string): Promise<string> {
+  const id = `${slug}--${name}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 60);
+  await retryMutate(() => capture(["scheduler", "jobs", "create", "http", id, "--schedule", schedule, "--uri", uri, "--http-method", "POST", "--location", REGION, "--project", PROJECT]));
+  return id;
+}
+
+export async function deleteJob(id: string): Promise<void> {
+  await retryMutate(() => capture(["scheduler", "jobs", "delete", id, "--location", REGION, "--project", PROJECT, "--quiet"]));
+}
+
+export async function runJob(id: string): Promise<void> {
+  await retryMutate(() => capture(["scheduler", "jobs", "run", id, "--location", REGION, "--project", PROJECT]));
+}

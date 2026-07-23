@@ -10,6 +10,7 @@ import {
 import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
 import { StoragePanel } from "./StoragePanel";
+import { JobsPanel } from "./JobsPanel";
 
 interface ServiceInfo {
   slug: string; url: string; ready: boolean; region: string;
@@ -154,6 +155,8 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
             <DatabasePanel slug={appName} hasDb={hasDb} />
 
             <StoragePanel slug={appName} hasStorage={hasStorage} />
+
+            <JobsPanel slug={appName} />
 
             <section className="section reveal" style={{ animationDelay: ".11s" }}>
               <div className="split">
