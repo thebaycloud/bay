@@ -10,6 +10,7 @@ npm-debug.log*
 .env*.local
 .env.local
 .pg.json
+.sa/
 .vercel
 *.tsbuildinfo
 next-env.d.ts

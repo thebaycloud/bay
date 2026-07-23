@@ -8,6 +8,7 @@ import {
   ArrowUpRight, RefreshCw, Check,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
+import { DatabasePanel } from "./DatabasePanel";
 
 interface ServiceInfo {
   slug: string; url: string; ready: boolean; region: string;
@@ -145,6 +146,8 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
                 <span className="plus" style={{ left: "75%", top: "50%" }}>+</span>
               </div>
             </section>
+
+            <DatabasePanel slug={appName} hasDb={hasDb} />
 
             <section className="section reveal" style={{ animationDelay: ".11s" }}>
               <div className="split">
