@@ -200,6 +200,15 @@ table.dg tr:hover td { background: var(--paper); }
 .db-empty { padding: 22px; color: var(--faint); font-family: var(--mono); font-size: 12px; }
 @media (max-width: 860px) { .db { grid-template-columns: 1fr; } .db-tables { border-right: none; border-bottom: 1px solid var(--line); max-height: 160px; } }
 
+/* storage file list */
+.filelist { border: 1px solid var(--line); background: var(--card); max-height: 440px; overflow: auto; }
+.file-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
+.file-row:last-child { border-bottom: none; }
+.file-row svg { color: var(--ink-2); flex: none; }
+.file-row .fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.file-row .ft { color: var(--ink-2); font-size: 10.5px; }
+.file-row .fs { color: var(--faint); font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+
 /* split */
 .split { display: grid; grid-template-columns: 1.1fr .9fr; }
 .split .panel { background: var(--card); }

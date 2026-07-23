@@ -34,6 +34,7 @@ export interface ServiceInfo {
   envKeys: string[];
   cloudsql: string;
   repo: string;
+  storageBucket: string;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -65,5 +66,26 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
     envKeys: (c.env ?? []).map((e: any) => e.name).filter((n: string) => n && n !== "SUPERSONIC_REPO"),
     cloudsql: ann["run.googleapis.com/cloudsql-instances"] ?? "",
     repo: (c.env ?? []).find((e: any) => e.name === "SUPERSONIC_REPO")?.value ?? "",
+    storageBucket: (c.env ?? []).find((e: any) => e.name === "STORAGE_BUCKET")?.value ?? "",
   };
+}
+
+export function bucketForSlug(slug: string): string {
+  return `supersonicdeploy-${slug}`.slice(0, 63);
+}
+
+function accessToken(): Promise<string> {
+  return capture(["auth", "print-access-token"]).then((s) => s.trim());
+}
+
+export async function listBucketObjects(bucket: string): Promise<{ name: string; size: number; updated: string; contentType: string }[]> {
+  const t = await accessToken();
+  const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${bucket}/o?maxResults=200`, {
+    headers: { Authorization: "Bearer " + t, "x-goog-user-project": PROJECT },
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message);
+  return (j.items ?? []).map((o: { name: string; size?: string; updated: string; contentType?: string }) => ({
+    name: o.name, size: Number(o.size ?? 0), updated: o.updated, contentType: o.contentType ?? "",
+  }));
 }

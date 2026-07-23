@@ -97,6 +97,19 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
     });
 }
 
+/** Create a per-app GCS bucket (idempotent) and return its name. */
+async function provisionStorage(slug: string, log: (l: string) => void): Promise<string> {
+  const bucket = `supersonicdeploy-${slug}`.slice(0, 63);
+  try {
+    await capture("gcloud", ["storage", "buckets", "create", `gs://${bucket}`, "--location", REGION, "--project", PROJECT]);
+    log(`Provisioned storage bucket ${bucket}`);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    if (!/already own|already exists|conflict|409/i.test(m)) throw e;
+  }
+  return bucket;
+}
+
 // After a deploy passes Cloud Run's health check, actually fetch the app: a
 // server can "listen" yet still reject the real request (e.g. Vite preview host
 // allowlisting), which we must catch and repair.
@@ -202,6 +215,15 @@ export async function POST(req: Request) {
           }
         } else if (s.database?.engine) {
           log(`(${s.database.engine} provisioning not wired yet — deploying without it)`);
+        }
+
+        log("Provisioning object storage…");
+        try {
+          const bucket = await provisionStorage(slug, log);
+          extraEnv.push(`STORAGE_BUCKET=${bucket}`);
+          extraEnv.push(`GOOGLE_CLOUD_PROJECT=${PROJECT}`);
+        } catch (e) {
+          log(`! storage skipped: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         for (const [k, v] of Object.entries(secrets)) {

@@ -9,10 +9,11 @@ import {
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
+import { StoragePanel } from "./StoragePanel";
 
 interface ServiceInfo {
   slug: string; url: string; ready: boolean; region: string;
-  created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string;
+  created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string; storageBucket: string;
 }
 
 const services = [
@@ -23,9 +24,10 @@ const services = [
 ];
 
 export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo | null }) {
-  const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "" };
+  const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "" };
   const domain = d.url.replace(/^https?:\/\//, "") || `${appName}.supersonic.cv`;
   const hasDb = Boolean(d.cloudsql);
+  const hasStorage = Boolean(d.storageBucket);
   const dbName = hasDb ? d.cloudsql.split(":").pop() ?? "attached" : "";
   const revShort = d.revision.replace(`${appName}-`, "") || "—";
   const imageShort = d.image.split("/").pop() ?? "";
@@ -38,7 +40,7 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
     { icon: GitBranch, name: "Deployment", wired: Boolean(d.revision), stat: revShort, meta: "latest ready revision" },
     { icon: Users, name: "Auth", wired: false, stat: "not set up", meta: "Identity Platform" },
     { icon: Mail, name: "Email", wired: false, stat: "not set up", meta: "transactional" },
-    { icon: HardDrive, name: "Storage", wired: false, stat: "not set up", meta: "GCS + CDN" },
+    { icon: HardDrive, name: "Storage", wired: hasStorage, stat: hasStorage ? "GCS bucket" : "not set up", meta: hasStorage ? d.storageBucket : "GCS + CDN" },
     { icon: BarChart3, name: "Analytics", wired: false, stat: "not set up", meta: "PostHog" },
   ];
 
@@ -150,6 +152,8 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
             </section>
 
             <DatabasePanel slug={appName} hasDb={hasDb} />
+
+            <StoragePanel slug={appName} hasStorage={hasStorage} />
 
             <section className="section reveal" style={{ animationDelay: ".11s" }}>
               <div className="split">

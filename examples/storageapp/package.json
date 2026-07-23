@@ -1,0 +1,7 @@
+{
+  "name": "storageapp",
+  "private": true,
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": "22" },
+  "dependencies": { "@google-cloud/storage": "^7.0.0" }
+}
