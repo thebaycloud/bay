@@ -245,6 +245,16 @@ table.dg tr:hover td { background: var(--paper); }
 .usermenu { display: flex; align-items: center; gap: 8px; }
 .usermenu .ue { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* issues (maintenance loop) */
+.issues { border: 1px solid var(--line); background: var(--card); }
+.issue { border-bottom: 1px solid var(--line); }
+.issue:last-child { border-bottom: none; }
+.issue-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
+.issue-head .ib { color: #c0564b; display: grid; place-items: center; flex: none; }
+.issue-head .imsg { flex: 1; font-family: var(--mono); font-size: 11.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.issue-head .btn.sm { flex: none; }
+.issue-fix { padding: 2px 14px 14px; }
+
 /* split */
 .split { display: grid; grid-template-columns: 1.1fr .9fr; }
 .split .panel { background: var(--card); }

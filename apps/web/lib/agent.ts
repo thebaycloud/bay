@@ -167,3 +167,58 @@ export async function repairDeploy(opts: {
 
   return { ok: false, changes, summary: `Couldn't fix it automatically after ${redeploys} redeploys${changes.length ? ` (tried: ${changes.join(", ")})` : ""}. Open it in your coding agent to debug.` };
 }
+
+// ---- diagnose-only (the maintenance loop): produce a fix-prompt, never edit ----
+
+const DIAGNOSE_TOOLS = [
+  { name: "list_files", description: "List the repo's files.", parameters: { type: "object", properties: {} } },
+  { name: "read_file", description: "Read a file's contents.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "report_fix", description: "Return the final, surgical fix-prompt for the user's own coding agent.", parameters: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] } },
+];
+
+const DIAGNOSE_SYSTEM = `You are Supersonic's diagnosis assistant. A deployed app is throwing an error in production. Read the relevant repo files, then produce a SHORT, surgical fix-prompt the user can paste into their own coding agent (e.g. Claude Code) to fix it — reference the exact file(s), line(s), and the change to make. Do NOT rewrite whole files or edit anything. When ready, call report_fix with the prompt. Act only through tools.`;
+
+export async function diagnoseError(opts: { dir: string; error: string }): Promise<string> {
+  const { dir, error } = opts;
+  const contents: any[] = [{
+    role: "user",
+    parts: [{ text: `Production error:\n\n${error}\n\nRepo files:\n${listFiles(dir).join("\n")}\n\nRead what you need, then call report_fix with a precise fix-prompt.` }],
+  }];
+  for (let step = 0; step < 10; step++) {
+    let resp: any;
+    try {
+      resp = await gemini({
+        systemInstruction: { parts: [{ text: DIAGNOSE_SYSTEM }] },
+        contents,
+        tools: [{ functionDeclarations: DIAGNOSE_TOOLS }],
+        toolConfig: { functionCallingConfig: { mode: "ANY" } },
+        generationConfig: { temperature: 0 },
+      });
+    } catch (e) {
+      return `Couldn't diagnose automatically: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    const parts: any[] = resp.candidates?.[0]?.content?.parts ?? [];
+    const calls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+    if (!calls.length) {
+      contents.push({ role: "model", parts });
+      contents.push({ role: "user", parts: [{ text: "Call report_fix with the fix-prompt." }] });
+      continue;
+    }
+    contents.push({ role: "model", parts });
+    const responses: any[] = [];
+    for (const call of calls) {
+      const name: string = call.name;
+      const args = call.args ?? {};
+      let result = "";
+      try {
+        if (name === "list_files") result = listFiles(dir).join("\n");
+        else if (name === "read_file") result = readFileSync(safe(dir, args.path), "utf8").slice(0, 8000);
+        else if (name === "report_fix") return String(args.prompt ?? "No fix produced.");
+        else result = "unknown tool";
+      } catch (e) { result = `error: ${e instanceof Error ? e.message : String(e)}`; }
+      responses.push({ functionResponse: { name, response: { result: String(result) } } });
+    }
+    contents.push({ role: "user", parts: responses });
+  }
+  return "Couldn't pinpoint the fix automatically — open the app in your coding agent with the error above.";
+}

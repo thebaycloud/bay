@@ -149,3 +149,21 @@ export async function deleteJob(id: string): Promise<void> {
 export async function runJob(id: string): Promise<void> {
   await retryMutate(() => capture(["scheduler", "jobs", "run", id, "--location", REGION, "--project", PROJECT]));
 }
+
+export interface AppError { message: string; time: string; }
+
+export async function getErrors(slug: string): Promise<AppError[]> {
+  const filter = `resource.type=cloud_run_revision AND resource.labels.service_name=${slug} AND severity>=ERROR`;
+  try {
+    const out = await capture(["logging", "read", filter, "--project", PROJECT, "--limit", "15", "--freshness", "7d", "--format=json"]);
+    const arr = JSON.parse(out) as any[];
+    return arr
+      .map((e) => ({
+        message: String(e.textPayload ?? e.jsonPayload?.message ?? (e.jsonPayload ? JSON.stringify(e.jsonPayload) : "")).replace(/\s+/g, " ").trim().slice(0, 400),
+        time: e.timestamp ?? "",
+      }))
+      .filter((e) => e.message);
+  } catch {
+    return [];
+  }
+}

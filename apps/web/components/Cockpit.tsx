@@ -11,6 +11,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
 import { StoragePanel } from "./StoragePanel";
 import { JobsPanel } from "./JobsPanel";
+import { IssuesPanel } from "./IssuesPanel";
 
 interface ServiceInfo {
   slug: string; url: string; ready: boolean; region: string;
@@ -26,7 +27,7 @@ const services = [
 
 export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo | null }) {
   const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: "" };
-  const domain = d.url.replace(/^https?:\/\//, "") || `${appName}.supersonic.cv`;
+  const domain = `${appName}.supersonic.cv`;
   const hasDb = Boolean(d.cloudsql);
   const hasStorage = Boolean(d.storageBucket);
   const dbName = hasDb ? d.cloudsql.split(":").pop() ?? "attached" : "";
@@ -89,7 +90,7 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
           <div className="url-pill">
             <span className="u">{domain}</span>
             <button className="ib" title="Copy" onClick={() => copy(domain, `${domain} copied`)}><Copy size={14} /></button>
-            {d.url && <a className="ib" title="Visit" href={d.url} target="_blank" rel="noreferrer"><ArrowUpRight size={14} /></a>}
+            <a className="ib" title="Visit" href={`https://${domain}`} target="_blank" rel="noreferrer"><ArrowUpRight size={14} /></a>
           </div>
           <div className="status" style={{ color: d.ready ? "var(--live)" : "var(--ink-2)", borderColor: d.ready ? "color-mix(in srgb, var(--live) 30%, var(--border))" : "var(--line-2)" }}>
             <span className="d" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />{d.ready ? "Live" : "Down"}
@@ -157,6 +158,8 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
             <StoragePanel slug={appName} hasStorage={hasStorage} />
 
             <JobsPanel slug={appName} />
+
+            <IssuesPanel slug={appName} />
 
             <section className="section reveal" style={{ animationDelay: ".11s" }}>
               <div className="split">
