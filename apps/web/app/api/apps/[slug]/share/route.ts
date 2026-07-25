@@ -36,7 +36,9 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   }
   if (body.addEmail) {
     const email = String(body.addEmail).trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    // 254 is the maximum length of an address per RFC 5321; without a bound an
+    // arbitrarily long string matches the regex and reaches the database.
+    if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return Response.json({ error: "invalid email" }, { status: 400 });
     }
     await addGrant(slug, email);

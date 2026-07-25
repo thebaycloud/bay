@@ -20,7 +20,10 @@ export default function SharePanel({ slug }: { slug: string }) {
   async function load() {
     try {
       const r = await fetch(`/api/apps/${slug}/share`);
-      if (!r.ok) return;
+      if (!r.ok) {
+        setError(r.status === 403 ? "Only the owner can manage access" : `Couldn't load sharing settings (${r.status})`);
+        return;
+      }
       const j = await r.json();
       setVisibility(j.visibility);
       setGrants(j.grants ?? []);
