@@ -23,21 +23,51 @@ export async function forward(
   const doRequest = target.protocol === "https:" ? httpsRequest : httpRequest;
 
   await new Promise<void>((resolve) => {
+    // This proxy fronts every hosted app, so an unhandled stream 'error' would
+    // not fail one request — it would take the process down for every tenant.
+    // Every stream gets a handler, and the promise settles exactly once on any
+    // outcome, including a client that walks away mid-stream.
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
     const upstream = doRequest(
       { protocol: target.protocol, hostname: target.hostname, port: target.port || undefined,
         path: target.pathname + target.search, method: req.method, headers },
       (upRes) => {
         res.writeHead(upRes.statusCode ?? 502, scrubSetCookie({ ...upRes.headers }));
         upRes.pipe(res);
-        upRes.on("end", resolve);
+        upRes.on("end", done);
+        upRes.on("error", (e) => {
+          console.error("upstream response error", e);
+          res.destroy();
+          done();
+        });
       }
     );
+
     upstream.on("error", (e) => {
       console.error("upstream error", e);
       if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/plain" });
       res.end("upstream unavailable");
-      resolve();
+      done();
     });
+
+    // The client hung up (closed a tab, dropped an SSE stream). Stop talking to
+    // the app rather than leaving the connection and this promise dangling.
+    res.on("close", () => {
+      upstream.destroy();
+      done();
+    });
+    req.on("error", (e) => {
+      console.error("client request error", e);
+      upstream.destroy();
+      done();
+    });
+
     req.pipe(upstream);
   });
 }

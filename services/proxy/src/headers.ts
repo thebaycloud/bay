@@ -50,7 +50,13 @@ export function scrubSetCookie(headers: OutgoingHttpHeaders): OutgoingHttpHeader
   if (!raw) return headers;
   const list = Array.isArray(raw) ? raw : [String(raw)];
   headers["set-cookie"] = list.map((c) =>
-    c.split(";").map((p) => p.trim()).filter((p) => !/^domain=/i.test(p)).join("; ")
+    c
+      .split(";")
+      .map((p) => p.trim())
+      // Index 0 is the cookie's own name=value pair, so a cookie literally
+      // named "domain" must survive; only later segments are attributes.
+      .filter((p, i) => i === 0 || !/^domain=/i.test(p))
+      .join("; ")
   );
   return headers;
 }

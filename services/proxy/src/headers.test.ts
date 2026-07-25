@@ -51,3 +51,10 @@ test("hop-by-hop headers are not forwarded", () => {
   assert.equal(out.connection, undefined);
   assert.equal(out.host, undefined);
 });
+
+// A cookie whose own name is "domain" must survive — only attribute positions
+// carry Domain=, and stripping the name=value pair silently breaks the cookie.
+test("a cookie named domain is not mistaken for the Domain attribute", () => {
+  const out = scrubSetCookie({ "set-cookie": ["domain=acme; Path=/; Domain=.supersonic.cv"] });
+  assert.deepEqual(out["set-cookie"], ["domain=acme; Path=/"]);
+});
