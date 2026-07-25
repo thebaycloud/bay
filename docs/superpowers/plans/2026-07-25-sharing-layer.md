@@ -1834,8 +1834,21 @@ gcloud compute backend-services add-backend supersonic-proxy-backend \
   --global --network-endpoint-group=supersonic-proxy-neg \
   --network-endpoint-group-region=us-central1 --project supersonic-deploy-prod
 
-gcloud compute ssl-certificates create supersonic-wildcard \
-  --domains="supersonic.cv,*.supersonic.cv" --global --project supersonic-deploy-prod
+# NOTE: classic managed certificates do NOT support wildcards — the command
+# below fails with "Wildcard domains not supported". Use Certificate Manager,
+# which does, at the cost of a one-time DNS authorization record:
+#
+#   gcloud certificate-manager dns-authorizations create supersonic-dns-auth \
+#     --domain="supersonic.cv" --project supersonic-deploy-prod
+#   # add the CNAME it prints to DNS (this does NOT reroute any traffic)
+#   gcloud certificate-manager certificates create supersonic-wildcard \
+#     --domains="supersonic.cv,*.supersonic.cv" \
+#     --dns-authorizations=supersonic-dns-auth --project supersonic-deploy-prod
+#   gcloud certificate-manager maps create supersonic-cert-map --project supersonic-deploy-prod
+#   gcloud certificate-manager maps entries create wildcard --map=supersonic-cert-map \
+#     --certificates=supersonic-wildcard --hostname="*.supersonic.cv" --project supersonic-deploy-prod
+#   # then attach with: gcloud compute target-https-proxies create supersonic-https \
+#   #   --url-map=supersonic-lb --certificate-map=supersonic-cert-map --global
 
 gcloud compute url-maps create supersonic-lb \
   --default-service supersonic-proxy-backend --global --project supersonic-deploy-prod
