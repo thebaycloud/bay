@@ -69,3 +69,9 @@ export async function workspaceOfUser(userId: string): Promise<string | null> {
   const r = await db().query(`SELECT workspace_id FROM users WHERE id = $1`, [userId]);
   return r.rows[0]?.workspace_id ?? null;
 }
+
+/** Domain of a workspace, or null if the workspace does not exist. */
+export async function workspaceDomainOf(workspaceId: string): Promise<string | null> {
+  const r = await db().query(`SELECT domain FROM workspaces WHERE id = $1`, [workspaceId]);
+  return r.rows[0]?.domain ?? null;
+}

@@ -1,9 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
-import { lookupApp, hasGrant, workspaceOfUser } from "./registry";
+import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./registry";
 import { page403, page404, page502 } from "./pages";
 import { readVisitor, signInRedirect } from "./session";
 import { decideAccess } from "./access";
+import { forward } from "./forward";
 
 function slugFromHost(host: string | undefined): string | null {
   if (!host) return null;
@@ -44,9 +45,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return html(res, 403, page403(app.owner_email));
   }
 
-  // Forwarding arrives in Task 9.
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end(`allowed ${visitor.email} -> ${app.run_url}`);
+  const workspaceDomain = (await workspaceDomainOf(app.workspace_id)) ?? "";
+  await forward(req, res, app.run_url, visitor, workspaceDomain);
 }
 
 createServer((req, res) => {
