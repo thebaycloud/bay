@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { config } from "./config";
 import { lookupApp } from "./registry";
 import { page404, page502 } from "./pages";
+import { readVisitor, signInRedirect } from "./session";
 
 function slugFromHost(host: string | undefined): string | null {
   if (!host) return null;
@@ -26,9 +27,16 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (!app) return html(res, 404, page404());
   if (!app.run_url) return html(res, 502, page502(slug));
 
-  // Auth and forwarding arrive in Tasks 7-9.
+  const visitor = await readVisitor(req);
+  if (!visitor) {
+    res.writeHead(302, { Location: signInRedirect(req) });
+    res.end();
+    return;
+  }
+
+  // Access check and forwarding arrive in Tasks 8-9.
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end(`resolved ${slug} -> ${app.run_url}`);
+  res.end(`${visitor.email} -> ${app.run_url}`);
 }
 
 createServer((req, res) => {
