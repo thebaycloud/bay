@@ -23,6 +23,15 @@ export default function Signup() {
     const res = await signIn("credentials", { email, password, redirect: false });
     setBusy(false);
     if (res?.error) { setErr("account created — please sign in"); router.push("/login"); return; }
+    // If a CLI is waiting (browser was opened by `supersonic signup`), hand off to
+    // the authorize page, which mints a token and returns it to the terminal.
+    const params = new URLSearchParams(window.location.search);
+    const port = params.get("port");
+    if (port) {
+      const name = params.get("name") || "cli";
+      window.location.href = `/cli?port=${encodeURIComponent(port)}&name=${encodeURIComponent(name)}`;
+      return;
+    }
     router.push("/"); router.refresh();
   }
 

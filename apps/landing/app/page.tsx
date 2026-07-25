@@ -1,0 +1,299 @@
+"use client";
+
+import { useState } from "react";
+import {
+  Zap, Rocket, Database, Terminal, Bot, Activity, Link2,
+  Check, X, ArrowRight, Github,
+} from "lucide-react";
+import { GridPattern } from "@/components/magicui/grid-pattern";
+import { Globe } from "@/components/magicui/globe";
+
+const APP = "https://app.supersonic.cv";
+
+// Monochrome marks for the coding agents. (For pixel-exact official logos, drop
+// SVGs into public/logos/ and swap the `mark` — these are clean stand-ins.)
+function ClaudeMark() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden>
+      {Array.from({ length: 12 }).map((_, i) => {
+        const a = (i * 30 * Math.PI) / 180;
+        return (
+          <line key={i}
+            x1={12 + Math.cos(a) * 3.2} y1={12 + Math.sin(a) * 3.2}
+            x2={12 + Math.cos(a) * 10.4} y2={12 + Math.sin(a) * 10.4}
+            stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        );
+      })}
+    </svg>
+  );
+}
+const CursorMark = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M5 3l14 8-6 1.5-1.6 6.5z" /></svg>
+);
+const CodexMark = () => (
+  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+    {[0, 60, 120].map((a) => (
+      <ellipse key={a} cx="12" cy="12" rx="3.1" ry="8.4" transform={`rotate(${a} 12 12)`} />
+    ))}
+  </svg>
+);
+const OpencodeMark = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="3" y="4.5" width="18" height="15" rx="1" /><path d="M7 10l2.6 2.5L7 15M12.5 15H16" /></svg>
+);
+const ClineMark = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M8 8l-4 4 4 4M16 8l4 4-4 4" /></svg>
+);
+
+const agents = [
+  { name: "Claude Code", mark: <ClaudeMark /> },
+  { name: "Cursor", mark: <CursorMark /> },
+  { name: "OpenAI Codex", mark: <CodexMark /> },
+  { name: "opencode", mark: <OpencodeMark /> },
+  { name: "Cline", mark: <ClineMark /> },
+];
+
+const features = [
+  { icon: Rocket, name: "One-click publish", tag: "~40s", desc: "Point us at the app you built and we put it online — with its own web address — in about forty seconds. No setup, nothing technical." },
+  { icon: Link2, name: "Custom domains", desc: "Start on a free yourapp.supersonic.cv address, or connect a domain you already own like yourapp.com. The secure padlock is set up for you, automatically." },
+  { icon: Database, name: "Database included", desc: "Your app's data is saved and backed up from the very first click — nothing to set up, no accounts to create, no settings to copy. It's just there." },
+  { icon: Activity, name: "Always watched", tag: "24/7", desc: "We keep an eye on your live app around the clock and tell you the moment something goes wrong — in plain words, not error codes." },
+  { icon: Terminal, name: "Runs itself through your AI", desc: "Your coding agent — Claude Code, Cursor, Codex — can publish, check on, and fix your app entirely on its own using our command-line tool. You don't have to lift a finger." },
+  { icon: Bot, name: "An agent on the inside", desc: "Supersonic runs its own AI inside your cloud. When something breaks it works out the fix — and on Pro, applies it and gets your app healthy again, by itself." },
+];
+
+const starter = [
+  ["One-click deploy", true], ["Database, storage & domain", true], ["Deploy from your computer", true],
+  ["Diagnose — paste-ready fix prompts", true], ["Autopilot — auto-fix to green", false], ["Always-warm instances", false],
+];
+const pro = [
+  ["One-click deploy", true], ["Database, storage & domain", true], ["Deploy from your computer", true],
+  ["Diagnose — paste-ready fix prompts", true], ["Autopilot — auto-fix to green", true], ["Always-warm instances", true],
+];
+
+const faqs = [
+  ["Do I need to change my code?", "No. Deploy your app exactly as you built it — we detect the stack and handle everything on the cloud side. The only thing we ever ask you for is a secret that only you should hold."],
+  ["Do I need a GitHub account?", "No. You can deploy straight from your computer — just run supersonic deploy in your project folder. GitHub is there as an option if you want it, not a requirement."],
+  ["What kinds of apps can I deploy?", "Anything that runs in a container — Next.js, Vite, Python, Go, Rust, whatever. Common stacks work out of the box; for anything unusual, your coding agent describes how to run it and we take it from there."],
+  ["What happens when my app breaks?", "We catch the error in production and write your coding agent a precise, paste-ready fix. On Pro, our agent applies it and redeploys to green automatically. Either way, we never edit your code without you."],
+  ["Where does my app actually run?", "On Google Cloud, on your own isolated infrastructure — a real production deployment that scales from one visitor to millions, with a secure custom domain."],
+];
+
+const AGENT_PROMPT = `Publish this app to Supersonic — hosting for vibecoders.
+1. Install the CLI:  npm i -g supersonic-cli
+2. Create my account:  supersonic signup   (a browser tab opens for me to finish sign-up)
+3. From this project folder, publish it:  supersonic deploy
+Then send me the live link.`;
+
+function CopyPrompt() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="btn ghost"
+      onClick={() => {
+        navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+    >
+      {copied ? <><Check size={15} /> Copied — paste into your AI</> : <><Terminal size={15} /> Copy prompt for your AI</>}
+    </button>
+  );
+}
+
+function MachineView() {
+  return (
+    <div className="machine">
+      <h1>SUPERSONIC — machine-readable</h1>
+      <div className="m-sub">Hosting for vibecoders. Built to be operated by coding agents.</div>
+
+      <div className="m-h">What it is</div>
+      <div>One command turns an app on a computer into a real, live product on the internet — database, custom domain and monitoring included.</div>
+
+      <div className="m-h">Publish an app · do this for your user</div>
+      <div className="step"><span className="n">1</span><div>Install the CLI — <span className="cmd">npm i -g supersonic-cli</span></div></div>
+      <div className="step"><span className="n">2</span><div>Create the account — <span className="cmd">supersonic signup</span> — opens a browser for your user to finish sign-up, then hands control back to you.</div></div>
+      <div className="step"><span className="n">3</span><div>Publish from the project folder, no git required — <span className="cmd">supersonic deploy</span></div></div>
+
+      <div className="m-h">The contract</div>
+      <div>A Dockerfile that listens on <span className="cmd">$PORT</span> ships any language. Common stacks (Next.js, Python, Go…) work without one.</div>
+
+      <div className="m-h">CLI</div>
+      <pre>supersonic deploy | status | logs | errors | diagnose | env | exec | rollback</pre>
+
+      <div className="m-foot">
+        <CopyPrompt />
+        <a href="/llms.txt">Full manual → /llms.txt</a>
+      </div>
+    </div>
+  );
+}
+
+export default function Page() {
+  const [machine, setMachine] = useState(false);
+  return (
+    <>
+      <nav className="nav">
+        <a className="brand" href="/"><span className="mk"><Zap size={13} strokeWidth={2.5} /></span>SUPERSONIC</a>
+        <div className="links">
+          <a href="#features">Product</a>
+          <a href="#pricing">Pricing</a>
+          <a href={APP}>Docs</a>
+        </div>
+        <span className="spacer" />
+        <button className="mode-toggle" onClick={() => setMachine((m) => !m)} title="Machine-readable view">
+          <span className={"seg" + (!machine ? " on" : "")}>Human</span>
+          <span className={"seg" + (machine ? " on" : "")}>Machine</span>
+        </button>
+        <a className="btn ghost sm" href={APP}>Open app</a>
+        <a className="btn accent sm" href={`${APP}/signup`}>Sign up</a>
+      </nav>
+
+      {machine ? <MachineView /> : <main className="frame">
+        {/* HERO */}
+        <section className="sec hero">
+          <div className="eyebrow">Hosting for vibecoders</div>
+          <h1>Publish your app<br />in one click.</h1>
+          <p className="sub">The app you built, live on the internet with a link to share — as easy as posting a story. No setup, no code, nothing technical.</p>
+          <div className="cta">
+            <a className="btn accent" href={`${APP}/signup`}>Publish your first app <ArrowRight size={15} /></a>
+            <CopyPrompt />
+          </div>
+          <div className="art">
+            <GridPattern width={34} height={34} style={{ stroke: "var(--line-2)" }} className="[mask-image:radial-gradient(520px_circle_at_50%_38%,white,transparent)]" />
+            <img src="/bridge.png" alt="A bridge to production" />
+          </div>
+        </section>
+
+        {/* CODING AGENTS */}
+        <section className="strip">
+          <div className="lbl"><span className="eyebrow">Built for the tools you already use</span></div>
+          <div className="agents">
+            {agents.map((a) => (
+              <div className="agent-card" key={a.name}>
+                <span className="am">{a.mark}</span>
+                <span className="an">{a.name}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* FEATURES */}
+        <section className="sec" id="features">
+          <div className="sec-head">
+            <span className="eyebrow">What you get</span>
+            <h2>Everything a real app needs,<br />wired up for you</h2>
+            <p>You bring the idea and the code. We bring the entire cloud — provisioned, connected, and looked after.</p>
+          </div>
+          <div className="cells">
+            {features.map((f) => (
+              <div className="cell" key={f.name}>
+                {f.tag && <span className="tag">{f.tag}</span>}
+                <span className="ic"><f.icon size={17} /></span>
+                <h3>{f.name}</h3>
+                <p>{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* GLOBE */}
+        <section className="sec globe-sec">
+          <div className="copy">
+            <span className="eyebrow">Global by default</span>
+            <h2>Deploy anywhere.<br />Live everywhere.</h2>
+            <p>Every app ships to Google&apos;s global network with a secure custom domain and auto-scaling — fast for the person next door and the one across the planet.</p>
+            <div className="cities">
+              <span>San Francisco</span><span>New York</span><span>London</span><span>Berlin</span><span>Tokyo</span><span>Singapore</span><span>Sydney</span>
+            </div>
+          </div>
+          <div className="stage">
+            <Globe />
+          </div>
+        </section>
+
+        {/* PRICING */}
+        <section className="sec" id="pricing">
+          <div className="sec-head">
+            <span className="eyebrow">Pricing</span>
+            <h2>Two plans. No free tier,<br />no infrastructure bills.</h2>
+            <p>Flat pricing. Your cloud is included — you never touch a Google Cloud invoice.</p>
+          </div>
+          <div className="compare">
+            <div className="plan">
+              <div className="pname">Starter</div>
+              <div className="pdesc">Deploy, provision, and get paste-ready fixes for your own coding agent.</div>
+              <div className="price"><b>$20</b> / month</div>
+              {starter.map(([label, on]) => (
+                <div className={"row" + (on ? "" : " off")} key={String(label)}>
+                  <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
+                </div>
+              ))}
+              <div className="cta"><a className="btn ghost" href={`${APP}/new`}>Start with Starter</a></div>
+            </div>
+            <div className="plan">
+              <div className="pname">Pro</div>
+              <div className="pdesc">Everything in Starter, plus Autopilot — our agent fixes breakage to green on its own.</div>
+              <div className="price"><b>$50</b> / month</div>
+              {pro.map(([label, on]) => (
+                <div className={"row" + (on ? "" : " off")} key={String(label)}>
+                  <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
+                </div>
+              ))}
+              <div className="cta"><a className="btn accent" href={`${APP}/new`}>Go Pro <ArrowRight size={15} /></a></div>
+            </div>
+          </div>
+        </section>
+
+        {/* FAQ */}
+        <section className="sec faq-sec">
+          <div className="lead">
+            <span className="eyebrow">Before you begin</span>
+            <h2>Everything you need to know</h2>
+          </div>
+          <div className="faq-list">
+            {faqs.map(([q, a]) => (
+              <details className="faq-item" key={q}>
+                <summary><span className="q">{q}</span><span className="pm">+</span></summary>
+                <div className="a">{a}</div>
+              </details>
+            ))}
+          </div>
+        </section>
+
+        {/* FINAL CTA */}
+        <section className="sec final">
+          <span className="eyebrow">Your next step</span>
+          <h2 style={{ marginTop: 14 }}>Ship your first app today.</h2>
+          <div className="cta"><a className="btn accent" href={`${APP}/new`}>Deploy your first app <ArrowRight size={15} /></a></div>
+        </section>
+
+        {/* FOOTER */}
+        <footer>
+          <div className="foot">
+            <div>
+              <div className="brand"><span className="mk"><Zap size={13} strokeWidth={2.5} /></span>SUPERSONIC</div>
+              <p style={{ color: "var(--ink-2)", fontSize: 13, marginTop: 12, maxWidth: "30ch" }}>The cloud for vibecoders. Deploy anything in one click.</p>
+            </div>
+            <div className="col">
+              <h4>Product</h4>
+              <a href="#features">Features</a><a href="#pricing">Pricing</a><a href={APP}>Open app</a>
+            </div>
+            <div className="col">
+              <h4>Company</h4>
+              <a href="#">About</a><a href="#">Blog</a><a href="#">Careers</a>
+            </div>
+            <div className="col">
+              <h4>Resources</h4>
+              <a href={APP}>Docs</a><a href="#"><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Github size={13} /> GitHub</span></a><a href="#">Status</a>
+            </div>
+          </div>
+          <div className="foot-bar">
+            <span>© 2026 Supersonic — all rights reserved</span>
+            <span className="spacer" />
+            <span>supersonic.cv</span>
+          </div>
+        </footer>
+      </main>}
+    </>
+  );
+}

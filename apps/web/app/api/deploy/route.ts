@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
@@ -166,6 +166,43 @@ function spaDockerfile(outdir: string): string {
   ].join("\n");
 }
 
+// Next.js (and other build-then-serve node frameworks) MUST run their build
+// before `next start`, or the container crashloops with "no production build in
+// .next". Buildpacks don't reliably run the build (esp. with mixed lockfiles),
+// so we inject an explicit build -> start Dockerfile. Forcing `npm install` also
+// resolves the classic package-lock.json + yarn.lock ambiguity.
+function nextDockerfile(): string {
+  return [
+    "FROM node:22-slim AS build",
+    "WORKDIR /app",
+    "ENV NEXT_TELEMETRY_DISABLED=1",
+    "COPY package*.json ./",
+    "RUN npm install --no-audit --no-fund --legacy-peer-deps",
+    "COPY . .",
+    "RUN npm run build",
+    "",
+    "FROM node:22-slim",
+    "WORKDIR /app",
+    "ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080",
+    "COPY --from=build /app ./",
+    "EXPOSE 8080",
+    'CMD ["npm","run","start"]',
+    "",
+  ].join("\n");
+}
+
+// File-based detection (more reliable than a framework label): a Next.js app has
+// `next` in its deps and a build script.
+function isNextApp(dir: string): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    return Boolean(deps.next) && Boolean(pkg.scripts?.build);
+  } catch {
+    return false;
+  }
+}
+
 // Give the app a <slug>.supersonic.cv address (the wildcard *.supersonic.cv
 // CNAME + this per-app mapping is what routes it). SSL provisions async.
 async function createDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
@@ -180,11 +217,24 @@ async function createDomainMapping(slug: string, log: (l: string) => void): Prom
 }
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({}));
-  const url = normalizeRepo(String(body.repo ?? ""));
-  const slug = cloudRunName(url);
-  const secrets = (body.secrets ?? {}) as Record<string, string>;
   const ownerId = await currentUserId();
+  // Two ingest doors: a git URL (clone) or a project uploaded straight from the
+  // user's computer (a gzipped tar of the folder). Both end in a populated dir,
+  // after which the pipeline is identical.
+  const isUpload = req.headers.get("x-supersonic-upload") === "1";
+  let url = "";
+  let slug = "";
+  let secrets: Record<string, string> = {};
+  let archive: Buffer | null = null;
+  if (isUpload) {
+    archive = Buffer.from(await req.arrayBuffer());
+    slug = cloudRunName(req.headers.get("x-supersonic-app") || "app");
+  } else {
+    const body = await req.json().catch(() => ({}));
+    url = normalizeRepo(String(body.repo ?? ""));
+    slug = cloudRunName(url);
+    secrets = (body.secrets ?? {}) as Record<string, string>;
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -192,11 +242,18 @@ export async function POST(req: Request) {
       const send = (o: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
       const log = (line: string) => send({ type: "log", line });
       try {
-        send({ type: "start", slug, url });
+        send({ type: "start", slug, url: url || `${slug} · from your computer` });
         const dir = mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
-        log(`Pulling ${url}`);
-        await run("git", ["clone", "--depth", "1", url, dir], () => {});
+        if (isUpload && archive) {
+          log("Unpacking your project…");
+          const tgz = `${dir}.tgz`;
+          writeFileSync(tgz, archive);
+          await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+        } else {
+          log(`Pulling ${url}`);
+          await run("git", ["clone", "--depth", "1", url, dir], () => {});
+        }
 
         log("Detecting stack…");
         const raw = await capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", dir, "--api"]);
@@ -208,13 +265,17 @@ export async function POST(req: Request) {
         if (s.cache) log(`Provision ${s.cache} cache`);
         if (s.secretsNeeded?.length) log(`Will ask for secrets: ${s.secretsNeeded.join(", ")}`);
 
-        if (/vite|create react app|\bspa\b/i.test(s.framework) && !existsSync(join(dir, "Dockerfile"))) {
+        const hasDockerfile = existsSync(join(dir, "Dockerfile"));
+        if (!hasDockerfile && /vite|create react app|\bspa\b/i.test(s.framework)) {
           const outdir = /create react app/i.test(s.framework) ? "build" : "dist";
           writeFileSync(join(dir, "Dockerfile"), spaDockerfile(outdir));
           log(`SPA detected — building to static and serving ${outdir}/ on $PORT`);
+        } else if (!hasDockerfile && isNextApp(dir)) {
+          writeFileSync(join(dir, "Dockerfile"), nextDockerfile());
+          log("Next.js detected — running the build, then serving on $PORT");
         }
 
-        const extraEnv: string[] = [`SUPERSONIC_REPO=${url}`];
+        const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
         let cloudsql: string | null = null;
         if (s.database?.engine === "postgres") {
           log("Provisioning Postgres…");

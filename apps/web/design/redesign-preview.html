@@ -1,0 +1,417 @@
+<title>Supersonic — Redesign Preview</title>
+<style>
+  :root {
+    --bg: #ffffff; --ground: #f7f7f5; --card: #ffffff; --panel: #f4f4f1; --hover: #efefec;
+    --border: #ececea;
+    --ink: #1b1b18; --ink-2: #6f6f68; --faint: #a2a29a;
+    --accent: #0b5e38; --accent-hover: #094b2d; --accent-soft: #ecf3ef; --accent-ink: #ffffff;
+    --live: #17904f; --down: #c33a2c; --warn: #b07d1c;
+    --shadow-sm: 0 1px 2px rgba(20,20,16,.05);
+    --shadow: 0 1px 2px rgba(20,20,16,.04), 0 4px 14px rgba(20,20,16,.05);
+    --shadow-lg: 0 8px 30px rgba(20,20,16,.10);
+    --r: 14px; --r-lg: 20px; --r-btn: 11px; --r-pill: 999px;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, monospace;
+    --sidebar-w: 250px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191816; --ground: #1e1d1a; --card: #211f1c; --panel: #262420; --hover: #2c2a25;
+      --border: #2e2c28;
+      --ink: #ededea; --ink-2: #a3a39a; --faint: #6f6e66;
+      --accent: #2ea86a; --accent-hover: #37b675; --accent-soft: #17281f; --accent-ink: #05130b;
+      --live: #2fb56f; --down: #ef6a61; --warn: #d3a24a;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+      --shadow: 0 1px 2px rgba(0,0,0,.35); --shadow-lg: 0 14px 36px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff; --ground: #f7f7f5; --card: #ffffff; --panel: #f4f4f1; --hover: #efefec; --border: #ececea;
+    --ink: #1b1b18; --ink-2: #6f6f68; --faint: #a2a29a;
+    --accent: #0b5e38; --accent-hover: #094b2d; --accent-soft: #ecf3ef; --accent-ink: #ffffff;
+    --live: #17904f; --down: #c33a2c; --warn: #b07d1c;
+    --shadow-sm: 0 1px 2px rgba(20,20,16,.05);
+    --shadow: 0 1px 2px rgba(20,20,16,.04), 0 4px 14px rgba(20,20,16,.05); --shadow-lg: 0 8px 30px rgba(20,20,16,.10);
+  }
+  :root[data-theme="dark"] {
+    --bg: #191816; --ground: #1e1d1a; --card: #211f1c; --panel: #262420; --hover: #2c2a25; --border: #2e2c28;
+    --ink: #ededea; --ink-2: #a3a39a; --faint: #6f6e66;
+    --accent: #2ea86a; --accent-hover: #37b675; --accent-soft: #17281f; --accent-ink: #05130b;
+    --live: #2fb56f; --down: #ef6a61; --warn: #d3a24a;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+    --shadow: 0 1px 2px rgba(0,0,0,.35); --shadow-lg: 0 14px 36px rgba(0,0,0,.5);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 14px; line-height: 1.5; letter-spacing: -0.006em; -webkit-font-smoothing: antialiased; }
+  svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7;
+    stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  button { font: inherit; color: inherit; cursor: pointer; border: none; background: none; }
+  input { font: inherit; }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: var(--accent-soft); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+  .app { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+
+  /* ---------- sidebar ---------- */
+  .sidebar { position: sticky; top: 0; height: 100vh; background: var(--bg); padding: 16px 12px; display: flex; flex-direction: column; }
+  .brand { display: flex; align-items: center; gap: 11px; padding: 6px 10px 16px; font-weight: 650; font-size: 16px; }
+  .brand .mark { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; }
+  .brand .mark svg.i { width: 17px; height: 17px; stroke-width: 2.5; }
+  .ws { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: var(--r-btn); text-align: left; transition: background .13s; margin-bottom: 8px; }
+  .ws:hover { background: var(--panel); }
+  .ws .sq { width: 26px; height: 26px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 700; font-size: 12px; flex: none; }
+  .ws .nm { font-weight: 600; font-size: 13.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws .chev { color: var(--faint); width: 16px; height: 16px; }
+  nav { display: flex; flex-direction: column; gap: 1px; }
+  .nav-label { font-size: 11.5px; font-weight: 600; color: var(--faint); padding: 16px 11px 6px; }
+  .nav-item { display: flex; align-items: center; gap: 12px; padding: 8px 11px; border-radius: 10px; color: var(--ink-2); font-weight: 500; font-size: 14px; width: 100%; text-align: left; transition: background .13s, color .13s; }
+  .nav-item svg.i { width: 19px; height: 19px; color: var(--faint); }
+  .nav-item:hover { background: var(--panel); color: var(--ink); }
+  .nav-item:hover svg.i { color: var(--ink-2); }
+  .nav-item.active { background: var(--panel); color: var(--ink); font-weight: 600; }
+  .nav-item.active svg.i { color: var(--ink); }
+  .nav-item .kbd { margin-left: auto; font-size: 11px; color: var(--faint); font-family: var(--mono); }
+  .up-card { margin-top: auto; background: var(--panel); border-radius: var(--r); padding: 13px 14px; display: flex; align-items: center; gap: 11px; }
+  .up-card .zap { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; flex: none; }
+  .up-card .zap svg.i { width: 15px; height: 15px; }
+  .up-card .t { font-weight: 650; font-size: 13.5px; }
+  .up-card .s { font-size: 12px; color: var(--ink-2); }
+  .user-row { display: flex; align-items: center; gap: 10px; padding: 10px 10px 2px; margin-top: 8px; }
+  .user-row .av { width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: var(--bg); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  .user-row .un { font-weight: 600; font-size: 13.5px; }
+
+  /* ---------- main ---------- */
+  .main { min-width: 0; background: var(--ground); display: flex; flex-direction: column; }
+  .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 14px; height: 62px; padding: 0 30px; background: color-mix(in srgb, var(--ground) 80%, transparent); backdrop-filter: blur(14px); }
+  .crumb { display: flex; align-items: center; gap: 9px; font-size: 14.5px; font-weight: 600; }
+  .crumb .sep { color: var(--faint); font-weight: 400; }
+  .crumb .home-link { color: var(--ink-2); cursor: pointer; }
+  .crumb .home-link:hover { color: var(--ink); }
+  .back { display: none; width: 34px; height: 34px; border-radius: 10px; place-items: center; color: var(--ink-2); }
+  .back:hover { background: var(--hover); color: var(--ink); }
+  .spacer { flex: 1; }
+  .tb-actions { display: flex; gap: 9px; align-items: center; }
+
+  .scroll { padding: 30px 34px 60px; max-width: 1180px; width: 100%; margin: 0 auto; }
+  .view { animation: rise .38s cubic-bezier(.2,.7,.2,1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+
+  /* buttons */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 17px; border-radius: var(--r-btn); font-weight: 600; font-size: 14px; transition: background .13s, box-shadow .13s, transform .08s; white-space: nowrap; }
+  .btn:active { transform: translateY(1px); }
+  .btn svg.i { width: 18px; height: 18px; }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); box-shadow: var(--shadow-sm); }
+  .btn-primary:hover { background: var(--accent-hover); box-shadow: var(--shadow); }
+  .btn-ghost { background: var(--card); color: var(--ink); box-shadow: inset 0 0 0 1px var(--border); }
+  .btn-ghost:hover { background: var(--panel); }
+  .btn-soft { background: var(--panel); color: var(--ink); }
+  .btn-soft:hover { background: var(--hover); }
+  .btn-sm { height: 34px; padding: 0 13px; font-size: 13px; border-radius: 9px; }
+
+  /* pills */
+  .pill { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 11px; border-radius: var(--r-pill); font-size: 12.5px; font-weight: 600; background: var(--panel); color: var(--ink-2); }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .pill.live { background: var(--accent-soft); color: var(--live); }
+  .pill.live .dot { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 20%, transparent); }
+  .pill.down { background: color-mix(in srgb, var(--down) 12%, var(--card)); color: var(--down); }
+  .pill.down .dot { background: var(--down); }
+  .pill.building { color: var(--warn); }
+  .pill.building .dot { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  /* ---------- apps home ---------- */
+  .hero { text-align: center; padding: 34px 0 30px; }
+  .hero h1 { font-size: 30px; font-weight: 700; letter-spacing: -.03em; margin: 0 0 22px; }
+  .deploy-box { max-width: 660px; margin: 0 auto; background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 8px 8px 8px 18px; display: flex; align-items: center; gap: 12px; }
+  .deploy-box svg.i { color: var(--faint); }
+  .deploy-box input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: 15px; height: 44px; }
+  .deploy-box input::placeholder { color: var(--faint); }
+  .hero .alt { margin: 14px 0 0; color: var(--ink-2); font-size: 13.5px; }
+  .hero .alt b { color: var(--accent); font-weight: 600; cursor: pointer; }
+  .row-head { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 16px; }
+  .tabs { display: flex; gap: 6px; }
+  .tab { height: 34px; padding: 0 15px; border-radius: var(--r-pill); font-weight: 500; font-size: 13.5px; color: var(--ink-2); }
+  .tab:hover { background: var(--hover); }
+  .tab.on { background: var(--ink); color: var(--bg); font-weight: 600; }
+  .browse { color: var(--ink-2); font-size: 13.5px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .browse:hover { color: var(--ink); }
+  .apps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(258px, 1fr)); gap: 16px; }
+  .app-card { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow-sm); padding: 17px 18px 18px; cursor: pointer; transition: box-shadow .16s, transform .16s; display: flex; flex-direction: column; }
+  .app-card:hover { box-shadow: var(--shadow-lg); transform: translateY(-3px); }
+  .app-card .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+  .app-card .ic { width: 38px; height: 38px; border-radius: 11px; background: var(--panel); color: var(--ink); display: grid; place-items: center; font-weight: 700; font-size: 16px; }
+  .app-card h3 { margin: 0 0 4px; font-size: 15.5px; font-weight: 650; letter-spacing: -.01em; }
+  .app-card .dom { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .app-card .meta { margin-top: 13px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .new-card { display: flex; align-items: center; justify-content: center; gap: 11px; min-height: 152px; background: transparent; box-shadow: inset 0 0 0 1.5px var(--border); color: var(--ink-2); text-align: center; }
+  .new-card:hover { box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--accent); transform: none; }
+  .new-card .plus { width: 40px; height: 40px; border-radius: 11px; background: var(--panel); display: grid; place-items: center; }
+  .new-card:hover .plus { background: var(--accent-soft); }
+
+  /* ---------- cockpit: two columns (your app | to-do rail) ---------- */
+  .cockpit { display: grid; grid-template-columns: minmax(0, 1fr) 332px; gap: 28px; align-items: start; }
+  .section-head { display: flex; align-items: baseline; gap: 12px; margin: 30px 0 14px; }
+  .section-head h2 { font-size: 17px; font-weight: 700; letter-spacing: -.02em; margin: 0; }
+  .section-head .note { color: var(--ink-2); font-size: 13px; }
+
+  .app-head h1 { font-size: 30px; font-weight: 700; letter-spacing: -.03em; margin: 12px 0 14px; }
+  .head-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .domain { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 5px 0 14px; border-radius: var(--r-btn); background: var(--card); box-shadow: inset 0 0 0 1px var(--border); font-family: var(--mono); font-size: 12.5px; }
+  .domain .ib { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--ink-2); }
+  .domain .ib:hover { background: var(--panel); color: var(--ink); }
+  .domain .ib svg.i { width: 15px; height: 15px; }
+  .updated { color: var(--ink-2); font-size: 13.5px; }
+
+  .has-card { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow-sm); padding: 4px 20px; }
+  .has-row { display: flex; align-items: center; gap: 14px; padding: 15px 0; box-shadow: inset 0 -1px 0 var(--border); }
+  .has-row:last-child { box-shadow: none; }
+  .has-row .chk { width: 32px; height: 32px; border-radius: 9px; background: var(--accent-soft); color: var(--live); display: grid; place-items: center; flex: none; }
+  .has-row .chk svg.i { width: 17px; height: 17px; stroke-width: 2.5; }
+  .has-row .hl { font-weight: 600; font-size: 14.5px; }
+  .has-row .hs { color: var(--ink-2); font-size: 13px; margin-top: 1px; }
+
+  .tech { margin-top: 18px; background: var(--card); border-radius: var(--r); box-shadow: var(--shadow-sm); }
+  .tech summary { list-style: none; cursor: pointer; padding: 15px 20px; font-weight: 600; font-size: 14px; color: var(--ink-2); display: flex; align-items: center; justify-content: space-between; }
+  .tech summary::-webkit-details-marker { display: none; }
+  .tech summary svg.i { width: 18px; height: 18px; color: var(--faint); transition: transform .2s; }
+  .tech[open] summary svg.i { transform: rotate(180deg); }
+  .tech-body { padding: 2px 20px 16px; }
+  .kv .r { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; box-shadow: inset 0 -1px 0 var(--border); font-size: 13.5px; }
+  .kv .r:last-child { box-shadow: none; }
+  .kv .r .k { color: var(--ink-2); }
+  .kv .r .v { font-family: var(--mono); font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 62%; }
+  .env-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+  .env-chips .ec { font-family: var(--mono); font-size: 12px; background: var(--panel); color: var(--ink-2); padding: 5px 10px; border-radius: var(--r-pill); }
+
+  /* to-do rail */
+  .rail { position: sticky; top: 82px; display: flex; flex-direction: column; gap: 11px; }
+  .rail-head { display: flex; align-items: center; gap: 9px; padding: 4px 2px 4px; }
+  .rail-head h2 { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+  .rail-head .count { background: var(--down); color: #fff; font-size: 11.5px; font-weight: 700; min-width: 20px; height: 20px; border-radius: 999px; display: grid; place-items: center; padding: 0 6px; }
+  .task { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow-sm); padding: 15px 16px; text-align: left; width: 100%; display: block; }
+  .task.alert { box-shadow: var(--shadow-sm), inset 0 0 0 1.5px color-mix(in srgb, var(--down) 30%, transparent); }
+  .task-top { display: flex; align-items: flex-start; gap: 11px; }
+  .task .tic { width: 32px; height: 32px; border-radius: 9px; background: var(--panel); color: var(--ink-2); display: grid; place-items: center; flex: none; }
+  .task .tic svg.i { width: 17px; height: 17px; }
+  .task.alert .tic { background: color-mix(in srgb, var(--down) 12%, var(--card)); color: var(--down); }
+  .task .tl { font-weight: 600; font-size: 14px; line-height: 1.35; }
+  .task .ts { color: var(--ink-2); font-size: 12.5px; margin-top: 2px; }
+  .task .tm { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); margin: 9px 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task.add { display: flex; align-items: center; gap: 11px; transition: background .13s; }
+  .task.add:hover { background: var(--panel); }
+  .task.add .grow { flex: 1; }
+  .task.add .chev { color: var(--faint); }
+  .task.add .chev svg.i { width: 18px; height: 18px; }
+  .rail-done { color: var(--ink-2); font-size: 13px; padding: 4px 4px; display: flex; align-items: center; gap: 8px; }
+
+  .fix { display: none; margin-top: 13px; }
+  .fix.show { display: block; animation: rise .28s both; }
+  .fix .code { background: var(--panel); border-radius: 10px; padding: 13px 15px; font-family: var(--mono); font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
+  .fix .foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; flex-wrap: wrap; }
+  .fix .hint { color: var(--faint); font-size: 12px; }
+
+  .theme-toggle { position: fixed; bottom: 22px; right: 22px; width: 44px; height: 44px; border-radius: 50%; background: var(--card); box-shadow: var(--shadow-lg); display: grid; place-items: center; color: var(--ink); z-index: 50; }
+  .theme-toggle:hover { background: var(--panel); }
+  .theme-toggle .moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle .moon { display: block; }
+  :root[data-theme="dark"] .theme-toggle .sun { display: none; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .theme-toggle .sun { display: none; } :root:not([data-theme="light"]) .theme-toggle .moon { display: block; } }
+
+  @media (max-width: 1040px) { .cockpit { grid-template-columns: 1fr; } .rail { position: static; } }
+  @media (max-width: 920px) { .app { grid-template-columns: 1fr; } .sidebar { display: none; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<svg hidden xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 8-10c1.5 0 3 .5 3 3a22 22 0 0 1-8 10z"/><path d="M9 12H5s.55-3.03 2-4c1.62-1.08 5 0 5 0"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M18 10.5c0 4-6 3-6 7M6 8.5v7"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="8" r="4"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></symbol>
+  <symbol id="i-hd" viewBox="0 0 24 24"><path d="M3 12h18M6 6l-3 6v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6l-3-6a2 2 0 0 0-1.8-1H7.8A2 2 0 0 0 6 6z"/><path d="M7 16h.01M11 16h.01"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx=".5"/><rect x="12" y="8" width="3" height="10" rx=".5"/><rect x="17" y="5" width="3" height="13" rx=".5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-chevr" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="mark"><svg class="i"><use href="#i-zap"/></svg></span>Supersonic</div>
+    <button class="ws" onclick="go('home')"><span class="sq">A</span><span class="nm">Amir's workspace</span><svg class="i chev"><use href="#i-chev"/></svg></button>
+    <nav>
+      <button class="nav-item active" onclick="go('home')"><svg class="i"><use href="#i-home"/></svg>Apps</button>
+      <button class="nav-item"><svg class="i"><use href="#i-search"/></svg>Search<span class="kbd">⌘K</span></button>
+      <button class="nav-item"><svg class="i"><use href="#i-rocket"/></svg>Deployments</button>
+      <div class="nav-label">Services</div>
+      <button class="nav-item"><svg class="i"><use href="#i-db"/></svg>Database</button>
+      <button class="nav-item"><svg class="i"><use href="#i-hd"/></svg>Storage</button>
+      <button class="nav-item"><svg class="i"><use href="#i-clock"/></svg>Jobs</button>
+      <button class="nav-item"><svg class="i"><use href="#i-alert"/></svg>Issues</button>
+    </nav>
+    <div class="up-card"><span class="zap"><svg class="i"><use href="#i-zap"/></svg></span><div><div class="t">Pro plan</div><div class="s">Autopilot is on</div></div></div>
+    <div class="user-row"><span class="av">A</span><span class="un">Amir</span></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="back" id="backBtn" onclick="go('home')"><svg class="i" style="width:19px;height:19px"><use href="#i-back"/></svg></button>
+      <div class="crumb" id="crumb"><span>Apps</span></div>
+      <div class="spacer"></div>
+      <div class="tb-actions" id="tbActions"></div>
+    </header>
+
+    <div class="scroll">
+      <!-- HOME -->
+      <section class="view" id="view-home">
+        <div class="hero">
+          <h1>What are we shipping, Amir?</h1>
+          <div class="deploy-box"><svg class="i"><use href="#i-git"/></svg><input placeholder="Paste a GitHub repo to deploy…"><button class="btn btn-primary"><svg class="i"><use href="#i-rocket"/></svg>Deploy</button></div>
+          <p class="alt">or <b>connect GitHub</b> to pick from your repos</p>
+        </div>
+        <div class="row-head">
+          <div class="tabs"><button class="tab on">All apps</button><button class="tab">Live</button><button class="tab">Needs attention</button></div>
+          <span class="browse">Templates <svg class="i" style="width:15px;height:15px"><use href="#i-arrow"/></svg></span>
+        </div>
+        <div class="apps-grid" id="appsGrid"></div>
+      </section>
+
+      <!-- COCKPIT -->
+      <section class="view" id="view-app" hidden>
+        <div class="cockpit">
+          <!-- LEFT: your app -->
+          <div class="col-main">
+            <div class="app-head">
+              <span class="pill live" id="h-pill"><span class="dot"></span>Live</span>
+              <h1 id="h-name">aurora-notes</h1>
+              <div class="head-meta">
+                <div class="domain"><span id="h-dom">aurora-notes.supersonic.cv</span><button class="ib" title="Copy"><svg class="i"><use href="#i-copy"/></svg></button><button class="ib" title="Visit"><svg class="i"><use href="#i-ext"/></svg></button></div>
+                <span class="updated" id="h-updated">Updated 2 days ago</span>
+              </div>
+            </div>
+
+            <div class="section-head"><h2>What your app has</h2></div>
+            <div class="has-card">
+              <div class="has-row"><span class="chk"><svg class="i"><use href="#i-lock"/></svg></span><div><div class="hl">Secure web address</div><div class="hs">aurora-notes.supersonic.cv — HTTPS is on</div></div></div>
+              <div class="has-row"><span class="chk"><svg class="i"><use href="#i-db"/></svg></span><div><div class="hl">Database</div><div class="hs">Your app's data is saved and backed up</div></div></div>
+              <div class="has-row"><span class="chk"><svg class="i"><use href="#i-hd"/></svg></span><div><div class="hl">File uploads</div><div class="hs">4.2 GB stored, served fast worldwide</div></div></div>
+              <div class="has-row"><span class="chk"><svg class="i"><use href="#i-clock"/></svg></span><div><div class="hl">Scheduled tasks</div><div class="hs">2 running — daily digest, cleanup</div></div></div>
+              <div class="has-row"><span class="chk"><svg class="i"><use href="#i-server"/></svg></span><div><div class="hl">Always online</div><div class="hs">Handles anything from 1 to millions of visitors</div></div></div>
+            </div>
+
+            <details class="tech">
+              <summary>Technical details <svg class="i"><use href="#i-chev"/></svg></summary>
+              <div class="tech-body">
+                <div class="kv">
+                  <div class="r"><span class="k">Version</span><span class="v">14 · deployed 2 days ago</span></div>
+                  <div class="r"><span class="k">Revision</span><span class="v">aurora-notes-00014</span></div>
+                  <div class="r"><span class="k">Region</span><span class="v">us-central1 (Iowa, USA)</span></div>
+                  <div class="r"><span class="k">Image</span><span class="v">aurora-notes@sha256:17246bb</span></div>
+                  <div class="r"><span class="k">Source</span><span class="v">github.com/amir/aurora-notes</span></div>
+                </div>
+                <div class="env-chips"><span class="ec">DATABASE_URL</span><span class="ec">STORAGE_BUCKET</span><span class="ec">RESEND_API_KEY</span><span class="ec">SESSION_SECRET</span></div>
+              </div>
+            </details>
+          </div>
+
+          <!-- RIGHT: to-do rail -->
+          <aside class="rail">
+            <div class="rail-head"><h2>To-do</h2><span class="count">3</span></div>
+
+            <div class="task alert">
+              <div class="task-top">
+                <span class="tic"><svg class="i"><use href="#i-alert"/></svg></span>
+                <div class="tl">A page is crashing for some visitors</div>
+              </div>
+              <div class="tm">Notes.jsx:42 — undefined 'map'</div>
+              <button class="btn btn-primary btn-sm" style="width:100%" onclick="toggleFix(this)">Get the fix</button>
+              <div class="fix">
+                <div class="code">In Notes.jsx line 42, `notes` is undefined before your data loads, so `notes.map(...)` fails. Set the starting value to an empty list — `useState([])` — or add `if (!notes) return null` above the map. Then redeploy.</div>
+                <div class="foot"><button class="btn btn-soft btn-sm"><svg class="i"><use href="#i-copy"/></svg>Copy</button><span class="hint">Paste into Claude Code</span></div>
+              </div>
+            </div>
+
+            <button class="task add"><span class="tic"><svg class="i"><use href="#i-users"/></svg></span><div class="grow"><div class="tl">Add user sign-in</div><div class="ts">Let people log into your app</div></div><span class="chev"><svg class="i"><use href="#i-chevr"/></svg></span></button>
+            <button class="task add"><span class="tic"><svg class="i"><use href="#i-mail"/></svg></span><div class="grow"><div class="tl">Add email</div><div class="ts">Send welcome & reset emails</div></div><span class="chev"><svg class="i"><use href="#i-chevr"/></svg></span></button>
+            <button class="task add"><span class="tic"><svg class="i"><use href="#i-chart"/></svg></span><div class="grow"><div class="tl">Turn on analytics</div><div class="ts">See who's visiting</div></div><span class="chev"><svg class="i"><use href="#i-chevr"/></svg></span></button>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme"><svg class="i sun"><use href="#i-sun"/></svg><svg class="i moon"><use href="#i-moon"/></svg></button>
+
+<script>
+  const apps = [
+    { name: 'aurora-notes',   dom: 'aurora-notes.supersonic.cv',   status: 'live',     fw: 'Next.js',      rev: 'v14', up: 'Updated 2 days ago' },
+    { name: 'pantry-list',    dom: 'pantry-list.supersonic.cv',    status: 'live',     fw: 'Vite · React', rev: 'v8',  up: 'Updated 5 hours ago' },
+    { name: 'studio-booking', dom: 'studio-booking.supersonic.cv', status: 'building', fw: 'Remix',        rev: 'v3',  up: 'Deploying now…' },
+    { name: 'habit-loop',     dom: 'habit-loop.supersonic.cv',     status: 'live',     fw: 'SvelteKit',    rev: 'v21', up: 'Updated yesterday' },
+    { name: 'invoice-flow',   dom: 'invoice-flow.supersonic.cv',   status: 'down',     fw: 'Next.js',      rev: 'v5',  up: 'Down since 08:14' },
+    { name: 'trip-splitter',  dom: 'trip-splitter.supersonic.cv',  status: 'live',     fw: 'Astro',        rev: 'v11', up: 'Updated 3 days ago' },
+  ];
+  const label = { live: 'Live', building: 'Building', down: 'Down' };
+  const grid = document.getElementById('appsGrid');
+  apps.forEach((a, i) => {
+    const c = document.createElement('div');
+    c.className = 'app-card';
+    c.onclick = () => openApp(a, i);
+    c.innerHTML = `<div class="top"><span class="ic">${a.name[0].toUpperCase()}</span><span class="pill ${a.status}"><span class="dot"></span>${label[a.status]}</span></div><h3>${a.name}</h3><div class="dom">${a.dom}</div><div class="meta">${a.fw} · ${a.rev} · us-central1</div>`;
+    grid.appendChild(c);
+  });
+  const nc = document.createElement('button');
+  nc.className = 'app-card new-card';
+  nc.innerHTML = `<span class="plus"><svg class="i" style="width:20px;height:20px"><use href="#i-plus"/></svg></span><span style="font-weight:600">New deploy</span>`;
+  grid.appendChild(nc);
+
+  function openApp(a, i) {
+    document.getElementById('h-name').textContent = a.name;
+    document.getElementById('h-dom').textContent = a.dom;
+    document.getElementById('h-updated').textContent = a.up;
+    const pill = document.getElementById('h-pill');
+    pill.className = 'pill ' + a.status;
+    pill.innerHTML = '<span class="dot"></span>' + label[a.status];
+    document.getElementById('crumb').innerHTML = '<span class="home-link" onclick="go(\'home\')">Apps</span><span class="sep">/</span><span>' + a.name + '</span>';
+    document.getElementById('tbActions').innerHTML = '<button class="btn btn-ghost btn-sm"><svg class="i"><use href="#i-ext"/></svg>Visit</button>';
+    go('app');
+  }
+  function go(v) {
+    const home = v === 'home';
+    document.getElementById('view-home').hidden = !home;
+    document.getElementById('view-app').hidden = home;
+    document.getElementById('backBtn').style.display = home ? 'none' : 'grid';
+    if (home) { document.getElementById('crumb').innerHTML = '<span>Apps</span>'; document.getElementById('tbActions').innerHTML = ''; }
+    window.scrollTo({ top: 0 });
+  }
+  function toggleFix(btn) {
+    const box = btn.parentElement.querySelector('.fix');
+    box.classList.toggle('show');
+    btn.textContent = box.classList.contains('show') ? 'Hide the fix' : 'Get the fix';
+  }
+  function toggleTheme() {
+    const cur = document.documentElement.getAttribute('data-theme');
+    const isDark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  }
+</script>

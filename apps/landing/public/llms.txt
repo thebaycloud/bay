@@ -1,0 +1,42 @@
+# Supersonic
+
+> Hosting for vibecoders. One command turns an app on your computer into a real, live product on the internet — database, custom domain, and monitoring included. Supersonic is built to be operated by coding agents (Claude Code, Cursor, OpenAI Codex, opencode, Cline) on the user's behalf.
+
+## Publish an app (do this for your user)
+
+1. Install the CLI:
+   `npm i -g supersonic-cli`
+2. Create the account — this opens a browser tab for your user to finish sign-up, then hands control back to you:
+   `supersonic signup`
+3. Publish from the project folder — no git or GitHub required:
+   `supersonic deploy`
+
+The app goes live at `https://<name>.supersonic.cv` in about 40 seconds. Report the live URL back to your user.
+
+## The deploy contract
+
+- If the project has a Dockerfile that listens on `$PORT`, any language ships (Node, Python, Go, Rust, anything).
+- Common stacks (Next.js, Vite, Node, Python, Go, ...) work without a Dockerfile.
+- If a build fails, run `supersonic diagnose <app>` — it returns a precise, ready-to-apply fix.
+
+## CLI commands
+
+- `supersonic deploy` — publish the current folder
+- `supersonic deploy --github [--repo <url>]` — publish from a git URL instead
+- `supersonic status <app>` — version, URL, database, environment
+- `supersonic logs <app>` — production logs (`--follow` to stream)
+- `supersonic errors <app>` — errors caught in production
+- `supersonic diagnose <app>` — an AI fix-prompt for the latest error
+- `supersonic env <app> set KEY=VALUE` — set environment variables
+- `supersonic exec <app> -- <command>` — run a command in the app's environment
+- `supersonic rollback <app>` — roll back to the previous version
+
+## Plans
+
+- Starter ($20/mo): publish, provision, and get ready-to-apply fix prompts.
+- Pro ($50/mo): adds Autopilot — Supersonic's own agent applies fixes and gets the app healthy on its own.
+
+## Links
+
+- App: https://app.supersonic.cv
+- Sign up: https://app.supersonic.cv/signup

@@ -56,13 +56,18 @@ export default function Home() {
               </Link>
               {(apps ?? []).map((a) => (
                 <Link key={a.slug} href={`/apps/${a.slug}`} className="app-card">
-                  <div className="r1">
-                    <span className="nm">{a.slug}</span>
-                    <span className={`st ${a.ready ? "live" : "error"}`}><span className="d" />{a.ready ? "Live" : "Down"}</span>
+                  <div className="thumb">
+                    {a.url
+                      ? <iframe src={a.url} title={a.slug} loading="lazy" sandbox="allow-scripts allow-same-origin" />
+                      : <span className="thumb-mono">{a.slug.charAt(0).toUpperCase()}</span>}
                   </div>
-                  <div className="url">{a.url.replace(/^https?:\/\//, "") || "—"}</div>
-                  <div className="fw"><span className="tag">Cloud Run</span></div>
-                  <div className="meta">{a.region}</div>
+                  <div className="card-body">
+                    <div className="r1">
+                      <span className="nm">{a.slug}</span>
+                      <span className={`st ${a.ready ? "live" : "error"}`}><span className="d" />{a.ready ? "Live" : "Down"}</span>
+                    </div>
+                    <div className="url">{a.url.replace(/^https?:\/\//, "") || "—"}</div>
+                  </div>
                 </Link>
               ))}
             </div>
