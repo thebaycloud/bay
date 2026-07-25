@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:migrate": "node --import tsx db/migrate.ts",
+    "test": "node --import tsx --test test/"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",
@@ -30,6 +32,7 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
+    "tsx": "^4.19.1",
     "typescript": "^5.6.3"
   }
 }
