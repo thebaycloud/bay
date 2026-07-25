@@ -61,3 +61,26 @@ test("workspace visibility does not imply grant access for a different workspace
     visitorWorkspaceId: null, hasGrant: true,
   }), false);
 });
+
+// An unrecognized visibility must deny. Without this the default branch — the
+// whole point of deny-by-default — is unpinned, and a future edit could turn a
+// typo or a new enum value into an open door.
+test("an unrecognized visibility denies everyone", () => {
+  for (const visibility of ["", "public", "deleted", "PRIVATE"]) {
+    assert.equal(decideAccess({
+      app: { ...app, visibility: visibility as never }, visitor: colleague,
+      visitorWorkspaceId: "ws-acme", hasGrant: true,
+    }), false, `visibility ${JSON.stringify(visibility)} should deny`);
+  }
+});
+
+// The owner short-circuit is checked for private above; pin it for the other
+// two so a refactor cannot reorder it away unnoticed.
+test("the owner can open their app at every visibility", () => {
+  for (const visibility of ["private", "shared", "workspace"] as const) {
+    assert.equal(decideAccess({
+      app: { ...app, visibility }, visitor: owner,
+      visitorWorkspaceId: null, hasGrant: false,
+    }), true, `owner should open a ${visibility} app`);
+  }
+});
