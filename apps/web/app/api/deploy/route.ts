@@ -114,19 +114,32 @@ async function provisionStorage(slug: string, log: (l: string) => void): Promise
 const PROXY_SA = process.env.PROXY_SERVICE_ACCOUNT
   ?? "supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com";
 
-/** Only the proxy may invoke the app. This is what seals the *.run.app bypass. */
-async function grantProxyInvoker(slug: string, log: (l: string) => void): Promise<void> {
-  try {
+/** IAM member string for the identity this control plane runs as. */
+async function callerMember(): Promise<string> {
+  const acct = (await capture("gcloud", ["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"])).trim();
+  return acct.endsWith(".gserviceaccount.com") ? `serviceAccount:${acct}` : `user:${acct}`;
+}
+
+/**
+ * Only the proxy may serve the app to the world — that is what seals the
+ * *.run.app bypass. The control plane grants itself the same right because it
+ * has to probe the app it just deployed; without that the probe would 403 on
+ * every fresh deploy and hand a perfectly good app to the repair agent.
+ *
+ * This runs before the probe, and a failure fails the deploy: a sealed app
+ * that the proxy cannot invoke is unreachable, and reporting it live would be
+ * a lie.
+ */
+async function grantInvokers(slug: string, log: (l: string) => void): Promise<void> {
+  for (const member of [`serviceAccount:${PROXY_SA}`, await callerMember()]) {
     await capture("gcloud", [
       "run", "services", "add-iam-policy-binding", slug,
-      "--member", `serviceAccount:${PROXY_SA}`,
+      "--member", member,
       "--role", "roles/run.invoker",
       "--region", REGION, "--project", PROJECT,
     ]);
-    log("Sealed — reachable only through Supersonic");
-  } catch (e) {
-    log(`! could not bind proxy invoker: ${e instanceof Error ? e.message : String(e)}`);
   }
+  log("Sealed — reachable only through Supersonic");
 }
 
 /** Mint an ID token for a Cloud Run URL so we can call a sealed service. */
@@ -292,6 +305,7 @@ export async function POST(req: Request) {
             const svc = JSON.parse(o.slice(o.indexOf("{")));
             const liveUrl = svc?.status?.url ?? "";
             if (liveUrl) {
+              await grantInvokers(slug, log);
               log("verifying the app responds…");
               const probe = await probeApp(liveUrl, log);
               if (!probe.ok) return { ok: false, error: probe.reason };
@@ -331,11 +345,14 @@ export async function POST(req: Request) {
           }
         }
         log(`Live at ${result.url}`);
-        await grantProxyInvoker(slug, log);
         if (ownerId && ownerWorkspace) await markAppLive(slug, result.url ?? "");
         log(`Private — open ${slug}.supersonic.cv to share it`);
         send({ type: "done", slug, url: `https://${slug}.supersonic.cv` });
       } catch (e) {
+        // Anything thrown after the row was created — a clone failure, bad
+        // detector output, a provisioning error — would otherwise leave the app
+        // stuck at status 'deploying' forever.
+        if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });
       } finally {
         controller.close();
