@@ -6,11 +6,22 @@ import { Zap, ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, K
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-const AGENT_PROMPT = `Publish this app to Supersonic — hosting for vibecoders.
-1. Install the CLI:  npm i -g supersonic-cli
-2. Create my account:  supersonic signup   (a browser tab opens for me to finish sign-up)
-3. From this project folder, publish it:  supersonic deploy
-Then send me the live link.`;
+const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-click hosting (https://supersonic.cv). I already have a Supersonic account. Run these steps from my project's root folder and keep me posted.
+
+1. Make sure the CLI is installed:  supersonic help
+   If "supersonic" isn't found, install it:  npm i -g supersonic-cli
+
+2. Confirm I'm signed in:  supersonic whoami
+   - Logged in → go to step 3.
+   - Not logged in → sign me in:  supersonic login  (opens a browser; the CLI captures the token automatically). Only if I don't actually have an account yet, use "supersonic signup" instead.
+
+3. Publish this folder — no git or GitHub required:  supersonic deploy
+   This zips the project (skipping node_modules, .git, .env* and .gitignore'd files), uploads it, and builds it in the cloud. It streams progress and prints "✓ live: <url>" on success. If it exits WITHOUT that line, the deploy did not succeed — run "supersonic logs <app>" and "supersonic diagnose <app>" to find out why, fix it, and redeploy.
+
+4. When it's live, send me the URL. If my app needs any environment variables/secrets, tell me which and set them with:  supersonic env <app> set KEY=VALUE  — then redeploy.
+
+Useful commands: supersonic apps · status <app> · logs <app> · errors <app> · rollback <app>.
+Important: never invent or hardcode secrets, and don't commit anything. Ask me for values you don't have.`;
 
 type Door = "url" | "github" | "local";
 type Phase = "idle" | "detecting" | "secrets" | "deploying" | "done" | "error";
@@ -156,7 +167,7 @@ export default function NewApp() {
                     <p className="lead" style={{ margin: "0 0 14px", fontSize: 13 }}>
                       Paste this into <b>Claude Code</b>, <b>Cursor</b>, or <b>Codex</b> — your agent installs the CLI, signs you in, and publishes this folder. No git, no setup.
                     </p>
-                    <div className="prompt-box"><div className="inner" style={{ whiteSpace: "pre-wrap" }}>{AGENT_PROMPT}</div></div>
+                    <div className="prompt-box agent"><div className="inner" style={{ whiteSpace: "pre-wrap" }}>{AGENT_PROMPT}</div></div>
                     <div className="deploy-cta">
                       <button className="btn primary" onClick={() => navigator.clipboard?.writeText(AGENT_PROMPT)}>
                         <Copy size={13} />Copy prompt for your agent

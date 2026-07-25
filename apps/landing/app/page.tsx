@@ -78,11 +78,24 @@ const faqs = [
   ["Where does my app actually run?", "On Google Cloud, on your own isolated infrastructure — a real production deployment that scales from one visitor to millions, with a secure custom domain."],
 ];
 
-const AGENT_PROMPT = `Publish this app to Supersonic — hosting for vibecoders.
-1. Install the CLI:  npm i -g supersonic-cli
-2. Create my account:  supersonic signup   (a browser tab opens for me to finish sign-up)
-3. From this project folder, publish it:  supersonic deploy
-Then send me the live link.`;
+const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-click hosting for vibecoders (https://supersonic.cv). Run these steps from my project's root folder and keep me posted.
+
+1. Install the Supersonic CLI globally:  npm i -g supersonic-cli
+   (The command it provides is "supersonic". Run "supersonic help" if you need the full list.)
+
+2. Check whether I'm already signed in:  supersonic whoami
+   - If it says I'm logged in, skip to step 4.
+   - If not, create my account in step 3.
+
+3. Create my account:  supersonic signup
+   This opens a browser tab for me to finish sign-up (I may need an invite code — ask me for it if the page requests one). When I'm done, the CLI captures my token automatically and you can continue. If a browser can't open, tell me and I'll paste a token.
+
+4. Publish this folder — no git or GitHub required:  supersonic deploy
+   This zips the project (skipping node_modules, .git, .env* and .gitignore'd files), uploads it, and builds it in the cloud. It streams progress and prints "✓ live: <url>" on success. If it exits without that line, the deploy did NOT succeed — run "supersonic logs <app>" and "supersonic diagnose <app>" to see why, fix it, and redeploy.
+
+5. When it's live, send me the URL. If my app reads any secrets from environment variables, tell me which ones and set them with:  supersonic env <app> set KEY=VALUE
+
+Important: never invent or hardcode secrets, and don't commit anything. Ask me for values you don't have.`;
 
 function CopyPrompt() {
   const [copied, setCopied] = useState(false);

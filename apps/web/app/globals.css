@@ -286,6 +286,9 @@ table.dg tr:hover td { background: var(--paper); }
 .prompt-box::before { content: "$"; position: absolute; top: 12px; left: 12px; color: var(--faint); }
 .prompt-box .inner { padding-left: 16px; }
 .prompt-box .path { color: var(--ink-2); }
+.prompt-box.agent { font-size: 11.5px; line-height: 1.75; max-height: 340px; overflow-y: auto; padding: 16px; }
+.prompt-box.agent::before { content: none; }
+.prompt-box.agent .inner { padding-left: 0; }
 .fix-foot { display: flex; align-items: center; gap: 12px; }
 .fix-foot .hint { font-family: var(--mono); font-size: 10.5px; color: var(--faint); letter-spacing: .04em; text-transform: uppercase; }
 
