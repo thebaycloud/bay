@@ -114,9 +114,14 @@ async function provisionStorage(slug: string, log: (l: string) => void): Promise
 const PROXY_SA = process.env.PROXY_SERVICE_ACCOUNT
   ?? "supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com";
 
+/** Marks a failure the repair agent has no way to fix — permissions, not code. */
+const IAM_FAILURE = "IAM binding failed";
+
 /** IAM member string for the identity this control plane runs as. */
 async function callerMember(): Promise<string> {
-  const acct = (await capture("gcloud", ["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"])).trim();
+  const out = await capture("gcloud", ["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"]);
+  const acct = out.trim().split("\n")[0].trim();
+  if (!acct) throw new Error(`${IAM_FAILURE}: gcloud reports no active account`);
   return acct.endsWith(".gserviceaccount.com") ? `serviceAccount:${acct}` : `user:${acct}`;
 }
 
@@ -132,12 +137,16 @@ async function callerMember(): Promise<string> {
  */
 async function grantInvokers(slug: string, log: (l: string) => void): Promise<void> {
   for (const member of [`serviceAccount:${PROXY_SA}`, await callerMember()]) {
-    await capture("gcloud", [
-      "run", "services", "add-iam-policy-binding", slug,
-      "--member", member,
-      "--role", "roles/run.invoker",
-      "--region", REGION, "--project", PROJECT,
-    ]);
+    try {
+      await capture("gcloud", [
+        "run", "services", "add-iam-policy-binding", slug,
+        "--member", member,
+        "--role", "roles/run.invoker",
+        "--region", REGION, "--project", PROJECT,
+      ]);
+    } catch (e) {
+      throw new Error(`${IAM_FAILURE} for ${member}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   log("Sealed — reachable only through Supersonic");
 }
@@ -335,6 +344,13 @@ export async function POST(req: Request) {
         let result = await runDeploy();
         if (!result.ok) {
           log(`✕ ${result.error}`);
+          // A permissions failure is ours, not the repo's — the repair agent would
+          // burn redeploys on it and then bury the real cause in its summary.
+          if ((result.error ?? "").includes(IAM_FAILURE)) {
+            if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
+            send({ type: "error", message: result.error });
+            return;
+          }
           log("Repair agent taking over — reading the repo, fixing, retrying…");
           const fixed = await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
           if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
