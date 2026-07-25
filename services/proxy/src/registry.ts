@@ -12,7 +12,22 @@ export interface AppRow {
 }
 
 const CACHE_MS = 30_000;
+/**
+ * Cache keys come straight from the Host header, so anyone can mint new ones by
+ * walking subdomains — and misses cache too. Bound the map and evict oldest
+ * first so enumeration costs a stranger memory on our side, not ours.
+ */
+const CACHE_MAX = 1000;
 const cache = new Map<string, { row: AppRow | null; at: number }>();
+
+function remember(slug: string, row: AppRow | null): void {
+  // A Map iterates in insertion order, so the first key is the oldest.
+  if (cache.size >= CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(slug, { row, at: Date.now() });
+}
 
 let pool: Pool | null = null;
 function db(): Pool {
@@ -35,7 +50,7 @@ export async function lookupApp(slug: string): Promise<AppRow | null> {
     [slug]
   );
   const row = (r.rows[0] as AppRow | undefined) ?? null;
-  cache.set(slug, { row, at: Date.now() });
+  remember(slug, row);
   return row;
 }
 
