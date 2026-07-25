@@ -18,12 +18,21 @@ export function isPublicEmailProvider(domain: string): boolean {
   return PUBLIC_PROVIDERS.has(domain.trim().toLowerCase());
 }
 
+/** Anything that can run a query — a Pool, or a PoolClient inside a transaction. */
+interface Queryable {
+  query(sql: string, params?: unknown[]): Promise<{ rows: { id: string }[] }>;
+}
+
 /**
  * Find or create the workspace this email belongs to.
  * Company domains share one workspace; consumer addresses get a personal one.
+ *
+ * Pass `executor` to run inside a caller's open transaction. Without it this
+ * takes its own connection from the pool — which would deadlock if the caller
+ * is already holding one, since the pool is small.
  */
-export async function resolveWorkspaceForEmail(email: string): Promise<string> {
-  const pool = getPool(DB);
+export async function resolveWorkspaceForEmail(email: string, executor?: Queryable): Promise<string> {
+  const pool: Queryable = executor ?? getPool(DB);
   const domain = domainOf(email);
 
   if (!domain || isPublicEmailProvider(domain)) {

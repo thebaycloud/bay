@@ -42,18 +42,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // Only resolve a workspace for a user who doesn't have one yet.
       // resolveWorkspaceForEmail creates a row for personal addresses, so calling
       // it on every sign-in would leave an orphaned workspace behind each time.
+      // The row lock serializes concurrent first sign-ins for the same user, which
+      // would otherwise both pass the check and both create a workspace.
       const email = user.email.toLowerCase();
-      const pool = getPool("supersonic_platform");
-      const existing = await pool.query(
-        `SELECT workspace_id FROM users WHERE email = $1`,
-        [email]
-      );
-      if (existing.rows[0] && existing.rows[0].workspace_id === null) {
-        const workspaceId = await resolveWorkspaceForEmail(user.email);
-        await pool.query(
-          `UPDATE users SET workspace_id = $1 WHERE email = $2 AND workspace_id IS NULL`,
-          [workspaceId, email]
+      const client = await getPool("supersonic_platform").connect();
+      try {
+        await client.query("BEGIN");
+        const existing = await client.query(
+          `SELECT workspace_id FROM users WHERE email = $1 FOR UPDATE`,
+          [email]
         );
+        if (existing.rows[0] && existing.rows[0].workspace_id === null) {
+          const workspaceId = await resolveWorkspaceForEmail(user.email, client);
+          await client.query(
+            `UPDATE users SET workspace_id = $1 WHERE email = $2 AND workspace_id IS NULL`,
+            [workspaceId, email]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
       }
       return true;
     },
