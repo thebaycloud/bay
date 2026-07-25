@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Node 22. The repo has no test infrastructure; this plan introduces `node:test` run through `tsx`.
+- Node 22. The repo has no test infrastructure; this plan introduces `node:test` run through `tsx`. Test scripts must pass a **quoted glob** (`--test 'test/**/*.test.ts'`), not a bare directory — on Node 22.22.1 `--test test/` resolves the directory as a module specifier and fails without running anything.
 - `visibility` is exactly one of `'private' | 'shared' | 'workspace'`. Default on deploy is `'private'`.
 - Grants key on **email**, never `user_id` — invitees may not have signed in yet.
 - Personal workspaces have `domain = NULL` and `kind = 'personal'`; only `kind = 'company'` workspaces are joinable by domain match.
@@ -744,7 +744,7 @@ Create `services/proxy/package.json`:
   "scripts": {
     "dev": "node --import tsx --watch src/index.ts",
     "start": "node --import tsx src/index.ts",
-    "test": "node --import tsx --test src/"
+    "test": "node --import tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@auth/core": "0.41.3",
