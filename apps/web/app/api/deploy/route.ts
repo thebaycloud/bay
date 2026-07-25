@@ -10,6 +10,8 @@ import { cloudRunName } from "@/lib/slug";
 import { repairDeploy } from "@/lib/agent";
 import { currentUserId } from "@/lib/session";
 import { pgConfig } from "@/lib/pg-config";
+import { resolveSlug } from "@/lib/gcloud";
+import { setDeploy } from "@/lib/deploys";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -203,6 +205,28 @@ function isNextApp(dir: string): boolean {
   }
 }
 
+// Kaniko build with registry layer caching + a fast build machine. Caches each
+// layer (crucially the `npm install` layer) keyed on the files it depends on, so
+// an unchanged package.json means deps are pulled from cache instead of rebuilt.
+function cachedBuildConfig(image: string): string {
+  return [
+    "steps:",
+    "  - name: gcr.io/kaniko-project/executor:latest",
+    "    args:",
+    `      - --destination=${image}:latest`,
+    "      - --dockerfile=Dockerfile",
+    "      - --cache=true",
+    "      - --cache-ttl=168h",
+    `      - --cache-repo=${image}-cache`,
+    "      - --snapshot-mode=redo",
+    "      - --use-new-run",
+    "options:",
+    "  machineType: E2_HIGHCPU_8",
+    "  logging: CLOUD_LOGGING_ONLY",
+    "",
+  ].join("\n");
+}
+
 // Give the app a <slug>.supersonic.cv address (the wildcard *.supersonic.cv
 // CNAME + this per-app mapping is what routes it). SSL provisions async.
 async function createDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
@@ -224,25 +248,35 @@ export async function POST(req: Request) {
   const isUpload = req.headers.get("x-supersonic-upload") === "1";
   let url = "";
   let slug = "";
+  let friendlyName = "app";
   let secrets: Record<string, string> = {};
   let archive: Buffer | null = null;
   if (isUpload) {
     archive = Buffer.from(await req.arrayBuffer());
-    slug = cloudRunName(req.headers.get("x-supersonic-app") || "app");
+    friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
   } else {
     const body = await req.json().catch(() => ({}));
     url = normalizeRepo(String(body.repo ?? ""));
-    slug = cloudRunName(url);
+    friendlyName = cloudRunName(url);
     secrets = (body.secrets ?? {}) as Record<string, string>;
   }
+  // Apps get a short random subdomain (e.g. as76d.supersonic.cv). Redeploys reuse
+  // the same slug by matching the friendly name against the user's existing apps.
+  slug = await resolveSlug(ownerId || "", friendlyName);
 
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
       const send = (o: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
-      const log = (line: string) => send({ type: "log", line });
+      let lastStage = 0;
+      const log = (line: string) => {
+        send({ type: "log", line });
+        // Mirror progress to the deploy store (throttled) so the dashboard sees it live.
+        if (ownerId && Date.now() - lastStage > 2500) { lastStage = Date.now(); setDeploy(slug, { status: "building", stage: line }); }
+      };
       try {
         send({ type: "start", slug, url: url || `${slug} · from your computer` });
+        if (ownerId) setDeploy(slug, { ownerId, name: friendlyName, status: "building", stage: "starting…" });
         const dir = mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
         if (isUpload && archive) {
@@ -304,17 +338,27 @@ export async function POST(req: Request) {
           if (k && v) { extraEnv.push(`${k}=${v}`); log(`Injecting secret ${k}`); }
         }
 
-        const deployArgs = [
-          "run", "deploy", slug, "--source", dir,
+        // Flags shared by both build paths (applied on `gcloud run deploy`).
+        const deployFlags = [
           "--region", REGION, "--allow-unauthenticated",
           "--project", PROJECT, "--format=json",
         ];
-        if (cloudsql) deployArgs.push(`--set-cloudsql-instances=${cloudsql}`);
-        if (extraEnv.length) deployArgs.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
-        if (ownerId) deployArgs.push(`--update-labels=supersonic-owner=${ownerId}`);
+        if (cloudsql) deployFlags.push(`--set-cloudsql-instances=${cloudsql}`);
+        if (extraEnv.length) deployFlags.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
+        const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
+        if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
+        deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
+
+        // With a Dockerfile, build via Kaniko (registry layer cache + a fast build
+        // machine) and deploy the image — so an unchanged `npm install` is reused and
+        // redeploys are dramatically faster. Without one, fall back to buildpacks.
+        const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
+        const useKaniko = existsSync(join(dir, "Dockerfile"));
+        if (useKaniko) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE));
+        const buildLine = (l: string) => { if (/error|fail|step #|npm |next build|compiled|pushing|using cache|cached|denied|warming/i.test(l)) log(l); };
 
         const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
-          const hb = setInterval(() => log("building container…"), 6000);
+          const hb = setInterval(() => log("deploying…"), 6000);
           try {
             const o = await gcloudDeploy(args, log);
             clearInterval(hb);
@@ -338,10 +382,28 @@ export async function POST(req: Request) {
           }
         };
         const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
-          let res = await attempt(deployArgs);
+          if (useKaniko) {
+            log("Building with layer cache — the first build warms it, later ones are fast…");
+            const hb = setInterval(() => log("building…"), 8000);
+            const btail: string[] = [];
+            const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
+            try {
+              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], onBuild);
+            } catch {
+              clearInterval(hb);
+              const buildLog = await fetchBuildError();
+              const reason = buildLog
+                || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
+                || btail.slice(-6).join("\n");
+              return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
+            }
+            clearInterval(hb);
+            return attempt(["run", "deploy", slug, "--image", `${IMAGE}:latest`, ...deployFlags]);
+          }
+          let res = await attempt(["run", "deploy", slug, "--source", dir, ...deployFlags]);
           if (!res.ok && /clear-base-image/i.test(res.error ?? "")) {
             log("switching build type — clearing base image and retrying…");
-            res = await attempt([...deployArgs, "--clear-base-image"]);
+            res = await attempt(["run", "deploy", slug, "--source", dir, ...deployFlags, "--clear-base-image"]);
           }
           return res;
         };
@@ -353,13 +415,16 @@ export async function POST(req: Request) {
           log("Repair agent taking over — reading the repo, fixing, retrying…");
           const fixed = await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
           if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
-          else { send({ type: "error", message: fixed.summary }); return; }
+          else { if (ownerId) setDeploy(slug, { status: "failed", stage: fixed.summary }); send({ type: "error", message: fixed.summary }); return; }
         }
         log(`Live at ${result.url}`);
         await createDomainMapping(slug, log);
+        if (ownerId) setDeploy(slug, { status: "live", url: result.url });
         send({ type: "done", slug, url: result.url });
       } catch (e) {
-        send({ type: "error", message: e instanceof Error ? e.message : String(e) });
+        const msg = e instanceof Error ? e.message : String(e);
+        if (ownerId) setDeploy(slug, { status: "failed", stage: msg });
+        send({ type: "error", message: msg });
       } finally {
         controller.close();
       }

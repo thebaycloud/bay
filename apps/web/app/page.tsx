@@ -7,17 +7,28 @@ import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UserMenu } from "@/components/UserMenu";
 
-interface App { slug: string; url: string; ready: boolean; region: string; image: string; }
+interface App { slug: string; name: string; url: string; ready: boolean; region: string; image: string; status?: string; stage?: string; }
 
 export default function Home() {
   const [apps, setApps] = useState<App[] | null>(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    fetch("/api/apps")
-      .then((r) => r.json())
-      .then((d) => { if (d.error) setErr(d.error); setApps(d.apps ?? []); })
-      .catch((e) => { setErr(String(e)); setApps([]); });
+    let stop = false;
+    async function load() {
+      try {
+        const d = await (await fetch("/api/apps")).json();
+        if (stop) return;
+        if (d.error) setErr(d.error);
+        setApps(d.apps ?? []);
+        // Keep polling while any deploy is still building.
+        if ((d.apps ?? []).some((a: App) => a.status === "building")) setTimeout(load, 3000);
+      } catch (e) {
+        if (!stop) { setErr(String(e)); setApps([]); }
+      }
+    }
+    load();
+    return () => { stop = true; };
   }, []);
 
   const live = (apps ?? []).filter((a) => a.ready).length;
@@ -54,7 +65,18 @@ export default function Home() {
               <Link href="/new" className="app-card new">
                 <span className="plusbig">+</span>New app
               </Link>
-              {(apps ?? []).map((a) => (
+              {(apps ?? []).map((a) => a.status === "building" ? (
+                <div key={a.slug} className="app-card building">
+                  <div className="thumb"><span className="thumb-build">◐</span></div>
+                  <div className="card-body">
+                    <div className="r1">
+                      <span className="nm">{a.name || a.slug}</span>
+                      <span className="st building"><span className="d" />Building</span>
+                    </div>
+                    <div className="url">{a.stage}</div>
+                  </div>
+                </div>
+              ) : (
                 <Link key={a.slug} href={`/apps/${a.slug}`} className="app-card">
                   <div className="thumb">
                     {a.url
@@ -63,7 +85,7 @@ export default function Home() {
                   </div>
                   <div className="card-body">
                     <div className="r1">
-                      <span className="nm">{a.slug}</span>
+                      <span className="nm">{a.name || a.slug}</span>
                       <span className={`st ${a.ready ? "live" : "error"}`}><span className="d" />{a.ready ? "Live" : "Down"}</span>
                     </div>
                     <div className="url">{a.url.replace(/^https?:\/\//, "") || "—"}</div>

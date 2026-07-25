@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomSlug } from "./slug";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -17,6 +18,7 @@ function capture(args: string[]): Promise<string> {
 
 export interface AppSummary {
   slug: string;
+  name: string;
   url: string;
   ready: boolean;
   region: string;
@@ -25,9 +27,11 @@ export interface AppSummary {
 }
 
 const OWNER_LABEL = "supersonic-owner";
+const NAME_LABEL = "supersonic-name";
 
 export interface ServiceInfo {
   slug: string;
+  name: string;
   url: string;
   ready: boolean;
   region: string;
@@ -49,6 +53,7 @@ export async function listServices(ownerId?: string): Promise<AppSummary[]> {
     .filter((s) => !ownerId || s.metadata?.labels?.[OWNER_LABEL] === ownerId)
     .map((s) => ({
       slug: s.metadata?.name ?? "",
+      name: s.metadata?.labels?.[NAME_LABEL] || s.metadata?.name || "",
       url: s.status?.url ?? "",
       ready: (s.status?.conditions ?? []).find((c: any) => c.type === "Ready")?.status === "True",
       region: REGION,
@@ -69,6 +74,7 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
   const ann = s.spec?.template?.metadata?.annotations ?? {};
   return {
     slug: s.metadata?.name ?? slug,
+    name: s.metadata?.labels?.[NAME_LABEL] || (s.metadata?.name ?? slug),
     url: s.status?.url ?? "",
     ready: (s.status?.conditions ?? []).find((x: any) => x.type === "Ready")?.status === "True",
     region: REGION,
@@ -85,6 +91,27 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
 
 export function bucketForSlug(slug: string): string {
   return `supersonicdeploy-${slug}`.slice(0, 63);
+}
+
+/** Resolve the Cloud Run service name for a deploy: reuse the user's existing app
+ * with this friendly name (so redeploys update in place), otherwise a fresh short
+ * random slug that isn't already taken. */
+export async function resolveSlug(ownerId: string, friendlyName: string): Promise<string> {
+  const taken = new Set<string>();
+  let existing: string | null = null;
+  try {
+    const out = await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=json"]);
+    const arr = JSON.parse(out) as any[];
+    for (const s of arr) {
+      const nm = s.metadata?.name as string | undefined;
+      if (nm) taken.add(nm);
+      if (ownerId && s.metadata?.labels?.[OWNER_LABEL] === ownerId && s.metadata?.labels?.[NAME_LABEL] === friendlyName) existing = nm ?? null;
+    }
+  } catch { /* listing failed — hand back a fresh random slug */ }
+  if (existing) return existing;
+  let slug = randomSlug();
+  for (let i = 0; taken.has(slug) && i < 10; i++) slug = randomSlug();
+  return slug;
 }
 
 function accessToken(): Promise<string> {

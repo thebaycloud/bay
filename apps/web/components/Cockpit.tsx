@@ -14,7 +14,7 @@ import { JobsPanel } from "./JobsPanel";
 import { IssuesPanel } from "./IssuesPanel";
 
 interface ServiceInfo {
-  slug: string; url: string; ready: boolean; region: string;
+  slug: string; name: string; url: string; ready: boolean; region: string;
   created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string; storageBucket: string; owner: string;
 }
 
@@ -26,8 +26,13 @@ const navServices = [
 ];
 
 export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo | null }) {
-  const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: "" };
+  const d = data ?? { slug: appName, name: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: "" };
   const domain = `${appName}.supersonic.cv`;
+  // The run.app URL works immediately; the custom subdomain needs SSL provisioning
+  // (~15 min) and may not resolve yet — use the working URL for preview + links.
+  const liveUrl = d.url || `https://${domain}`;
+  const liveHost = liveUrl.replace(/^https?:\/\//, "");
+  const displayName = d.name || appName;
   const hasDb = Boolean(d.cloudsql);
   const hasStorage = Boolean(d.storageBucket);
   const dbName = hasDb ? d.cloudsql.split(":").pop() ?? "attached" : "";
@@ -36,7 +41,7 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
 
   // LEFT — what your app already has, in plain language (only the wired ones).
   const haves = [
-    Boolean(d.url) && { icon: Lock, label: "Secure web address", desc: `${domain} · HTTPS is on` },
+    Boolean(d.url) && { icon: Lock, label: "Secure web address", desc: `${liveHost} · HTTPS is on` },
     hasDb && { icon: Database, label: "Database", desc: "Your app's data is saved and backed up" },
     hasStorage && { icon: HardDrive, label: "File uploads", desc: "Files stored and served fast worldwide" },
     { icon: Server, label: "Always online", desc: "Handles anything from 1 to millions of visitors" },
@@ -69,7 +74,7 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
         </Link>
         <button className="switch">
           <span className="dot" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />
-          <span className="nm">{appName}</span>
+          <span className="nm">{displayName}</span>
           <ChevronDown className="chev" size={13} />
         </button>
         <nav>
@@ -88,14 +93,14 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
         <header className="topbar">
           <div className="crumb">
             <Link href="/" className="c-dim" style={{ textDecoration: "none", color: "inherit" }}>apps</Link>
-            <span className="sep">/</span><span>{appName}</span>
+            <span className="sep">/</span><span>{displayName}</span>
           </div>
           <div className="spacer" />
           <button className="kbar"><Search size={13} />Search<span className="kbd">⌘K</span></button>
           <div className="url-pill">
-            <span className="u">{domain}</span>
-            <button className="ib" title="Copy" onClick={() => copy(domain, `${domain} copied`)}><Copy size={14} /></button>
-            <a className="ib" title="Visit" href={`https://${domain}`} target="_blank" rel="noreferrer"><ArrowUpRight size={14} /></a>
+            <span className="u">{liveHost}</span>
+            <button className="ib" title="Copy" onClick={() => copy(liveHost, `${liveHost} copied`)}><Copy size={14} /></button>
+            <a className="ib" title="Visit" href={liveUrl} target="_blank" rel="noreferrer"><ArrowUpRight size={14} /></a>
           </div>
           <div className="status" style={{ color: d.ready ? "var(--live)" : "var(--ink-2)", borderColor: d.ready ? "color-mix(in srgb, var(--live) 30%, var(--border))" : "var(--line-2)" }}>
             <span className="d" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />{d.ready ? "Live" : "Down"}
@@ -113,14 +118,14 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
               {/* LEFT — your app */}
               <div className="ct-main">
                 {Boolean(d.url) && (
-                  <a className="preview" href={`https://${domain}`} target="_blank" rel="noreferrer">
+                  <a className="preview" href={liveUrl} target="_blank" rel="noreferrer">
                     <div className="bar">
                       <span className="dots"><i /><i /><i /></span>
-                      <span className="pu">{domain}</span>
+                      <span className="pu">{liveHost}</span>
                       <ArrowUpRight size={13} className="ext" />
                     </div>
                     <div className="frame">
-                      <iframe src={`https://${domain}`} title={`${appName} preview`} loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms" />
+                      <iframe src={liveUrl} title={`${appName} preview`} loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms" />
                       <span className="frame-hint">live preview — click to open</span>
                     </div>
                   </a>
@@ -131,7 +136,7 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
                     <span className="live"><span className="d" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />{d.ready ? "LIVE" : "DOWN"}</span>
                     <span>/ YOUR APP</span>
                   </div>
-                  <h1>{appName}</h1>
+                  <h1>{displayName}</h1>
                   <p className="sub">{d.ready ? "Running smoothly on Cloud Run — nothing for you to babysit." : "This app is currently down. Check the to-do list for what to fix."}</p>
                 </div>
 
