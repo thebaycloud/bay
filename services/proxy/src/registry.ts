@@ -22,7 +22,8 @@ const cache = new Map<string, { row: AppRow | null; at: number }>();
 
 function remember(slug: string, row: AppRow | null): void {
   // A Map iterates in insertion order, so the first key is the oldest.
-  if (cache.size >= CACHE_MAX) {
+  // Refreshing a key already present replaces it, so nothing needs evicting.
+  if (cache.size >= CACHE_MAX && !cache.has(slug)) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
   }
