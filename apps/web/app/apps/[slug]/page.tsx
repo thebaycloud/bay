@@ -1,4 +1,5 @@
 import { Cockpit } from "@/components/Cockpit";
+import SharePanel from "@/components/SharePanel";
 import { describeService, type ServiceInfo } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 
@@ -22,5 +23,9 @@ export default async function AppPage({ params }: { params: { slug: string } }) 
       </div>
     );
   }
-  return <Cockpit appName={slug} data={data} />;
+  return (
+    <Cockpit appName={slug} data={data}>
+      <SharePanel slug={slug} />
+    </Cockpit>
+  );
 }

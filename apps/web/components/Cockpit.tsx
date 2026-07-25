@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   Zap, ChevronDown, LayoutGrid, Rocket, Database, Users, BarChart3, Mail,
   HardDrive, ShieldCheck, Globe, History, Server, GitBranch, Search, Copy,
@@ -25,7 +25,7 @@ const services = [
   { icon: GitBranch, label: "Deployments" },
 ];
 
-export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo | null }) {
+export function Cockpit({ appName, data, children }: { appName: string; data: ServiceInfo | null; children?: ReactNode }) {
   const d = data ?? { slug: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: "" };
   const domain = `${appName}.supersonic.cv`;
   const hasDb = Boolean(d.cloudsql);
@@ -160,6 +160,12 @@ export function Cockpit({ appName, data }: { appName: string; data: ServiceInfo 
             <JobsPanel slug={appName} />
 
             <IssuesPanel slug={appName} />
+
+            {children && (
+              <section className="section reveal" style={{ animationDelay: ".13s" }}>
+                <div style={{ padding: "20px 28px", maxWidth: 420 }}>{children}</div>
+              </section>
+            )}
 
             <section className="section reveal" style={{ animationDelay: ".11s" }}>
               <div className="split">
