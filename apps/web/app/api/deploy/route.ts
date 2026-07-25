@@ -10,6 +10,8 @@ import { cloudRunName } from "@/lib/slug";
 import { repairDeploy } from "@/lib/agent";
 import { currentUserId } from "@/lib/session";
 import { pgConfig } from "@/lib/pg-config";
+import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
+import { getPool } from "@/lib/db";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -109,16 +111,51 @@ async function provisionStorage(slug: string, log: (l: string) => void): Promise
   return bucket;
 }
 
+const PROXY_SA = process.env.PROXY_SERVICE_ACCOUNT
+  ?? "supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com";
+
+/** Only the proxy may invoke the app. This is what seals the *.run.app bypass. */
+async function grantProxyInvoker(slug: string, log: (l: string) => void): Promise<void> {
+  try {
+    await capture("gcloud", [
+      "run", "services", "add-iam-policy-binding", slug,
+      "--member", `serviceAccount:${PROXY_SA}`,
+      "--role", "roles/run.invoker",
+      "--region", REGION, "--project", PROJECT,
+    ]);
+    log("Sealed — reachable only through Supersonic");
+  } catch (e) {
+    log(`! could not bind proxy invoker: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** Mint an ID token for a Cloud Run URL so we can call a sealed service. */
+async function idTokenFor(audience: string): Promise<string> {
+  return (await capture("gcloud", ["auth", "print-identity-token", `--audiences=${audience}`])).trim();
+}
+
 // After a deploy passes Cloud Run's health check, actually fetch the app: a
 // server can "listen" yet still reject the real request (e.g. Vite preview host
-// allowlisting), which we must catch and repair.
-async function probeApp(url: string): Promise<{ ok: boolean; reason?: string }> {
+// allowlisting), which we must catch and repair. The app is sealed, so this
+// request carries an ID token exactly as the proxy's would.
+async function probeApp(url: string, log: (l: string) => void): Promise<{ ok: boolean; reason?: string }> {
+  // Mint the token outside the catch below. A sealed app cannot be reached
+  // without one, so a token failure means the check did not happen — report
+  // that plainly instead of returning a pass we never verified.
+  let token: string;
+  try {
+    token = await idTokenFor(url);
+  } catch (e) {
+    log(`! response check skipped — no ID token (${e instanceof Error ? e.message : String(e)})`);
+    return { ok: true };
+  }
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 20000);
-    const r = await fetch(url, { signal: ctrl.signal });
+    const r = await fetch(url, { signal: ctrl.signal, headers: { Authorization: `Bearer ${token}` } });
     clearTimeout(to);
     const body = (await r.text()).slice(0, 3000);
+    if (r.status === 403) return { ok: false, reason: "App is sealed but the deployer identity cannot invoke it — check the run.invoker binding." };
     if (r.status >= 500) return { ok: false, reason: `App is up but returns HTTP ${r.status}: ${body.replace(/\s+/g, " ").slice(0, 240)}` };
     if (/blocked request|allowedhosts|is not allowed|cannot get \/|application error|internal server error/i.test(body))
       return { ok: false, reason: `App started but rejected the request: "${body.replace(/\s+/g, " ").slice(0, 240)}"` };
@@ -166,25 +203,17 @@ function spaDockerfile(outdir: string): string {
   ].join("\n");
 }
 
-// Give the app a <slug>.supersonic.cv address (the wildcard *.supersonic.cv
-// CNAME + this per-app mapping is what routes it). SSL provisions async.
-async function createDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
-  try {
-    await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", slug, "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT]);
-    log(`Mapped ${slug}.supersonic.cv (SSL provisioning, live in ~15 min)`);
-  } catch (e) {
-    const m = e instanceof Error ? e.message : String(e);
-    if (/already exists/i.test(m)) { log(`${slug}.supersonic.cv already mapped`); return; }
-    log(`! custom domain skipped: ${m.replace(/\s+/g, " ").slice(0, 100)}`);
-  }
-}
-
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const url = normalizeRepo(String(body.repo ?? ""));
   const slug = cloudRunName(url);
   const secrets = (body.secrets ?? {}) as Record<string, string>;
   const ownerId = await currentUserId();
+  const ownerWorkspace = ownerId
+    ? (await getPool("supersonic_platform").query(
+        `SELECT workspace_id FROM users WHERE id = $1`, [ownerId]
+      )).rows[0]?.workspace_id ?? null
+    : null;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -193,6 +222,9 @@ export async function POST(req: Request) {
       const log = (line: string) => send({ type: "log", line });
       try {
         send({ type: "start", slug, url });
+        if (ownerId && ownerWorkspace) {
+          await createAppRecord({ slug, workspaceId: ownerWorkspace, ownerId });
+        }
         const dir = mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
         log(`Pulling ${url}`);
@@ -245,7 +277,7 @@ export async function POST(req: Request) {
 
         const deployArgs = [
           "run", "deploy", slug, "--source", dir,
-          "--region", REGION, "--allow-unauthenticated",
+          "--region", REGION, "--no-allow-unauthenticated",
           "--project", PROJECT, "--format=json",
         ];
         if (cloudsql) deployArgs.push(`--set-cloudsql-instances=${cloudsql}`);
@@ -261,7 +293,7 @@ export async function POST(req: Request) {
             const liveUrl = svc?.status?.url ?? "";
             if (liveUrl) {
               log("verifying the app responds…");
-              const probe = await probeApp(liveUrl);
+              const probe = await probeApp(liveUrl, log);
               if (!probe.ok) return { ok: false, error: probe.reason };
             }
             return { ok: true, url: liveUrl };
@@ -292,11 +324,17 @@ export async function POST(req: Request) {
           log("Repair agent taking over — reading the repo, fixing, retrying…");
           const fixed = await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
           if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
-          else { send({ type: "error", message: fixed.summary }); return; }
+          else {
+            if (ownerId && ownerWorkspace) await markAppFailed(slug);
+            send({ type: "error", message: fixed.summary });
+            return;
+          }
         }
         log(`Live at ${result.url}`);
-        await createDomainMapping(slug, log);
-        send({ type: "done", slug, url: result.url });
+        await grantProxyInvoker(slug, log);
+        if (ownerId && ownerWorkspace) await markAppLive(slug, result.url ?? "");
+        log(`Private — open ${slug}.supersonic.cv to share it`);
+        send({ type: "done", slug, url: `https://${slug}.supersonic.cv` });
       } catch (e) {
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });
       } finally {
