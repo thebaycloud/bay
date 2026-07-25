@@ -1,0 +1,60 @@
+# Supersonic
+
+> Hosting for vibecoders. One command turns an app on your user's computer into a real, live product on the internet — database, custom domain, and monitoring included. Supersonic is built to be operated by coding agents (Claude Code, Cursor, OpenAI Codex, opencode, Cline) on the user's behalf.
+
+If you are a coding agent asked to publish a user's app to Supersonic, follow "Publish an app" below exactly, in order. Keep the user informed and never invent, hardcode, or commit secrets — ask the user for values you don't have.
+
+## Publish an app
+
+1. Install the CLI globally:
+   `npm i -g supersonic-cli`
+   It provides the `supersonic` command. Run `supersonic help` for the full command list.
+
+2. Check auth state:
+   `supersonic whoami`
+   - Logged in → go to step 4.
+   - Not logged in → step 3.
+
+3. Sign the user in or create their account:
+   - Existing account: `supersonic login`
+   - New user: `supersonic signup`
+   Both open a browser tab; the user finishes there and the CLI captures the token automatically. Sign-up may ask for an invite code — ask the user for it. If no browser can open (headless/SSH), the user can pass a token: `supersonic login --token <token>`.
+
+4. Publish from the project's root folder — no git or GitHub required:
+   `supersonic deploy`
+   This zips the folder (skipping node_modules, .git, .env* and .gitignore'd files), uploads it, and builds it in the cloud, streaming progress. On success it prints `✓ live: <url>`.
+   IMPORTANT: if it exits WITHOUT a `✓ live:` line, the deploy did not succeed. Diagnose and retry:
+   `supersonic logs <app>` and `supersonic diagnose <app>` → apply the fix → `supersonic deploy` again.
+
+5. Report the live URL to the user. If the app reads secrets from environment variables, set them and redeploy:
+   `supersonic env <app> set KEY=VALUE`
+
+## The deploy contract
+
+- Any language ships if the project has a Dockerfile that listens on `$PORT`.
+- Common stacks (Next.js, Vite, Node, Python, Go, ...) work without a Dockerfile.
+- Next.js and other build-then-serve apps are built automatically before serving.
+
+## CLI commands
+
+- `supersonic deploy` — publish the current folder (no git needed)
+- `supersonic deploy --github [--repo <url>]` — publish from a git URL instead
+- `supersonic apps` — list the user's apps
+- `supersonic status <app>` — version, URL, database, environment
+- `supersonic logs <app>` — production logs (`--follow` to stream)
+- `supersonic errors <app>` — errors caught in production
+- `supersonic diagnose <app>` — an AI fix-prompt for the latest error
+- `supersonic env <app> set KEY=VALUE` — set environment variables
+- `supersonic exec <app> -- <command>` — run a command in the app's environment
+- `supersonic rollback <app>` — roll back to the previous version
+- Add `--json` to any command for machine-readable output.
+
+## Plans
+
+- Starter ($20/mo): publish, provision, and get ready-to-apply fix prompts.
+- Pro ($50/mo): adds Autopilot — Supersonic's own agent applies fixes and gets the app healthy on its own.
+
+## Links
+
+- App: https://app.supersonic.cv
+- Sign up: https://app.supersonic.cv/signup

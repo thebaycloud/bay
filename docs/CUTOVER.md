@@ -23,6 +23,22 @@ hosted app through the proxy in one step.
   the proxy and the control plane. Proven: a fresh service returns 403 anonymously
   while an app deployed by the old code still returns 200.
 
+## The switch
+
+Both routing models live in the code and are selected by one environment variable
+on the control plane:
+
+| `SEAL_APPS` | Deploy behaviour | Routing |
+|---|---|---|
+| unset (today) | `--allow-unauthenticated` + per-app domain mapping | `<slug>.supersonic.cv` -> Cloud Run directly |
+| `1` (after cutover) | `--no-allow-unauthenticated` + invoker granted to the proxy | `*.supersonic.cv` -> load balancer -> proxy -> app |
+
+They are mutually exclusive. Setting `SEAL_APPS=1` before DNS moves makes every
+new app unreachable: the domain mapping still points straight at Cloud Run, which
+now refuses anonymous callers. Flip it in step 5 below, not earlier.
+
+The `apps` row is written either way, so the proxy is ready the moment DNS moves.
+
 ## Remaining, in this order
 
 1. **Wildcard certificate.** Classic managed certs reject `*.supersonic.cv`
@@ -41,12 +57,15 @@ hosted app through the proxy in one step.
 4. **Point `*.supersonic.cv` at 8.233.7.157.** This is the irreversible step.
    Today the record points at `ghs.googlehosted.com` (per-app domain mappings).
 
-5. **Decide the public-app story before sealing anything.** `landing`,
+5. **Set `SEAL_APPS=1`** on the control plane and redeploy. New deploys are sealed
+   from this point; existing apps are unaffected until step 7.
+
+6. **Decide the public-app story before sealing anything.** `landing`,
    `supersonic-landing`, and `supersonic-control-plane` are public on purpose and are
    excluded from the backfill. The sharing model has no "public" visibility — adding
    one is a product decision, not a migration step.
 
-6. **Seal the remaining apps** once the proxy path is confirmed live:
+7. **Seal the remaining apps** once the proxy path is confirmed live:
    remove `allUsers` invoker, add the proxy service account.
 
 ## Rollback

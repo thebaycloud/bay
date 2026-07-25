@@ -23,6 +23,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 RUN curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/usr/local >/dev/null
 ENV PATH="/usr/local/google-cloud-sdk/bin:${PATH}"
+# `beta` is needed for `run domain-mappings` (pretty *.supersonic.cv domains) and `builds log`.
+RUN gcloud components install beta --quiet >/dev/null
 
 WORKDIR /app
 COPY --from=webbuild /app/apps/web ./apps/web

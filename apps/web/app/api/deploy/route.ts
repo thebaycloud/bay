@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
@@ -12,9 +12,25 @@ import { currentUserId } from "@/lib/session";
 import { pgConfig } from "@/lib/pg-config";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
 import { getPool } from "@/lib/db";
+import { resolveSlug } from "@/lib/gcloud";
+import { setDeploy } from "@/lib/deploys";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
+
+/**
+ * Which routing model a deploy uses. These are mutually exclusive:
+ *
+ *   off (default) — the app is public and gets its own domain mapping, so
+ *                   <slug>.supersonic.cv resolves straight to Cloud Run.
+ *   on            — only the proxy may invoke the app, and *.supersonic.cv is
+ *                   expected to point at the load balancer in front of it.
+ *
+ * Turning this on before the DNS cutover makes every app unreachable: the
+ * per-app mapping still sends traffic directly to Cloud Run, which now refuses
+ * it. See docs/CUTOVER.md for the order of operations.
+ */
+const SEAL_APPS = process.env.SEAL_APPS === "1";
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
 const ENV = {
   ...process.env,
@@ -160,21 +176,23 @@ async function idTokenFor(audience: string): Promise<string> {
 // server can "listen" yet still reject the real request (e.g. Vite preview host
 // allowlisting), which we must catch and repair. The app is sealed, so this
 // request carries an ID token exactly as the proxy's would.
-async function probeApp(url: string, log: (l: string) => void): Promise<{ ok: boolean; reason?: string }> {
-  // Mint the token outside the catch below. A sealed app cannot be reached
-  // without one, so a token failure means the check did not happen — report
-  // that plainly instead of returning a pass we never verified.
-  let token: string;
-  try {
-    token = await idTokenFor(url);
-  } catch (e) {
-    log(`! response check skipped — no ID token (${e instanceof Error ? e.message : String(e)})`);
-    return { ok: true };
+async function probeApp(url: string, log: (l: string) => void, sealed: boolean): Promise<{ ok: boolean; reason?: string }> {
+  // A sealed app cannot be reached without a token, so mint it outside the catch
+  // below: a token failure means the check did not happen, and saying so beats
+  // returning a pass we never verified. A public app needs no token at all.
+  let auth: Record<string, string> = {};
+  if (sealed) {
+    try {
+      auth = { Authorization: `Bearer ${await idTokenFor(url)}` };
+    } catch (e) {
+      log(`! response check skipped — no ID token (${e instanceof Error ? e.message : String(e)})`);
+      return { ok: true };
+    }
   }
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 20000);
-    const r = await fetch(url, { signal: ctrl.signal, headers: { Authorization: `Bearer ${token}` } });
+    const r = await fetch(url, { signal: ctrl.signal, headers: auth });
     clearTimeout(to);
     const body = (await r.text()).slice(0, 3000);
     if (r.status === 403) return { ok: false, reason: "App is sealed but the deployer identity cannot invoke it — check the run.invoker binding." };
@@ -225,32 +243,136 @@ function spaDockerfile(outdir: string): string {
   ].join("\n");
 }
 
+// Next.js (and other build-then-serve node frameworks) MUST run their build
+// before `next start`, or the container crashloops with "no production build in
+// .next". Buildpacks don't reliably run the build (esp. with mixed lockfiles),
+// so we inject an explicit build -> start Dockerfile. Forcing `npm install` also
+// resolves the classic package-lock.json + yarn.lock ambiguity.
+function nextDockerfile(): string {
+  return [
+    "FROM node:22-slim AS build",
+    "WORKDIR /app",
+    "ENV NEXT_TELEMETRY_DISABLED=1",
+    "COPY package*.json ./",
+    "RUN npm install --no-audit --no-fund --legacy-peer-deps",
+    "COPY . .",
+    "RUN npm run build",
+    "",
+    "FROM node:22-slim",
+    "WORKDIR /app",
+    "ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080",
+    "COPY --from=build /app ./",
+    "EXPOSE 8080",
+    'CMD ["npm","run","start"]',
+    "",
+  ].join("\n");
+}
+
+// File-based detection (more reliable than a framework label): a Next.js app has
+// `next` in its deps and a build script.
+function isNextApp(dir: string): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    return Boolean(deps.next) && Boolean(pkg.scripts?.build);
+  } catch {
+    return false;
+  }
+}
+
+// Kaniko build with registry layer caching + a fast build machine. Caches each
+// layer (crucially the `npm install` layer) keyed on the files it depends on, so
+// an unchanged package.json means deps are pulled from cache instead of rebuilt.
+function cachedBuildConfig(image: string): string {
+  return [
+    "steps:",
+    "  - name: gcr.io/kaniko-project/executor:latest",
+    "    args:",
+    `      - --destination=${image}:latest`,
+    "      - --dockerfile=Dockerfile",
+    "      - --cache=true",
+    "      - --cache-ttl=168h",
+    `      - --cache-repo=${image}-cache`,
+    "      - --snapshot-mode=redo",
+    "      - --use-new-run",
+    "options:",
+    "  machineType: E2_HIGHCPU_8",
+    "  logging: CLOUD_LOGGING_ONLY",
+    "",
+  ].join("\n");
+}
+
+// Give the app a <slug>.supersonic.cv address (the wildcard *.supersonic.cv
+// CNAME + this per-app mapping is what routes it). SSL provisions async.
+async function createDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
+  try {
+    await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", slug, "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT]);
+    log(`Mapped ${slug}.supersonic.cv (SSL provisioning, live in ~15 min)`);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/already exists/i.test(m)) { log(`${slug}.supersonic.cv already mapped`); return; }
+    log(`! custom domain skipped: ${m.replace(/\s+/g, " ").slice(0, 100)}`);
+  }
+}
+
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({}));
-  const url = normalizeRepo(String(body.repo ?? ""));
-  const slug = cloudRunName(url);
-  const secrets = (body.secrets ?? {}) as Record<string, string>;
   const ownerId = await currentUserId();
   const ownerWorkspace = ownerId
     ? (await getPool("supersonic_platform").query(
         `SELECT workspace_id FROM users WHERE id = $1`, [ownerId]
       )).rows[0]?.workspace_id ?? null
     : null;
+  // Two ingest doors: a git URL (clone) or a project uploaded straight from the
+  // user's computer (a gzipped tar of the folder). Both end in a populated dir,
+  // after which the pipeline is identical.
+  const isUpload = req.headers.get("x-supersonic-upload") === "1";
+  let url = "";
+  let slug = "";
+  let friendlyName = "app";
+  let secrets: Record<string, string> = {};
+  let archive: Buffer | null = null;
+  if (isUpload) {
+    archive = Buffer.from(await req.arrayBuffer());
+    friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
+  } else {
+    const body = await req.json().catch(() => ({}));
+    url = normalizeRepo(String(body.repo ?? ""));
+    friendlyName = cloudRunName(url);
+    secrets = (body.secrets ?? {}) as Record<string, string>;
+  }
+  // Apps get a short random subdomain (e.g. as76d.supersonic.cv). Redeploys reuse
+  // the same slug by matching the friendly name against the user's existing apps.
+  slug = await resolveSlug(ownerId || "", friendlyName);
 
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
       const send = (o: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
-      const log = (line: string) => send({ type: "log", line });
+      let lastStage = 0;
+      const log = (line: string) => {
+        send({ type: "log", line });
+        // Mirror progress to the deploy store (throttled) so the dashboard sees it live.
+        if (ownerId && Date.now() - lastStage > 2500) { lastStage = Date.now(); setDeploy(slug, { status: "building", stage: line }); }
+      };
       try {
-        send({ type: "start", slug, url });
+        send({ type: "start", slug, url: url || `${slug} · from your computer` });
+        if (ownerId) setDeploy(slug, { ownerId, name: friendlyName, status: "building", stage: "starting…" });
+        // The proxy resolves every request against this table, so the row must
+        // exist before the deploy can possibly succeed.
         if (ownerId && ownerWorkspace) {
           await createAppRecord({ slug, workspaceId: ownerWorkspace, ownerId });
         }
         const dir = mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
-        log(`Pulling ${url}`);
-        await run("git", ["clone", "--depth", "1", url, dir], () => {});
+        if (isUpload && archive) {
+          log("Unpacking your project…");
+          const tgz = `${dir}.tgz`;
+          writeFileSync(tgz, archive);
+          await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+        } else {
+          log(`Pulling ${url}`);
+          await run("git", ["clone", "--depth", "1", url, dir], () => {});
+        }
 
         log("Detecting stack…");
         const raw = await capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", dir, "--api"]);
@@ -262,13 +384,17 @@ export async function POST(req: Request) {
         if (s.cache) log(`Provision ${s.cache} cache`);
         if (s.secretsNeeded?.length) log(`Will ask for secrets: ${s.secretsNeeded.join(", ")}`);
 
-        if (/vite|create react app|\bspa\b/i.test(s.framework) && !existsSync(join(dir, "Dockerfile"))) {
+        const hasDockerfile = existsSync(join(dir, "Dockerfile"));
+        if (!hasDockerfile && /vite|create react app|\bspa\b/i.test(s.framework)) {
           const outdir = /create react app/i.test(s.framework) ? "build" : "dist";
           writeFileSync(join(dir, "Dockerfile"), spaDockerfile(outdir));
           log(`SPA detected — building to static and serving ${outdir}/ on $PORT`);
+        } else if (!hasDockerfile && isNextApp(dir)) {
+          writeFileSync(join(dir, "Dockerfile"), nextDockerfile());
+          log("Next.js detected — running the build, then serving on $PORT");
         }
 
-        const extraEnv: string[] = [`SUPERSONIC_REPO=${url}`];
+        const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
         let cloudsql: string | null = null;
         if (s.database?.engine === "postgres") {
           log("Provisioning Postgres…");
@@ -297,26 +423,43 @@ export async function POST(req: Request) {
           if (k && v) { extraEnv.push(`${k}=${v}`); log(`Injecting secret ${k}`); }
         }
 
-        const deployArgs = [
-          "run", "deploy", slug, "--source", dir,
-          "--region", REGION, "--no-allow-unauthenticated",
+        // Flags shared by both build paths (applied on `gcloud run deploy`).
+        // SEAL_APPS switches the two routing models. Off (today): the app is
+        // public and reached through its own domain mapping. On (after the DNS
+        // cutover): only the proxy may invoke it, and *.supersonic.cv routes
+        // through the load balancer. Turning it on before DNS moves would make
+        // every app unreachable — see docs/CUTOVER.md.
+        const deployFlags = [
+          "--region", REGION, SEAL_APPS ? "--no-allow-unauthenticated" : "--allow-unauthenticated",
           "--project", PROJECT, "--format=json",
         ];
-        if (cloudsql) deployArgs.push(`--set-cloudsql-instances=${cloudsql}`);
-        if (extraEnv.length) deployArgs.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
-        if (ownerId) deployArgs.push(`--update-labels=supersonic-owner=${ownerId}`);
+        if (cloudsql) deployFlags.push(`--set-cloudsql-instances=${cloudsql}`);
+        if (extraEnv.length) deployFlags.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
+        const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
+        if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
+        deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
+
+        // With a Dockerfile, build via Kaniko (registry layer cache + a fast build
+        // machine) and deploy the image — so an unchanged `npm install` is reused and
+        // redeploys are dramatically faster. Without one, fall back to buildpacks.
+        const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
+        const useKaniko = existsSync(join(dir, "Dockerfile"));
+        if (useKaniko) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE));
+        const buildLine = (l: string) => { if (/error|fail|step #|npm |next build|compiled|pushing|using cache|cached|denied|warming/i.test(l)) log(l); };
 
         const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
-          const hb = setInterval(() => log("building container…"), 6000);
+          const hb = setInterval(() => log("deploying…"), 6000);
           try {
             const o = await gcloudDeploy(args, log);
             clearInterval(hb);
             const svc = JSON.parse(o.slice(o.indexOf("{")));
             const liveUrl = svc?.status?.url ?? "";
             if (liveUrl) {
-              await grantInvokers(slug, log);
+              // Grant before probing: a sealed app 403s the control plane's own
+              // probe until the binding exists.
+              if (SEAL_APPS) await grantInvokers(slug, log);
               log("verifying the app responds…");
-              const probe = await probeApp(liveUrl, log);
+              const probe = await probeApp(liveUrl, log, SEAL_APPS);
               if (!probe.ok) return { ok: false, error: probe.reason };
             }
             return { ok: true, url: liveUrl };
@@ -332,10 +475,28 @@ export async function POST(req: Request) {
           }
         };
         const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
-          let res = await attempt(deployArgs);
+          if (useKaniko) {
+            log("Building with layer cache — the first build warms it, later ones are fast…");
+            const hb = setInterval(() => log("building…"), 8000);
+            const btail: string[] = [];
+            const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
+            try {
+              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], onBuild);
+            } catch {
+              clearInterval(hb);
+              const buildLog = await fetchBuildError();
+              const reason = buildLog
+                || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
+                || btail.slice(-6).join("\n");
+              return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
+            }
+            clearInterval(hb);
+            return attempt(["run", "deploy", slug, "--image", `${IMAGE}:latest`, ...deployFlags]);
+          }
+          let res = await attempt(["run", "deploy", slug, "--source", dir, ...deployFlags]);
           if (!res.ok && /clear-base-image/i.test(res.error ?? "")) {
             log("switching build type — clearing base image and retrying…");
-            res = await attempt([...deployArgs, "--clear-base-image"]);
+            res = await attempt(["run", "deploy", slug, "--source", dir, ...deployFlags, "--clear-base-image"]);
           }
           return res;
         };
@@ -355,21 +516,31 @@ export async function POST(req: Request) {
           const fixed = await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
           if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
           else {
-            if (ownerId && ownerWorkspace) await markAppFailed(slug);
+            if (ownerId) setDeploy(slug, { status: "failed", stage: fixed.summary });
+            if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
             send({ type: "error", message: fixed.summary });
             return;
           }
         }
         log(`Live at ${result.url}`);
+        // The two routing models are mutually exclusive: a per-app domain
+        // mapping points straight at Cloud Run, which a sealed app refuses.
+        if (SEAL_APPS) {
+          log(`Private — open ${slug}.supersonic.cv to share it`);
+        } else {
+          await createDomainMapping(slug, log);
+        }
+        if (ownerId) setDeploy(slug, { status: "live", url: result.url });
         if (ownerId && ownerWorkspace) await markAppLive(slug, result.url ?? "");
-        log(`Private — open ${slug}.supersonic.cv to share it`);
-        send({ type: "done", slug, url: `https://${slug}.supersonic.cv` });
+        send({ type: "done", slug, url: SEAL_APPS ? `https://${slug}.supersonic.cv` : result.url });
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (ownerId) setDeploy(slug, { status: "failed", stage: msg });
         // Anything thrown after the row was created — a clone failure, bad
         // detector output, a provisioning error — would otherwise leave the app
         // stuck at status 'deploying' forever.
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
-        send({ type: "error", message: e instanceof Error ? e.message : String(e) });
+        send({ type: "error", message: msg });
       } finally {
         controller.close();
       }

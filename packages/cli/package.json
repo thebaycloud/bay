@@ -1,9 +1,31 @@
 {
-  "name": "supersonic",
-  "version": "0.1.0",
-  "description": "Deploy anything to Supersonic in one command.",
-  "bin": { "supersonic": "./index.js" },
+  "name": "supersonic-cli",
+  "version": "0.6.1",
+  "description": "Deploy & debug Supersonic apps from your coding agent — the agent-native CLI.",
+  "bin": {
+    "supersonic": "./index.js"
+  },
   "type": "commonjs",
-  "engines": { "node": ">=20" },
-  "files": ["index.js"]
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "keywords": [
+    "deploy",
+    "cloud",
+    "gcp",
+    "cloud-run",
+    "vibecoding",
+    "supersonic"
+  ],
+  "homepage": "https://app.supersonic.cv",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/The-Red-Onion/supersonic",
+    "directory": "packages/cli"
+  },
+  "license": "MIT"
 }

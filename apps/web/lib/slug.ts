@@ -11,3 +11,11 @@ export function cloudRunName(input: string): string {
   if (!/^[a-z]/.test(s)) s = "app-" + s;
   return s.slice(0, 49);
 }
+
+/** A short random Cloud Run name — a letter + 4 alphanumerics, e.g. "as76d". */
+export function randomSlug(): string {
+  const alnum = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let s = "abcdefghijklmnopqrstuvwxyz"[Math.floor(Math.random() * 26)];
+  for (let i = 0; i < 4; i++) s += alnum[Math.floor(Math.random() * 36)];
+  return s;
+}
