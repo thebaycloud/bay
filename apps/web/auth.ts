@@ -39,11 +39,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (account && account.provider !== "credentials") {
         await createUser(user.email, user.name ?? "", null, account.provider);
       }
-      const workspaceId = await resolveWorkspaceForEmail(user.email);
-      await getPool("supersonic_platform").query(
-        `UPDATE users SET workspace_id = $1 WHERE email = $2 AND workspace_id IS NULL`,
-        [workspaceId, user.email.toLowerCase()]
+      // Only resolve a workspace for a user who doesn't have one yet.
+      // resolveWorkspaceForEmail creates a row for personal addresses, so calling
+      // it on every sign-in would leave an orphaned workspace behind each time.
+      const email = user.email.toLowerCase();
+      const pool = getPool("supersonic_platform");
+      const existing = await pool.query(
+        `SELECT workspace_id FROM users WHERE email = $1`,
+        [email]
       );
+      if (existing.rows[0] && existing.rows[0].workspace_id === null) {
+        const workspaceId = await resolveWorkspaceForEmail(user.email);
+        await pool.query(
+          `UPDATE users SET workspace_id = $1 WHERE email = $2 AND workspace_id IS NULL`,
+          [workspaceId, email]
+        );
+      }
       return true;
     },
   },
