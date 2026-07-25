@@ -5,6 +5,8 @@ import GitHub from "next-auth/providers/github";
 import bcrypt from "bcryptjs";
 import { authConfig } from "./auth.config";
 import { findUserByEmail, createUser } from "@/lib/users";
+import { resolveWorkspaceForEmail } from "@/lib/workspace";
+import { getPool } from "@/lib/db";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const providers: any[] = [
@@ -33,9 +35,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     ...authConfig.callbacks,
     async signIn({ user, account }) {
-      if (account && account.provider !== "credentials" && user.email) {
+      if (!user.email) return false;
+      if (account && account.provider !== "credentials") {
         await createUser(user.email, user.name ?? "", null, account.provider);
       }
+      const workspaceId = await resolveWorkspaceForEmail(user.email);
+      await getPool("supersonic_platform").query(
+        `UPDATE users SET workspace_id = $1 WHERE email = $2 AND workspace_id IS NULL`,
+        [workspaceId, user.email.toLowerCase()]
+      );
       return true;
     },
   },

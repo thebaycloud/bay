@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "db:migrate": "node --import tsx db/migrate.ts",
-    "test": "node --import tsx --test test/"
+    "test": "node --import tsx --test 'test/**/*.test.ts'"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",
