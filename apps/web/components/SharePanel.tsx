@@ -15,34 +15,50 @@ export default function SharePanel({ slug }: { slug: string }) {
   const [grants, setGrants] = useState<string[]>([]);
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    const r = await fetch(`/api/apps/${slug}/share`);
-    if (!r.ok) return;
-    const j = await r.json();
-    setVisibility(j.visibility);
-    setGrants(j.grants ?? []);
+    try {
+      const r = await fetch(`/api/apps/${slug}/share`);
+      if (!r.ok) return;
+      const j = await r.json();
+      setVisibility(j.visibility);
+      setGrants(j.grants ?? []);
+    } catch {
+      setError("Couldn't load sharing settings");
+    }
   }
   useEffect(() => { load(); }, [slug]);
 
   async function post(body: Record<string, string>) {
     setBusy(true);
-    const r = await fetch(`/api/apps/${slug}/share`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (r.ok) {
-      const j = await r.json();
+    setError(null);
+    try {
+      const r = await fetch(`/api/apps/${slug}/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setError(j.error ?? `Couldn't save (${r.status})`);
+        return;
+      }
       setVisibility(j.visibility);
       setGrants(j.grants ?? []);
+    } catch {
+      // Without this the controls stay disabled forever on a dropped network.
+      setError("Couldn't reach the server");
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   return (
     <section className="space-y-3">
       <h2 className="text-sm uppercase tracking-wide opacity-60">Access</h2>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
 
       <select
         value={visibility}
