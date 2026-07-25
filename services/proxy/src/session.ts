@@ -4,13 +4,26 @@ import { config } from "./config";
 
 export interface Visitor { userId: string; email: string; name: string }
 
+/**
+ * decodeURIComponent throws on a malformed percent sequence. A stray "%" in any
+ * unrelated cookie would otherwise take down the whole request with a 500,
+ * instead of the visitor simply being treated as signed out.
+ */
+function decodeValue(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
   for (const part of header.split(";")) {
     const i = part.indexOf("=");
     if (i < 0) continue;
-    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    out[part.slice(0, i).trim()] = decodeValue(part.slice(i + 1).trim());
   }
   return out;
 }
