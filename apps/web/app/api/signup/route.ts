@@ -5,7 +5,11 @@ import { findUserByEmail, createUser } from "@/lib/users";
 import { isAllowed, listAllowEntries } from "@/lib/allowlist";
 
 export async function POST(req: Request) {
-  const { email, name, password, invite } = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({}));
+  const { name, password, invite } = body;
+  // isAllowed trims, but findUserByEmail/createUser only lowercase — an
+  // untrimmed address would pass the gate and create a row nobody can log into.
+  const email = String(body.email ?? "").trim();
   if (process.env.SIGNUP_INVITE_CODE && String(invite ?? "") !== process.env.SIGNUP_INVITE_CODE) {
     return Response.json({ error: "invalid or missing invite code" }, { status: 403 });
   }
