@@ -15,6 +15,15 @@ INSERT INTO allowed_signins(domain, note) VALUES
 ON CONFLICT (domain) DO NOTHING;
 
 -- Every user who exists at migration time keeps access, whatever their domain.
-INSERT INTO allowed_signins(email, note)
-SELECT lower(email), 'seed: existing user at migration time' FROM users
-ON CONFLICT (email) DO NOTHING;
+-- Guarded because this file also runs against a fresh database, where `users`
+-- does not exist yet; the whole migration runs as one implicit transaction, so
+-- an unguarded reference would roll back the CREATE TABLE above with it.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema = 'public' AND table_name = 'users') THEN
+    INSERT INTO allowed_signins(email, note)
+    SELECT lower(email), 'seed: existing user at migration time' FROM users
+    ON CONFLICT (email) DO NOTHING;
+  END IF;
+END $$;

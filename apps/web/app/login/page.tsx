@@ -10,7 +10,11 @@ function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const notInvited = params.get("error") === "not_invited";
-  const rejected = params.get("email") ?? "";
+  // Straight from the query string, so cap it and require it to look like an
+  // address — otherwise /login?error=not_invited&email=<any sentence> is a
+  // ready-made phishing surface in a first-party error box.
+  const raw = params.get("email") ?? "";
+  const rejected = raw.length <= 254 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(raw) ? raw : "";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");

@@ -45,3 +45,23 @@ test("malformed addresses are denied", () => {
 test("an empty allowlist denies everyone", () => {
   assert.equal(isAllowed("arsenfounder@gmail.com", []), false);
 });
+
+// The bypass this file exists to prevent: reading the second "@" field instead
+// of requiring exactly one made boris@luwo.ai@evil.com look like luwo.ai, while
+// mail actually routes to evil.com.
+test("an address with more than one @ is denied", () => {
+  for (const bad of [
+    "boris@luwo.ai@evil.com",
+    "boris@evil.com@luwo.ai",
+    "arsenfounder@gmail.com@evil.com",
+    "a@b@c@luwo.ai",
+  ]) {
+    assert.equal(isAllowed(bad, entries), false, `${bad} should be denied`);
+  }
+});
+
+test("addresses with an undeliverable domain are denied", () => {
+  for (const bad of ["boris@luwo.ai.", "boris@.luwo.ai", "boris@localhost", "boris@"]) {
+    assert.equal(isAllowed(bad, entries), false, `${bad} should be denied`);
+  }
+});

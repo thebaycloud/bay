@@ -10,8 +10,23 @@ const PUBLIC_PROVIDERS = new Set([
   "yahoo.com", "inbox.ru", "bk.ru", "list.ru",
 ]);
 
+/**
+ * The domain an address actually delivers to, or "" if the address is malformed.
+ *
+ * A valid address has exactly one "@". Reading the *second* field instead would
+ * make `boris@luwo.ai@evil.com` look like the luwo.ai domain, while mail really
+ * routes to evil.com — enough to pass an allowlist and join someone else's
+ * company workspace. Anything that is not exactly local@domain is refused here,
+ * and every caller treats "" as "no domain".
+ */
 export function domainOf(email: string): string {
-  return email.trim().toLowerCase().split("@")[1] ?? "";
+  const parts = email.trim().toLowerCase().split("@");
+  if (parts.length !== 2) return "";
+  const [local, domain] = parts;
+  if (!local || !domain) return "";
+  // A bare "@" or a trailing dot is not a deliverable domain either.
+  if (!domain.includes(".") || domain.startsWith(".") || domain.endsWith(".")) return "";
+  return domain;
 }
 
 export function isPublicEmailProvider(domain: string): boolean {

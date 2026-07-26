@@ -128,6 +128,13 @@ INSERT INTO allowed_signins(email, note)  VALUES ('boris@acme.com', 'invited by 
 INSERT INTO allowed_signins(domain, note) VALUES ('acme.com',       'partner company');
 ```
 
-Removing access is a DELETE. Existing sessions survive until they expire — revoking
-someone immediately means deleting their row *and* rotating `AUTH_SECRET`, which signs
-everyone out.
+Removing access is a DELETE — but it does **not** revoke anything already issued:
+
+| What they hold | Does DELETE stop it? |
+|---|---|
+| A browser session | No — it survives until it expires. Rotating `AUTH_SECRET` signs everyone out. |
+| A CLI token (`cli_tokens`) | **No.** These are database-backed bearer tokens, unaffected by `AUTH_SECRET`, and nothing re-checks them against the allowlist. Delete the person's rows from `cli_tokens` too. |
+
+So a full revocation today is three steps: delete from `allowed_signins`, delete their
+rows from `cli_tokens`, and rotate `AUTH_SECRET` if the session must die immediately.
+Re-checking the allowlist on CLI token use is a known gap, not yet built.

@@ -20,3 +20,16 @@ test("consumer providers are public", () => {
 test("public provider matching is case-insensitive", () => {
   assert.equal(isPublicEmailProvider("GMAIL.COM"), true);
 });
+
+test("domainOf refuses anything that is not exactly local@domain", () => {
+  // Taking split("@")[1] here would return "luwo.ai" and hand an outsider a
+  // company workspace.
+  assert.equal(domainOf("boris@luwo.ai@evil.com"), "");
+  assert.equal(domainOf("boris@evil.com@luwo.ai"), "");
+  assert.equal(domainOf("no-at-sign"), "");
+  assert.equal(domainOf("@luwo.ai"), "");
+  assert.equal(domainOf("boris@"), "");
+  assert.equal(domainOf("boris@luwo.ai."), "");
+  assert.equal(domainOf("boris@localhost"), "");
+  assert.equal(domainOf("Boris@Luwo.AI"), "luwo.ai");
+});
