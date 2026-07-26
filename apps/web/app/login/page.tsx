@@ -42,7 +42,9 @@ function LoginForm() {
           <button className="btn primary" type="submit" disabled={busy}>{busy ? "…" : "Sign in"}</button>
         </form>
         <div className="authoauth">
-          <button className="btn" disabled>Continue with Google <span className="soon">soon</span></button>
+          <button className="btn" type="button" onClick={() => signIn("google", { callbackUrl: "/" })}>
+            Continue with Google
+          </button>
           <button className="btn" disabled><Github size={14} />Continue with GitHub <span className="soon">soon</span></button>
         </div>
         <div className="authalt">No account? <Link href="/signup">Sign up</Link></div>

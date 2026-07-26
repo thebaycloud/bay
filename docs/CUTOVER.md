@@ -74,3 +74,60 @@ Point DNS back at `ghs.googlehosted.com`. The per-app domain mappings were delet
 from the deploy path but existing mappings were never removed, so previously
 deployed apps keep resolving. Nothing in the database needs undoing — the proxy is
 the only thing that reads `apps`.
+
+---
+
+# Turning on Google sign-in
+
+Three steps that need a browser and cannot be scripted. Everything else is done:
+the allowlist table is seeded, the gate is live in `signIn`, and the button is wired.
+
+1. **Create the OAuth client.** Cloud Console → APIs & Services → Credentials →
+   Create credentials → OAuth client ID → **Web application**, in project
+   `supersonic-deploy-prod`. Configure the consent screen first if prompted;
+   `External` is required because two operators sign in with personal gmail addresses.
+
+2. **Add the redirect URI**, exactly, scheme included:
+   `https://<control-plane-host>/api/auth/callback/google`
+   The host must match `AUTH_URL` on the deployed control plane. A mismatch is the
+   single most common cause of `redirect_uri_mismatch`.
+
+3. **Store and wire the credentials:**
+
+   ```bash
+   printf %s "<client-id>"     | gcloud secrets create supersonic-google-client-id     --data-file=- --project supersonic-deploy-prod
+   printf %s "<client-secret>" | gcloud secrets create supersonic-google-client-secret --data-file=- --project supersonic-deploy-prod
+
+   SA=$(gcloud run services describe supersonic-control-plane --region us-central1 \
+        --project supersonic-deploy-prod --format='value(spec.template.spec.serviceAccountName)')
+   for s in supersonic-google-client-id supersonic-google-client-secret; do
+     gcloud secrets add-iam-policy-binding "$s" --member="serviceAccount:${SA}" \
+       --role=roles/secretmanager.secretAccessor --project supersonic-deploy-prod
+   done
+
+   gcloud run services update supersonic-control-plane --region us-central1 \
+     --project supersonic-deploy-prod \
+     --update-secrets "GOOGLE_CLIENT_ID=supersonic-google-client-id:latest,GOOGLE_CLIENT_SECRET=supersonic-google-client-secret:latest"
+   ```
+
+Until step 3 lands, `auth.ts` does not register the provider and the button leads
+nowhere. The code is inert, not broken.
+
+**Verify before removing passwords:** sign in with Google as an operator and confirm
+you land on your existing account with your existing apps — not a duplicate. Then sign
+in with a Google account that is not on the allowlist and confirm the readable
+"isn't on the invite list" message. Only then run Task 5 of
+`docs/superpowers/plans/2026-07-27-verified-identity.md`.
+
+## Managing the allowlist
+
+Adding someone is one row, no redeploy:
+
+```sql
+INSERT INTO allowed_signins(email, note)  VALUES ('boris@acme.com', 'invited by arsen');
+INSERT INTO allowed_signins(domain, note) VALUES ('acme.com',       'partner company');
+```
+
+Removing access is a DELETE. Existing sessions survive until they expire — revoking
+someone immediately means deleting their row *and* rotating `AUTH_SECRET`, which signs
+everyone out.
