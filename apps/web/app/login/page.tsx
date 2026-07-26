@@ -1,13 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Zap, Github } from "lucide-react";
 
-export default function Login() {
+function LoginForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const notInvited = params.get("error") === "not_invited";
+  const rejected = params.get("email") ?? "";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -31,6 +34,11 @@ export default function Login() {
           <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
           <input type="password" placeholder="password" value={password} onChange={(e) => setPassword(e.target.value)} />
           {err && <div className="autherr">✕ {err}</div>}
+          {notInvited && (
+            <div className="autherr">
+              ✕ {rejected || "That address"} isn&apos;t on the invite list. Ask whoever invited you to add it.
+            </div>
+          )}
           <button className="btn primary" type="submit" disabled={busy}>{busy ? "…" : "Sign in"}</button>
         </form>
         <div className="authoauth">
@@ -40,5 +48,15 @@ export default function Login() {
         <div className="authalt">No account? <Link href="/signup">Sign up</Link></div>
       </div>
     </div>
+  );
+}
+
+// useSearchParams opts the tree into client-side rendering, which Next requires
+// to sit behind a Suspense boundary or the /login prerender fails.
+export default function Login() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }
