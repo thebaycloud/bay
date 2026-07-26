@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPool } from "../lib/db";
@@ -6,10 +6,16 @@ import { getPool } from "../lib/db";
 const here = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  const sql = readFileSync(join(here, "001_sharing.sql"), "utf8");
+  // Every migration is idempotent, so applying all of them every time is safe
+  // and removes the need for a tracking table.
+  const files = readdirSync(here)
+    .filter((f) => /^\d+_.*\.sql$/.test(f))
+    .sort();
   const pool = getPool("supersonic_platform");
-  await pool.query(sql);
-  console.log("migration 001_sharing applied");
+  for (const file of files) {
+    await pool.query(readFileSync(join(here, file), "utf8"));
+    console.log(`migration ${file} applied`);
+  }
   await pool.end();
 }
 
