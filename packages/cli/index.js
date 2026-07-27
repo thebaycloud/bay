@@ -12,7 +12,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const http = require("http");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const CFG_DIR = path.join(os.homedir(), ".supersonic");
 const CFG = path.join(CFG_DIR, "config.json");
@@ -300,6 +300,15 @@ async function deploy(args) {
   }
   // Default: deploy this folder straight from your computer — no git, no setup.
   const appName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
+
+  // The fast path: your machine already has this project and builds it in seconds, so
+  // build here and send only the result. Uploading sources and rebuilding them in the
+  // cloud is ~80s; this is ~15s, and nothing at all when the output has not changed.
+  if (!args["cloud-build"]) {
+    const done = await tryPrebuilt(appName, args);
+    if (done !== null) return done;
+  }
+
   info(cyan("▸ ") + "packaging " + bold(appName) + " from this folder…");
   const tgz = await packageFolder();
   const body = fs.readFileSync(tgz);
@@ -316,6 +325,107 @@ async function deploy(args) {
   if (res.status === 403) die("forbidden");
   if (!res.body) die("no response stream");
   return consumeDeploy(res, args);
+}
+
+/**
+ * Build here and upload only the result.
+ *
+ * Returns null to mean "not this path, carry on with the cloud build" — which happens
+ * for server apps, when the detector can't place the project, and whenever the local
+ * build fails. Every one of those falls back rather than failing: someone whose machine
+ * is misconfigured still gets a deploy.
+ */
+async function tryPrebuilt(appName, args) {
+  let detect, prebuilt;
+  try {
+    detect = require("./vendor/detector.js");
+    prebuilt = require("./lib/prebuilt.js");
+  } catch {
+    return null; // detector not bundled — old install, use the cloud
+  }
+
+  let stack;
+  try { stack = detect.detectStack(process.cwd()); } catch { return null; }
+
+  const plan = prebuilt.planFor(stack);
+  if (plan.mode === "cloud") return null;
+
+  const outDir = path.resolve(process.cwd(), plan.outputDir);
+
+  if (plan.mode === "build") {
+    const warn = prebuilt.nodeVersionWarning(stack);
+    if (warn) info(dim("! " + warn));
+
+    if (!fs.existsSync(path.join(process.cwd(), "node_modules")) && plan.installCommand) {
+      info(cyan("▸ ") + "installing dependencies…");
+      if (!runLocal(plan.installCommand)) {
+        info(dim("! install failed here — building in the cloud instead"));
+        return null;
+      }
+    }
+    info(cyan("▸ ") + "building " + bold(appName) + "…");
+    if (!runLocal(plan.buildCommand)) {
+      info(dim("! build failed here — building in the cloud instead"));
+      return null;
+    }
+  }
+
+  if (!prebuilt.hasOutput(outDir)) {
+    info(dim(`! nothing in ${plan.outputDir}/ — building in the cloud instead`));
+    return null;
+  }
+
+  const hash = prebuilt.hashDir(outDir);
+
+  // Already live? Then there is nothing to send.
+  try {
+    const pre = await api("/api/deploy/preflight", { method: "POST", body: { app: appName, hash } });
+    if (pre && pre.skip) {
+      info(green("✓ ") + "already live, nothing changed — " + bold(pre.url));
+      return pre.url;
+    }
+  } catch { /* preflight is an optimisation; never let it stop a deploy */ }
+
+  const tgz = await packageDir(outDir);
+  const body = fs.readFileSync(tgz);
+  try { fs.unlinkSync(tgz); } catch { /* ignore */ }
+  info(dim(`uploading ${(body.length / 1048576).toFixed(1)} MB of built output`));
+
+  const tok = token();
+  if (!tok) die("not authenticated — run: supersonic login");
+  const res = await fetch(baseUrl() + "/api/deploy", {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + tok,
+      "Content-Type": "application/gzip",
+      "x-supersonic-upload": "1",
+      "x-supersonic-prebuilt": "1",
+      "x-supersonic-hash": hash,
+      "x-supersonic-app": appName,
+    },
+    body,
+  });
+  if (res.status === 401) die("token invalid or expired — run: supersonic login");
+  if (res.status === 403) die("forbidden");
+  if (!res.body) die("no response stream");
+  return consumeDeploy(res, args);
+}
+
+/** Run a shell command in the project, streaming its output. True when it succeeded. */
+function runLocal(command) {
+  const r = spawnSync(command, { shell: true, stdio: "inherit", cwd: process.cwd() });
+  return r.status === 0;
+}
+
+/** Pack a single directory's contents into a temp .tgz. */
+function packageDir(dir) {
+  return new Promise((resolve, reject) => {
+    const out = path.join(os.tmpdir(), "ss-built-" + process.pid + ".tgz");
+    const p = spawn("tar", ["-czf", out, "-C", dir, "."], { stdio: ["ignore", "ignore", "pipe"] });
+    let err = ""; p.stderr.on("data", (d) => (err += d));
+    p.on("error", () => reject(new Error("could not run `tar` — is it installed?")));
+    p.on("close", () => (fs.existsSync(out) ? resolve(out) : reject(new Error("packaging failed: " + err.trim()))));
+  });
 }
 
 async function redeploy(args) {
