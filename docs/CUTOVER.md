@@ -138,3 +138,112 @@ Removing access is a DELETE — but it does **not** revoke anything already issu
 So a full revocation today is three steps: delete from `allowed_signins`, delete their
 rows from `cli_tokens`, and rotate `AUTH_SECRET` if the session must die immediately.
 Re-checking the allowlist on CLI token use is a known gap, not yet built.
+
+---
+
+# Fast deploys — infrastructure to create
+
+The code for the three-lane pipeline is merged and **inert until these exist**. Every
+new setting is read from an environment variable that defaults to today's behaviour,
+so the control plane runs unchanged with none of them set. Turn them on in this order.
+
+## 1. The static assets bucket
+
+```bash
+gcloud storage buckets create gs://supersonic-static-assets \
+  --location us-central1 --project supersonic-deploy-prod \
+  --uniform-bucket-level-access
+```
+
+## 2. The static server's identity
+
+Least privilege from the start: read on one bucket, nothing else. This is deliberate —
+an audit on 2026-07-27 found every hosted app inheriting the default compute account
+with `run.admin`, `storage.admin` and `artifactregistry.writer`, and new services are
+not going to repeat that.
+
+```bash
+gcloud iam service-accounts create supersonic-static \
+  --display-name "Supersonic static server" --project supersonic-deploy-prod
+
+gcloud storage buckets add-iam-policy-binding gs://supersonic-static-assets \
+  --member "serviceAccount:supersonic-static@supersonic-deploy-prod.iam.gserviceaccount.com" \
+  --role roles/storage.objectViewer --project supersonic-deploy-prod
+```
+
+## 3. Deploy the static server
+
+```bash
+cd services/static
+gcloud run deploy supersonic-static \
+  --source . --region us-central1 --project supersonic-deploy-prod \
+  --service-account supersonic-static@supersonic-deploy-prod.iam.gserviceaccount.com \
+  --set-env-vars ASSETS_BUCKET=supersonic-static-assets,ROOT_DOMAIN=supersonic.cv \
+  --allow-unauthenticated --quiet
+```
+
+`--allow-unauthenticated` matches the apps it fronts while `SEAL_APPS` is off. When
+sealing happens, this service seals with everything else — it is an ordinary Cloud Run
+service, which is exactly why the proxy and the visibility rules already cover it.
+
+## 4. The regional npm mirror
+
+```bash
+gcloud artifacts repositories create npm-mirror \
+  --repository-format npm --mode remote-repository \
+  --remote-repo-config-desc "npmjs" --remote-npm-repo NPMJS \
+  --location us-central1 --project supersonic-deploy-prod
+```
+
+## 5. The base image repository
+
+```bash
+gcloud artifacts repositories create bases \
+  --repository-format docker --location us-central1 \
+  --project supersonic-deploy-prod
+
+infra/bases/refresh.sh
+```
+
+`refresh.sh` builds `:candidate`, smoke-tests it, and only then moves `:stable`. Run it
+weekly. A failed refresh leaves `:stable` alone and exits non-zero — deploys keep using
+the last good base, which is the whole point of the gate.
+
+## 6. Switch the control plane on
+
+Only after the above exist:
+
+```bash
+gcloud run services update supersonic-control-plane \
+  --region us-central1 --project supersonic-deploy-prod \
+  --update-env-vars \
+STATIC_SERVICE=supersonic-static,\
+ASSETS_BUCKET=supersonic-static-assets,\
+NPM_REGISTRY=https://us-central1-npm.pkg.dev/supersonic-deploy-prod/npm-mirror/,\
+NODE_BASE_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/bases/node22:stable,\
+NEXT_BASE_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/bases/node22-next:stable
+```
+
+Each variable is independent. Setting only `STATIC_SERVICE` and `ASSETS_BUCKET` turns on
+the static lane and leaves everything else as it is today; unsetting any one of them
+reverts that piece with no redeploy.
+
+## 7. Apply the migration
+
+`003_deploy_stages.sql` creates the per-stage timing table. It is additive and
+idempotent like the rest.
+
+```bash
+cd apps/web && npx tsx db/migrate.ts
+```
+
+Nothing else in this section depends on it, but the lane timings in the design are
+projections until this table has data behind them — so it is worth doing first, not last.
+
+## Not done here: the hosted-app runtime account
+
+`APP_RUNTIME_SERVICE_ACCOUNT` is read by the deploy route and unset, so hosted apps still
+inherit the default compute account and its project-wide admin roles. Creating a
+locked-down account and trimming the default one's roles is a separate, higher-risk
+change — Cloud Build and the control plane both lean on those roles, and cutting them
+blind will take the platform down. It needs its own careful pass.

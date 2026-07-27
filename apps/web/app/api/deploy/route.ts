@@ -231,24 +231,42 @@ async function fetchBuildError(): Promise<string> {
 
 // SPAs (Vite/CRA) are static sites, not servers. Build them and serve the
 // output on $PORT instead of trying to run a dev/preview server.
+/**
+ * Node base image for generated Dockerfiles.
+ *
+ * Pointing this at our own regional Artifact Registry removes a Docker Hub pull
+ * — and its rate limit — from every build, and the mirrored image carries a
+ * pre-populated package cache for the stack. Unset today, so builds keep using
+ * Docker Hub until the mirror exists: a base that cannot be pulled must never be
+ * able to take deploys down.
+ */
+const NODE_BASE = process.env.NODE_BASE_IMAGE || "node:22-slim";
+/** npm registry for generated builds. Empty = the public default. */
+const NPM_REGISTRY = process.env.NPM_REGISTRY || "";
+const npmRegistryLine = NPM_REGISTRY ? `RUN npm config set registry ${NPM_REGISTRY}` : null;
+/** Audit and funding run on every build and buy us nothing. */
+const NPM_FLAGS = "--prefer-offline --no-audit --no-fund";
+
 function spaDockerfile(outdir: string): string {
   return [
-    "FROM node:22-slim AS build",
+    `FROM ${NODE_BASE} AS build`,
     "WORKDIR /app",
+    npmRegistryLine,
     "COPY package*.json ./",
-    "RUN npm install",
+    `RUN npm install ${NPM_FLAGS}`,
     "COPY . .",
     "RUN npm run build",
     "",
-    "FROM node:22-slim",
+    `FROM ${NODE_BASE}`,
     "WORKDIR /app",
-    "RUN npm install -g serve",
+    npmRegistryLine,
+    `RUN npm install -g serve ${NPM_FLAGS}`,
     `COPY --from=build /app/${outdir} ./public`,
     "ENV PORT=8080",
     "EXPOSE 8080",
     'CMD ["sh","-c","serve -s public -l ${PORT}"]',
     "",
-  ].join("\n");
+  ].filter((l) => l !== null).join("\n");
 }
 
 // Next.js (and other build-then-serve node frameworks) MUST run their build
@@ -257,23 +275,25 @@ function spaDockerfile(outdir: string): string {
 // so we inject an explicit build -> start Dockerfile. Forcing `npm install` also
 // resolves the classic package-lock.json + yarn.lock ambiguity.
 function nextDockerfile(): string {
+  const base = process.env.NEXT_BASE_IMAGE || NODE_BASE;
   return [
-    "FROM node:22-slim AS build",
+    `FROM ${base} AS build`,
     "WORKDIR /app",
     "ENV NEXT_TELEMETRY_DISABLED=1",
+    npmRegistryLine,
     "COPY package*.json ./",
-    "RUN npm install --no-audit --no-fund --legacy-peer-deps",
+    `RUN npm install ${NPM_FLAGS} --legacy-peer-deps`,
     "COPY . .",
     "RUN npm run build",
     "",
-    "FROM node:22-slim",
+    `FROM ${base}`,
     "WORKDIR /app",
     "ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=8080",
     "COPY --from=build /app ./",
     "EXPOSE 8080",
     'CMD ["npm","run","start"]',
     "",
-  ].join("\n");
+  ].filter((l) => l !== null).join("\n");
 }
 
 // File-based detection (more reliable than a framework label): a Next.js app has
