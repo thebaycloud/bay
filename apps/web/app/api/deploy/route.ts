@@ -16,6 +16,7 @@ import { resolveSlug } from "@/lib/gcloud";
 import { setDeploy } from "@/lib/deploys";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
 import { take as takeClone } from "@/lib/clone-cache";
+import { resilientInstall } from "@/lib/install";
 import { StageRecorder } from "@/lib/stages";
 
 const PROJECT = "supersonic-deploy-prod";
@@ -336,28 +337,6 @@ function cachedBuildConfig(image: string): string {
     "  logging: CLOUD_LOGGING_ONLY",
     "",
   ].join("\n");
-}
-
-/**
- * A reproducible install that falls back to a working one.
- *
- * `npm ci` refuses to run when package.json and package-lock.json disagree, and
- * they disagree constantly in the projects we host — someone adds a dependency by
- * hand or an agent edits package.json and nobody regenerates the lock. Measured on
- * a real repository: the build failed at 37s, the repair agent worked out to run
- * `npm install`, and the deploy finished at 119s instead of about 50s.
- *
- * The lockfile is still preferred when it is usable, so a correct project keeps
- * its reproducible install. Only the failure path changes: it stops being a
- * failed build plus an LLM round trip, and becomes one shell fallback.
- *
- * Yarn and pnpm are left alone — their frozen-lockfile modes fail loudly for
- * reasons worth surfacing, and neither has npm's habit of drifting.
- */
-export function resilientInstall(installCommand: string | null): string | null {
-  if (!installCommand) return null;
-  if (!/^npm ci\b/.test(installCommand)) return installCommand;
-  return `${installCommand} || npm install ${installCommand.replace(/^npm ci\s*/, "")}`.trimEnd();
 }
 
 /** Cached because it is the same value for every static deploy. */

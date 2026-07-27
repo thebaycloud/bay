@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resilientInstall } from "../app/api/deploy/route";
+import { resilientInstall } from "../lib/install";
 
 test("npm ci falls back to npm install, keeping its flags", () => {
   // npm ci refuses to run when package.json and package-lock.json disagree, and
