@@ -48,6 +48,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers,
   callbacks: {
     ...authConfig.callbacks,
+    // Runs only on sign-in (when `user` is present). Maps the identity to OUR
+    // users.id by verified email and pins it to token.sub, so session.user.id is
+    // always our UUID. Without this, OAuth logins carry the provider's account id
+    // (Google/GitHub's) as their session id, breaking every ownership + account
+    // query. signIn (below) has already upserted the row, so the lookup hits.
+    async jwt({ token, user }) {
+      if (user?.email) {
+        const dbUser = await findUserByEmail(user.email);
+        if (dbUser) { token.sub = dbUser.id; token.email = dbUser.email; }
+      }
+      return token;
+    },
     async signIn({ user, account }) {
       if (!user.email) return false;
 

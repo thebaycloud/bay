@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Zap, Search, Plus } from "lucide-react";
+import { Search, Plus } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { UserMenu } from "@/components/UserMenu";
-import { PlanBadge } from "@/components/PlanBadge";
+import { Sidebar } from "@/components/Sidebar";
 
 interface App { slug: string; name: string; url: string; ready: boolean; region: string; image: string; status?: string; stage?: string; }
 
@@ -35,22 +34,18 @@ export default function Home() {
   const live = (apps ?? []).filter((a) => a.ready).length;
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <Link href="/" className="topbrand">
-          <span className="logo"><Zap size={13} strokeWidth={2.4} /></span>
-          SUPERSONIC
-        </Link>
-        <div className="spacer" />
-        <button className="kbar"><Search size={13} />Search<span className="kbd">⌘K</span></button>
-        <PlanBadge />
-        <UserMenu />
-        <Bracket>
-          <Link href="/new" className="btn primary"><Plus size={13} />New app</Link>
-        </Bracket>
-      </header>
+    <div className="shell shell-side">
+      <Sidebar active="apps" />
+      <div className="main">
+        <header className="topbar">
+          <button className="kbar"><Search size={13} />Search<span className="kbd">⌘K</span></button>
+          <div className="spacer" />
+          <Bracket>
+            <Link href="/new" className="btn primary"><Plus size={13} />New app</Link>
+          </Bracket>
+        </header>
 
-      <div className="content">
+        <div className="content">
         <div className="wrap">
           <div className="ruler reveal" />
           <section className="home-hero reveal" style={{ animationDelay: ".03s" }}>
@@ -96,6 +91,7 @@ export default function Home() {
               ))}
             </div>
           </section>
+        </div>
         </div>
       </div>
 

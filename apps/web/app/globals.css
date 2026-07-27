@@ -510,6 +510,50 @@ a.btn { text-decoration: none; }
 .set-head .st { font-family: var(--mono); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
 .set-head .ss { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.55; max-width: 60ch; }
 .set-err { padding: 10px 18px; color: var(--down, #c33a2c); font-family: var(--mono); font-size: 11.5px; }
+/* settings page extras */
+.scroll { flex: 1; overflow-y: auto; }
+.set-body { padding: 14px 18px; }
+.plan-line { display: flex; align-items: center; gap: 14px; }
+.plan-tag { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 5px 10px; border: 1px solid var(--line-2); color: var(--ink-2); }
+.plan-tag.pro { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.tok-meta { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tok-confirm { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.tok-confirm .tok-q { font-family: var(--mono); font-size: 11px; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; }
+
+/* persistent left sidebar */
+.shell-side { flex-direction: row; }
+.sidebar { width: 232px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--paper); }
+.side-brand { display: flex; align-items: center; gap: 9px; height: 50px; flex: none; padding: 0 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-weight: 600; font-size: 13.5px; letter-spacing: .02em; color: var(--ink); text-decoration: none; }
+.side-brand .logo { width: 22px; height: 22px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; }
+.side-nav { display: flex; flex-direction: column; padding: 10px 8px; gap: 2px; }
+.side-nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); text-decoration: none; background: none; border: 0; cursor: pointer; width: 100%; text-align: left; }
+.side-nav-item:hover { background: var(--card); color: var(--ink); }
+.side-nav-item.active { background: var(--card); color: var(--ink); }
+.side-spacer { flex: 1; }
+.side-acct { border-top: 1px solid var(--line); padding: 8px; }
+.side-acct-id { display: flex; align-items: center; gap: 10px; padding: 8px; }
+.side-acct-plan { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* account side panel */
+.acct-trigger { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line-2); background: var(--card); cursor: pointer; padding: 0; }
+.acct-trigger:hover { border-color: var(--ink-2); }
+.acct-av { width: 22px; height: 22px; display: grid; place-items: center; background: var(--accent); color: var(--accent-fg); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.acct-av.lg { width: 38px; height: 38px; font-size: 16px; }
+.acct-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .28); z-index: 90; }
+.acct-panel { position: fixed; top: 0; right: 0; height: 100dvh; width: 320px; max-width: 90vw; background: var(--paper); border-left: 1px solid var(--line); z-index: 91; display: flex; flex-direction: column; box-shadow: -8px 0 30px rgba(0, 0, 0, .14); animation: acct-in .16s var(--ease); }
+@keyframes acct-in { from { transform: translateX(14px); opacity: .5; } to { transform: translateX(0); opacity: 1; } }
+.acct-top { display: flex; align-items: center; justify-content: space-between; padding: 11px 12px 11px 16px; border-bottom: 1px solid var(--line); }
+.acct-title { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.acct-id { display: flex; align-items: center; gap: 12px; padding: 18px 16px; border-bottom: 1px solid var(--line); }
+.acct-idtxt { min-width: 0; }
+.acct-name { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.acct-email { font-family: var(--mono); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-plan { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.acct-note { padding: 8px 16px; color: var(--down, #c33a2c); font-family: var(--mono); font-size: 11px; }
+.acct-nav { display: flex; flex-direction: column; padding: 8px; gap: 2px; }
+.acct-link { display: flex; align-items: center; gap: 10px; padding: 11px 12px; font-family: var(--mono); font-size: 12.5px; color: var(--ink); background: none; border: 0; cursor: pointer; text-decoration: none; text-align: left; width: 100%; }
+.acct-link:hover { background: var(--card); }
 
 .env-list { }
 .env-empty { padding: 16px 18px; color: var(--faint); font-family: var(--mono); font-size: 12px; }
