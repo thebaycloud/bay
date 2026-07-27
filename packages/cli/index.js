@@ -476,6 +476,19 @@ async function consumeDeploy(res, args) {
       else if (ev.type === "error") { if (args.json) json({ ok: false, error: ev.message }); die(ev.message); }
     }
   }
+  // The server can answer with a plain JSON error instead of a stream — a plan limit,
+  // a rejected request. That is not a build that timed out, and saying so sent someone
+  // to `supersonic logs` looking for a failure that never happened. If what arrived
+  // parses as an error object, report what it actually said.
+  const trailing = (buf || "").trim();
+  if (trailing) {
+    let body; try { body = JSON.parse(trailing.replace(/^data: /, "")); } catch { /* not JSON */ }
+    if (body && body.error) {
+      if (args.json) json({ ok: false, error: body.error, upgrade: !!body.upgrade });
+      die(body.error);
+    }
+  }
+
   // Stream closed with no terminal `done`/`error` — the build likely timed out or
   // the connection dropped mid-repair. Never report this as success.
   if (args.json) json({ ok: false, error: "deploy stream ended without a result" });
