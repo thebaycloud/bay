@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Zap, ChevronDown, LayoutGrid, Database, HardDrive, Server, Copy,
-  ArrowUpRight, RefreshCw, Check, Lock, AlertTriangle, Settings2, GitBranch,
+  ArrowUpRight, Check, Lock, AlertTriangle, Settings2, GitBranch, Users, X,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
@@ -52,6 +52,7 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
   ].filter(Boolean) as { icon: typeof Lock; label: string; desc: string }[];
 
   const [tab, setTab] = useState<Tab>("overview");
+  const [shareOpen, setShareOpen] = useState(false);
   // Deep-link: /apps/<slug>?tab=deployments (used by the dashboard's Building card).
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -106,7 +107,20 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
           <div className="status" style={{ color: d.ready ? "var(--live)" : "var(--ink-2)", borderColor: d.ready ? "color-mix(in srgb, var(--live) 30%, var(--border))" : "var(--line-2)" }}>
             <span className="d" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />{d.ready ? "Live" : "Down"}
           </div>
-          <button className="btn primary" onClick={() => setTab("deployments")}><RefreshCw size={13} />Redeploy</button>
+          {children && (
+            <div className="share-wrap">
+              <button className="btn primary" onClick={() => setShareOpen((v) => !v)}><Users size={13} />Share</button>
+              {shareOpen && (
+                <>
+                  <div className="share-backdrop" onClick={() => setShareOpen(false)} />
+                  <div className="share-pop">
+                    <div className="share-pop-head"><span>Share this app</span><button className="ib" onClick={() => setShareOpen(false)}><X size={14} /></button></div>
+                    {children}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </header>
 
         <div className="content">
@@ -137,8 +151,6 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
                   <h1>{displayName}</h1>
                   <p className="sub">{d.ready ? "Running smoothly on Cloud Run — nothing for you to babysit." : "This app is currently down. Check Issues for what to fix."}</p>
                 </div>
-
-                {children && <div className="ov-share">{children}</div>}
 
                 <div className="haves">
                   <div className="haves-h">What your app has</div>

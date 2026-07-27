@@ -1,29 +1,96 @@
 import { config } from "./config";
 
-// The Supersonic overlay injected into every hosted app's HTML:
-//   - a "Runs on Supersonic" badge, bottom-right, for everyone
-//   - a small owner toolbar (Share · Open in Supersonic), top-right, owners only
-// Kept as one inline <style>+<div>+<a> block with a very high z-index so it sits
-// above the app's own UI without needing the app to cooperate.
+// The Supersonic overlay injected into every hosted app's HTML. It renders inside
+// a Shadow DOM so the app's own CSS can't reach it (no style bleed, no glow) and
+// ours can't leak out. Everyone sees a "Runs on Supersonic" badge; owners also get
+// a separated toolbar (Share · Open in Supersonic), and Share edits access inline.
 
 const APP = "https://app.supersonic.cv";
 const SITE = "https://supersonic.cv";
 
-function overlay(slug: string, owner: boolean): string {
-  const toolbar = owner
-    ? `<div id="ss-bar" style="position:fixed;top:12px;right:12px;z-index:2147483000;display:flex;gap:6px;align-items:center;font:600 12px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
-<a href="${APP}/apps/${slug}?tab=settings" target="_blank" style="display:inline-flex;align-items:center;gap:6px;background:#fff;color:#15140f;padding:8px 12px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.14)">Share</a>
-<a href="${APP}/apps/${slug}" target="_blank" style="display:inline-flex;align-items:center;gap:6px;background:#15140f;color:#fff;padding:8px 12px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.14)">Open in Supersonic</a>
-</div>`
-    : "";
-  const badge = `<a href="${SITE}" target="_blank" id="ss-badge" style="position:fixed;bottom:16px;right:16px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:#0b5e38;color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:9px 13px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.18)">
-<svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Runs on Supersonic</a>`;
-  return `<div id="ss-overlay" data-nosnippet>${toolbar}${badge}</div>`;
+/** A self-contained script that builds the overlay in a shadow root. */
+function overlayScript(slug: string, owner: boolean): string {
+  // slug is validated [a-z0-9-] upstream; JSON.stringify guards the rest.
+  const cfg = JSON.stringify({ slug, owner, app: APP, site: SITE });
+  return `<script>(function(){
+var C=${cfg};
+if(window.__ssOverlay)return; window.__ssOverlay=1;
+var host=document.createElement('div'); host.id='ss-overlay';
+host.style.cssText='all:initial'; (document.body||document.documentElement).appendChild(host);
+var root=host.attachShadow({mode:'open'});
+var css=\`
+:host{all:initial}
+*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+.badge{position:fixed;bottom:16px;right:16px;display:inline-flex;align-items:center;gap:6px;background:#0b5e38;color:#fff;font:600 12px/1 sans-serif;padding:9px 13px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.18);z-index:2147483000}
+.bar{position:fixed;top:14px;right:14px;display:flex;align-items:center;gap:8px;background:#15140f;color:#fff;padding:6px 6px 6px 14px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.28);z-index:2147483000}
+.bar .brand{font:600 12px/1 sans-serif;letter-spacing:.02em;color:#cfcfc7;display:flex;align-items:center;gap:6px}
+.bar button{font:600 12.5px/1 sans-serif;border:0;cursor:pointer;padding:8px 13px;border-radius:8px}
+.bar .share{background:#2ea86a;color:#05130b}
+.bar .open{background:#2b2a26;color:#fff;text-decoration:none;display:inline-flex;align-items:center}
+.pop{position:fixed;top:58px;right:14px;width:300px;background:#1c1b18;color:#eae8df;border:1px solid #35342e;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.5);z-index:2147483000;overflow:hidden}
+.pop h4{margin:0;padding:12px 14px;font:600 12px/1 sans-serif;border-bottom:1px solid #2a2925;color:#eae8df}
+.opt{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;padding:10px 12px;cursor:pointer;color:#eae8df}
+.opt:hover{background:#232219}.opt.on{background:#17281f}
+.opt .l{font:600 13px/1.2 sans-serif}.opt .d{font:400 11px/1.3 sans-serif;color:#9c9a8f;margin-top:2px}
+.opt .g{flex:1}.opt .ck{color:#2ea86a}
+.people{border-top:1px solid #2a2925;padding:10px 12px}
+.people input{width:100%;padding:7px 9px;background:#111;border:1px solid #35342e;color:#fff;border-radius:6px;font:400 12px sans-serif;outline:none}
+.people .row{display:flex;align-items:center;justify-content:space-between;font:400 12px sans-serif;padding:6px 2px;color:#cfcfc7}
+.people .rm{background:none;border:0;color:#7a786f;cursor:pointer}
+\`;
+var vis='private',grants=[];
+function h(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;}
+var style=document.createElement('style');style.textContent=css;root.appendChild(style);
+
+// badge (everyone)
+var badge=document.createElement('a');badge.className='badge';badge.href=C.site;badge.target='_blank';
+badge.innerHTML='<svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Runs on Supersonic';
+root.appendChild(badge);
+
+if(!C.owner)return;
+
+// toolbar (owner)
+var bar=h('div','bar');
+var brand=h('div','brand');brand.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="#2ea86a"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Supersonic';
+var share=h('button','share','Share');
+var open=document.createElement('a');open.className='open';open.href=C.app+'/apps/'+C.slug;open.target='_blank';open.textContent='Open in Supersonic';
+bar.appendChild(brand);bar.appendChild(share);bar.appendChild(open);root.appendChild(bar);
+
+var pop=null;
+var OPTS=[['private','Only me','Just you can open it'],['shared','Specific people','People you invite by email'],['public','Public','Anyone with the link']];
+function api(body){return fetch(C.app+'/api/apps/'+C.slug+'/share',{method:body?'POST':'GET',credentials:'include',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json()});}
+function render(){
+  if(!pop)return;
+  pop.innerHTML='';
+  pop.appendChild(h('h4',null,'Who can open this app'));
+  OPTS.forEach(function(o){
+    var b=h('button','opt'+(vis===o[0]?' on':''));
+    var g=h('div','g');g.appendChild(h('div','l',o[1]));g.appendChild(h('div','d',o[2]));
+    b.appendChild(g);
+    if(vis===o[0]){var ck=h('span','ck','✓');b.appendChild(ck);}
+    b.onclick=function(){api({visibility:o[0]}).then(function(j){vis=j.visibility;grants=j.grants||[];render();});};
+    pop.appendChild(b);
+  });
+  if(vis==='shared'){
+    var ppl=h('div','people');
+    var inp=document.createElement('input');inp.type='email';inp.placeholder='colleague@company.com';
+    inp.onkeydown=function(e){if(e.key==='Enter'&&inp.value){api({addEmail:inp.value}).then(function(j){vis=j.visibility;grants=j.grants||[];render();});}};
+    ppl.appendChild(inp);
+    grants.forEach(function(gr){var row=h('div','row');row.appendChild(h('span',null,gr));var rm=h('button','rm','remove');rm.onclick=function(){api({removeEmail:gr}).then(function(j){vis=j.visibility;grants=j.grants||[];render();});};row.appendChild(rm);ppl.appendChild(row);});
+    pop.appendChild(ppl);
+  }
+}
+share.onclick=function(){
+  if(pop){pop.remove();pop=null;return;}
+  pop=h('div','pop');root.appendChild(pop);render();
+  api().then(function(j){if(j&&j.visibility){vis=j.visibility;grants=j.grants||[];render();}});
+};
+})();</script>`;
 }
 
-/** Inject the overlay just before </body> (or append if there's no body tag). */
+/** Inject the overlay script just before </body> (or append if there's no body). */
 export function injectOverlay(htmlBody: string, slug: string, owner: boolean): string {
-  const snippet = overlay(slug, owner);
+  const snippet = overlayScript(slug, owner);
   const idx = htmlBody.toLowerCase().lastIndexOf("</body>");
   if (idx === -1) return htmlBody + snippet;
   return htmlBody.slice(0, idx) + snippet + htmlBody.slice(idx);
