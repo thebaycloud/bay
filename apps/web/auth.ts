@@ -40,6 +40,25 @@ if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) {
   providers.push(GitHub({
     clientId: process.env.GITHUB_ID,
     clientSecret: process.env.GITHUB_SECRET,
+    // GitHub omits the email from /user when the user keeps it private, which
+    // made signIn (which requires user.email) reject every private-email
+    // account. Fall back to the primary verified address from /user/emails
+    // (the user:email scope, requested by default, authorizes this).
+    async profile(profile, tokens) {
+      let email = profile.email as string | null;
+      if (!email) {
+        try {
+          const res = await fetch("https://api.github.com/user/emails", {
+            headers: { Authorization: `Bearer ${tokens.access_token}`, "User-Agent": "supersonic", Accept: "application/vnd.github+json" },
+          });
+          if (res.ok) {
+            const emails = (await res.json()) as { email: string; primary: boolean; verified: boolean }[];
+            email = (emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified) ?? emails[0])?.email ?? null;
+          }
+        } catch { /* leave email null — signIn will reject with a clear path */ }
+      }
+      return { id: profile.id.toString(), name: (profile.name ?? profile.login) as string, email, image: profile.avatar_url as string };
+    },
   }));
 }
 
