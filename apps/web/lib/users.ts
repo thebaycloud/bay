@@ -10,8 +10,20 @@ export interface User {
   provider: string;
 }
 
+// Accounts are keyed by (email, provider), so a plain email can now match more
+// than one row. Auth paths must always disambiguate by provider — use
+// findUserByEmailAndProvider. This helper stays only for callers that genuinely
+// want "any account with this email" and returns the first match.
 export async function findUserByEmail(email: string): Promise<User | null> {
-  const r = await getPool(DB).query("SELECT * FROM users WHERE email=$1", [email.toLowerCase()]);
+  const r = await getPool(DB).query("SELECT * FROM users WHERE email=$1 LIMIT 1", [email.toLowerCase()]);
+  return r.rows[0] ?? null;
+}
+
+export async function findUserByEmailAndProvider(email: string, provider: string): Promise<User | null> {
+  const r = await getPool(DB).query(
+    "SELECT * FROM users WHERE email=$1 AND provider=$2",
+    [email.toLowerCase(), provider]
+  );
   return r.rows[0] ?? null;
 }
 
@@ -40,7 +52,7 @@ export async function updateName(id: string, name: string): Promise<void> {
 export async function createUser(email: string, name: string, passwordHash: string | null, provider = "credentials"): Promise<User> {
   const r = await getPool(DB).query(
     `INSERT INTO users(email, name, password_hash, provider) VALUES($1,$2,$3,$4)
-     ON CONFLICT(email) DO UPDATE SET name = COALESCE(EXCLUDED.name, users.name)
+     ON CONFLICT(email, provider) DO UPDATE SET name = COALESCE(EXCLUDED.name, users.name)
      RETURNING *`,
     [email.toLowerCase(), name || null, passwordHash, provider]
   );

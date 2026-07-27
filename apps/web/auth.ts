@@ -4,7 +4,7 @@ import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
 import bcrypt from "bcryptjs";
 import { authConfig } from "./auth.config";
-import { findUserByEmail, createUser } from "@/lib/users";
+import { findUserByEmailAndProvider, createUser } from "@/lib/users";
 import { resolveWorkspaceForEmail } from "@/lib/workspace";
 import { isAllowed, listAllowEntries } from "@/lib/allowlist";
 import { getPool } from "@/lib/db";
@@ -17,7 +17,9 @@ const providers: any[] = [
       const email = String(creds?.email ?? "").toLowerCase();
       const password = String(creds?.password ?? "");
       if (!email || !password) return null;
-      const user = await findUserByEmail(email);
+      // Only the password account for this email — never an OAuth account that
+      // happens to share it (those have no password_hash anyway).
+      const user = await findUserByEmailAndProvider(email, "credentials");
       if (!user?.password_hash) return null;
       const ok = await bcrypt.compare(password, user.password_hash);
       if (!ok) return null;
@@ -74,10 +76,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // query. signIn (below) has already upserted the row, so the lookup hits.
     async jwt({ token, user, account }) {
       if (user?.email) {
-        const dbUser = await findUserByEmail(user.email);
-        console.log(`[jwt-debug] provider=${account?.provider} email=${user.email} userId=${user.id} dbUserId=${dbUser?.id ?? "NULL"} prevSub=${token.sub}`);
+        // Resolve to the (email, provider) account, so each provider is its own
+        // account and token.sub is our users.id — not the OAuth account id.
+        const dbUser = await findUserByEmailAndProvider(user.email, account?.provider ?? "credentials");
         if (dbUser) { token.sub = dbUser.id; token.email = dbUser.email; }
-        console.log(`[jwt-debug] finalSub=${token.sub}`);
       }
       return token;
     },
@@ -106,19 +108,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // it on every sign-in would leave an orphaned workspace behind each time.
       // The row lock serializes concurrent first sign-ins for the same user, which
       // would otherwise both pass the check and both create a workspace.
+      // Scope to THIS account (email + provider) — a shared email now spans
+      // several accounts, and each gets its own workspace so their apps stay
+      // separate.
       const email = user.email.toLowerCase();
+      const provider = account?.provider ?? "credentials";
       const client = await getPool("supersonic_platform").connect();
       try {
         await client.query("BEGIN");
         const existing = await client.query(
-          `SELECT workspace_id FROM users WHERE email = $1 FOR UPDATE`,
-          [email]
+          `SELECT workspace_id FROM users WHERE email = $1 AND provider = $2 FOR UPDATE`,
+          [email, provider]
         );
         if (existing.rows[0] && existing.rows[0].workspace_id === null) {
           const workspaceId = await resolveWorkspaceForEmail(user.email, client);
           await client.query(
-            `UPDATE users SET workspace_id = $1 WHERE email = $2 AND workspace_id IS NULL`,
-            [workspaceId, email]
+            `UPDATE users SET workspace_id = $1 WHERE email = $2 AND provider = $3 AND workspace_id IS NULL`,
+            [workspaceId, email, provider]
           );
         }
         await client.query("COMMIT");

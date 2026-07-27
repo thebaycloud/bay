@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import bcrypt from "bcryptjs";
-import { findUserByEmail, createUser } from "@/lib/users";
+import { findUserByEmailAndProvider, createUser } from "@/lib/users";
 import { isAllowed, listAllowEntries } from "@/lib/allowlist";
 
 export async function POST(req: Request) {
@@ -29,7 +29,9 @@ export async function POST(req: Request) {
     return Response.json({ error: "could not verify the invite list" }, { status: 503 });
   }
   try {
-    if (await findUserByEmail(String(email))) {
+    // Only a password account for this email blocks signup — an OAuth account
+    // under the same email is a separate account and doesn't conflict.
+    if (await findUserByEmailAndProvider(String(email), "credentials")) {
       return Response.json({ error: "an account with that email already exists" }, { status: 400 });
     }
     const hash = await bcrypt.hash(String(password), 10);
