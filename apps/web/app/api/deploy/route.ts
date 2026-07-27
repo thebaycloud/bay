@@ -317,6 +317,15 @@ async function createDomainMapping(slug: string, log: (l: string) => void): Prom
 
 export async function POST(req: Request) {
   const ownerId = await currentUserId();
+  // The middleware waves any request carrying an `Authorization: Bearer …`
+  // header past the cookie gate, on the promise that the route validates the
+  // token itself. This route never did: currentUserId() returns null for a
+  // bogus token and every use below is `if (ownerId)`-guarded, so an anonymous
+  // caller skipped the bookkeeping and still reached `git clone` → container
+  // build → Cloud Run deploy under our own service account. That is
+  // unauthenticated code execution in our project, reachable by anyone who
+  // sends one junk header. Refuse before anything else runs.
+  if (!ownerId) return Response.json({ error: "not signed in" }, { status: 401 });
   const ownerWorkspace = ownerId
     ? (await getPool("supersonic_platform").query(
         `SELECT workspace_id FROM users WHERE id = $1`, [ownerId]

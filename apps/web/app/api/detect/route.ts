@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
+import { currentUserId } from "@/lib/session";
 
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } as NodeJS.ProcessEnv;
@@ -33,6 +34,12 @@ function capture(cmd: string, args: string[]) {
 }
 
 export async function POST(req: Request) {
+  // Same hole as /api/deploy: a junk `Authorization: Bearer …` header clears
+  // the middleware's cookie gate, and this route had no check of its own — so
+  // anyone could make the control plane `git clone` a URL of their choosing.
+  // normalizeRepo passes file:// through and prefixes anything else with
+  // https://, which puts internal hosts in reach too.
+  if (!(await currentUserId())) return Response.json({ error: "not signed in" }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   const url = normalizeRepo(String(body.repo ?? ""));
   const slug = cloudRunName(url);
