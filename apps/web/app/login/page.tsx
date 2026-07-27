@@ -6,15 +6,28 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Zap, Github } from "lucide-react";
 
-function LoginForm() {
-  const router = useRouter();
+/**
+ * Only this notice reads the query string, and only this notice sits behind the
+ * Suspense boundary Next requires for useSearchParams. Wrapping the whole page
+ * instead makes the server render nothing at all — a blank login screen.
+ */
+function NotInvitedNotice() {
   const params = useSearchParams();
-  const notInvited = params.get("error") === "not_invited";
+  if (params.get("error") !== "not_invited") return null;
   // Straight from the query string, so cap it and require it to look like an
   // address — otherwise /login?error=not_invited&email=<any sentence> is a
   // ready-made phishing surface in a first-party error box.
   const raw = params.get("email") ?? "";
   const rejected = raw.length <= 254 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(raw) ? raw : "";
+  return (
+    <div className="autherr">
+      ✕ {rejected || "That address"} isn&apos;t on the invite list. Ask whoever invited you to add it.
+    </div>
+  );
+}
+
+export default function Login() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -38,11 +51,7 @@ function LoginForm() {
           <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
           <input type="password" placeholder="password" value={password} onChange={(e) => setPassword(e.target.value)} />
           {err && <div className="autherr">✕ {err}</div>}
-          {notInvited && (
-            <div className="autherr">
-              ✕ {rejected || "That address"} isn&apos;t on the invite list. Ask whoever invited you to add it.
-            </div>
-          )}
+          <Suspense fallback={null}><NotInvitedNotice /></Suspense>
           <button className="btn primary" type="submit" disabled={busy}>{busy ? "…" : "Sign in"}</button>
         </form>
         <div className="authoauth">
@@ -54,15 +63,5 @@ function LoginForm() {
         <div className="authalt">No account? <Link href="/signup">Sign up</Link></div>
       </div>
     </div>
-  );
-}
-
-// useSearchParams opts the tree into client-side rendering, which Next requires
-// to sit behind a Suspense boundary or the /login prerender fails.
-export default function Login() {
-  return (
-    <Suspense fallback={null}>
-      <LoginForm />
-    </Suspense>
   );
 }
