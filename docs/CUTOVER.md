@@ -179,12 +179,24 @@ gcloud run deploy supersonic-static \
   --source . --region us-central1 --project supersonic-deploy-prod \
   --service-account supersonic-static@supersonic-deploy-prod.iam.gserviceaccount.com \
   --set-env-vars ASSETS_BUCKET=supersonic-static-assets,ROOT_DOMAIN=supersonic.cv \
-  --allow-unauthenticated --quiet
+  --no-allow-unauthenticated --quiet
+
+gcloud run services add-iam-policy-binding supersonic-static \
+  --region us-central1 --project supersonic-deploy-prod \
+  --member "serviceAccount:supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com" \
+  --role roles/run.invoker
 ```
 
-`--allow-unauthenticated` matches the apps it fronts while `SEAL_APPS` is off. When
-sealing happens, this service seals with everything else — it is an ordinary Cloud Run
-service, which is exactly why the proxy and the visibility rules already cover it.
+**Sealed, and it matters more here than for an ordinary app.** This one service fronts
+every static app, and it decides which one to serve from the `x-supersonic-slug` header
+the proxy sets. Left publicly invokable, anyone who knew the run.app URL could send that
+header themselves and read a *private* app's files without ever passing the proxy's
+access decision.
+
+This was got wrong once during the rollout — the service went out with
+`--allow-unauthenticated` on the belief that `SEAL_APPS` was off, when it was already
+`1`. Caught by checking the live IAM policy afterwards rather than trusting the
+assumption.
 
 ## 4. The regional npm mirror — created, deliberately NOT switched on
 
