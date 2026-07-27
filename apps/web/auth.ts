@@ -72,10 +72,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // always our UUID. Without this, OAuth logins carry the provider's account id
     // (Google/GitHub's) as their session id, breaking every ownership + account
     // query. signIn (below) has already upserted the row, so the lookup hits.
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
       if (user?.email) {
         const dbUser = await findUserByEmail(user.email);
+        console.log(`[jwt-debug] provider=${account?.provider} email=${user.email} userId=${user.id} dbUserId=${dbUser?.id ?? "NULL"} prevSub=${token.sub}`);
         if (dbUser) { token.sub = dbUser.id; token.email = dbUser.email; }
+        console.log(`[jwt-debug] finalSub=${token.sub}`);
       }
       return token;
     },
