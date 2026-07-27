@@ -49,7 +49,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   ]);
 
   if (!decideAccess({ app, visitor, visitorWorkspaceId, hasGrant: granted })) {
-    return html(res, 403, page403(app.owner_email));
+    return html(res, 403, page403(slug, "https://app.supersonic.cv"));
   }
 
   const workspaceDomain = (await workspaceDomainOf(app.workspace_id)) ?? "";

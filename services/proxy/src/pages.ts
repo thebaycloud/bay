@@ -1,17 +1,40 @@
-function shell(title: string, body: string): string {
+function shell(title: string, body: string, extra = ""): string {
   return `<!doctype html><meta charset="utf-8"><title>${title}</title>
 <style>
-body{font:16px/1.6 ui-sans-serif,system-ui,sans-serif;margin:0;min-height:100vh;
-display:grid;place-items:center;background:#0b0b0c;color:#e8e8ea}
-main{max-width:32rem;padding:2rem;text-align:center}
-h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0;color:#9a9aa2}
-code{background:#1a1a1d;padding:.1rem .35rem;border-radius:.25rem}
-</style><main>${body}</main>`;
+body{font:15px/1.6 -apple-system,BlinkMacSystemFont,ui-sans-serif,system-ui,sans-serif;margin:0;min-height:100vh;
+display:grid;place-items:center;background:#0e1512;color:#e9efeb}
+main{max-width:30rem;padding:2rem;text-align:center}
+.mk{width:40px;height:40px;border-radius:11px;background:#0b5e38;display:grid;place-items:center;margin:0 auto 20px}
+h1{font-size:1.3rem;margin:0 0 .5rem;letter-spacing:-.01em}p{margin:0;color:#9db0a6}
+code{background:#1d2621;padding:.1rem .35rem;border-radius:.25rem}
+.btn{display:inline-flex;align-items:center;gap:8px;margin-top:22px;background:#2ea86a;color:#05130b;
+border:0;cursor:pointer;font:600 14px sans-serif;padding:12px 20px;border-radius:10px;text-decoration:none}
+.btn:disabled{opacity:.6;cursor:default}
+.note{margin-top:14px;font-size:13px;color:#6d7d74}
+</style><main>${body}</main>${extra}`;
 }
 
-export function page403(ownerEmail: string): string {
-  return shell("No access", `<h1>You don't have access to this tool</h1>
-<p>Ask <code>${escapeHtml(ownerEmail)}</code> to share it with you.</p>`);
+const MARK = `<div class="mk"><svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>`;
+
+/** Shown to a signed-in visitor who has no access. Offers to ask the owner —
+ * without ever revealing who the owner is. */
+export function page403(slug: string, appOrigin: string): string {
+  const script = `<script>
+var b=document.getElementById('req');
+b.onclick=function(){
+  b.disabled=true;b.textContent='Sending…';
+  fetch(${JSON.stringify(appOrigin)}+'/api/apps/${slug}/request-access',{method:'POST',credentials:'include'})
+   .then(function(r){return r.json().catch(function(){return{}})})
+   .then(function(j){
+     if(j&&j.ok){document.getElementById('body').innerHTML='${MARK}<h1>Request sent</h1><p>The owner has been asked to give you access. You&#39;ll hear back by email.</p>';}
+     else{b.disabled=false;b.textContent='Request access';document.getElementById('n').textContent=(j&&j.error)||'Could not send the request. Try again.';}
+   }).catch(function(){b.disabled=false;b.textContent='Request access';document.getElementById('n').textContent='Could not reach the server.';});
+};
+</script>`;
+  return shell("No access", `<div id="body">${MARK}<h1>You don't have access to this app</h1>
+<p>This app is private. You can ask the owner to let you in.</p>
+<button class="btn" id="req">Request access</button>
+<div class="note" id="n"></div></div>`, script);
 }
 
 export function page404(): string {
