@@ -18,6 +18,11 @@ seconds. No infra, ever. As easy as posting a story.
 | `packages/skills` | One source → Claude Code skill, Cursor rules, AGENTS.md, Copilot instructions | 5 |
 | `infra/terraform` | GCP infra as code (Cloud Run, Cloud SQL, Identity Platform, DNS, SSL…) | 0 |
 | `docs/` | `PHASES.md` (full build plan), `ARCHITECTURE.md` | — |
+| `apps/outreach-extension` | Internal growth tool: MV3 extension for LinkedIn outreach | — |
+| `services/outreach` | Backend for the above — prospects, campaigns, caps, copy generation | — |
+
+> `apps/outreach-extension` and `services/outreach` are internal sales tooling,
+> not part of the product. They ship on their own cadence.
 
 ## Status
 

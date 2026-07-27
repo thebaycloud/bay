@@ -22,6 +22,9 @@ export function isAllowed(email: string, entries: AllowEntry[]): boolean {
   if (!addr || !domain || !local) return false;
 
   for (const e of entries) {
+    // A domain of "*" opens sign-in to everyone (signups are public). Remove the
+    // wildcard row to re-close the gate.
+    if (e.domain && e.domain.trim() === "*") return true;
     if (e.email && e.email.trim().toLowerCase() === addr) return true;
     if (e.domain && e.domain.trim().toLowerCase() === domain) return true;
   }

@@ -80,7 +80,7 @@ export default function Home() {
                 <Link key={a.slug} href={`/apps/${a.slug}`} className="app-card">
                   <div className="thumb">
                     {a.url
-                      ? <iframe src={a.url} title={a.slug} loading="lazy" sandbox="allow-scripts allow-same-origin" />
+                      ? <iframe src={`https://${a.slug}.supersonic.cv`} title={a.slug} loading="lazy" sandbox="allow-scripts allow-same-origin" />
                       : <span className="thumb-mono">{a.slug.charAt(0).toUpperCase()}</span>}
                   </div>
                   <div className="card-body">
@@ -88,7 +88,7 @@ export default function Home() {
                       <span className="nm">{a.name || a.slug}</span>
                       <span className={`st ${a.ready ? "live" : "error"}`}><span className="d" />{a.ready ? "Live" : "Down"}</span>
                     </div>
-                    <div className="url">{a.url.replace(/^https?:\/\//, "") || "—"}</div>
+                    <div className="url">{a.slug}.supersonic.cv</div>
                   </div>
                 </Link>
               ))}

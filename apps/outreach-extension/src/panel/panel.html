@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Supersonic Outreach</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Outreach</h1>
+      <span id="account" class="muted">not connected</span>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab is-active" data-tab="scrape">Scrape</button>
+      <button class="tab" data-tab="health">Health</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <section id="panel-scrape" class="panel">
+      <p class="hint">
+        Open the LinkedIn page you want to pull from, then choose a source.
+        Everything runs in that tab at human pace — leave it visible.
+      </p>
+
+      <div class="actions">
+        <button data-scrape="post_likers">Post likers</button>
+        <button data-scrape="post_commenters">Post commenters</button>
+        <button data-scrape="search">Search results</button>
+        <button data-scrape="connections">My connections</button>
+      </div>
+
+      <h2>Enrichment</h2>
+      <p class="hint">
+        Visits un-enriched profiles one by one to collect role, company and
+        recent activity. This is the only context the copy generator gets.
+      </p>
+      <button id="enrich">Enrich next 10</button>
+
+      <h2>Prospects</h2>
+      <table id="stats"><tbody></tbody></table>
+
+      <h2>Recent runs</h2>
+      <ul id="runs" class="runs"></ul>
+    </section>
+
+    <section id="panel-health" class="panel is-hidden">
+      <p class="hint">
+        Which selectors currently match on the open tab. A red row means
+        LinkedIn changed its markup and <code>src/content/selectors.ts</code>
+        needs updating before that source will work.
+      </p>
+      <button id="check-health">Check open tab</button>
+      <ul id="health" class="health"></ul>
+
+      <h2>Diagnose</h2>
+      <p class="hint">
+        Captures what is actually in the page — which selector candidates
+        matched, the open dialog, and sample markup around the profile links.
+        Copies to the clipboard. Paste it back to fix selectors from evidence
+        instead of guesswork.
+      </p>
+      <button id="diagnose">Copy diagnosis for this page</button>
+      <pre id="diagnosis" class="diagnosis"></pre>
+    </section>
+
+    <section id="panel-settings" class="panel is-hidden">
+      <label for="api-url">Service URL</label>
+      <input id="api-url" type="url" placeholder="https://outreach.example.internal" />
+
+      <label for="token">Account token</label>
+      <input id="token" type="password" placeholder="sok_…" />
+
+      <button id="save-settings">Save &amp; connect</button>
+      <p class="hint">
+        Issued by <code>scripts/create-account.ts</code> on the service. Stored
+        in extension storage only; the content script never sees it.
+      </p>
+    </section>
+
+    <div id="status" role="status"></div>
+
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>

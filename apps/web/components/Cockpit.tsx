@@ -32,10 +32,11 @@ const tabs: { id: Tab; icon: typeof LayoutGrid; label: string }[] = [
 export function Cockpit({ appName, data, children }: { appName: string; data: ServiceInfo | null; children?: ReactNode }) {
   const d = data ?? { slug: appName, name: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: "" };
   const domain = `${appName}.supersonic.cv`;
-  // The run.app URL works immediately; the custom subdomain needs SSL provisioning
-  // (~15 min) and may not resolve yet — use the working URL for preview + links.
-  const liveUrl = d.url || `https://${domain}`;
-  const liveHost = liveUrl.replace(/^https?:\/\//, "");
+  // Apps are served through the proxy at <slug>.supersonic.cv (the raw run.app URL
+  // is sealed). The owner viewing this page carries the .supersonic.cv session, so
+  // the preview iframe loads.
+  const liveUrl = `https://${domain}`;
+  const liveHost = domain;
   const displayName = d.name || appName;
   const hasDb = Boolean(d.cloudsql);
   const hasStorage = Boolean(d.storageBucket);

@@ -17,3 +17,6 @@ next-env.d.ts
 .turbo/
 coverage/
 .superpowers/
+
+# Extension signing key — pins the extension ID. Keep it out of git.
+extension-key.pem
