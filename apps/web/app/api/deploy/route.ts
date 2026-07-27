@@ -364,9 +364,14 @@ function staticBuildConfig(opts: {
   destination: string;
 }): string {
   const shell = [opts.installCommand, opts.buildCommand].filter(Boolean).join(" && ") || "true";
+  // The whole point of the warm base is the package cache it carries, and the
+  // static lane is where dependency installation dominates: measured on a real
+  // Vite deploy, 77s of an 83s deploy was this step. Pulling node:22-slim from
+  // Docker Hub instead threw that away.
+  const builder = process.env.NEXT_BASE_IMAGE || process.env.NODE_BASE_IMAGE || "node:22-slim";
   return [
     "steps:",
-    "  - name: node:22-slim",
+    `  - name: ${builder}`,
     "    entrypoint: bash",
     `    args: ["-lc", ${JSON.stringify(shell)}]`,
     "  - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim",
