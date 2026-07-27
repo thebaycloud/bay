@@ -75,23 +75,35 @@ export function Globe({
     window.addEventListener("resize", onResize);
     onResize();
 
-    const globe = createGlobe(canvasRef.current!, {
-      ...config,
-      width: width * 2,
-      height: width * 2,
-      onRender: (state) => {
-        if (!pointerInteracting.current) phi += 0.004;
-        state.phi = phi + rs.get();
-        state.width = width * 2;
-        state.height = width * 2;
-      },
-    });
+    // cobe throws if getContext("webgl") returns null — no GPU, a blocklisted
+    // driver, or a privacy extension. That threw during render of the whole
+    // page, so a missing decoration took the entire marketing site down to
+    // "Application error: a client-side exception has occurred". The globe is
+    // ornamental: if it can't start, leave the canvas invisible and move on.
+    let globe: ReturnType<typeof createGlobe> | null = null;
+    try {
+      globe = createGlobe(canvasRef.current!, {
+        ...config,
+        width: width * 2,
+        height: width * 2,
+        onRender: (state) => {
+          if (!pointerInteracting.current) phi += 0.004;
+          state.phi = phi + rs.get();
+          state.width = width * 2;
+          state.height = width * 2;
+        },
+      });
+    } catch (e) {
+      console.warn("globe unavailable, continuing without it", e);
+    }
 
-    setTimeout(() => {
-      if (canvasRef.current) canvasRef.current.style.opacity = "1";
-    }, 0);
+    if (globe) {
+      setTimeout(() => {
+        if (canvasRef.current) canvasRef.current.style.opacity = "1";
+      }, 0);
+    }
     return () => {
-      globe.destroy();
+      globe?.destroy();
       window.removeEventListener("resize", onResize);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
