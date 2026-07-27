@@ -337,6 +337,21 @@ function cachedBuildConfig(image: string): string {
   ].join("\n");
 }
 
+/** Cached because it is the same value for every static deploy. */
+let staticUrlCache: string | null = null;
+async function staticServiceUrl(): Promise<string | null> {
+  if (staticUrlCache) return staticUrlCache;
+  try {
+    const out = await capture("gcloud", [
+      "run", "services", "describe", STATIC_SERVICE,
+      "--region", REGION, "--project", PROJECT, "--format=value(status.url)",
+    ]);
+    const url = out.trim();
+    if (url.startsWith("https://")) { staticUrlCache = url; return url; }
+  } catch { /* not deployed yet */ }
+  return null;
+}
+
 /**
  * Cloud Build config for the static lane: install, build, then copy the output
  * straight to GCS. The bytes never travel back through the control plane.
@@ -633,7 +648,15 @@ export async function POST(req: Request) {
           // failure above leaves the previous release live and untouched.
           await run("gcloud", ["storage", "cp", "-", `gs://${ASSETS_BUCKET}/${pointerPath(slug)}`, "--project", PROJECT], () => {}, release);
           log(`Published release ${release}`);
-          return { ok: true, url: `https://${slug}.supersonic.cv` };
+          // The proxy routes by looking up apps.run_url, so a static app points
+          // at the shared static server. The proxy tells that server which app a
+          // request is for via x-supersonic-slug, because it drops Host on the
+          // way through and every static app shares this one upstream.
+          const upstream = await staticServiceUrl();
+          if (!upstream) {
+            return { ok: false, error: `${STATIC_SERVICE} has no URL — is the static server deployed?` };
+          }
+          return { ok: true, url: upstream };
         };
 
         const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
@@ -688,18 +711,20 @@ export async function POST(req: Request) {
         log(`Live at ${result.url}`);
         // The two routing models are mutually exclusive: a per-app domain
         // mapping points straight at Cloud Run, which a sealed app refuses.
-        if (SEAL_APPS) {
-          log(`Private — open ${slug}.supersonic.cv to share it`);
+        if (SEAL_APPS || staticServe) {
+          // A static app has no service of its own to map a name onto — the
+          // proxy routes it by apps.run_url to the shared static server, the
+          // same way it routes everything else. So the visibility rules apply
+          // with no special case, and there is no per-app mapping to create.
+          log(`Live at ${slug}.supersonic.cv`);
         } else {
-          // A static app has no service of its own — the name points at the one
-          // shared static server, which resolves the slug back out of the Host
-          // header. Because that server is an ordinary Cloud Run service, the
-          // proxy and the visibility rules apply to it with no special case.
-          await createDomainMapping(slug, log, staticServe ? STATIC_SERVICE : slug);
+          await createDomainMapping(slug, log);
         }
         if (ownerId) setDeploy(slug, { status: "live", url: result.url });
         if (ownerId && ownerWorkspace) await markAppLive(slug, result.url ?? "");
-        send({ type: "done", slug, url: SEAL_APPS ? `https://${slug}.supersonic.cv` : result.url });
+        // A static app's run_url is the shared static server, which is useless to
+        // show someone — their app lives at its own name, reached through the proxy.
+        send({ type: "done", slug, url: SEAL_APPS || staticServe ? `https://${slug}.supersonic.cv` : result.url });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (ownerId) setDeploy(slug, { status: "failed", stage: msg });

@@ -14,7 +14,7 @@ export async function forward(
   inject?: { slug: string; owner: boolean }
 ): Promise<void> {
   const target = new URL(req.url ?? "/", targetBase);
-  const headers = buildUpstreamHeaders(req.headers, visitor, config.sessionCookieName);
+  const headers = buildUpstreamHeaders(req.headers, visitor, config.sessionCookieName, inject?.slug);
   headers["x-supersonic-workspace"] = workspaceDomain;
 
   // Cloud Run rejects unauthenticated calls; we are the only allowed invoker.

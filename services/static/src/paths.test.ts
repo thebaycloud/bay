@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { slugFromHost, objectKey, looksLikeFile } from "./paths.ts";
+import { slugFromHost, slugFor, objectKey, looksLikeFile } from "./paths.ts";
 import { contentType, cacheControl, isFingerprinted } from "./headers.ts";
 
 const ROOT = "supersonic.cv";
@@ -30,6 +30,35 @@ test("a slug that is not a valid label is rejected", () => {
   assert.equal(slugFromHost("-bad.supersonic.cv", ROOT), null);
   assert.equal(slugFromHost("bad_.supersonic.cv", ROOT), null);
   assert.equal(slugFromHost("../etc.supersonic.cv", ROOT), null);
+});
+
+// --- slug behind the proxy
+
+test("the proxy's slug header wins over the Host header", () => {
+  // Behind the proxy the Host is the run.app hostname, which names no app.
+  assert.equal(
+    slugFor("myapp", "supersonic-static-xyz.a.run.app", ROOT),
+    "myapp",
+  );
+});
+
+test("a malformed slug header is rejected outright, not fallen back on", () => {
+  // Falling back to Host here would let a bad header quietly serve whatever the
+  // hostname happened to say.
+  for (const bad of ["../other", "a/b", "UPPER CASE", "", "-lead", "a".repeat(70)]) {
+    assert.equal(slugFor(bad, "myapp.supersonic.cv", ROOT), null, bad);
+  }
+});
+
+test("a repeated slug header is rejected", () => {
+  // node gives an array for duplicated headers; taking the first would let a
+  // second copy smuggle a different value past a naive check.
+  assert.equal(slugFor(["a", "b"], "myapp.supersonic.cv", ROOT), null);
+});
+
+test("without the header the Host decides", () => {
+  assert.equal(slugFor(undefined, "myapp.supersonic.cv", ROOT), "myapp");
+  assert.equal(slugFor(undefined, "supersonic.cv", ROOT), null);
 });
 
 // --- path normalisation

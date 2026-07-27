@@ -10,7 +10,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Storage } from "@google-cloud/storage";
-import { slugFromHost, objectKey, looksLikeFile } from "./paths.ts";
+import { slugFor, objectKey, looksLikeFile } from "./paths.ts";
 import { contentType, cacheControl } from "./headers.ts";
 import { PointerCache, isReleaseId } from "./pointer.ts";
 
@@ -41,7 +41,7 @@ function fail(res: ServerResponse, status: number, message: string): void {
 async function serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== "GET" && req.method !== "HEAD") return fail(res, 405, "method not allowed");
 
-  const slug = slugFromHost(req.headers.host, ROOT_DOMAIN);
+  const slug = slugFor(req.headers["x-supersonic-slug"], req.headers.host, ROOT_DOMAIN);
   if (!slug) return fail(res, 404, "not found");
 
   const release = await pointers.get(slug);

@@ -24,7 +24,8 @@ export function stripSessionCookie(value: string, cookieName: string): string {
 export function buildUpstreamHeaders(
   incoming: IncomingHttpHeaders,
   visitor: VisitorIdentity,
-  sessionCookieName: string
+  sessionCookieName: string,
+  slug?: string
 ): OutgoingHttpHeaders {
   const out: OutgoingHttpHeaders = {};
 
@@ -44,6 +45,12 @@ export function buildUpstreamHeaders(
   out["x-supersonic-user-id"] = visitor.userId;
   out["x-supersonic-email"] = visitor.email;
   out["x-supersonic-name"] = visitor.name;
+  // Host is dropped above and the upstream request sets its own, so an upstream
+  // shared between tenants — the static server fronting every static app — has
+  // no way to tell which app a request was for. This is that way. Safe to trust
+  // downstream precisely because the loop above discards anything the client
+  // sent under this prefix.
+  if (slug) out["x-supersonic-slug"] = slug;
   return out;
 }
 

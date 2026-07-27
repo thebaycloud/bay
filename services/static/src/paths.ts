@@ -10,6 +10,35 @@
 const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
+ * Which app a request is for.
+ *
+ * Behind the proxy the Host header is gone — the proxy drops it and the upstream
+ * request carries the run.app hostname instead — so the proxy names the app in
+ * `x-supersonic-slug`. Direct requests still carry a real Host, which is the
+ * path used before the proxy is in front and by the health check.
+ *
+ * The header is validated exactly as strictly as a hostname label would be, so
+ * trusting it cannot widen what a caller can reach beyond one well-formed slug's
+ * public assets.
+ */
+export function slugFor(
+  headerSlug: string | string[] | undefined,
+  host: string | undefined,
+  root: string,
+): string | null {
+  if (headerSlug !== undefined) {
+    // Present but not a single well-formed value — a duplicated header arrives
+    // as an array — is refused outright. Falling back to Host here would let an
+    // anomalous header quietly resolve through a different mechanism than the
+    // one that set it.
+    if (typeof headerSlug !== "string") return null;
+    const value = headerSlug.trim().toLowerCase();
+    return SLUG.test(value) ? value : null;
+  }
+  return slugFromHost(host, root);
+}
+
+/**
  * Slug from a Host header. `foo.supersonic.cv` -> `foo`.
  *
  * The port is stripped because `Host` carries one on non-standard ports. Anything
