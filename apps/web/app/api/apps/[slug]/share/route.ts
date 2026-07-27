@@ -5,6 +5,7 @@ import { getAppBySlug, setVisibility, listGrants, addGrant, removeGrant, type Vi
 import { listPending, resolveRequest } from "@/lib/requests";
 import { sendAccessGranted } from "@/lib/email";
 import { currentUserId } from "@/lib/session";
+import { planLimits } from "@/lib/entitlements";
 
 const VISIBILITIES: Visibility[] = ["private", "shared", "public"];
 
@@ -69,6 +70,19 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     // arbitrarily long string matches the regex and reaches the database.
     if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return Response.json({ error: "invalid email" }, { status: 400, headers: cors });
+    }
+    // Sharing cap (inert until GATING_ENABLED=1). Re-adding someone already on the
+    // list is idempotent and always allowed; only a genuinely new invitee counts
+    // against the cap.
+    const limits = await planLimits(app.owner_id);
+    if (Number.isFinite(limits.maxGrants)) {
+      const current = await listGrants(slug);
+      if (!current.includes(email) && current.length >= limits.maxGrants) {
+        return Response.json(
+          { error: `Your plan allows sharing with ${limits.maxGrants} people. Upgrade to Pro for unlimited sharing.`, upgrade: true },
+          { status: 402, headers: cors }
+        );
+      }
     }
     // Granting = inviting or approving a request; either way, resolve any pending
     // request and tell the person they're in.

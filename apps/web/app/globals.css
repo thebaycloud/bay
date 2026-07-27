@@ -245,6 +245,15 @@ table.dg tr:hover td { background: var(--paper); }
 .usermenu { display: flex; align-items: center; gap: 8px; }
 .usermenu .ue { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* plan pill (topbar) */
+.planbadge { display: flex; align-items: center; }
+.planbadge .btn.sm { gap: 6px; }
+.planbadge .plan-pro { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.planbadge .plan-pro:hover { opacity: .9; background: var(--accent); }
+.planbadge .plan-up { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); }
+.planbadge .plan-up:hover { background: color-mix(in srgb, var(--accent) 8%, var(--card)); border-color: var(--accent); }
+.planbadge .btn:disabled { opacity: .55; cursor: default; }
+
 /* issues (maintenance loop) */
 .issues { border: 1px solid var(--line); background: var(--card); }
 .issue { border-bottom: 1px solid var(--line); }

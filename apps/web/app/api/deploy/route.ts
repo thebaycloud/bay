@@ -18,6 +18,7 @@ import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/stat
 import { take as takeClone } from "@/lib/clone-cache";
 import { resilientInstall } from "@/lib/install";
 import { StageRecorder } from "@/lib/stages";
+import { planLimits, countOwnerApps, type Limits } from "@/lib/entitlements";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -80,6 +81,19 @@ function diagnose(errTail: string[]): string {
   }
   const errs = errTail.filter((l) => /error|fail/i.test(l)).slice(-4);
   return errs.join(" · ") || errTail.slice(-4).join(" · ") || "deploy failed";
+}
+
+// Basic plan doesn't get the auto-fix agent — it gets a paste-ready prompt to
+// hand its own coding agent. This turns a raw deploy error into that prompt.
+function fixPrompt(slug: string, error: string): string {
+  return [
+    "My deploy to Supersonic failed. Fix the code so it deploys cleanly, then",
+    "run `supersonic deploy` again from the project root.",
+    "",
+    "Here is the exact error from the build/deploy:",
+    "",
+    error.trim(),
+  ].join("\n");
 }
 
 function gcloudDeploy(args: string[], onLine: (l: string) => void) {
@@ -439,6 +453,24 @@ export async function POST(req: Request) {
   // the same slug by matching the friendly name against the user's existing apps.
   slug = await resolveSlug(ownerId || "", friendlyName);
 
+  // Plan enforcement (inert until GATING_ENABLED=1 — see lib/entitlements). The
+  // app-count cap is checked up front so a blocked deploy fails cleanly with a
+  // 402 instead of erroring mid-stream. `limits` also decides, further down,
+  // whether a failed deploy gets the auto-fix agent (pro) or a paste prompt (basic).
+  const limits: Limits = await planLimits(ownerId);
+  if (Number.isFinite(limits.maxApps)) {
+    const existing = await countOwnerApps(ownerId, slug);
+    if (existing >= limits.maxApps) {
+      return Response.json(
+        {
+          error: `Your plan includes ${limits.maxApps} app. Upgrade to Pro for unlimited apps at app.supersonic.cv.`,
+          upgrade: true,
+        },
+        { status: 402 }
+      );
+    }
+  }
+
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
@@ -724,6 +756,20 @@ export async function POST(req: Request) {
           if ((result.error ?? "").includes(IAM_FAILURE)) {
             if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
             send({ type: "error", message: result.error });
+            return;
+          }
+          // The auto-fix agent is a Pro feature. Basic gets a paste-ready prompt
+          // for its own coding agent instead of us fixing the code in the cloud.
+          if (!limits.autoFix) {
+            if (ownerId) setDeploy(slug, { status: "failed", stage: result.error ?? "deploy failed" });
+            if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
+            log("Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
+            send({
+              type: "error",
+              message: result.error,
+              fixPrompt: fixPrompt(slug, result.error ?? "deploy failed"),
+              upgrade: true,
+            });
             return;
           }
           log("Repair agent taking over — reading the repo, fixing, retrying…");

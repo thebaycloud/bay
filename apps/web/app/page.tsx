@@ -6,6 +6,7 @@ import { Zap, Search, Plus } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UserMenu } from "@/components/UserMenu";
+import { PlanBadge } from "@/components/PlanBadge";
 
 interface App { slug: string; name: string; url: string; ready: boolean; region: string; image: string; status?: string; stage?: string; }
 
@@ -42,6 +43,7 @@ export default function Home() {
         </Link>
         <div className="spacer" />
         <button className="kbar"><Search size={13} />Search<span className="kbd">⌘K</span></button>
+        <PlanBadge />
         <UserMenu />
         <Bracket>
           <Link href="/new" className="btn primary"><Plus size={13} />New app</Link>

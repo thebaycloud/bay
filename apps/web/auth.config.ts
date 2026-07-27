@@ -39,7 +39,10 @@ export const authConfig = {
       if (p.startsWith("/api/") && hasBearer) return true;
       const isPublic =
         p.startsWith("/login") || p.startsWith("/signup") ||
-        p.startsWith("/api/auth") || p.startsWith("/api/signup");
+        p.startsWith("/api/auth") || p.startsWith("/api/signup") ||
+        // Stripe calls this server-to-server with no cookie; it verifies its own
+        // signature. The rest of /api/billing stays behind the cookie gate.
+        p.startsWith("/api/billing/webhook");
       if (isPublic) return true;
       return !!auth?.user;
     },
