@@ -254,6 +254,14 @@ export async function rollback(slug: string): Promise<string> {
   return target;
 }
 
+/** Permanently delete an app: its Cloud Run service, custom domain mapping, and
+ * storage bucket. Each step is best-effort so a missing piece doesn't block. */
+export async function deleteApp(slug: string): Promise<void> {
+  await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]);
+  try { await capture(["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* no mapping */ }
+  try { await capture(["storage", "rm", "-r", `gs://supersonicdeploy-${slug}`, "--quiet"]); } catch { /* no bucket */ }
+}
+
 const DEPLOYER_SA = "supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com";
 
 // Cloud Run has no exec-into-a-running-instance. So we run the command in a

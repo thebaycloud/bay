@@ -1,6 +1,7 @@
 import { Cockpit } from "@/components/Cockpit";
 import SharePanel from "@/components/SharePanel";
 import { describeService, type ServiceInfo } from "@/lib/gcloud";
+import { getDeploy } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +12,13 @@ export default async function AppPage({ params }: { params: { slug: string } }) 
 
   let data: ServiceInfo | null = null;
   try { data = await describeService(slug); } catch { data = null; }
+
+  // A first-ever deploy has no Cloud Run service yet — if there's an active deploy
+  // for this user, still show the cockpit (Deployments tab streams its progress).
+  if (!data) {
+    const dep = await getDeploy(slug);
+    if (dep && uid) return <Cockpit appName={slug} data={{ slug, name: dep.name || slug, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: uid }} />;
+  }
 
   if (!data || data.owner !== uid) {
     return (

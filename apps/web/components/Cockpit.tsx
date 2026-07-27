@@ -1,28 +1,32 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Zap, ChevronDown, LayoutGrid, Rocket, Database, Users, BarChart3, Mail,
-  HardDrive, Globe, Server, GitBranch, Search, Copy, ArrowUpRight, RefreshCw,
-  Check, Lock, ChevronRight, AlertTriangle,
+  Zap, ChevronDown, LayoutGrid, Database, HardDrive, Server, Copy,
+  ArrowUpRight, RefreshCw, Check, Lock, AlertTriangle, Settings2, GitBranch,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
 import { StoragePanel } from "./StoragePanel";
 import { JobsPanel } from "./JobsPanel";
 import { IssuesPanel } from "./IssuesPanel";
+import { SettingsSection } from "./SettingsSection";
+import { DeploymentsSection } from "./DeploymentsSection";
 
 interface ServiceInfo {
   slug: string; name: string; url: string; ready: boolean; region: string;
   created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string; storageBucket: string; owner: string;
 }
 
-const navServices = [
-  { icon: Database, label: "Database" },
-  { icon: Globe, label: "Domain" },
-  { icon: Server, label: "Compute" },
-  { icon: GitBranch, label: "Deployments" },
+type Tab = "overview" | "issues" | "data" | "deployments" | "settings";
+
+const tabs: { id: Tab; icon: typeof LayoutGrid; label: string }[] = [
+  { id: "overview", icon: LayoutGrid, label: "Overview" },
+  { id: "issues", icon: AlertTriangle, label: "Issues" },
+  { id: "data", icon: Database, label: "Data" },
+  { id: "deployments", icon: GitBranch, label: "Deployments" },
+  { id: "settings", icon: Settings2, label: "Settings" },
 ];
 
 export function Cockpit({ appName, data, children }: { appName: string; data: ServiceInfo | null; children?: ReactNode }) {
@@ -39,7 +43,6 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
   const imageShort = d.image.split("/").pop() ?? "";
   const created = d.created ? d.created.slice(0, 10) : "—";
 
-  // LEFT — what your app already has, in plain language (only the wired ones).
   const haves = [
     Boolean(d.url) && { icon: Lock, label: "Secure web address", desc: `${liveHost} · HTTPS is on` },
     hasDb && { icon: Database, label: "Database", desc: "Your app's data is saved and backed up" },
@@ -47,15 +50,12 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
     { icon: Server, label: "Always online", desc: "Handles anything from 1 to millions of visitors" },
   ].filter(Boolean) as { icon: typeof Lock; label: string; desc: string }[];
 
-  // RIGHT — things you can do to your app.
-  const todos = [
-    !hasDb && { icon: Database, label: "Add a database", desc: "Save your app's data" },
-    !hasStorage && { icon: HardDrive, label: "Add file storage", desc: "Let people upload files" },
-    { icon: Users, label: "Add user sign-in", desc: "Let people log into your app" },
-    { icon: Mail, label: "Add email", desc: "Send welcome & reset emails" },
-    { icon: BarChart3, label: "Turn on analytics", desc: "See who's visiting" },
-  ].filter(Boolean) as { icon: typeof Lock; label: string; desc: string }[];
-
+  const [tab, setTab] = useState<Tab>("overview");
+  // Deep-link: /apps/<slug>?tab=deployments (used by the dashboard's Building card).
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t && tabs.some((x) => x.id === t)) setTab(t as Tab);
+  }, []);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   function showToast(msg: string) {
@@ -78,10 +78,11 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
           <ChevronDown className="chev" size={13} />
         </button>
         <nav>
-          <button className="nav-item active"><LayoutGrid size={15} />Overview</button>
-          <button className="nav-item"><Rocket size={15} />Deployments</button>
-          <div className="nav-label">Services</div>
-          {navServices.map((s) => (<button className="nav-item" key={s.label}><s.icon size={15} />{s.label}</button>))}
+          {tabs.map((t) => (
+            <button key={t.id} className={"nav-item" + (tab === t.id ? " active" : "")} onClick={() => setTab(t.id)}>
+              <t.icon size={15} />{t.label}
+            </button>
+          ))}
         </nav>
         <div className="side-foot">
           <div className="av">A</div>
@@ -96,7 +97,6 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
             <span className="sep">/</span><span>{displayName}</span>
           </div>
           <div className="spacer" />
-          <button className="kbar"><Search size={13} />Search<span className="kbd">⌘K</span></button>
           <div className="url-pill">
             <span className="u">{liveHost}</span>
             <button className="ib" title="Copy" onClick={() => copy(liveHost, `${liveHost} copied`)}><Copy size={14} /></button>
@@ -105,20 +105,17 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
           <div className="status" style={{ color: d.ready ? "var(--live)" : "var(--ink-2)", borderColor: d.ready ? "color-mix(in srgb, var(--live) 30%, var(--border))" : "var(--line-2)" }}>
             <span className="d" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />{d.ready ? "Live" : "Down"}
           </div>
-          {d.repo
-            ? <Link href={`/new?repo=${encodeURIComponent(d.repo)}`} className="btn primary"><RefreshCw size={13} />Redeploy</Link>
-            : <button className="btn" onClick={() => location.reload()}><RefreshCw size={13} />Refresh</button>}
+          <button className="btn primary" onClick={() => setTab("deployments")}><RefreshCw size={13} />Redeploy</button>
         </header>
 
         <div className="content">
           <div className="wrap">
             <div className="ruler reveal" />
 
-            <section className="cockpit-top reveal" style={{ animationDelay: ".03s" }}>
-              {/* LEFT — your app */}
-              <div className="ct-main">
+            {tab === "overview" && (
+              <section className="section-page reveal">
                 {Boolean(d.url) && (
-                  <a className="preview" href={liveUrl} target="_blank" rel="noreferrer">
+                  <a className="preview wide" href={liveUrl} target="_blank" rel="noreferrer">
                     <div className="bar">
                       <span className="dots"><i /><i /><i /></span>
                       <span className="pu">{liveHost}</span>
@@ -137,8 +134,10 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
                     <span>/ YOUR APP</span>
                   </div>
                   <h1>{displayName}</h1>
-                  <p className="sub">{d.ready ? "Running smoothly on Cloud Run — nothing for you to babysit." : "This app is currently down. Check the to-do list for what to fix."}</p>
+                  <p className="sub">{d.ready ? "Running smoothly on Cloud Run — nothing for you to babysit." : "This app is currently down. Check Issues for what to fix."}</p>
                 </div>
+
+                {children && <div className="ov-share">{children}</div>}
 
                 <div className="haves">
                   <div className="haves-h">What your app has</div>
@@ -159,44 +158,40 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
                       <div className="row"><span className="k">revision</span><span className="v">{d.revision || "—"}</span></div>
                       <div className="row"><span className="k">region</span><span className="v">{d.region}</span></div>
                       <div className="row"><span className="k">image</span><span className="v">{imageShort || "—"}</span></div>
-                      <div className="row"><span className="k">source</span><span className="v">{d.repo ? d.repo.replace(/^https?:\/\//, "") : "—"}</span></div>
+                      <div className="row"><span className="k">source</span><span className="v">{d.repo ? d.repo.replace(/^https?:\/\//, "") : "from your computer"}</span></div>
                       <div className="row"><span className="k">database</span><span className="v">{hasDb ? dbName : "none"}</span></div>
                       <div className="row"><span className="k">created</span><span className="v">{created}</span></div>
                     </div>
-                    <div className="envchips">
-                      <span className="envlabel">environment</span>
-                      {d.envKeys.length === 0 && <span className="chip">no env vars set</span>}
-                      {d.envKeys.map((k) => <span className="chip" key={k}>{k}</span>)}
-                    </div>
                   </div>
                 </details>
-              </div>
+              </section>
+            )}
 
-              {/* RIGHT — to-do rail */}
-              <aside className="ct-rail">
-                <div className="rail-h">To-do</div>
-                <a href="#issues" className="todo-item alert">
-                  <span className="tic"><AlertTriangle size={15} /></span>
-                  <div className="tgrow"><div className="tl">Check for issues</div><div className="td">Errors caught in production</div></div>
-                  <ChevronRight size={15} className="tchev" />
-                </a>
-                {todos.map((t) => (
-                  <button className="todo-item" key={t.label}>
-                    <span className="tic"><t.icon size={15} /></span>
-                    <div className="tgrow"><div className="tl">{t.label}</div><div className="td">{t.desc}</div></div>
-                    <ChevronRight size={15} className="tchev" />
-                  </button>
-                ))}
-              </aside>
-            </section>
+            {tab === "issues" && (
+              <section className="section-page reveal">
+                <div className="page-head"><h2>Issues</h2><p>Errors caught in production. We never touch your code — you get a paste-ready fix for your coding agent.</p></div>
+                <IssuesPanel slug={appName} />
+              </section>
+            )}
 
-            <div id="issues"><IssuesPanel slug={appName} /></div>
-            <DatabasePanel slug={appName} hasDb={hasDb} />
-            <StoragePanel slug={appName} hasStorage={hasStorage} />
-            <JobsPanel slug={appName} />
-            {children && (
-              <section className="section reveal">
-                <div style={{ padding: "20px 28px", maxWidth: 420 }}>{children}</div>
+            {tab === "data" && (
+              <section className="section-page reveal">
+                <div className="page-head"><h2>Data</h2><p>Your app&apos;s database, files, and scheduled tasks.</p></div>
+                <DatabasePanel slug={appName} hasDb={hasDb} />
+                <StoragePanel slug={appName} hasStorage={hasStorage} />
+                <JobsPanel slug={appName} />
+              </section>
+            )}
+
+            {tab === "deployments" && (
+              <section className="section-page reveal">
+                <DeploymentsSection slug={appName} repo={d.repo} />
+              </section>
+            )}
+
+            {tab === "settings" && (
+              <section className="section-page reveal">
+                <SettingsSection slug={appName} name={displayName} liveHost={liveHost} envKeys={d.envKeys} onToast={showToast} />
               </section>
             )}
           </div>

@@ -48,6 +48,19 @@ export async function setDeploy(
   } catch { /* ignore — progress tracking is best-effort */ }
 }
 
+/** The latest deploy record for one app (for the Deployments live view). */
+export async function getDeploy(slug: string): Promise<DeployRow | null> {
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      "SELECT slug, name, status, stage, url FROM deploys WHERE slug=$1", [slug],
+    );
+    return r.rows[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Deploys still building for a user (ignoring stale ones from crashed deploys). */
 export async function listActiveDeploys(ownerId: string): Promise<DeployRow[]> {
   try {

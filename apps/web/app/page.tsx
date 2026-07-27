@@ -66,7 +66,7 @@ export default function Home() {
                 <span className="plusbig">+</span>New app
               </Link>
               {(apps ?? []).map((a) => a.status === "building" ? (
-                <div key={a.slug} className="app-card building">
+                <Link key={a.slug} href={`/apps/${a.slug}?tab=deployments`} className="app-card building">
                   <div className="thumb"><span className="thumb-build">◐</span></div>
                   <div className="card-body">
                     <div className="r1">
@@ -75,7 +75,7 @@ export default function Home() {
                     </div>
                     <div className="url">{a.stage}</div>
                   </div>
-                </div>
+                </Link>
               ) : (
                 <Link key={a.slug} href={`/apps/${a.slug}`} className="app-card">
                   <div className="thumb">
