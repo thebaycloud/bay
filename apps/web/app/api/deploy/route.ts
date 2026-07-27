@@ -31,6 +31,8 @@ const REGION = "us-central1";
  * it. See docs/CUTOVER.md for the order of operations.
  */
 const SEAL_APPS = process.env.SEAL_APPS === "1";
+/** Runtime identity for the apps we host. Empty = inherit the project default. */
+const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
 const ENV = {
   ...process.env,
@@ -449,6 +451,17 @@ export async function POST(req: Request) {
           "--region", REGION, SEAL_APPS ? "--no-allow-unauthenticated" : "--allow-unauthenticated",
           "--project", PROJECT, "--format=json",
         ];
+        // Without this the app inherits the project's default compute service
+        // account, which here carries run.admin, storage.admin and
+        // artifactregistry.writer. That gives every customer's code — arbitrary
+        // code we agreed to run — the ability to delete the control plane, read
+        // every other customer's source out of the build bucket, and overwrite
+        // another app's image. Cloud Run hands any process in the container a
+        // token for its service account via the metadata server, so it takes one
+        // curl. Point apps at a runtime account that holds nothing instead.
+        // Unset today so this is a no-op until the account exists — see the
+        // rollout note in docs/CUTOVER.md.
+        if (APP_RUNTIME_SA) deployFlags.push(`--service-account=${APP_RUNTIME_SA}`);
         if (cloudsql) deployFlags.push(`--set-cloudsql-instances=${cloudsql}`);
         if (extraEnv.length) deployFlags.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
         const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
