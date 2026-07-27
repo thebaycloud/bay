@@ -400,6 +400,8 @@ a.btn { text-decoration: none; }
 .secrets-head { display: flex; align-items: flex-start; gap: 11px; padding: 15px 16px; border-bottom: 1px solid var(--line); }
 .secrets-head .sh-t { font-family: var(--mono); font-size: 13px; font-weight: 600; }
 .secrets-head .sh-s { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+.secrets-warn { margin: 0; padding: 12px 16px; font-size: 12px; line-height: 1.5; color: var(--ink-2); background: #fdf6e3; border-bottom: 1px solid var(--line); }
+.secrets-warn strong { color: var(--ink); }
 .secret-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .secret-row label { font-family: var(--mono); font-size: 11.5px; color: var(--ink); min-width: 190px; letter-spacing: -.01em; }
 .secret-row input { flex: 1; border: 1px solid var(--line-2); background: var(--paper); outline: none; font-family: var(--mono); font-size: 12px; color: var(--ink); padding: 8px 10px; }

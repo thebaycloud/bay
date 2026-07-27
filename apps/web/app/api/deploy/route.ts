@@ -14,6 +14,8 @@ import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
 import { getPool } from "@/lib/db";
 import { resolveSlug } from "@/lib/gcloud";
 import { setDeploy } from "@/lib/deploys";
+import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
+import { take as takeClone } from "@/lib/clone-cache";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -33,6 +35,8 @@ const REGION = "us-central1";
 const SEAL_APPS = process.env.SEAL_APPS === "1";
 /** Runtime identity for the apps we host. Empty = inherit the project default. */
 const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
+/** The one Cloud Run service that fronts every static app. */
+const STATIC_SERVICE = process.env.STATIC_SERVICE ?? "supersonic-static";
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
 const ENV = {
   ...process.env,
@@ -43,13 +47,15 @@ const ENV = {
 function forEachLine(buf: Buffer, cb: (l: string) => void) {
   buf.toString().split(/\r?\n/).forEach((l) => { if (l.trim()) cb(l.trim()); });
 }
-function run(cmd: string, args: string[], onLine: (l: string) => void) {
+function run(cmd: string, args: string[], onLine: (l: string) => void, stdin?: string) {
   return new Promise<void>((resolve, reject) => {
     const p = spawn(cmd, args, { env: ENV });
     p.stdout.on("data", (d: Buffer) => forEachLine(d, onLine));
     p.stderr.on("data", (d: Buffer) => forEachLine(d, onLine));
     p.on("error", reject);
     p.on("close", (c) => (c === 0 ? resolve() : reject(new Error(`${cmd} exited ${c}`))));
+    // Writing the release pointer is a few bytes; piping them beats a temp file.
+    if (stdin !== undefined) { p.stdin.on("error", reject); p.stdin.end(stdin); }
   });
 }
 function capture(cmd: string, args: string[]) {
@@ -311,11 +317,38 @@ function cachedBuildConfig(image: string): string {
   ].join("\n");
 }
 
+/**
+ * Cloud Build config for the static lane: install, build, then copy the output
+ * straight to GCS. The bytes never travel back through the control plane.
+ */
+function staticBuildConfig(opts: {
+  installCommand: string | null;
+  buildCommand: string | null;
+  outputDir: string;
+  destination: string;
+}): string {
+  const shell = [opts.installCommand, opts.buildCommand].filter(Boolean).join(" && ") || "true";
+  return [
+    "steps:",
+    "  - name: node:22-slim",
+    "    entrypoint: bash",
+    `    args: ["-lc", ${JSON.stringify(shell)}]`,
+    "  - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim",
+    "    entrypoint: bash",
+    `    args: ["-lc", ${JSON.stringify(`gcloud storage rsync -r ${opts.outputDir} ${opts.destination}`)}]`,
+    "options:",
+    "  logging: CLOUD_LOGGING_ONLY",
+    "",
+  ].join("\n");
+}
+
 // Give the app a <slug>.supersonic.cv address (the wildcard *.supersonic.cv
 // CNAME + this per-app mapping is what routes it). SSL provisions async.
-async function createDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
+// `service` is the Cloud Run service behind the name: the app's own for the
+// container lanes, the one shared static server for the static lane.
+async function createDomainMapping(slug: string, log: (l: string) => void, service: string = slug): Promise<void> {
   try {
-    await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", slug, "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT]);
+    await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", service, "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT]);
     log(`Mapped ${slug}.supersonic.cv (SSL provisioning, live in ~15 min)`);
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
@@ -349,6 +382,7 @@ export async function POST(req: Request) {
   let friendlyName = "app";
   let secrets: Record<string, string> = {};
   let archive: Buffer | null = null;
+  let cloneToken: unknown = null;
   if (isUpload) {
     archive = Buffer.from(await req.arrayBuffer());
     friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
@@ -357,6 +391,7 @@ export async function POST(req: Request) {
     url = normalizeRepo(String(body.repo ?? ""));
     friendlyName = cloudRunName(url);
     secrets = (body.secrets ?? {}) as Record<string, string>;
+    cloneToken = body.cloneToken ?? null;
   }
   // Apps get a short random subdomain (e.g. as76d.supersonic.cv). Redeploys reuse
   // the same slug by matching the friendly name against the user's existing apps.
@@ -380,13 +415,19 @@ export async function POST(req: Request) {
         if (ownerId && ownerWorkspace) {
           await createAppRecord({ slug, workspaceId: ownerWorkspace, ownerId });
         }
-        const dir = mkdtempSync(join(tmpdir(), "ss-deploy-"));
+        // /api/detect already cloned this repo moments ago. Reuse that clone when
+        // it is still around. A miss — a different control-plane instance, an
+        // expired entry — just means cloning again, never a failed deploy.
+        const reused = isUpload ? null : takeClone(cloneToken);
+        const dir = reused ?? mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
         if (isUpload && archive) {
           log("Unpacking your project…");
           const tgz = `${dir}.tgz`;
           writeFileSync(tgz, archive);
           await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+        } else if (reused) {
+          log(`Using the copy of ${url} we already fetched`);
         } else {
           log(`Pulling ${url}`);
           await run("git", ["clone", "--depth", "1", url, dir], () => {});
@@ -402,8 +443,16 @@ export async function POST(req: Request) {
         if (s.cache) log(`Provision ${s.cache} cache`);
         if (s.secretsNeeded?.length) log(`Will ask for secrets: ${s.secretsNeeded.join(", ")}`);
 
+        // A project that ships its own Dockerfile always takes a container lane,
+        // whatever the detector concluded. The author was explicit.
         const hasDockerfile = existsSync(join(dir, "Dockerfile"));
-        if (!hasDockerfile && /vite|create react app|\bspa\b/i.test(s.framework)) {
+        const staticServe = !hasDockerfile && s.serve?.mode === "static"
+          ? { outputDir: String(s.serve.outputDir || ".") }
+          : null;
+
+        if (staticServe) {
+          log(`${s.framework} builds to a directory — publishing it without a container`);
+        } else if (!hasDockerfile && /vite|create react app|\bspa\b/i.test(s.framework)) {
           const outdir = /create react app/i.test(s.framework) ? "build" : "dist";
           writeFileSync(join(dir, "Dockerfile"), spaDockerfile(outdir));
           log(`SPA detected — building to static and serving ${outdir}/ on $PORT`);
@@ -414,27 +463,48 @@ export async function POST(req: Request) {
 
         const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
         let cloudsql: string | null = null;
-        if (s.database?.engine === "postgres") {
-          log("Provisioning Postgres…");
-          try {
-            const pg = await provisionPostgres(slug, log);
-            extraEnv.push(`DATABASE_URL=${pg.databaseUrl}`);
-            cloudsql = pg.connectionName;
-            log("Injecting DATABASE_URL + wiring Cloud SQL");
-          } catch (e) {
-            log(`! ${e instanceof Error ? e.message : String(e)} — deploying without a database`);
-          }
-        } else if (s.database?.engine) {
+
+        // Provisioning does not depend on the build, so it is started here and
+        // awaited only where its results are actually needed — the database and
+        // the bucket get created while Cloud Build is already working. Both
+        // settle rather than reject: a missing bucket has always been survivable,
+        // and starting them early must not change that.
+        const pgPromise = s.database?.engine === "postgres"
+          ? provisionPostgres(slug, log).then(
+              (pg) => ({ ok: true as const, pg }),
+              (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
+            )
+          : null;
+        const storagePromise = provisionStorage(slug, log).then(
+          (bucket) => ({ ok: true as const, bucket }),
+          (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
+        );
+        if (s.database?.engine && s.database.engine !== "postgres") {
           log(`(${s.database.engine} provisioning not wired yet — deploying without it)`);
         }
 
-        log("Provisioning object storage…");
-        try {
-          const bucket = await provisionStorage(slug, log);
-          extraEnv.push(`STORAGE_BUCKET=${bucket}`);
-          extraEnv.push(`GOOGLE_CLOUD_PROJECT=${PROJECT}`);
-        } catch (e) {
-          log(`! storage skipped: ${e instanceof Error ? e.message : String(e)}`);
+        // The static lane needs neither, and waiting on them would hand back the
+        // seconds this lane exists to save.
+        if (!staticServe) {
+          if (pgPromise) {
+            log("Provisioning Postgres…");
+            const r = await pgPromise;
+            if (r.ok) {
+              extraEnv.push(`DATABASE_URL=${r.pg.databaseUrl}`);
+              cloudsql = r.pg.connectionName;
+              log("Injecting DATABASE_URL + wiring Cloud SQL");
+            } else {
+              log(`! ${r.error} — deploying without a database`);
+            }
+          }
+          log("Provisioning object storage…");
+          const st = await storagePromise;
+          if (st.ok) {
+            extraEnv.push(`STORAGE_BUCKET=${st.bucket}`);
+            extraEnv.push(`GOOGLE_CLOUD_PROJECT=${PROJECT}`);
+          } else {
+            log(`! storage skipped: ${st.error}`);
+          }
         }
 
         for (const [k, v] of Object.entries(secrets)) {
@@ -503,7 +573,51 @@ export async function POST(req: Request) {
             return { ok: false, error: err };
           }
         };
+        /**
+         * Static lane: build the assets, copy them to GCS, then move the pointer.
+         * No image is assembled, nothing is pushed to Artifact Registry, no Cloud
+         * Run service is created and no revision has to roll out — which is the
+         * entire reason this lane exists.
+         */
+        const runStatic = async (out: { outputDir: string }): Promise<{ ok: boolean; url?: string; error?: string }> => {
+          const release = releaseId();
+          const destination = `gs://${ASSETS_BUCKET}/${releasePrefix(slug, release)}`;
+          const needsBuild = Boolean(s.installCommand || s.buildCommand);
+
+          try {
+            if (needsBuild) {
+              log("Building assets…");
+              const hb = setInterval(() => log("building…"), 8000);
+              writeFileSync(join(dir, "cloudbuild.yaml"), staticBuildConfig({
+                installCommand: s.installCommand ? `${s.installCommand} --prefer-offline --no-audit --no-fund` : null,
+                buildCommand: s.buildCommand,
+                outputDir: out.outputDir,
+                destination,
+              }));
+              try {
+                await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
+              } finally { clearInterval(hb); }
+            } else {
+              // Nothing to build — the directory already is the site, so it goes
+              // straight up from here and skips Cloud Build entirely.
+              log("Uploading…");
+              await run("gcloud", ["storage", "rsync", "-r", join(dir, out.outputDir), destination, "--project", PROJECT], () => {});
+            }
+          } catch (e) {
+            const buildLog = await fetchBuildError();
+            const reason = buildLog || (e instanceof Error ? e.message : String(e));
+            return { ok: false, error: `Build failed:\n${reason}` };
+          }
+
+          // Last, and only now: the release is complete, so it may be named. A
+          // failure above leaves the previous release live and untouched.
+          await run("gcloud", ["storage", "cp", "-", `gs://${ASSETS_BUCKET}/${pointerPath(slug)}`, "--project", PROJECT], () => {}, release);
+          log(`Published release ${release}`);
+          return { ok: true, url: `https://${slug}.supersonic.cv` };
+        };
+
         const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
+          if (staticServe) return runStatic(staticServe);
           if (useKaniko) {
             log("Building with layer cache — the first build warms it, later ones are fast…");
             const hb = setInterval(() => log("building…"), 8000);
@@ -557,7 +671,11 @@ export async function POST(req: Request) {
         if (SEAL_APPS) {
           log(`Private — open ${slug}.supersonic.cv to share it`);
         } else {
-          await createDomainMapping(slug, log);
+          // A static app has no service of its own — the name points at the one
+          // shared static server, which resolves the slug back out of the Host
+          // header. Because that server is an ordinary Cloud Run service, the
+          // proxy and the visibility rules apply to it with no special case.
+          await createDomainMapping(slug, log, staticServe ? STATIC_SERVICE : slug);
         }
         if (ownerId) setDeploy(slug, { status: "live", url: result.url });
         if (ownerId && ownerWorkspace) await markAppLive(slug, result.url ?? "");

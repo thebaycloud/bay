@@ -2,11 +2,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
 import { currentUserId } from "@/lib/session";
+import { put, reserve, discard, sweep } from "@/lib/clone-cache";
 
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } as NodeJS.ProcessEnv;
@@ -43,21 +42,30 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const url = normalizeRepo(String(body.repo ?? ""));
   const slug = cloudRunName(url);
-  const dir = mkdtempSync(join(tmpdir(), "ss-detect-"));
+  // The clone is kept instead of thrown away, so /api/deploy can reuse it rather
+  // than fetching the same repository a second time. Sweeping here keeps
+  // abandoned deploys — someone closing the tab at the secrets step — from
+  // filling the instance's disk.
+  sweep();
+  const dir = reserve();
+  let keep = false;
   try {
     await run("git", ["clone", "--depth", "1", url, dir]);
     const raw = await capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", dir, "--api"]);
     const det = JSON.parse(raw.slice(raw.indexOf("{")));
+    keep = true;
     return Response.json({
       slug,
       framework: det.stack.framework,
       language: det.stack.language,
       dbEngine: det.stack.database?.engine ?? null,
       secretsNeeded: det.stack.secretsNeeded ?? [],
+      serve: det.stack.serve ?? { mode: "container" },
+      cloneToken: put(dir),
     });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
   } finally {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    if (!keep) discard(dir);
   }
 }

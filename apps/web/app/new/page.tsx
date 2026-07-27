@@ -47,7 +47,9 @@ export default function NewApp() {
   const [liveUrl, setLiveUrl] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
+  const [isStatic, setIsStatic] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cloneToken = useRef<string | null>(null);
 
   useEffect(() => {
     const r = new URLSearchParams(window.location.search).get("repo");
@@ -72,6 +74,11 @@ export default function NewApp() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "detection failed");
       setDetectMeta({ framework: data.framework, dbEngine: data.dbEngine });
+      // Lets the deploy reuse the clone detection just made instead of fetching
+      // the same repository again. Purely an optimisation — if it is missing or
+      // stale the deploy clones as before.
+      cloneToken.current = typeof data.cloneToken === "string" ? data.cloneToken : null;
+      setIsStatic(data.serve?.mode === "static");
       if (Array.isArray(data.secretsNeeded) && data.secretsNeeded.length) {
         setSecretsNeeded(data.secretsNeeded);
         setSecretVals(Object.fromEntries(data.secretsNeeded.map((s: string) => [s, ""])));
@@ -93,7 +100,7 @@ export default function NewApp() {
     try {
       const res = await fetch("/api/deploy", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: repoArg(), secrets }),
+        body: JSON.stringify({ repo: repoArg(), secrets, cloneToken: cloneToken.current }),
       });
       if (!res.body) throw new Error("no response stream");
       const reader = res.body.getReader();
@@ -217,6 +224,18 @@ export default function NewApp() {
                     </div>
                   </div>
                 </div>
+                {isStatic && (
+                  // A static app has no server, so these are build-time variables
+                  // baked into the bundle — anyone who opens the site can read
+                  // them. That is how every VITE_* variable has always worked, but
+                  // a field labelled "secret" implies the opposite, so say it.
+                  <div className="secrets-warn">
+                    ⚠ This app is served as static files, so these values are built
+                    into the bundle and <strong>anyone visiting the site can read them</strong>.
+                    Only put in keys that are safe in public — never a database password
+                    or a server-side API key.
+                  </div>
+                )}
                 {secretsNeeded.map((s) => (
                   <div className="secret-row" key={s}>
                     <label>{s}</label>
