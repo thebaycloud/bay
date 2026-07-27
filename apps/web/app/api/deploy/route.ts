@@ -17,6 +17,7 @@ import { setDeploy } from "@/lib/deploys";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
 import { take as takeClone } from "@/lib/clone-cache";
 import { resilientInstall } from "@/lib/install";
+import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder } from "@/lib/stages";
 import { planLimits, countOwnerApps, type Limits } from "@/lib/entitlements";
 
@@ -353,6 +354,72 @@ function cachedBuildConfig(image: string): string {
   ].join("\n");
 }
 
+/**
+ * Publish a release the CLI already built.
+ *
+ * Nothing is detected, installed or built here — that work happened on the user's
+ * machine, where the project already lives and its build takes seconds. All that is
+ * left is: unpack, upload, check, flip.
+ *
+ * The check is the reason a bad local build cannot take a site down. Until the pointer
+ * moves at the end, the previous release is serving and completely untouched.
+ */
+async function publishPrebuilt(opts: {
+  dir: string;
+  archive: Buffer;
+  slug: string;
+  hash: string;
+  log: (l: string) => void;
+  send: (o: unknown) => void;
+  stages: StageRecorder;
+}): Promise<void> {
+  const { dir, archive, slug, hash, log, send, stages } = opts;
+  const release = releaseId();
+  const prefix = releasePrefix(slug, release);
+  const destination = `gs://${ASSETS_BUCKET}/${prefix}`;
+
+  await stages.around("unpack", async () => {
+    log("Unpacking your build…");
+    const tgz = `${dir}.tgz`;
+    writeFileSync(tgz, archive);
+    await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+  });
+
+  await stages.around("upload", async () => {
+    log("Uploading…");
+    await run("gcloud", ["storage", "rsync", "-r", dir, destination, "--project", PROJECT], () => {});
+  });
+
+  await stages.around("verify", async () => {
+    log("Checking the build…");
+    const listing = await capture("gcloud", ["storage", "ls", "-r", `${destination}**`, "--project", PROJECT]);
+    const present = listing
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith(destination) && !l.endsWith("/"))
+      .map((l) => l.slice(destination.length));
+
+    let indexHtml: string | null = null;
+    if (present.includes("index.html")) {
+      indexHtml = await capture("gcloud", ["storage", "cat", `${destination}index.html`, "--project", PROJECT]);
+    }
+
+    const verdict = verifyRelease(present, indexHtml);
+    if (!verdict.ok) {
+      // The release stays in storage but is never named, so the live site is
+      // exactly as it was a moment ago.
+      throw new Error(`${verdict.reason} — your site was left on the previous release`);
+    }
+    log(`${present.length} files check out`);
+  });
+
+  // Only now, with a release known to be coherent, does it become the live one.
+  await run("gcloud", ["storage", "cp", "-", `gs://${ASSETS_BUCKET}/${pointerPath(slug)}`, "--project", PROJECT], () => {}, release);
+  log(`Published release ${release}`);
+  send({ type: "detected", stack: { framework: "prebuilt", language: "static" }, plan: [] });
+  if (hash) log("Recorded this build, so an unchanged redeploy will skip the upload");
+}
+
 /** Cached because it is the same value for every static deploy. */
 let staticUrlCache: string | null = null;
 async function staticServiceUrl(): Promise<string | null> {
@@ -433,6 +500,11 @@ export async function POST(req: Request) {
   // user's computer (a gzipped tar of the folder). Both end in a populated dir,
   // after which the pipeline is identical.
   const isUpload = req.headers.get("x-supersonic-upload") === "1";
+  // A third door: the CLI already built the project on the user's machine and is
+  // sending only the output directory. Nothing here is detected, installed or built —
+  // the bytes are published as a release, which is the whole ~80s-to-~15s difference.
+  const isPrebuilt = isUpload && req.headers.get("x-supersonic-prebuilt") === "1";
+  const prebuiltHash = (req.headers.get("x-supersonic-hash") ?? "").trim().toLowerCase();
   let url = "";
   let slug = "";
   let friendlyName = "app";
@@ -497,6 +569,17 @@ export async function POST(req: Request) {
         // expired entry — just means cloning again, never a failed deploy.
         const reused = isUpload ? null : takeClone(cloneToken);
         const dir = reused ?? mkdtempSync(join(tmpdir(), "ss-deploy-"));
+
+        if (isPrebuilt && archive) {
+          stages = new StageRecorder(slug, "static");
+          await publishPrebuilt({ dir, archive, slug, hash: prebuiltHash, log, send, stages });
+          if (ownerId) setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
+          if (ownerId && ownerWorkspace) {
+            await markAppLive(slug, (await staticServiceUrl()) ?? "", prebuiltHash || null);
+          }
+          send({ type: "done", slug, url: `https://${slug}.supersonic.cv` });
+          return;
+        }
 
         if (isUpload && archive) {
           await stages.around("unpack", async () => {
