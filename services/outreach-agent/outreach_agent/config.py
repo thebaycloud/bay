@@ -11,6 +11,17 @@ from dataclasses import dataclass
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
 
 
+def _has_anthropic_profile() -> bool:
+    """True when `ant auth login` has written a credential to disk."""
+    config_dir = os.environ.get("ANTHROPIC_CONFIG_DIR") or os.path.join(
+        os.path.expanduser("~"), ".config", "anthropic"
+    )
+    credentials = os.path.join(config_dir, "credentials")
+    return os.path.isdir(credentials) and any(
+        name.endswith(".json") for name in os.listdir(credentials)
+    )
+
+
 @dataclass(frozen=True)
 class Config:
     api_url: str
@@ -32,8 +43,18 @@ class Config:
                 "OUTREACH_TOKEN is not set. Issue one with "
                 "services/outreach/scripts/create-account.ts and export it."
             )
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise SystemExit("ANTHROPIC_API_KEY is not set.")
+        # Credentials resolve the same way the Anthropic SDK resolves them:
+        # ANTHROPIC_API_KEY, then ANTHROPIC_AUTH_TOKEN, then an OAuth profile
+        # written by `ant auth login`. An unset key is therefore not an error —
+        # a profile on disk is a perfectly good credential.
+        has_env_credential = bool(
+            os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        )
+        if not (has_env_credential or _has_anthropic_profile()):
+            raise SystemExit(
+                "No Anthropic credentials found. Either run `ant auth login`, "
+                "or export ANTHROPIC_API_KEY."
+            )
 
         return Config(
             api_url=api_url.rstrip("/"),

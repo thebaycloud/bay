@@ -3,10 +3,18 @@
 import { useState } from "react";
 import {
   Zap, Rocket, Database, Terminal, Bot, Activity, Link2,
-  Check, X, ArrowRight, Github,
+  Check, X, ArrowRight, Github, Crown, Palette, MessageSquare, Gauge, Wrench,
 } from "lucide-react";
 import { GridPattern } from "@/components/magicui/grid-pattern";
 import { Globe } from "@/components/magicui/globe";
+import { Terminal as Term, TypingAnimation, AnimatedSpan } from "@/components/magicui/terminal";
+import { AiChat } from "@/components/sections/ai-chat";
+
+const roles = [
+  { icon: Crown, name: "Owner", desc: "Deploys the app, controls who's in, and manages everything from one place." },
+  { icon: Palette, name: "Designer", desc: "Tweaks the look and ships changes — no backend, no setup, just design and redeploy." },
+  { icon: MessageSquare, name: "Commenter", desc: "Opens the live app and pins feedback right on it, like leaving comments in a Google Doc." },
+];
 
 const APP = "https://app.supersonic.cv";
 
@@ -97,11 +105,11 @@ const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-cl
 
 Important: never invent or hardcode secrets, and don't commit anything. Ask me for values you don't have.`;
 
-function CopyPrompt() {
+function CopyPrompt({ accent }: { accent?: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
-      className="btn ghost"
+      className={accent ? "btn accent" : "btn ghost"}
       onClick={() => {
         navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
         setCopied(true);
@@ -164,16 +172,16 @@ export default function Page() {
       {machine ? <MachineView /> : <main className="frame">
         {/* HERO */}
         <section className="sec hero">
-          <div className="eyebrow">Hosting for vibecoders</div>
-          <h1>Publish your app<br />in one click.</h1>
-          <p className="sub">The app you built, live on the internet with a link to share — as easy as posting a story. No setup, no code, nothing technical.</p>
+          <div className="eyebrow">Deploy in 60 seconds</div>
+          <h1>The fastest hosting<br />in the world.</h1>
+          <p className="sub">Publish in seconds, invite your team, and let our in-cloud agent keep it running. The fastest way to build software together — as easy as sharing a Google Doc.</p>
           <div className="cta">
-            <a className="btn accent" href={`${APP}/signup`}>Publish your first app <ArrowRight size={15} /></a>
-            <CopyPrompt />
+            <CopyPrompt accent />
           </div>
           <div className="art">
             <GridPattern width={34} height={34} style={{ stroke: "var(--line-2)" }} className="[mask-image:radial-gradient(520px_circle_at_50%_38%,white,transparent)]" />
             <img src="/bridge.png" alt="A bridge to production" />
+            <div className="art-term"><AiChat /></div>
           </div>
         </section>
 
@@ -187,6 +195,20 @@ export default function Page() {
                 <span className="an">{a.name}</span>
               </div>
             ))}
+          </div>
+        </section>
+
+        {/* SPEED */}
+        <section className="sec speed-sec">
+          <div className="sec-head">
+            <span className="eyebrow">Speed</span>
+            <h2>Live in about forty seconds.<br />Every time.</h2>
+            <p>Static sites skip the container entirely. Real apps build on a warm, cached pipeline. Redeploys are near-instant — so your team iterates at the speed of thought.</p>
+          </div>
+          <div className="speed-stats">
+            <div className="stat"><span className="sv">~40s</span><span className="sl">idea to live URL</span></div>
+            <div className="stat"><span className="sv">0</span><span className="sl">config files to write</span></div>
+            <div className="stat"><span className="sv">∞</span><span className="sl">redeploys, always fast</span></div>
           </div>
         </section>
 
@@ -206,6 +228,52 @@ export default function Page() {
                 <p>{f.desc}</p>
               </div>
             ))}
+          </div>
+        </section>
+
+        {/* COLLABORATION / ROLES */}
+        <section className="sec roles-sec" id="collaborate">
+          <div className="sec-head">
+            <span className="eyebrow">Built for teams</span>
+            <h2>Share a working app<br />as easily as a Google Doc.</h2>
+            <p>Supersonic isn&apos;t just hosting — it&apos;s where your team builds together. Everyone gets the right access, on the same live app.</p>
+          </div>
+          <div className="roles">
+            {roles.map((r) => (
+              <div className="role" key={r.name}>
+                <span className="role-ic"><r.icon size={19} /></span>
+                <h3>{r.name}</h3>
+                <p>{r.desc}</p>
+              </div>
+            ))}
+          </div>
+          <div className="roles-foot">
+            <span>Owner · Designer · Commenter — all on one link. Fast deploys mean the whole loop — build, see it live, comment, fix, ship again — happens in minutes, not days.</span>
+          </div>
+        </section>
+
+        {/* AGENT */}
+        <section className="sec agent-sec">
+          <div className="agent-copy">
+            <span className="eyebrow">The agent on the inside</span>
+            <h2>Something breaks at 2am?<br />It&apos;s already fixed.</h2>
+            <p>Supersonic runs its own AI inside your cloud. It watches your live app, and the moment something fails it <b>reads your code, writes the fix, and redeploys to green</b> — on its own. You wake up to a working app and a changelog.</p>
+            <div className="agent-flow">
+              <span className="af">Detects the error</span><ArrowRight size={14} />
+              <span className="af">Reads the code</span><ArrowRight size={14} />
+              <span className="af">Writes the fix</span><ArrowRight size={14} />
+              <span className="af on">Redeploys ✓</span>
+            </div>
+          </div>
+          <div className="agent-term">
+            <Term className="hero-term">
+              <AnimatedSpan delay={200} className="term-red">✕ TypeError: cannot read &apos;map&apos; of undefined — Notes.jsx:42</AnimatedSpan>
+              <AnimatedSpan delay={900} className="term-cyan">◆ agent · reading the repo…</AnimatedSpan>
+              <AnimatedSpan delay={1600} className="term-cyan">◆ agent · notes is undefined before fetch resolves</AnimatedSpan>
+              <AnimatedSpan delay={2300} className="term-dim">◆ agent · patched Notes.jsx (useState([]))</AnimatedSpan>
+              <AnimatedSpan delay={3000} className="term-dim">▸ redeploying…</AnimatedSpan>
+              <AnimatedSpan delay={3700} className="term-green">✓ healthy again — 0 errors</AnimatedSpan>
+            </Term>
           </div>
         </section>
 
@@ -307,6 +375,10 @@ export default function Page() {
           </div>
         </footer>
       </main>}
+
+      <a className="ss-badge" href={APP} target="_blank" rel="noreferrer">
+        <Zap size={11} strokeWidth={2.6} />Runs on Supersonic
+      </a>
     </>
   );
 }

@@ -42,7 +42,8 @@ Then log into LinkedIn in that window if you aren't already.
 ```bash
 export OUTREACH_API_URL=http://localhost:8081
 export OUTREACH_TOKEN=sok_...            # scripts/create-account.ts in services/outreach
-export ANTHROPIC_API_KEY=sk-ant-...
+# Credentials: either `ant auth login` (no key to manage), or:
+# export ANTHROPIC_API_KEY=sk-ant-...
 
 outreach-agent likers      "https://www.linkedin.com/feed/update/urn:li:activity:123/"
 outreach-agent commenters  "https://www.linkedin.com/feed/update/urn:li:activity:123/"
@@ -61,7 +62,7 @@ which path collected the prospect.
 |---|---|---|
 | `OUTREACH_API_URL` | `http://localhost:8081` | The outreach service |
 | `OUTREACH_TOKEN` | *(required)* | Per-teammate account token |
-| `ANTHROPIC_API_KEY` | *(required)* | Model access |
+| `ANTHROPIC_API_KEY` | *(optional)* | Model access. Unset is fine if `ant auth login` has run — credentials resolve key → auth token → OAuth profile, same as the SDK |
 | `CDP_URL` | `http://localhost:9222` | The Chrome to attach to |
 | `OUTREACH_MODEL` | `claude-opus-5` | Model driving the browser |
 | `OUTREACH_MAX_STEPS` | `60` | Hard stop on the agent loop |
