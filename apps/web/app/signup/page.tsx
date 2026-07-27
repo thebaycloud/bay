@@ -4,7 +4,18 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Zap } from "lucide-react";
+import { Zap, Github } from "lucide-react";
+
+// OAuth sign-in that preserves the CLI hand-off: if `supersonic signup` opened
+// the browser with a ?port=, bounce through /cli after auth so the terminal gets
+// its token; otherwise land on the dashboard.
+function oauthCallbackUrl(): string {
+  const params = new URLSearchParams(window.location.search);
+  const port = params.get("port");
+  if (!port) return "/";
+  const name = params.get("name") || "cli";
+  return `/cli?port=${encodeURIComponent(port)}&name=${encodeURIComponent(name)}`;
+}
 
 export default function Signup() {
   const router = useRouter();
@@ -46,6 +57,14 @@ export default function Signup() {
           {err && <div className="autherr">✕ {err}</div>}
           <button className="btn primary" type="submit" disabled={busy}>{busy ? "…" : "Create account"}</button>
         </form>
+        <div className="authoauth">
+          <button className="btn" type="button" onClick={() => signIn("google", { callbackUrl: oauthCallbackUrl() })}>
+            Continue with Google
+          </button>
+          <button className="btn" type="button" onClick={() => signIn("github", { callbackUrl: oauthCallbackUrl() })}>
+            <Github size={14} />Continue with GitHub
+          </button>
+        </div>
         <div className="authalt">Have an account? <Link href="/login">Sign in</Link></div>
       </div>
     </div>

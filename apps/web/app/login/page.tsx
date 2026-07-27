@@ -58,7 +58,9 @@ export default function Login() {
           <button className="btn" type="button" onClick={() => signIn("google", { callbackUrl: "/" })}>
             Continue with Google
           </button>
-          <button className="btn" disabled><Github size={14} />Continue with GitHub <span className="soon">soon</span></button>
+          <button className="btn" type="button" onClick={() => signIn("github", { callbackUrl: "/" })}>
+            <Github size={14} />Continue with GitHub
+          </button>
         </div>
         <div className="authalt">No account? <Link href="/signup">Sign up</Link></div>
       </div>

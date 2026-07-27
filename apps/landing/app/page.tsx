@@ -70,12 +70,12 @@ const features = [
 ];
 
 const starter = [
-  ["One-click deploy", true], ["Database, storage & domain", true], ["Deploy from your computer", true],
-  ["Diagnose — paste-ready fix prompts", true], ["Autopilot — auto-fix to green", false], ["Always-warm instances", false],
+  ["1 app", true], ["Database, storage & custom domain", true], ["Share with up to 3 people", true],
+  ["Paste-ready fix prompts when something breaks", true], ["Auto-fix failed deploys", false], ["Remove the Supersonic badge", false],
 ];
 const pro = [
-  ["One-click deploy", true], ["Database, storage & domain", true], ["Deploy from your computer", true],
-  ["Diagnose — paste-ready fix prompts", true], ["Autopilot — auto-fix to green", true], ["Always-warm instances", true],
+  ["Unlimited apps", true], ["Database, storage & custom domain", true], ["Unlimited sharing + roles", true],
+  ["Paste-ready fix prompts when something breaks", true], ["Auto-fix failed deploys", true], ["Remove the Supersonic badge", true],
 ];
 
 const faqs = [
@@ -301,20 +301,20 @@ export default function Page() {
           </div>
           <div className="compare">
             <div className="plan">
-              <div className="pname">Starter</div>
-              <div className="pdesc">Deploy, provision, and get paste-ready fixes for your own coding agent.</div>
-              <div className="price"><b>$20</b> / month</div>
+              <div className="pname">Basic</div>
+              <div className="pdesc">Ship one app, share it with your team, and get paste-ready fixes for your coding agent.</div>
+              <div className="price"><b>$12</b> / month</div>
               {starter.map(([label, on]) => (
                 <div className={"row" + (on ? "" : " off")} key={String(label)}>
                   <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
                 </div>
               ))}
-              <div className="cta"><a className="btn ghost" href={`${APP}/new`}>Start with Starter</a></div>
+              <div className="cta"><a className="btn ghost" href={`${APP}/new`}>Start with Basic</a></div>
             </div>
             <div className="plan">
               <div className="pname">Pro</div>
-              <div className="pdesc">Everything in Starter, plus Autopilot — our agent fixes breakage to green on its own.</div>
-              <div className="price"><b>$50</b> / month</div>
+              <div className="pdesc">Unlimited apps and sharing, plus Autopilot — failed deploys fix themselves and redeploy to green.</div>
+              <div className="price"><b>$20</b> / month</div>
               {pro.map(([label, on]) => (
                 <div className={"row" + (on ? "" : " off")} key={String(label)}>
                   <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
