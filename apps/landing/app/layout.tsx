@@ -14,6 +14,8 @@ const displaySerif = Bitter({
   display: "swap",
 });
 
+export const viewport = { width: "device-width", initialScale: 1 };
+
 export const metadata: Metadata = {
   title: "Supersonic — Deploy your app in one click",
   description:

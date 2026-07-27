@@ -61,7 +61,7 @@ const agents = [
 ];
 
 const features = [
-  { icon: Rocket, name: "One-click publish", tag: "~40s", desc: "Point us at the app you built and we put it online — with its own web address — in about forty seconds. No setup, nothing technical." },
+  { icon: Rocket, name: "One-click publish", tag: "~40s", desc: "Point us at the app you built and we put it online — with its own web address — in about 40 seconds. No setup, nothing technical." },
   { icon: Link2, name: "Custom domains", desc: "Start on a free yourapp.supersonic.cv address, or connect a domain you already own like yourapp.com. The secure padlock is set up for you, automatically." },
   { icon: Database, name: "Database included", desc: "Your app's data is saved and backed up from the very first click — nothing to set up, no accounts to create, no settings to copy. It's just there." },
   { icon: Activity, name: "Always watched", tag: "24/7", desc: "We keep an eye on your live app around the clock and tell you the moment something goes wrong — in plain words, not error codes." },
@@ -206,7 +206,6 @@ export default function Page() {
         <div className="links">
           <a href="#features">Product</a>
           <a href="#pricing">Pricing</a>
-          <a href={APP}>Docs</a>
         </div>
         <span className="spacer" />
         <a className="btn ghost sm" href={APP}>Open app</a>
@@ -245,7 +244,7 @@ export default function Page() {
         <section className="sec speed-sec">
           <div className="sec-head">
             <span className="eyebrow">Speed</span>
-            <h2>Live in about forty seconds.<br />Every time.</h2>
+            <h2>Live in 40 seconds.<br />Every time.</h2>
             <p>Static sites skip the container entirely. Real apps build on a warm, cached pipeline. Redeploys are near-instant — so your team iterates at the speed of thought.</p>
           </div>
           <div className="speed-stats">
@@ -259,7 +258,7 @@ export default function Page() {
         <section className="sec" id="features">
           <div className="sec-head">
             <span className="eyebrow">What you get</span>
-            <h2>Everything a real app needs,<br />wired up for you</h2>
+            <h2>Everything a real app needs,<br />handled by AI</h2>
             <p>You bring the idea and the code. We bring the entire cloud — provisioned, connected, and looked after.</p>
           </div>
           <div className="cells">
@@ -278,7 +277,7 @@ export default function Page() {
         <section className="sec roles-sec" id="collaborate">
           <div className="sec-head">
             <span className="eyebrow">Built for teams</span>
-            <h2>Share a working app<br />as easily as a Google Doc.</h2>
+            <h2>Share a working app<br />like a Google Doc.</h2>
             <p>Supersonic isn&apos;t just hosting — it&apos;s where your team builds together. Everyone gets the right access, on the same live app.</p>
           </div>
           <div className="roles">
@@ -339,7 +338,7 @@ export default function Page() {
         <section className="sec" id="pricing">
           <div className="sec-head">
             <span className="eyebrow">Pricing</span>
-            <h2>Two plans. No free tier,<br />no infrastructure bills.</h2>
+            <h2>Two plans.<br />No infrastructure bills.</h2>
             <p>Flat pricing. Your cloud is included — you never touch a Google Cloud invoice.</p>
           </div>
           <div className="compare">

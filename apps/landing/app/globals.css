@@ -14,8 +14,9 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-font-smoothing: antialiased; }
-body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.55; }
+/* no rubber-band / stretch at the top or bottom of the page */
+html { -webkit-font-smoothing: antialiased; overscroll-behavior: none; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.55; overscroll-behavior: none; }
 /* graph-paper ground */
 body::before {
   content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
@@ -104,12 +105,16 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.015
 
 /* hero art — golden gate, full size */
 .hero .art { position: relative; margin: 24px auto 0; max-width: 860px; overflow: visible; }
-.hero .art img { display: block; width: 100%; height: auto; }
+/* bridge sits above the decorative GridPattern (which is absolute inset:0) so the
+   grid stays a background texture instead of painting over the artwork/card. */
+.hero .art img { display: block; width: 100%; height: auto; position: relative; z-index: 1; }
 
 /* floating terminal — absolute inside the hero art, above everything, scrolls
    away with the page. Sits over the top-left of the bridge so it's in view on load. */
 .art-term { position: absolute; right: -90px; top: -6px; width: min(360px, 42vw); z-index: 40; text-align: left; }
-@media (max-width: 820px) { .art-term { position: static; width: 100%; margin: 20px auto 0; max-width: 380px; } }
+/* stacked below the bridge on mobile — relative (not static) so its z-index keeps
+   it above the GridPattern, and the card's white bg hides the grid behind it. */
+@media (max-width: 820px) { .art-term { position: relative; z-index: 2; right: auto; top: auto; width: 100%; margin: 20px auto 0; max-width: 380px; } }
 
 /* runs-on-supersonic badge (same as injected on user apps) */
 .ss-badge { position: fixed; bottom: 16px; right: 16px; z-index: 60; display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: var(--accent-fg); font-family: var(--sans); font-weight: 600; font-size: 12px; padding: 9px 13px; border-radius: 8px; text-decoration: none; box-shadow: 0 2px 12px rgba(0,0,0,.18); }
@@ -305,4 +310,48 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.015
   .globe-sec .copy, .faq-sec .lead, .plan { border-right: none; }
   .foot { grid-template-columns: 1fr 1fr; }
 }
+/* ===== phones ===== */
+@media (max-width: 760px) {
+  /* nav: drop the middle links, keep brand + actions */
+  .nav { gap: 10px; padding: 0 14px; height: 56px; }
+  .nav .links { display: none; }
+  .nav .brand { font-size: 13px; }
+  .btn.sm { height: 34px; padding: 0 12px; font-size: 11px; }
+}
+@media (max-width: 600px) {
+  body { font-size: 14.5px; }
+  .hero { padding: 30px 16px 0; }
+  .hero h1 { font-size: clamp(30px, 8.6vw, 44px); }
+  .hero .art { margin-top: 16px; }
+  .sec-head { padding: 40px 18px 10px; }
+  .sec-head h2, .final h2, .agent-copy h2,
+  .globe-sec .copy h2, .faq-sec .lead h2 { font-size: clamp(25px, 7.4vw, 34px); }
+  .agent-sec { padding: 36px 18px; gap: 22px; }
+  .globe-sec .copy { padding: 40px 20px; }
+  .globe-sec .stage { min-height: 300px; padding: 12px; }
+  .faq-sec .lead { padding: 40px 20px; }
+  .faq-item summary { padding: 18px; font-size: 14px; gap: 12px; }
+  .faq-item .a { padding: 0 18px 20px; }
+  .final { padding: 52px 18px 58px; }
+  .speed-stats .stat, .roles .role { padding: 26px 20px; }
+  .roles .role h3 { font-size: 22px; }
+  .machine { padding: 30px 18px 40px; }
+  .plan { padding: 26px 20px 6px; }
+  .cell { min-height: 0; padding: 22px 20px 26px; }
+  .foot { grid-template-columns: 1fr 1fr; padding: 32px 20px; gap: 16px 20px; }
+  .agents { padding: 8px 16px 30px; }
+}
+/* stack the joined hero prompt CTA + agent dropdown */
+@media (max-width: 560px) {
+  .promptcta { flex-direction: column; align-items: stretch; width: 100%; max-width: 320px; margin: 0 auto; }
+  .promptcta > .btn { width: 100%; }
+  .agent-dd { width: 100%; }
+  .agent-trigger { width: 100%; justify-content: center; border-left: 1px solid var(--accent); border-top: 0; padding: 0 24px; }
+  .agent-menu { left: 0; right: 0; min-width: 0; }
+}
+@media (max-width: 430px) {
+  .nav .btn.ghost { display: none; } /* hide "Open app", keep "Sign up" */
+  .foot { grid-template-columns: 1fr; }
+}
+
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
