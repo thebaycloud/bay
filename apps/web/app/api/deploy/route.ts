@@ -296,7 +296,14 @@ function cachedBuildConfig(image: string): string {
     "      - --snapshot-mode=redo",
     "      - --use-new-run",
     "options:",
-    "  machineType: E2_HIGHCPU_8",
+    // No machineType on purpose. Asking for a non-default machine makes Cloud
+    // Build provision a dedicated worker, and that wait is not small: across the
+    // last 20 builds in this project the split is perfect — every E2_HIGHCPU_8
+    // build queued 44-57s before starting, every default-pool build queued 1s.
+    // Our app builds finish in 38-72s, so paying ~50s of provisioning to shave a
+    // few seconds off an already-short build was a net loss of roughly a minute
+    // on every deploy. If app builds ever grow into the multi-minute range,
+    // measure again — at that size the bigger machine can start paying for itself.
     "  logging: CLOUD_LOGGING_ONLY",
     "",
   ].join("\n");
