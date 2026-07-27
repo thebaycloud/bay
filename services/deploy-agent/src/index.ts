@@ -17,6 +17,17 @@ import { pathToFileURL } from "node:url";
 
 export type DbEngine = "postgres" | "mysql" | "mongodb" | "redis" | "sqlite" | null;
 
+/**
+ * How the deployed app is served.
+ *
+ * `static` means the build produces a directory of files and nothing needs to run
+ * afterwards, so the deploy can skip building a container image entirely and just
+ * upload `outputDir`. `container` means the app has a server that has to stay up.
+ */
+export type Serve =
+  | { mode: "static"; outputDir: string }
+  | { mode: "container" };
+
 export interface Stack {
   language: string;
   framework: string;
@@ -29,8 +40,32 @@ export interface Stack {
   database: { engine: DbEngine; via: string | null };
   cache: DbEngine;
   secretsNeeded: string[];
+  serve: Serve;
   confidence: number;
   notes: string[];
+}
+
+const CONTAINER: Serve = { mode: "container" };
+
+/**
+ * Astro builds a static site by default and a server bundle once an adapter is
+ * configured, and the two need opposite deploy paths. The adapter is the signal:
+ * `output` alone is not, because `output: 'server'` without an adapter is a
+ * configuration error rather than a server build.
+ */
+export function astroServe(configSource: string | null): Serve {
+  const src = configSource ?? "";
+  const hasAdapter = /adapter\s*:/.test(src) || /@astrojs\/(node|vercel|netlify|cloudflare|deno)/.test(src);
+  return hasAdapter ? CONTAINER : { mode: "static", outputDir: "dist" };
+}
+
+/**
+ * Next.js only produces a static directory under `output: 'export'`. Anything else
+ * — including the default — needs the Next server running.
+ */
+export function nextServe(configSource: string | null): Serve {
+  const src = configSource ?? "";
+  return /output\s*:\s*["'`]export["'`]/.test(src) ? { mode: "static", outputDir: "out" } : CONTAINER;
 }
 
 function read(dir: string, file: string): string | null {
@@ -83,15 +118,16 @@ function detectNode(dir: string, pkgRaw: string, notes: string[]): Stack {
   let buildCommand: string | null = scripts.build ? `${pm} run build` : null;
   let startCommand = scripts.start ? `${pm} start` : "node index.js";
   let port = 3000;
+  let serve: Serve = CONTAINER;
 
-  if (dep("next")) { framework = "Next.js"; buildCommand = `${pm} run build`; startCommand = `${pm} start`; }
+  if (dep("next")) { framework = "Next.js"; buildCommand = `${pm} run build`; startCommand = `${pm} start`; serve = nextServe(nextConfig(dir)); }
   else if (dep("@remix-run/node") || dep("@remix-run/react")) { framework = "Remix"; buildCommand = `${pm} run build`; startCommand = `${pm} start`; }
   else if (dep("nuxt")) { framework = "Nuxt"; buildCommand = `${pm} run build`; startCommand = "node .output/server/index.mjs"; }
   else if (dep("@sveltejs/kit")) { framework = "SvelteKit"; buildCommand = `${pm} run build`; startCommand = "node build"; }
-  else if (dep("astro")) { framework = "Astro"; buildCommand = `${pm} run build`; startCommand = "node ./dist/server/entry.mjs"; port = 4321; }
+  else if (dep("astro")) { framework = "Astro"; buildCommand = `${pm} run build`; startCommand = "node ./dist/server/entry.mjs"; port = 4321; serve = astroServe(astroConfig(dir)); }
   else if (dep("@nestjs/core")) { framework = "NestJS"; buildCommand = `${pm} run build`; startCommand = "node dist/main.js"; }
-  else if (dep("vite")) { framework = "Vite (SPA)"; buildCommand = `${pm} run build`; startCommand = "(static)"; port = 80; notes.push("SPA — served as static assets behind the CDN."); }
-  else if (dep("react-scripts")) { framework = "Create React App"; buildCommand = `${pm} run build`; startCommand = "(static)"; port = 80; }
+  else if (dep("vite")) { framework = "Vite (SPA)"; buildCommand = `${pm} run build`; startCommand = "(static)"; port = 80; serve = { mode: "static", outputDir: "dist" }; notes.push("SPA — served as static assets behind the CDN."); }
+  else if (dep("react-scripts")) { framework = "Create React App"; buildCommand = `${pm} run build`; startCommand = "(static)"; port = 80; serve = { mode: "static", outputDir: "build" }; }
   else if (dep("express") || dep("fastify") || dep("koa")) { framework = dep("express") ? "Express" : dep("fastify") ? "Fastify" : "Koa"; }
 
   let engine: DbEngine = null; let via: string | null = null;
@@ -110,9 +146,25 @@ function detectNode(dir: string, pkgRaw: string, notes: string[]): Stack {
   return {
     language, framework, packageManager: pm, runtime: `node:${nodeMajor}`,
     installCommand, buildCommand, startCommand, port,
-    database: { engine, via }, cache, secretsNeeded,
+    database: { engine, via }, cache, secretsNeeded, serve,
     confidence: framework === "Node" ? 0.6 : 0.95, notes,
   };
+}
+
+/** Config files are read as text — we only ever pattern-match, never execute them. */
+function nextConfig(dir: string): string | null {
+  for (const f of ["next.config.js", "next.config.mjs", "next.config.ts"]) {
+    const s = read(dir, f);
+    if (s) return s;
+  }
+  return null;
+}
+function astroConfig(dir: string): string | null {
+  for (const f of ["astro.config.mjs", "astro.config.js", "astro.config.ts"]) {
+    const s = read(dir, f);
+    if (s) return s;
+  }
+  return null;
 }
 
 function prismaEngine(dir: string): DbEngine {
@@ -144,24 +196,26 @@ function detectPython(dir: string, notes: string[]): Stack {
   return {
     language: "Python", framework, packageManager: "pip", runtime: "python:3.12",
     installCommand: "pip install --no-cache-dir -r requirements.txt", buildCommand: null,
-    startCommand, port, database: { engine, via }, cache, secretsNeeded,
+    startCommand, port, database: { engine, via }, cache, secretsNeeded, serve: CONTAINER,
     confidence: framework === "Python" ? 0.6 : 0.9, notes,
   };
 }
 
 function detectGo(notes: string[]): Stack {
-  return { language: "Go", framework: "Go", packageManager: "go", runtime: "golang:1.22", installCommand: "go mod download", buildCommand: "go build -o server ./...", startCommand: "./server", port: 8080, database: { engine: null, via: null }, cache: null, secretsNeeded: [], confidence: 0.75, notes };
+  return { language: "Go", framework: "Go", packageManager: "go", runtime: "golang:1.22", installCommand: "go mod download", buildCommand: "go build -o server ./...", startCommand: "./server", port: 8080, database: { engine: null, via: null }, cache: null, secretsNeeded: [], serve: CONTAINER, confidence: 0.75, notes };
 }
 function detectRuby(dir: string, notes: string[]): Stack {
   const rails = (read(dir, "Gemfile") || "").match(/rails/i) != null;
-  return { language: "Ruby", framework: rails ? "Rails" : "Ruby", packageManager: "bundler", runtime: "ruby:3.3", installCommand: "bundle install", buildCommand: rails ? "bundle exec rails assets:precompile" : null, startCommand: rails ? "bundle exec rails server -b 0.0.0.0" : "ruby app.rb", port: 3000, database: { engine: rails ? "postgres" : null, via: rails ? "ActiveRecord" : null }, cache: null, secretsNeeded: [], confidence: rails ? 0.9 : 0.6, notes };
+  return { language: "Ruby", framework: rails ? "Rails" : "Ruby", packageManager: "bundler", runtime: "ruby:3.3", installCommand: "bundle install", buildCommand: rails ? "bundle exec rails assets:precompile" : null, startCommand: rails ? "bundle exec rails server -b 0.0.0.0" : "ruby app.rb", port: 3000, database: { engine: rails ? "postgres" : null, via: rails ? "ActiveRecord" : null }, cache: null, secretsNeeded: [], serve: CONTAINER, confidence: rails ? 0.9 : 0.6, notes };
 }
 function detectPhp(dir: string, notes: string[]): Stack {
   const laravel = (read(dir, "composer.json") || "").match(/laravel\/framework/i) != null;
-  return { language: "PHP", framework: laravel ? "Laravel" : "PHP", packageManager: "composer", runtime: "php:8.3", installCommand: "composer install --no-dev", buildCommand: null, startCommand: laravel ? "php artisan serve --host 0.0.0.0 --port 8000" : "php -S 0.0.0.0:8000", port: 8000, database: { engine: laravel ? "mysql" : null, via: laravel ? "Eloquent" : null }, cache: null, secretsNeeded: [], confidence: laravel ? 0.9 : 0.6, notes };
+  return { language: "PHP", framework: laravel ? "Laravel" : "PHP", packageManager: "composer", runtime: "php:8.3", installCommand: "composer install --no-dev", buildCommand: null, startCommand: laravel ? "php artisan serve --host 0.0.0.0 --port 8000" : "php -S 0.0.0.0:8000", port: 8000, database: { engine: laravel ? "mysql" : null, via: laravel ? "Eloquent" : null }, cache: null, secretsNeeded: [], serve: CONTAINER, confidence: laravel ? 0.9 : 0.6, notes };
 }
 function staticSite(notes: string[]): Stack {
-  return { language: "Static", framework: "Static site", packageManager: null, runtime: "nginx", installCommand: null, buildCommand: null, startCommand: "(nginx)", port: 80, database: { engine: null, via: null }, cache: null, secretsNeeded: [], confidence: 0.8, notes };
+  // Nothing to build: the directory we were handed is already the site, so the
+  // release is uploaded from "." rather than from a build output directory.
+  return { language: "Static", framework: "Static site", packageManager: null, runtime: "nginx", installCommand: null, buildCommand: null, startCommand: "(nginx)", port: 80, database: { engine: null, via: null }, cache: null, secretsNeeded: [], serve: { mode: "static", outputDir: "." }, confidence: 0.8, notes };
 }
 
 // ---------------------------------------------------------------- containerize

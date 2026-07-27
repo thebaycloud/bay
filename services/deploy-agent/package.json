@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "detect": "tsx src/index.ts"
+    "detect": "tsx src/index.ts",
+    "test": "node --import tsx --test 'test/**/*.test.ts'"
   },
   "devDependencies": {
     "tsx": "^4.19.1",
