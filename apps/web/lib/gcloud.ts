@@ -1,3 +1,4 @@
+import { slugForName } from "./deploys";
 import { spawn } from "node:child_process";
 import { randomSlug } from "./slug";
 
@@ -97,6 +98,12 @@ export function bucketForSlug(slug: string): string {
  * with this friendly name (so redeploys update in place), otherwise a fresh short
  * random slug that isn't already taken. */
 export async function resolveSlug(ownerId: string, friendlyName: string): Promise<string> {
+  // Ask the deploy record first. Cloud Run labels only describe apps that own a Cloud
+  // Run service, and static apps do not — they share one. Relying on labels alone meant
+  // every static redeploy minted a fresh slug and created a second app beside the first.
+  const known = await slugForName(ownerId, friendlyName);
+  if (known) return known;
+
   const taken = new Set<string>();
   let existing: string | null = null;
   try {

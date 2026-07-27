@@ -76,3 +76,32 @@ export async function listActiveDeploys(ownerId: string): Promise<DeployRow[]> {
     return [];
   }
 }
+
+/**
+ * The slug a person's project already has, matched by the name they deploy under.
+ *
+ * resolveSlug used to answer this from Cloud Run labels alone, which works only for
+ * apps that own a Cloud Run service. Static apps do not: they are served by one shared
+ * service, so there was nothing to carry a label and every redeploy minted a fresh slug
+ * and a brand new app. Found by deploying the same project twice — the second run
+ * created a second app instead of updating the first.
+ *
+ * This table already records (owner, name) -> slug for every deploy from anywhere, so
+ * it is the answer for both kinds.
+ */
+export async function slugForName(ownerId: string, name: string): Promise<string | null> {
+  if (!ownerId || !name) return null;
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      `SELECT slug FROM deploys
+        WHERE owner_id = $1 AND name = $2 AND status <> 'failed'
+        ORDER BY updated_at DESC LIMIT 1`,
+      [ownerId, name]
+    );
+    return r.rows[0]?.slug ?? null;
+  } catch {
+    // A lookup failure must mean "new app", never a failed deploy.
+    return null;
+  }
+}
