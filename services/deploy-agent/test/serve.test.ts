@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectStack, astroServe, nextServe } from "../src/index.ts";
+import { detectStack, astroServe, nextServe, installFor } from "../src/index.ts";
 
 /** Build a throwaway project directory from a map of file → contents. */
 function project(files: Record<string, string>): string {
@@ -110,4 +110,36 @@ test("a static-output config in a comment does not fool the container default", 
   // Regression guard: matching on the word "export" alone would call every
   // ES-module config static.
   assert.deepEqual(nextServe(`export default { reactStrictMode: true };`), { mode: "container" });
+});
+
+// --- install command
+
+test("npm ci is only used when a package-lock.json exists", () => {
+  // npm is the fallback when no lockfile of any kind was found, and `npm ci`
+  // refuses to run without package-lock.json — so the default branch was picking
+  // the one command that cannot work in the case that reaches it. Every
+  // lockfile-less project failed its first build and was rescued by the repair
+  // agent, costing a wasted build and about a minute. Measured on a real deploy.
+  assert.equal(installFor("npm", true), "npm ci");
+  assert.equal(installFor("npm", false), "npm install");
+});
+
+test("the other package managers are unaffected", () => {
+  assert.equal(installFor("pnpm", false), "pnpm i --frozen-lockfile");
+  assert.equal(installFor("yarn", false), "yarn --frozen-lockfile");
+  assert.equal(installFor("bun", false), "bun install");
+});
+
+test("a project with no lockfile gets an install command that works", () => {
+  const dir = project({ "package.json": pkg({ vite: "^5" }) });
+  try {
+    assert.equal(detectStack(dir).installCommand, "npm install");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a project with package-lock.json still gets the reproducible install", () => {
+  const dir = project({ "package.json": pkg({ vite: "^5" }), "package-lock.json": "{}" });
+  try {
+    assert.equal(detectStack(dir).installCommand, "npm ci");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

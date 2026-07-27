@@ -48,6 +48,27 @@ export interface Stack {
 const CONTAINER: Serve = { mode: "container" };
 
 /**
+ * How to install dependencies.
+ *
+ * "npm" is the fallback when no lockfile of any kind was found — and `npm ci`
+ * refuses to run without a package-lock.json. So the default branch was picking
+ * the one command that cannot work in the case that reaches it. Every project
+ * without a lockfile failed its first build and was rescued by the repair agent
+ * running `npm install`, at the cost of a wasted build and about a minute on the
+ * critical path. Measured on a real deploy: 93s to the failure, 158s to live.
+ *
+ * A lockfile-less project is the common case for the people this platform is for.
+ */
+export function installFor(pm: string, hasNpmLock: boolean): string {
+  switch (pm) {
+    case "pnpm": return "pnpm i --frozen-lockfile";
+    case "yarn": return "yarn --frozen-lockfile";
+    case "bun": return "bun install";
+    default: return hasNpmLock ? "npm ci" : "npm install";
+  }
+}
+
+/**
  * Astro builds a static site by default and a server bundle once an adapter is
  * configured, and the two need opposite deploy paths. The adapter is the signal:
  * `output` alone is not, because `output: 'server'` without an adapter is a
@@ -112,7 +133,7 @@ function detectNode(dir: string, pkgRaw: string, notes: string[]): Stack {
 
   const language = dep("typescript") || has(dir, "tsconfig.json") ? "TypeScript" : "JavaScript";
   const pm = has(dir, "pnpm-lock.yaml") ? "pnpm" : has(dir, "yarn.lock") ? "yarn" : has(dir, "bun.lockb") ? "bun" : "npm";
-  const installCommand = ({ npm: "npm ci", pnpm: "pnpm i --frozen-lockfile", yarn: "yarn --frozen-lockfile", bun: "bun install" } as const)[pm];
+  const installCommand = installFor(pm, has(dir, "package-lock.json"));
 
   let framework = "Node";
   let buildCommand: string | null = scripts.build ? `${pm} run build` : null;
