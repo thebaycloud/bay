@@ -26,9 +26,22 @@ const providers: any[] = [
   }),
 ];
 
-// Room for the future — enabled automatically once creds are set.
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) providers.push(Google);
-if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) providers.push(GitHub);
+// Enabled automatically once creds are set. Config is passed explicitly (rather
+// than the bare provider, which would read Auth.js's own AUTH_GOOGLE_ID /
+// AUTH_GITHUB_ID names) so the same env vars the conditionals check are the ones
+// actually used.
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  providers.push(Google({
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  }));
+}
+if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) {
+  providers.push(GitHub({
+    clientId: process.env.GITHUB_ID,
+    clientSecret: process.env.GITHUB_SECRET,
+  }));
+}
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
