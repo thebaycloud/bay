@@ -230,7 +230,7 @@ reverts that piece with no redeploy.
 
 ## 7. Apply the migration
 
-`003_deploy_stages.sql` creates the per-stage timing table. It is additive and
+`004_deploy_stages.sql` creates the per-stage timing table. It is additive and
 idempotent like the rest.
 
 ```bash
