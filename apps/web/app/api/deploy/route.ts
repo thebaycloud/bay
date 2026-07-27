@@ -16,6 +16,7 @@ import { resolveSlug } from "@/lib/gcloud";
 import { setDeploy } from "@/lib/deploys";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
 import { take as takeClone } from "@/lib/clone-cache";
+import { StageRecorder } from "@/lib/stages";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -436,6 +437,9 @@ export async function POST(req: Request) {
     async start(controller) {
       const enc = new TextEncoder();
       const send = (o: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
+      // The lane is only known after detection; until then everything is charged
+      // to "generic", which is what the pre-detection stages actually are.
+      let stages = new StageRecorder(slug, "generic");
       let lastStage = 0;
       const log = (line: string) => {
         send({ type: "log", line });
@@ -457,19 +461,28 @@ export async function POST(req: Request) {
         const dir = reused ?? mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
         if (isUpload && archive) {
-          log("Unpacking your project…");
-          const tgz = `${dir}.tgz`;
-          writeFileSync(tgz, archive);
-          await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+          await stages.around("unpack", async () => {
+            log("Unpacking your project…");
+            const tgz = `${dir}.tgz`;
+            writeFileSync(tgz, archive);
+            await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+          });
         } else if (reused) {
           log(`Using the copy of ${url} we already fetched`);
+          // Recorded so the saving from reusing a clone is visible in the data
+          // rather than only claimed in a design document.
+          await stages.skipped("clone");
         } else {
-          log(`Pulling ${url}`);
-          await run("git", ["clone", "--depth", "1", url, dir], () => {});
+          await stages.around("clone", async () => {
+            log(`Pulling ${url}`);
+            await run("git", ["clone", "--depth", "1", url, dir], () => {});
+          });
         }
 
-        log("Detecting stack…");
-        const raw = await capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", dir, "--api"]);
+        const raw = await stages.around("detect", async () => {
+          log("Detecting stack…");
+          return capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", dir, "--api"]);
+        });
         const det = JSON.parse(raw.slice(raw.indexOf("{")));
         const s = det.stack;
         send({ type: "detected", stack: s, plan: det.provisionPlan });
@@ -484,6 +497,9 @@ export async function POST(req: Request) {
         const staticServe = !hasDockerfile && s.serve?.mode === "static"
           ? { outputDir: String(s.serve.outputDir || ".") }
           : null;
+
+        // Now that the lane is known, the rest of the deploy is charged to it.
+        stages = new StageRecorder(slug, staticServe ? "static" : hasDockerfile ? "generic" : "fast");
 
         if (staticServe) {
           log(`${s.framework} builds to a directory — publishing it without a container`);
@@ -621,22 +637,26 @@ export async function POST(req: Request) {
 
           try {
             if (needsBuild) {
-              log("Building assets…");
-              const hb = setInterval(() => log("building…"), 8000);
-              writeFileSync(join(dir, "cloudbuild.yaml"), staticBuildConfig({
-                installCommand: s.installCommand ? `${s.installCommand} --prefer-offline --no-audit --no-fund` : null,
-                buildCommand: s.buildCommand,
-                outputDir: out.outputDir,
-                destination,
-              }));
-              try {
-                await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
-              } finally { clearInterval(hb); }
+              await stages.around("build", async () => {
+                log("Building assets…");
+                const hb = setInterval(() => log("building…"), 8000);
+                writeFileSync(join(dir, "cloudbuild.yaml"), staticBuildConfig({
+                  installCommand: s.installCommand ? `${s.installCommand} --prefer-offline --no-audit --no-fund` : null,
+                  buildCommand: s.buildCommand,
+                  outputDir: out.outputDir,
+                  destination,
+                }));
+                try {
+                  await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
+                } finally { clearInterval(hb); }
+              });
             } else {
               // Nothing to build — the directory already is the site, so it goes
               // straight up from here and skips Cloud Build entirely.
-              log("Uploading…");
-              await run("gcloud", ["storage", "rsync", "-r", join(dir, out.outputDir), destination, "--project", PROJECT], () => {});
+              await stages.around("upload", async () => {
+                log("Uploading…");
+                await run("gcloud", ["storage", "rsync", "-r", join(dir, out.outputDir), destination, "--project", PROJECT], () => {});
+              });
             }
           } catch (e) {
             const buildLog = await fetchBuildError();
@@ -688,7 +708,9 @@ export async function POST(req: Request) {
         };
 
         log(`Deploying ${slug} to Cloud Run…`);
+        const firstAttempt = stages.start("deploy");
         let result = await runDeploy();
+        await stages.end(firstAttempt, result.ok ? "ok" : "failed");
         if (!result.ok) {
           log(`✕ ${result.error}`);
           // A permissions failure is ours, not the repo's — the repair agent would
@@ -699,7 +721,12 @@ export async function POST(req: Request) {
             return;
           }
           log("Repair agent taking over — reading the repo, fixing, retrying…");
+          // Timed separately: a deploy the agent rescues is a very different
+          // experience from one that worked first time, and a median that mixes
+          // the two hides how often we are paying for it.
+          const repair = stages.start("repair-agent");
           const fixed = await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
+          await stages.end(repair, fixed.ok ? "ok" : "failed");
           if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
           else {
             if (ownerId) setDeploy(slug, { status: "failed", stage: fixed.summary });
