@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Zap, Github } from "lucide-react";
+import { GoogleIcon } from "@/components/BrandIcons";
 
 /**
  * Only this notice reads the query string, and only this notice sits behind the
@@ -56,7 +57,7 @@ export default function Login() {
         </form>
         <div className="authoauth">
           <button className="btn" type="button" onClick={() => signIn("google", { callbackUrl: "/" })}>
-            Continue with Google
+            <GoogleIcon />Continue with Google
           </button>
           <button className="btn" type="button" onClick={() => signIn("github", { callbackUrl: "/" })}>
             <Github size={14} />Continue with GitHub

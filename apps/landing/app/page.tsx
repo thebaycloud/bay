@@ -3,7 +3,7 @@
 import { useState } from "react";
 import {
   Zap, Rocket, Database, Terminal, Bot, Activity, Link2,
-  Check, X, ArrowRight, Github, Crown, Palette, MessageSquare, Gauge, Wrench,
+  Check, X, ArrowRight, Github, Crown, Palette, MessageSquare, Gauge, Wrench, ChevronDown,
 } from "lucide-react";
 import { GridPattern } from "@/components/magicui/grid-pattern";
 import { Globe } from "@/components/magicui/globe";
@@ -105,19 +105,67 @@ const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-cl
 
 Important: never invent or hardcode secrets, and don't commit anything. Ask me for values you don't have.`;
 
-function CopyPrompt({ accent }: { accent?: boolean }) {
+// The prompt is agent-agnostic; the switcher only makes it clear which coding
+// agent you'll paste it into (and labels the button accordingly).
+const HERO_AGENTS = [
+  { name: "Claude Code", mark: <ClaudeMark /> },
+  { name: "Codex", mark: <CodexMark /> },
+  { name: "Cursor", mark: <CursorMark /> },
+];
+
+function CopyPrompt({ accent, switcher }: { accent?: boolean; switcher?: boolean }) {
   const [copied, setCopied] = useState(false);
+  const [sel, setSel] = useState(0);
+  const [open, setOpen] = useState(false);
+  const current = HERO_AGENTS[sel];
+  const label = switcher ? "Copy prompt for" : "Copy prompt for your AI";
+  const copiedLabel = switcher ? "Copied — paste it in" : "Copied — paste into your AI";
   return (
-    <button
-      className={accent ? "btn accent" : "btn ghost"}
-      onClick={() => {
-        navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-    >
-      {copied ? <><Check size={15} /> Copied — paste into your AI</> : <><Terminal size={15} /> Copy prompt for your AI</>}
-    </button>
+    <div className="promptcta">
+      <button
+        className={accent ? "btn accent" : "btn ghost"}
+        onClick={() => {
+          navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }}
+      >
+        {copied ? <><Check size={15} /> {copiedLabel}</> : <><Terminal size={15} /> {label}</>}
+      </button>
+      {switcher && (
+        <div className="agent-dd">
+          <button
+            type="button"
+            className="agent-trigger"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <span className="as-mk">{current.mark}</span>
+            <span className="agent-name">{current.name}</span>
+            <ChevronDown size={13} className="agent-caret" />
+          </button>
+          {open && (
+            <>
+              <div className="agent-backdrop" onClick={() => setOpen(false)} />
+              <ul className="agent-menu" role="listbox">
+                {HERO_AGENTS.map((a, i) => (
+                  <li
+                    key={a.name}
+                    role="option"
+                    aria-selected={i === sel}
+                    className={"agent-item" + (i === sel ? " on" : "")}
+                    onClick={() => { setSel(i); setOpen(false); }}
+                  >
+                    <span className="as-mk">{a.mark}</span>{a.name}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -161,10 +209,6 @@ export default function Page() {
           <a href={APP}>Docs</a>
         </div>
         <span className="spacer" />
-        <button className="mode-toggle" onClick={() => setMachine((m) => !m)} title="Machine-readable view">
-          <span className={"seg" + (!machine ? " on" : "")}>Human</span>
-          <span className={"seg" + (machine ? " on" : "")}>Machine</span>
-        </button>
         <a className="btn ghost sm" href={APP}>Open app</a>
         <a className="btn accent sm" href={`${APP}/signup`}>Sign up</a>
       </nav>
@@ -174,9 +218,8 @@ export default function Page() {
         <section className="sec hero">
           <div className="eyebrow">Deploy in 60 seconds</div>
           <h1>The fastest hosting<br />in the world.</h1>
-          <p className="sub">Publish in seconds, invite your team, and let our in-cloud agent keep it running. The fastest way to build software together — as easy as sharing a Google Doc.</p>
           <div className="cta">
-            <CopyPrompt accent />
+            <CopyPrompt accent switcher />
           </div>
           <div className="art">
             <GridPattern width={34} height={34} style={{ stroke: "var(--line-2)" }} className="[mask-image:radial-gradient(520px_circle_at_50%_38%,white,transparent)]" />
@@ -375,6 +418,11 @@ export default function Page() {
           </div>
         </footer>
       </main>}
+
+      <button className="mode-toggle mode-fixed" onClick={() => setMachine((m) => !m)} title="Machine-readable view">
+        <span className={"seg" + (!machine ? " on" : "")}>Human</span>
+        <span className={"seg" + (machine ? " on" : "")}>Machine</span>
+      </button>
 
       <a className="ss-badge" href={APP} target="_blank" rel="noreferrer">
         <Zap size={11} strokeWidth={2.6} />Runs on Supersonic

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Zap, Github } from "lucide-react";
+import { GoogleIcon } from "@/components/BrandIcons";
 
 // OAuth sign-in that preserves the CLI hand-off: if `supersonic signup` opened
 // the browser with a ?port=, bounce through /cli after auth so the terminal gets
@@ -59,7 +60,7 @@ export default function Signup() {
         </form>
         <div className="authoauth">
           <button className="btn" type="button" onClick={() => signIn("google", { callbackUrl: oauthCallbackUrl() })}>
-            Continue with Google
+            <GoogleIcon />Continue with Google
           </button>
           <button className="btn" type="button" onClick={() => signIn("github", { callbackUrl: oauthCallbackUrl() })}>
             <Github size={14} />Continue with GitHub
