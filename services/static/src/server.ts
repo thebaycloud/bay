@@ -42,10 +42,23 @@ async function serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== "GET" && req.method !== "HEAD") return fail(res, 405, "method not allowed");
 
   const slug = slugFor(req.headers["x-supersonic-slug"], req.headers.host, ROOT_DOMAIN);
-  if (!slug) return fail(res, 404, "not found");
+  if (!slug) {
+    // Which of the two signals was missing is the difference between a proxy
+    // misconfiguration and a stray request, and guessing wasted a debugging
+    // round once already.
+    console.warn("no slug", JSON.stringify({
+      header: req.headers["x-supersonic-slug"] ?? null,
+      host: req.headers.host ?? null,
+      root: ROOT_DOMAIN,
+    }));
+    return fail(res, 404, "not found");
+  }
 
   const release = await pointers.get(slug);
-  if (!release) return fail(res, 404, "not found");
+  if (!release) {
+    console.warn("no live release", JSON.stringify({ slug, bucket: BUCKET }));
+    return fail(res, 404, "not found");
+  }
 
   const key = objectKey(req.url ?? "/");
   if (key === null) return fail(res, 400, "bad request");

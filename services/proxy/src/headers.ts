@@ -54,6 +54,26 @@ export function buildUpstreamHeaders(
   return out;
 }
 
+/**
+ * Hop-by-hop headers describe one connection and must never be copied onto
+ * another. `transfer-encoding` is the one that bites: an upstream that streams
+ * HTML sends `chunked`, and when we buffer that response to inject the overlay we
+ * set our own `content-length`. Forwarding both makes a response the load
+ * balancer rejects outright — "protocol error", a 502 the app never sees and
+ * cannot explain.
+ */
+const RESPONSE_DROP = new Set([
+  "transfer-encoding", "connection", "keep-alive", "proxy-authenticate",
+  "proxy-authorization", "te", "trailer", "upgrade",
+]);
+
+export function stripHopByHop(headers: OutgoingHttpHeaders): OutgoingHttpHeaders {
+  for (const key of Object.keys(headers)) {
+    if (RESPONSE_DROP.has(key.toLowerCase())) delete headers[key];
+  }
+  return headers;
+}
+
 /** Drop Domain= from upstream cookies so one tool cannot set a cookie for another. */
 export function scrubSetCookie(headers: OutgoingHttpHeaders): OutgoingHttpHeaders {
   const raw = headers["set-cookie"];

@@ -1,6 +1,6 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import { buildUpstreamHeaders, scrubSetCookie, type VisitorIdentity } from "./headers";
+import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, type VisitorIdentity } from "./headers";
 import { idTokenFor } from "./idtoken";
 import { config } from "./config";
 import { injectOverlay, isHtmlDocument } from "./inject";
@@ -40,7 +40,7 @@ export async function forward(
       { protocol: target.protocol, hostname: target.hostname, port: target.port || undefined,
         path: target.pathname + target.search, method: req.method, headers },
       (upRes) => {
-        const headers = scrubSetCookie({ ...upRes.headers });
+        const headers = stripHopByHop(scrubSetCookie({ ...upRes.headers }));
 
         // HTML documents are buffered so we can inject the Supersonic overlay
         // before </body>. Everything else (assets, JSON, SSE) streams untouched.

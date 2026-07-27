@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildUpstreamHeaders, scrubSetCookie } from "./headers";
+import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop } from "./headers";
 
 const visitor = { userId: "usr_1", email: "boris@acme.com", name: "Boris" };
 const COOKIE = "authjs.session-token";
@@ -57,4 +57,41 @@ test("hop-by-hop headers are not forwarded", () => {
 test("a cookie named domain is not mistaken for the Domain attribute", () => {
   const out = scrubSetCookie({ "set-cookie": ["domain=acme; Path=/; Domain=.supersonic.cv"] });
   assert.deepEqual(out["set-cookie"], ["domain=acme; Path=/"]);
+});
+
+// --- hop-by-hop headers on the response
+
+test("transfer-encoding is never copied from upstream", () => {
+  // An upstream that streams HTML sends chunked. We buffer that response to
+  // inject the overlay and set our own content-length; forwarding both makes a
+  // response the load balancer rejects as a protocol error — a 502 the app never
+  // sees and cannot explain. Cost a debugging round on a live deploy.
+  const out = stripHopByHop({
+    "content-type": "text/html",
+    "transfer-encoding": "chunked",
+    "x-supersonic-release": "r1",
+  });
+  assert.equal(out["transfer-encoding"], undefined);
+  assert.equal(out["content-type"], "text/html");
+  assert.equal(out["x-supersonic-release"], "r1");
+});
+
+test("every hop-by-hop header is dropped, whatever its case", () => {
+  const out = stripHopByHop({
+    "Transfer-Encoding": "chunked",
+    Connection: "keep-alive",
+    "Keep-Alive": "timeout=5",
+    TE: "trailers",
+    Trailer: "Expires",
+    Upgrade: "websocket",
+    "proxy-authenticate": "Basic",
+    "proxy-authorization": "Basic x",
+    "content-length": "12",
+  });
+  assert.deepEqual(Object.keys(out), ["content-length"]);
+});
+
+test("stripping leaves an ordinary response untouched", () => {
+  const headers = { "content-type": "application/json", etag: "W/\"abc\"", "cache-control": "no-cache" };
+  assert.deepEqual(stripHopByHop({ ...headers }), headers);
 });
