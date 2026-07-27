@@ -451,14 +451,48 @@ function staticBuildConfig(opts: {
   // Vite deploy, 77s of an 83s deploy was this step. Pulling node:22-slim from
   // Docker Hub instead threw that away.
   const builder = process.env.NEXT_BASE_IMAGE || process.env.NODE_BASE_IMAGE || "node:22-slim";
+  const CLOUD_SDK = "gcr.io/google.com/cloudsdktool/google-cloud-cli:slim";
+
+  // Cloud Build shares /workspace between steps, so node_modules restored here
+  // survives into the build step. Keyed by the lockfile, because that is exactly
+  // what determines the tree — a project whose dependencies did not change gets
+  // its node_modules back as one download instead of a full install.
+  //
+  // Every part of this is best-effort. A cache miss, an unreadable object, a
+  // failed upload: all swallowed. A caching layer that can fail a build is worse
+  // than no caching layer.
+  const restore = [
+    `L=$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
+    `[ -n "$L" ] || exit 0`,
+    `H=$(sha256sum "$L" | cut -c1-64)`,
+    `echo "deps cache key $H"`,
+    `gcloud storage cp gs://${ASSETS_BUCKET}/_deps/$H.tgz /workspace/.deps.tgz 2>/dev/null || exit 0`,
+    `tar -xzf /workspace/.deps.tgz -C /workspace 2>/dev/null && echo "deps restored from cache" || true`,
+  ].join("; ");
+
+  const save = [
+    `L=$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
+    `[ -n "$L" ] || exit 0`,
+    // Only write when nothing was restored, so a warm key is not re-uploaded on
+    // every deploy for no benefit.
+    `[ -f /workspace/.deps.tgz ] && exit 0`,
+    `[ -d node_modules ] || exit 0`,
+    `H=$(sha256sum "$L" | cut -c1-64)`,
+    `tar -czf /tmp/deps.tgz node_modules 2>/dev/null || exit 0`,
+    `gcloud storage cp /tmp/deps.tgz gs://${ASSETS_BUCKET}/_deps/$H.tgz 2>/dev/null && echo "deps cached" || true`,
+  ].join("; ");
+
   return [
     "steps:",
+    `  - name: ${CLOUD_SDK}`,
+    "    entrypoint: bash",
+    `    args: ["-lc", ${JSON.stringify(restore)}]`,
     `  - name: ${builder}`,
     "    entrypoint: bash",
     `    args: ["-lc", ${JSON.stringify(shell)}]`,
-    "  - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim",
+    `  - name: ${CLOUD_SDK}`,
     "    entrypoint: bash",
-    `    args: ["-lc", ${JSON.stringify(`gcloud storage rsync -r ${opts.outputDir} ${opts.destination}`)}]`,
+    `    args: ["-lc", ${JSON.stringify(`${save}; gcloud storage rsync -r ${opts.outputDir} ${opts.destination}`)}]`,
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
     "",
