@@ -1,5 +1,6 @@
 import { SELECTORS, whichCandidate, type SelectorTarget } from "./selectors";
 import { extractPeople } from "./people";
+import { reactionCandidates } from "./reactions";
 
 /**
  * A snapshot of what is actually on the page right now.
@@ -35,6 +36,8 @@ export interface Diagnosis {
   extractedSample: Array<{ profileUrl: string; fullName?: string; headline?: string }>;
   /** Trimmed markup around the first few profile links — the repair material. */
   linkSamples: string[];
+  /** How the reactions-control scorer ranked the page, best first. */
+  reactionCandidates: Array<{ score: number; label: string; text: string; why: string[] }>;
 }
 
 function truncate(text: string, max: number): string {
@@ -99,6 +102,16 @@ export function diagnose(): Diagnosis {
       textPreview: truncate(d.textContent ?? "", 200),
     })),
     extractedSample: extractPeople(extractionRoot).slice(0, 5),
+    // The ranking itself is the useful artefact: if the intended control is
+    // absent or outranked, that is visible here without opening DevTools.
+    reactionCandidates: reactionCandidates()
+      .slice(0, 6)
+      .map((c) => ({
+        score: c.score,
+        label: truncate(c.el.getAttribute("aria-label") ?? "", 80),
+        text: truncate(c.el.textContent ?? "", 40),
+        why: c.why,
+      })),
     linkSamples: anchors.slice(0, 3).map((a) => {
       // Two levels up is normally the card wrapper — the level that decides
       // whether name and headline extraction can work.

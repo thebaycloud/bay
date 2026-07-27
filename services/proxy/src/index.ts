@@ -29,6 +29,13 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (!app) return html(res, 404, page404());
   if (!app.run_url) return html(res, 502, page502(slug));
 
+  // Public apps skip the sign-in wall entirely — anyone with the link gets in.
+  if (app.visibility === "public") {
+    const wd = (await workspaceDomainOf(app.workspace_id)) ?? "";
+    await forward(req, res, app.run_url, { userId: "", email: "", name: "" }, wd, { slug, owner: false });
+    return;
+  }
+
   const visitor = await readVisitor(req);
   if (!visitor) {
     res.writeHead(302, { Location: signInRedirect(req) });
@@ -46,7 +53,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   }
 
   const workspaceDomain = (await workspaceDomainOf(app.workspace_id)) ?? "";
-  await forward(req, res, app.run_url, visitor, workspaceDomain);
+  await forward(req, res, app.run_url, visitor, workspaceDomain, { slug, owner: visitor.userId === app.owner_id });
 }
 
 createServer((req, res) => {

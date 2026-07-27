@@ -7,7 +7,7 @@ export interface AppRow {
   owner_id: string;
   owner_email: string;
   run_url: string | null;
-  visibility: "private" | "shared" | "workspace";
+  visibility: "private" | "shared" | "workspace" | "public";
   status: "deploying" | "live" | "failed";
 }
 

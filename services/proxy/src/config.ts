@@ -13,4 +13,6 @@ export const config = {
   sessionCookieName: PROD ? "__Secure-authjs.session-token" : "authjs.session-token",
   loginUrl: process.env.LOGIN_URL ?? "https://app.supersonic.cv/login",
   rootDomain: process.env.ROOT_DOMAIN ?? "supersonic.cv",
+  /** Inject the "Runs on Supersonic" badge + owner toolbar into HTML pages. */
+  injectOverlay: process.env.INJECT_OVERLAY !== "0",
 };

@@ -2,7 +2,7 @@ import { getPool } from "./db";
 
 const DB = "supersonic_platform";
 
-export type Visibility = "private" | "shared" | "workspace";
+export type Visibility = "private" | "shared" | "workspace" | "public";
 
 export interface AppRecord {
   id: string;

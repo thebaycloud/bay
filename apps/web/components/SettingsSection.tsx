@@ -87,11 +87,18 @@ export function SettingsSection({
       <div className="set-card">
         <div className="set-head"><Globe size={15} /><div><div className="st">Address</div><div className="ss">Where people reach your app.</div></div></div>
         <div className="dom-row">
-          <div className="dom-cur"><span className="dom-lbl">Current</span><span className="dom-val mono">{liveHost}</span></div>
+          <div className="dom-one">
+            <span className="dom-lbl">Supersonic address</span>
+            <div className="dom-line"><span className="dom-val mono">{liveHost}</span><span className="dom-ok">✓ live</span></div>
+          </div>
         </div>
-        <div className="dom-soon">
-          <span>Connect your own domain (like <span className="mono">yourapp.com</span>)</span>
-          <span className="soon-tag">coming soon</span>
+        <div className="dom-custom">
+          <span className="dom-lbl">Your own domain</span>
+          <div className="dom-add">
+            <input className="in mono" placeholder="yourapp.com" disabled />
+            <button className="btn" disabled>Connect</button>
+          </div>
+          <span className="dom-note">Custom domains are coming soon.</span>
         </div>
       </div>
 

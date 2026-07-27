@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react";
 
-type Visibility = "private" | "shared" | "workspace";
+type Visibility = "private" | "shared" | "public";
 
 const LABEL: Record<Visibility, string> = {
   private: "Only me",
   shared: "Specific people",
-  workspace: "Everyone at my company",
+  public: "Public — anyone with the link",
 };
 
 export default function SharePanel({ slug }: { slug: string }) {

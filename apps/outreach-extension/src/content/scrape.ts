@@ -1,6 +1,7 @@
 import { extractPeople, type ScrapedPerson } from "./people";
-import { actionPause, humanClick, scrollUntilExhausted, sleep } from "./human";
-import { findAll, findOne, requireOne, SelectorMiss } from "./selectors";
+import { actionPause, humanClick, scrollUntilExhausted } from "./human";
+import { openReactionsModal } from "./reactions";
+import { findAll, findOne, requireOne } from "./selectors";
 
 export type ScrapeSource = "post_likers" | "post_commenters" | "search" | "connections";
 
@@ -34,53 +35,13 @@ class PersonSink {
 }
 
 /**
- * Wait for the dialog that actually contains people, then return it.
- *
- * Several `role="dialog"` elements are commonly open at once — the Messaging
- * overlay is one, and it sits in the DOM before any modal you just opened. So
- * "the first dialog" is the wrong answer; the right one is the dialog that
- * contains profile links. Polling also covers the modal's list arriving a beat
- * after the modal frame itself.
- */
-async function waitForPeopleDialog(timeoutMs = 12_000): Promise<Element> {
-  const deadline = Date.now() + timeoutMs;
-  let lastSeenDialogs = 0;
-
-  while (Date.now() < deadline) {
-    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], .artdeco-modal'));
-    lastSeenDialogs = dialogs.length;
-    const withPeople = dialogs.find((d) => d.querySelector('a[href*="/in/"]'));
-    if (withPeople) return withPeople;
-    await sleep(400);
-  }
-
-  const modal = findOne("reactorsModal");
-  if (modal) return modal;
-  throw new SelectorMiss("reactorsModal", [
-    `no dialog containing profile links appeared within ${timeoutMs / 1000}s ` +
-      `(${lastSeenDialogs} dialog(s) open). The reactions modal may not have opened, ` +
-      `or its list markup changed — run Diagnose on this page with the modal open.`,
-  ]);
-}
-
-/**
  * Everyone who reacted to the post on the current page.
  *
  * The likers list is the warmest source we have — these people already engaged
  * with your content, so they are not really cold.
  */
 export async function scrapePostLikers(limit = 500): Promise<ScrapeResult> {
-  const button = findOne("reactionsButton");
-  if (!button) {
-    throw new SelectorMiss("reactionsButton", [
-      "no reactions control found — is this a post permalink page with at least one reaction?",
-    ]);
-  }
-
-  await humanClick(button);
-  await actionPause();
-
-  const modal = await waitForPeopleDialog();
+  const modal = await openReactionsModal();
   const sink = new PersonSink();
 
   await scrollUntilExhausted(modal, () => sink.harvest(modal), {

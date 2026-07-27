@@ -5,6 +5,9 @@ const IDENTITY_PREFIX = "x-supersonic-";
 const DROP = new Set([
   "host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade", "authorization",
+  // Dropped so upstream HTML comes back uncompressed and we can inject the
+  // Supersonic badge/toolbar before </body> without decoding gzip/br.
+  "accept-encoding",
 ]);
 
 export interface VisitorIdentity { userId: string; email: string; name: string }

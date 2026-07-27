@@ -3,13 +3,15 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import { buildUpstreamHeaders, scrubSetCookie, type VisitorIdentity } from "./headers";
 import { idTokenFor } from "./idtoken";
 import { config } from "./config";
+import { injectOverlay, isHtmlDocument } from "./inject";
 
 export async function forward(
   req: IncomingMessage,
   res: ServerResponse,
   targetBase: string,
   visitor: VisitorIdentity,
-  workspaceDomain: string
+  workspaceDomain: string,
+  inject?: { slug: string; owner: boolean }
 ): Promise<void> {
   const target = new URL(req.url ?? "/", targetBase);
   const headers = buildUpstreamHeaders(req.headers, visitor, config.sessionCookieName);
@@ -38,7 +40,31 @@ export async function forward(
       { protocol: target.protocol, hostname: target.hostname, port: target.port || undefined,
         path: target.pathname + target.search, method: req.method, headers },
       (upRes) => {
-        res.writeHead(upRes.statusCode ?? 502, scrubSetCookie({ ...upRes.headers }));
+        const headers = scrubSetCookie({ ...upRes.headers });
+
+        // HTML documents are buffered so we can inject the Supersonic overlay
+        // before </body>. Everything else (assets, JSON, SSE) streams untouched.
+        if (inject && isHtmlDocument(upRes.headers["content-type"])) {
+          const chunks: Buffer[] = [];
+          upRes.on("data", (c: Buffer) => chunks.push(c));
+          upRes.on("end", () => {
+            const body = injectOverlay(Buffer.concat(chunks).toString("utf8"), inject.slug, inject.owner);
+            const buf = Buffer.from(body, "utf8");
+            delete headers["content-encoding"];
+            headers["content-length"] = String(buf.length);
+            res.writeHead(upRes.statusCode ?? 502, headers);
+            res.end(buf);
+            done();
+          });
+          upRes.on("error", (e) => {
+            console.error("upstream response error", e);
+            res.destroy();
+            done();
+          });
+          return;
+        }
+
+        res.writeHead(upRes.statusCode ?? 502, headers);
         upRes.pipe(res);
         upRes.on("end", done);
         upRes.on("error", (e) => {

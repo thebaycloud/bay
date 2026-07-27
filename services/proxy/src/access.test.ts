@@ -66,11 +66,20 @@ test("workspace visibility does not imply grant access for a different workspace
 // whole point of deny-by-default — is unpinned, and a future edit could turn a
 // typo or a new enum value into an open door.
 test("an unrecognized visibility denies everyone", () => {
-  for (const visibility of ["", "public", "deleted", "PRIVATE"]) {
+  for (const visibility of ["", "deleted", "PRIVATE"]) {
     assert.equal(decideAccess({
       app: { ...app, visibility: visibility as never }, visitor: colleague,
       visitorWorkspaceId: "ws-acme", hasGrant: true,
     }), false, `visibility ${JSON.stringify(visibility)} should deny`);
+  }
+});
+
+test("public visibility lets anyone in", () => {
+  for (const visitor of [colleague, outsider]) {
+    assert.equal(decideAccess({
+      app: { ...app, visibility: "public" }, visitor,
+      visitorWorkspaceId: null, hasGrant: false,
+    }), true);
   }
 });
 

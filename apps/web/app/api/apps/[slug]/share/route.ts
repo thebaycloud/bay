@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import { getAppBySlug, setVisibility, listGrants, addGrant, removeGrant, type Visibility } from "@/lib/apps";
 import { currentUserId } from "@/lib/session";
 
-const VISIBILITIES: Visibility[] = ["private", "shared", "workspace"];
+const VISIBILITIES: Visibility[] = ["private", "shared", "public"];
 
 async function ownedApp(slug: string) {
   const uid = await currentUserId();
