@@ -2,6 +2,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { getAppBySlug, setVisibility, listGrants, addGrant, removeGrant, type Visibility } from "@/lib/apps";
+import { listPending, resolveRequest } from "@/lib/requests";
+import { sendAccessGranted } from "@/lib/email";
 import { currentUserId } from "@/lib/session";
 
 const VISIBILITIES: Visibility[] = ["private", "shared", "public"];
@@ -43,7 +45,8 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
   const slug = decodeURIComponent(params.slug);
   const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
-  return Response.json({ visibility: app.visibility, grants: await listGrants(slug) }, { headers: cors });
+  const [grants, requests] = await Promise.all([listGrants(slug), listPending(slug)]);
+  return Response.json({ visibility: app.visibility, grants, requests }, { headers: cors });
 }
 
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
@@ -67,10 +70,16 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return Response.json({ error: "invalid email" }, { status: 400, headers: cors });
     }
+    // Granting = inviting or approving a request; either way, resolve any pending
+    // request and tell the person they're in.
     await addGrant(slug, email);
+    await resolveRequest(slug, email, "approved");
+    await sendAccessGranted(email, slug);
   }
   if (body.removeEmail) await removeGrant(slug, String(body.removeEmail));
+  if (body.denyEmail) await resolveRequest(slug, String(body.denyEmail), "denied");
 
   const fresh = await getAppBySlug(slug);
-  return Response.json({ visibility: fresh?.visibility, grants: await listGrants(slug) }, { headers: cors });
+  const [grants, requests] = await Promise.all([listGrants(slug), listPending(slug)]);
+  return Response.json({ visibility: fresh?.visibility, grants, requests }, { headers: cors });
 }

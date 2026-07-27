@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { getAppBySlug } from "@/lib/apps";
 import { getPool } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
+import { addRequest } from "@/lib/requests";
 import { currentUserId } from "@/lib/session";
 
 const DB = "supersonic_platform";
@@ -52,6 +53,9 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
 
   const [requester, owner] = await Promise.all([emailOf(uid), emailOf(app.owner_id)]);
   if (!owner) return Response.json({ error: "couldn't reach the owner" }, { status: 500, headers });
+
+  // Record it so the owner can approve/deny from the Share panel, not just email.
+  if (requester) await addRequest(app.id, requester);
 
   const link = `https://app.supersonic.cv/apps/${slug}`;
   const result = await sendEmail({

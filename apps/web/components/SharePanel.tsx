@@ -14,6 +14,7 @@ const OPTIONS: { id: Visibility; icon: typeof Lock; label: string; desc: string 
 export default function SharePanel({ slug }: { slug: string }) {
   const [visibility, setVisibility] = useState<Visibility>("private");
   const [grants, setGrants] = useState<string[]>([]);
+  const [requests, setRequests] = useState<string[]>([]);
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +26,7 @@ export default function SharePanel({ slug }: { slug: string }) {
       const j = await r.json();
       setVisibility(j.visibility);
       setGrants(j.grants ?? []);
+      setRequests(j.requests ?? []);
     } catch { setError("Couldn't load sharing settings"); }
   }
   useEffect(() => { load(); }, [slug]);
@@ -39,6 +41,7 @@ export default function SharePanel({ slug }: { slug: string }) {
       if (!r.ok) { setError(j.error ?? `Couldn't save (${r.status})`); return; }
       setVisibility(j.visibility);
       setGrants(j.grants ?? []);
+      setRequests(j.requests ?? []);
     } catch { setError("Couldn't reach the server"); }
     finally { setBusy(false); }
   }
@@ -46,6 +49,21 @@ export default function SharePanel({ slug }: { slug: string }) {
   return (
     <div className="share-panel">
       {error && <div className="share-err">⚠ {error}</div>}
+
+      {requests.length > 0 && (
+        <div className="share-reqs">
+          <div className="share-reqs-h">Access requests</div>
+          {requests.map((rq) => (
+            <div className="share-req" key={rq}>
+              <span className="rq-email">{rq}</span>
+              <span className="rq-acts">
+                <button className="btn sm" disabled={busy} onClick={() => post({ addEmail: rq })}>Approve</button>
+                <button className="rq-deny" disabled={busy} onClick={() => post({ denyEmail: rq })}>Deny</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="share-opts">
         {OPTIONS.map((o) => (

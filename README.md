@@ -20,6 +20,9 @@ seconds. No infra, ever. As easy as posting a story.
 | `docs/` | `PHASES.md` (full build plan), `ARCHITECTURE.md` | — |
 | `apps/outreach-extension` | Internal growth tool: MV3 extension for LinkedIn outreach | — |
 | `services/outreach` | Backend for the above — prospects, campaigns, caps, copy generation | — |
+| `services/outreach-agent` | Browser-Use agent that sources prospects from LinkedIn | — |
+
+Plan for the outreach tooling: [`docs/OUTREACH.md`](docs/OUTREACH.md).
 
 > `apps/outreach-extension` and `services/outreach` are internal sales tooling,
 > not part of the product. They ship on their own cadence.

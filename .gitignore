@@ -21,3 +21,8 @@ coverage/
 
 # Extension signing key — pins the extension ID. Keep it out of git.
 extension-key.pem
+
+# Python agent venv
+services/outreach-agent/.venv/
+__pycache__/
+*.egg-info/

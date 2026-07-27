@@ -6,6 +6,15 @@ const API = "https://api.agentmail.to/v0";
 
 export interface SendResult { ok: boolean; skipped?: boolean; error?: string }
 
+/** "You now have access" — sent when the owner grants someone (invite or approval). */
+export async function sendAccessGranted(to: string, slug: string): Promise<SendResult> {
+  return sendEmail({
+    to,
+    subject: `You now have access to ${slug}`,
+    text: `You've been given access to the app "${slug}" on Supersonic.\n\nOpen it: https://${slug}.supersonic.cv`,
+  });
+}
+
 export async function sendEmail(msg: {
   to: string; subject: string; text: string; html?: string;
 }): Promise<SendResult> {

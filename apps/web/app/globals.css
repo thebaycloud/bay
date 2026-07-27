@@ -422,6 +422,13 @@ a.btn { text-decoration: none; }
 .share-pop-head .ib { width: 26px; height: 26px; display: grid; place-items: center; color: var(--ink-2); }
 .share-pop-head .ib:hover { background: var(--paper); color: var(--ink); }
 .share-panel { padding: 8px; }
+.share-reqs { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft, color-mix(in srgb, var(--accent) 8%, var(--card))); margin: 4px 4px 10px; }
+.share-reqs-h { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); padding: 9px 11px 6px; }
+.share-req { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 11px; }
+.share-req .rq-email { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-req .rq-acts { display: flex; align-items: center; gap: 6px; flex: none; }
+.share-req .rq-deny { background: none; border: none; color: var(--ink-2); font-size: 12px; cursor: pointer; padding: 5px 6px; }
+.share-req .rq-deny:hover { color: var(--down, #c33a2c); }
 .share-err { padding: 8px 10px; color: var(--down, #c33a2c); font-family: var(--mono); font-size: 11px; }
 .share-opts { display: flex; flex-direction: column; }
 .share-opt { display: flex; align-items: center; gap: 11px; padding: 10px 11px; width: 100%; text-align: left; background: none; border: none; transition: background .12s var(--ease); }

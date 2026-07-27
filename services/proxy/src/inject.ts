@@ -37,8 +37,15 @@ var css=\`
 .people input{width:100%;padding:7px 9px;background:#111;border:1px solid #35342e;color:#fff;border-radius:6px;font:400 12px sans-serif;outline:none}
 .people .row{display:flex;align-items:center;justify-content:space-between;font:400 12px sans-serif;padding:6px 2px;color:#cfcfc7}
 .people .rm{background:none;border:0;color:#7a786f;cursor:pointer}
+.reqs{border:1px solid #1f3a2b;background:#12241a;margin:8px 10px}
+.reqs h5{margin:0;padding:8px 10px 4px;font:600 10.5px sans-serif;letter-spacing:.06em;text-transform:uppercase;color:#2ea86a}
+.reqs .r{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;font:400 12px sans-serif;color:#eae8df}
+.reqs .r .e{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reqs .r .a{display:flex;gap:6px;flex:none}
+.reqs .ap{background:#2ea86a;color:#05130b;border:0;border-radius:6px;padding:5px 10px;font:600 11px sans-serif;cursor:pointer}
+.reqs .dn{background:none;border:0;color:#9db0a6;cursor:pointer;font:400 11px sans-serif}
 \`;
-var vis='private',grants=[];
+var vis='private',grants=[],reqs=[];
 function h(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;}
 var style=document.createElement('style');style.textContent=css;root.appendChild(style);
 
@@ -63,27 +70,38 @@ function render(){
   if(!pop)return;
   pop.innerHTML='';
   pop.appendChild(h('h4',null,'Who can open this app'));
+  if(reqs.length){
+    var rq=h('div','reqs');rq.appendChild(h('h5',null,'Access requests'));
+    reqs.forEach(function(em){
+      var row=h('div','r');row.appendChild(h('span','e',em));
+      var a=h('div','a');
+      var ap=h('button','ap','Approve');ap.onclick=function(){api({addEmail:em}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};
+      var dn=h('button','dn','Deny');dn.onclick=function(){api({denyEmail:em}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};
+      a.appendChild(ap);a.appendChild(dn);row.appendChild(a);rq.appendChild(row);
+    });
+    pop.appendChild(rq);
+  }
   OPTS.forEach(function(o){
     var b=h('button','opt'+(vis===o[0]?' on':''));
     var g=h('div','g');g.appendChild(h('div','l',o[1]));g.appendChild(h('div','d',o[2]));
     b.appendChild(g);
     if(vis===o[0]){var ck=h('span','ck','✓');b.appendChild(ck);}
-    b.onclick=function(){api({visibility:o[0]}).then(function(j){vis=j.visibility;grants=j.grants||[];render();});};
+    b.onclick=function(){api({visibility:o[0]}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};
     pop.appendChild(b);
   });
   if(vis==='shared'){
     var ppl=h('div','people');
     var inp=document.createElement('input');inp.type='email';inp.placeholder='colleague@company.com';
-    inp.onkeydown=function(e){if(e.key==='Enter'&&inp.value){api({addEmail:inp.value}).then(function(j){vis=j.visibility;grants=j.grants||[];render();});}};
+    inp.onkeydown=function(e){if(e.key==='Enter'&&inp.value){api({addEmail:inp.value}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});}};
     ppl.appendChild(inp);
-    grants.forEach(function(gr){var row=h('div','row');row.appendChild(h('span',null,gr));var rm=h('button','rm','remove');rm.onclick=function(){api({removeEmail:gr}).then(function(j){vis=j.visibility;grants=j.grants||[];render();});};row.appendChild(rm);ppl.appendChild(row);});
+    grants.forEach(function(gr){var row=h('div','row');row.appendChild(h('span',null,gr));var rm=h('button','rm','remove');rm.onclick=function(){api({removeEmail:gr}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};row.appendChild(rm);ppl.appendChild(row);});
     pop.appendChild(ppl);
   }
 }
 share.onclick=function(){
   if(pop){pop.remove();pop=null;return;}
   pop=h('div','pop');root.appendChild(pop);render();
-  api().then(function(j){if(j&&j.visibility){vis=j.visibility;grants=j.grants||[];render();}});
+  api().then(function(j){if(j&&j.visibility){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();}});
 };
 })();</script>`;
 }

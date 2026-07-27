@@ -1,7 +1,8 @@
 # Outreach — Build Plan
 
-Internal growth tooling: `apps/outreach-extension` + `services/outreach`. Not part
-of the product, not on the product's release cadence.
+Internal growth tooling: `apps/outreach-extension` + `services/outreach` +
+`services/outreach-agent`. Not part of the product, not on the product's
+release cadence.
 
 Phases are **sequence, not scope** — dependency order, same convention as
 [`PHASES.md`](PHASES.md). Marked ⚡ = concentrated risk.
@@ -65,28 +66,39 @@ regression alarm · profile enrichment pass · side panel with health + diagnosi
 
 ---
 
-### Phase 1.5 — Make sourcing actually work ⚡ *(current)*
+### Phase 1.5 — Sourcing by agent, not by selector ⚡ *(current)*
 
-The selectors are the only genuinely fragile part of this system, and the DOM
-they target is owned by someone with no interest in stability.
+Hand-written selectors were tried and abandoned. Two rounds of fixes against a
+live page failed — evidence scoring and click-verification were an improvement
+over an ordered CSS list, but the underlying problem stands: nobody writing this
+code can see the DOM, and LinkedIn's markup varies by account, locale, and A/B
+bucket.
 
-- **Evidence scoring over selector lists.** *(done)* Rank candidate elements by
-  accumulated evidence, disqualify controls that name another action, click the
-  best, then **verify** the expected result appeared and fall back if not. An
-  ordered CSS list silently clicks a plausible-but-wrong element; scoring plus
-  verification cannot.
-- **Prove each source on a live page.** Likers, commenters, search, connections.
-  Each gets fixed against a captured diagnosis rather than guesswork.
-- **AI element resolution as fallback.** When scoring fails, POST a compact
-  summary of candidate elements to the backend, have Claude pick, cache the
-  winning selector against a DOM fingerprint. One call per breakage, not per
-  action — the fast path stays deterministic. This is the useful 5% of what a
-  full browser-agent would do, at ~0.1% of the cost and latency.
-- **Selector regression alert.** A source whose last N runs all returned zero
-  raises in the panel. Silent zero-yield is the failure mode that costs weeks.
+`services/outreach-agent` replaces that path with Browser-Use. Tasks describe
+the goal — "everyone who reacted to this post" — and the model reads the page.
 
-**Schema:** `resolved_selectors(target, dom_fingerprint, selector, confirmed_at)`.
-**Ships:** all four sources pulling reliably from live LinkedIn.
+- **Attaches to the teammate's real Chrome over CDP**, so session, cookies, and
+  IP stay theirs. A fresh browser profile on an established account is a
+  device-fingerprint change and among the strongest restriction signals there is.
+- **Read-only contract** prepended to every task: no Connect, Follow, Message,
+  Send, Like, React, Comment, Share, Accept, or form submission.
+- **Structured output** (`output_model_schema`) so the model returns validated
+  records rather than prose to parse.
+- **Pacing enforced between agent steps**, not left to the model.
+- **Partial pulls are explicit** — `reached_end_of_list` is reported, because a
+  truncated scrape that reads as complete is how you wrongly conclude a source
+  is exhausted.
+
+**Cost:** each step is a model call carrying a page summary — cents per scrape
+rather than fractions of one, and slower. That is the trade for never
+maintaining a selector again.
+
+**The extension keeps the panel, settings, and run history**, and remains the
+send path in Phase 4. Its scraping code stays until the agent has proven itself
+on all four sources, then comes out.
+
+**Ships:** all four sources pulling from live LinkedIn without a CSS selector in
+the loop.
 
 ---
 
@@ -207,10 +219,10 @@ without stepping on each other.
 brand brief clears Claude Opus 5's 512-token cache minimum, so real spend lands
 lower. If this ever costs more than a rounding error, something is wrong.
 
-**Selector rot is a permanent tax, not a bug to fix once.** Budget for it:
-one file (`selectors.ts` + `reactions.ts`) owns every DOM assumption, failures
-are loud, the diagnosis tool captures repair material in one click, and Phase
-1.5's resolver makes most breakages self-healing.
+**Selector rot was a permanent tax, so we stopped paying it.** Phase 1.5 moves
+sourcing to an agent that reads pages instead of matching selectors. What
+remains DOM-coupled is the Phase 4 send path, deliberately: a wrong guess on a
+read is a bad batch, a wrong guess on a write is a message you cannot unsend.
 
 **The audit trail is not optional.** Every action lands in `events`. When an
 account gets a warning, the question "what exactly did we send, to whom, how
@@ -226,8 +238,10 @@ fast" needs an answer.
 2. **Reply rates that don't justify the build.** Most likely outcome if search
    is the main source. Post-likers and commenters are the hedge, which is why
    Phase 1.5 comes before anything else.
-3. **Selector rot outpacing maintenance.** Addressed by the resolver, but if
-   LinkedIn ships a major rewrite, expect a bad week.
+3. **Agent unreliability.** The trade made in Phase 1.5: no more selector rot,
+   but the model can now misread a page, stop early, or cost more than expected.
+   `reached_end_of_list`, `max_steps`, and the run history exist to make that
+   visible rather than silent.
 4. **Nobody uses it.** An internal tool with one user is a hobby. Phase 6 exists
    for a reason, and should not slip indefinitely.
 
