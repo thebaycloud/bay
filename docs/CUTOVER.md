@@ -186,7 +186,7 @@ gcloud run deploy supersonic-static \
 sealing happens, this service seals with everything else — it is an ordinary Cloud Run
 service, which is exactly why the proxy and the visibility rules already cover it.
 
-## 4. The regional npm mirror
+## 4. The regional npm mirror — created, deliberately NOT switched on
 
 ```bash
 gcloud artifacts repositories create npm-mirror \
@@ -194,6 +194,22 @@ gcloud artifacts repositories create npm-mirror \
   --remote-repo-config-desc "npmjs" --remote-npm-repo NPMJS \
   --location us-central1 --project supersonic-deploy-prod
 ```
+
+The repository exists. **`NPM_REGISTRY` is not set, and must not be set as-is.**
+
+Artifact Registry npm repositories refuse anonymous reads — verified against the
+live mirror, which answers `401` to an unauthenticated GET. Pointing builds at it
+without credentials would fail every `npm install` in the platform at once.
+
+Making it work needs an `.npmrc` carrying an access token in the build environment,
+and that has a trap: writing a token into a Dockerfile bakes it into an image layer,
+where it outlives the build and ships to whoever can pull the image. The static
+lane can do this safely because we own its Cloud Build steps and can write `.npmrc`
+in a step rather than a layer. The container lanes build with Kaniko from a
+customer-visible Dockerfile, so they need a build-arg or a mounted secret instead.
+
+Until that is built, leave `NPM_REGISTRY` unset. The base images below already
+carry a warm package cache, which is where most of the cold-start win comes from.
 
 ## 5. The base image repository
 
@@ -209,9 +225,9 @@ infra/bases/refresh.sh
 weekly. A failed refresh leaves `:stable` alone and exits non-zero — deploys keep using
 the last good base, which is the whole point of the gate.
 
-## 6. Switch the control plane on
+## 6. Switch the control plane on — done
 
-Only after the above exist:
+Applied on 2026-07-27:
 
 ```bash
 gcloud run services update supersonic-control-plane \
@@ -219,14 +235,33 @@ gcloud run services update supersonic-control-plane \
   --update-env-vars \
 STATIC_SERVICE=supersonic-static,\
 ASSETS_BUCKET=supersonic-static-assets,\
-NPM_REGISTRY=https://us-central1-npm.pkg.dev/supersonic-deploy-prod/npm-mirror/,\
 NODE_BASE_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/bases/node22:stable,\
 NEXT_BASE_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/bases/node22-next:stable
 ```
 
-Each variable is independent. Setting only `STATIC_SERVICE` and `ASSETS_BUCKET` turns on
-the static lane and leaves everything else as it is today; unsetting any one of them
-reverts that piece with no redeploy.
+`NPM_REGISTRY` is deliberately absent — see section 4.
+
+Each variable is independent, and unsetting any one reverts that piece with no
+redeploy. Removing `STATIC_SERVICE` and `ASSETS_BUCKET` sends every project back
+down the container path.
+
+## How static apps are actually routed
+
+Worth writing down, because the obvious answer is wrong and cost a round of
+debugging.
+
+All of `*.supersonic.cv` resolves to one load-balancer IP, so app traffic reaches
+the **proxy** — not the per-app Cloud Run domain mappings, which DNS never points
+at. Those mappings exist for several apps and are inert.
+
+The proxy routes by looking up `apps.run_url`, so a static app's row points at the
+shared static server. And because the proxy drops `Host` and lets the upstream
+request set its own, the static server cannot learn which app a request was for
+from the hostname — every static app shares that one upstream. The proxy therefore
+names the app in `x-supersonic-slug`, which is safe to trust downstream precisely
+because the proxy already discards anything a client sends under that prefix.
+
+Consequence: a static deploy creates no domain mapping. There is nothing to map.
 
 ## 7. Apply the migration
 
