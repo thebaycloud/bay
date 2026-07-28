@@ -82,9 +82,10 @@ async function signup(args) {
   await loopbackAuth(url, "/signup", "signed up");
 }
 
-// Browser loopback used by both login and signup: open the web at `startPath`,
-// spin up a local server, and let the web hand a CLI token back once signed in.
-async function loopbackAuth(url, startPath, verb) {
+// Browser loopback core: open the web at `startPath`, spin up a local server,
+// and resolve with the CLI token the web hands back (or null on timeout). Does
+// NOT save/print/exit — callers decide, so `deploy` can auto-auth and continue.
+async function runLoopback(url, startPath) {
   const server = http.createServer();
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
@@ -107,20 +108,35 @@ async function loopbackAuth(url, startPath, verb) {
   let timer;
   const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("timed out")), 300000); });
   const shutdown = () => { clearTimeout(timer); try { server.closeAllConnections?.(); } catch { /* noop */ } server.close(); };
-
-  let tok;
   try {
-    tok = await Promise.race([done, timeout]);
+    const tok = await Promise.race([done, timeout]);
+    shutdown();
+    return tok || null;
   } catch {
     shutdown();
-    return die(`${verb} timed out — try again, or use: supersonic login --token <token>`);
+    return null;
   }
-  shutdown();
-  if (!tok) return die("no token received");
+}
 
+// The `login`/`signup` wrapper: authenticate, then report and exit.
+async function loopbackAuth(url, startPath, verb) {
+  const tok = await runLoopback(url, startPath);
+  if (!tok) return die(`${verb} timed out — try again, or use: supersonic login --token <token>`);
   saveCfg({ ...loadCfg(), url, token: tok });
   print(green("✓ ") + `${verb} to ${url}`);
-  process.exit(0); // loopback server + timer are cleaned up; exit so the shell returns
+  process.exit(0);
+}
+
+// Make `deploy` (and other primary commands) a single command: if there's no
+// token, sign the human in via the browser once, then keep going.
+async function ensureAuth() {
+  if (token()) return;
+  const url = baseUrl();
+  info(dim("Not signed in — opening a browser to sign in (just this once)…"));
+  const tok = await runLoopback(url, "/cli");
+  if (!tok) die("sign-in timed out — run `supersonic login`, then `supersonic deploy` again");
+  saveCfg({ ...loadCfg(), url, token: tok });
+  info(green("✓ ") + "signed in — continuing…");
 }
 
 // Prove a token is valid by hitting any authorized endpoint (200 == good).
@@ -291,6 +307,9 @@ async function open(args) {
 }
 
 async function deploy(args) {
+  // One command: sign in automatically the first time, then deploy. No separate
+  // `supersonic login` step required.
+  await ensureAuth();
   // GitHub / a git URL is a pickable option — the default is straight from this folder.
   if (args.github || args.repo) {
     let repo = args.repo;
@@ -485,7 +504,7 @@ async function consumeDeploy(res, args) {
   if (trailing) {
     let body; try { body = JSON.parse(trailing.replace(/^data: /, "")); } catch { /* not JSON */ }
     if (body && body.error) {
-      if (args.json) json({ ok: false, error: body.error, upgrade: !!body.upgrade });
+      if (args.json) json({ ok: false, error: body.error, upgrade: !!body.upgrade, paywall: !!body.paywall });
       die(body.error);
     }
   }
@@ -507,7 +526,24 @@ function gitOrigin() {
   });
 }
 
-function usage() {
+function usage(all = false) {
+  if (!all) {
+    print(`${bold("supersonic")} — publish your app in one command
+
+${bold("just run this in your project folder:")}
+  ${green("supersonic deploy")}          publish this folder and print the live URL
+                             (opens a browser to sign in the first time)
+
+${bold("when something's wrong")}
+  supersonic logs <app>      recent logs
+  supersonic diagnose <app>  AI fix-prompt for your coding agent
+  supersonic apps            list your apps
+  supersonic open <app>      open the app in a browser
+  supersonic login           sign in manually
+
+${dim("more commands: supersonic help --all  ·  --json on any command for machine output")}`);
+    return;
+  }
   print(`${bold("supersonic")} — deploy & debug from your coding agent
 
 ${bold("setup")}
@@ -517,7 +553,7 @@ ${bold("setup")}
   supersonic whoami
 
 ${bold("deploy")}
-  supersonic deploy                             deploy this folder — no git needed
+  supersonic deploy                             deploy this folder — no git needed (auto sign-in)
   supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead
   supersonic redeploy <app>                     rebuild from the app's source
   supersonic rollback <app>                     roll back to the previous revision
@@ -559,7 +595,7 @@ const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, di
 
 (async () => {
   const [, , cmd, ...rest] = process.argv;
-  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") return usage();
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") return usage(rest.includes("--all") || rest.includes("-a"));
   const fn = COMMANDS[cmd];
   if (!fn) { info(red(`unknown command: ${cmd}`)); usage(); process.exit(1); }
   const args = parse(rest);

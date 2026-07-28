@@ -7,22 +7,16 @@ import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 
-const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-click hosting (https://supersonic.cv). I already have a Supersonic account. Run these steps from my project's root folder and keep me posted.
+const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-command hosting for vibecoders (agent manual: https://supersonic.cv/llms.txt). Run these from my project's root folder and keep me posted.
 
-1. Make sure the CLI is installed:  supersonic help
-   If "supersonic" isn't found, install it:  npm i -g supersonic-cli
+1. Install the CLI if it isn't already:  npm i -g supersonic-cli
 
-2. Confirm I'm signed in:  supersonic whoami
-   - Logged in → go to step 3.
-   - Not logged in → sign me in:  supersonic login  (opens a browser; the CLI captures the token automatically). Only if I don't actually have an account yet, use "supersonic signup" instead.
+2. Publish this folder:  supersonic deploy
+   That's the whole thing. The first time, it opens a browser for me to sign in (a new account starts a free trial automatically — nothing to pay). Then it packages this folder (no git or GitHub needed), builds it in the cloud, and prints "✓ live: <url>". Send me that URL.
 
-3. Publish this folder — no git or GitHub required:  supersonic deploy
-   This zips the project (skipping node_modules, .git, .env* and .gitignore'd files), uploads it, and builds it in the cloud. It streams progress and prints "✓ live: <url>" on success. If it exits WITHOUT that line, the deploy did not succeed — run "supersonic logs <app>" and "supersonic diagnose <app>" to find out why, fix it, and redeploy.
+3. If it exits WITHOUT a "✓ live" URL, the deploy failed:  run  supersonic diagnose  and apply the paste-ready fix it gives you, then run  supersonic deploy  again.
 
-4. When it's live, send me the URL. If my app needs any environment variables/secrets, tell me which and set them with:  supersonic env <app> set KEY=VALUE  — then redeploy.
-
-Useful commands: supersonic apps · status <app> · logs <app> · errors <app> · rollback <app>.
-Important: never invent or hardcode secrets, and don't commit anything. Ask me for values you don't have.`;
+If my app needs secrets/env vars, tell me which and set them with  supersonic env <app> set KEY=VALUE, then redeploy. Never invent or hardcode secrets, and don't commit anything — ask me for values you don't have.`;
 
 type Door = "url" | "github" | "local";
 type Phase = "idle" | "detecting" | "secrets" | "deploying" | "done" | "error";
