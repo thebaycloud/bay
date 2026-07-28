@@ -6,6 +6,7 @@ import { Search, Plus } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sidebar } from "@/components/Sidebar";
+import { TrialBanner } from "@/components/TrialBanner";
 
 interface App { slug: string; name: string; url: string; ready: boolean; region: string; image: string; status?: string; stage?: string; }
 
@@ -37,6 +38,7 @@ export default function Home() {
     <div className="shell shell-side">
       <Sidebar active="apps" />
       <div className="main">
+        <TrialBanner />
         <header className="topbar">
           <button className="kbar"><Search size={13} />Search<span className="kbd">⌘K</span></button>
           <div className="spacer" />

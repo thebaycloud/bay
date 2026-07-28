@@ -4,29 +4,29 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { Zap, LayoutGrid, Settings, LogOut, Sparkles } from "lucide-react";
+import { Paywall } from "./Paywall";
 
-interface Acct { email: string; name: string | null; plan: "basic" | "pro"; }
+interface Acct {
+  email: string;
+  name: string | null;
+  plan: "basic" | "pro";
+  access?: "trial" | "active" | "locked";
+  usage?: { apps: number; maxApps: number | null; maxGrants: number | null };
+}
 
 // Persistent left rail: brand, nav, and the account block pinned to the bottom.
 export function Sidebar({ active }: { active?: "apps" | "settings" }) {
   const [acct, setAcct] = useState<Acct | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [showPlans, setShowPlans] = useState(false);
 
   useEffect(() => {
     fetch("/api/account").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.email) setAcct(d); }).catch(() => {});
   }, []);
 
-  async function upgrade() {
-    setBusy(true);
-    try {
-      const r = await fetch("/api/billing/checkout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan: "pro" }) });
-      const d = await r.json().catch(() => ({}));
-      if (d.url) { window.location.href = d.url; return; }
-    } catch { /* ignore — settings page surfaces billing errors */ }
-    setBusy(false);
-  }
-
   const initial = (acct?.name || acct?.email || "?").trim().charAt(0).toUpperCase();
+  const onTrial = acct?.access === "trial";
+  const canUpgrade = onTrial || acct?.plan === "basic";
+  const meter = acct?.usage && acct.usage.maxApps != null ? acct.usage : null;
 
   return (
     <aside className="sidebar">
@@ -49,12 +49,22 @@ export function Sidebar({ active }: { active?: "apps" | "settings" }) {
             </div>
           </div>
           <div className="side-acct-plan">
-            <span className={"plan-tag" + (acct.plan === "pro" ? " pro" : "")}><Sparkles size={12} />{acct.plan === "pro" ? "Pro" : "Basic"}</span>
-            {acct.plan === "basic" && <button className="btn sm primary" disabled={busy} onClick={upgrade}>Upgrade</button>}
+            <span className={"plan-tag" + (onTrial || acct.plan === "pro" ? " pro" : "")}>
+              <Sparkles size={12} />{onTrial ? "Trial" : acct.plan === "pro" ? "Pro" : "Basic"}
+            </span>
+            {canUpgrade && <button className="btn sm primary" onClick={() => setShowPlans(true)}>Upgrade</button>}
           </div>
+          {meter && (
+            <div className="usage">
+              <div className="usage-row"><span>Apps</span><span>{meter.apps}/{meter.maxApps}</span></div>
+              <div className="usage-bar"><span style={{ width: `${Math.min(100, (meter.apps / (meter.maxApps || 1)) * 100)}%` }} /></div>
+            </div>
+          )}
           <button className="side-nav-item" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={15} />Sign out</button>
         </div>
       )}
+
+      {showPlans && <Paywall reason="choose_plan" onClose={() => setShowPlans(false)} />}
     </aside>
   );
 }

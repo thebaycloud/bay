@@ -44,6 +44,53 @@ export async function planLimits(userId: string): Promise<Limits> {
   return LIMITS[await getPlan(userId)];
 }
 
+// Subscription status mirrors Stripe once a user pays; before that they're
+// 'trialing' (app-managed, no card) or grandfathered 'active'.
+export type SubStatus = "trialing" | "active" | "past_due" | "canceled";
+// What a user may do right now: trial → full Pro, active → their plan's limits,
+// locked → nothing billable (show the paywall).
+export type AccessState = "trial" | "active" | "locked";
+
+export interface Entitlement {
+  access: AccessState;
+  plan: Plan;                 // the plan they'd be on once active (for display/billing)
+  limits: Limits;             // effective limits for this access state
+  status: SubStatus;
+  trialEndsAt: string | null; // ISO; null once they've paid or were grandfathered
+  locked: boolean;            // true → block deploys/shares, render the paywall
+}
+
+/**
+ * The single source of truth for what a user may do right now — combines the
+ * subscription status, the trial clock, and the plan. Trial gives full Pro; an
+ * expired trial (or cancellation) locks the account behind the paywall. With
+ * gating off, everyone is unlocked Pro. Fails OPEN on a DB error so a blip never
+ * locks a paying user out.
+ */
+export async function entitlement(userId: string): Promise<Entitlement> {
+  if (!GATING) return { access: "active", plan: "pro", limits: LIMITS.pro, status: "active", trialEndsAt: null, locked: false };
+  const locked: Entitlement = { access: "locked", plan: "basic", limits: LIMITS.basic, status: "canceled", trialEndsAt: null, locked: true };
+  if (!userId) return locked;
+  let row: { plan?: string; status?: string; trial_ends_at?: Date | string | null } | undefined;
+  try {
+    const r = await getPool(DB).query("SELECT plan, status, trial_ends_at FROM users WHERE id = $1", [userId]);
+    row = r.rows[0];
+  } catch {
+    return { access: "active", plan: "pro", limits: LIMITS.pro, status: "active", trialEndsAt: null, locked: false };
+  }
+  if (!row) return locked;
+  const plan: Plan = row.plan === "pro" ? "pro" : "basic";
+  const status = (row.status ?? "active") as SubStatus;
+  const trialEndsAt = row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : null;
+  const trialLive = status === "trialing" && trialEndsAt !== null && new Date(trialEndsAt).getTime() > Date.now();
+
+  if (status === "active" || status === "past_due")
+    return { access: "active", plan, limits: LIMITS[plan], status, trialEndsAt, locked: false };
+  if (trialLive)
+    return { access: "trial", plan: "pro", limits: LIMITS.pro, status, trialEndsAt, locked: false };
+  return { access: "locked", plan, limits: LIMITS[plan], status, trialEndsAt, locked: true };
+}
+
 /** The plan actually stored for a user, ignoring the gating flag — for display/billing. */
 export async function storedPlan(userId: string): Promise<Plan> {
   if (!userId) return "basic";
@@ -59,32 +106,34 @@ export function gatingEnabled(): boolean {
   return GATING;
 }
 
-/** Set a user's plan by id. Stripe ids are optional (webhook fills them in). */
+/** Set a user's plan + status by id. Stripe ids are optional (webhook fills them in). */
 export async function setPlanByUser(
   userId: string,
   plan: Plan,
+  status: SubStatus,
   stripeCustomerId?: string | null,
   stripeSubscriptionId?: string | null
 ): Promise<void> {
   await getPool(DB).query(
-    `UPDATE users SET plan = $2,
-       stripe_customer_id = COALESCE($3, stripe_customer_id),
-       stripe_subscription_id = $4
+    `UPDATE users SET plan = $2, status = $3,
+       stripe_customer_id = COALESCE($4, stripe_customer_id),
+       stripe_subscription_id = $5
      WHERE id = $1`,
-    [userId, plan, stripeCustomerId ?? null, stripeSubscriptionId ?? null]
+    [userId, plan, status, stripeCustomerId ?? null, stripeSubscriptionId ?? null]
   );
 }
 
-/** Set the plan for whichever user owns a Stripe customer — the webhook path. */
+/** Set the plan + status for whichever user owns a Stripe customer — the webhook path. */
 export async function setPlanByCustomer(
   stripeCustomerId: string,
   plan: Plan,
+  status: SubStatus,
   stripeSubscriptionId?: string | null
 ): Promise<void> {
   await getPool(DB).query(
-    `UPDATE users SET plan = $2, stripe_subscription_id = $3
+    `UPDATE users SET plan = $2, status = $3, stripe_subscription_id = $4
      WHERE stripe_customer_id = $1`,
-    [stripeCustomerId, plan, stripeSubscriptionId ?? null]
+    [stripeCustomerId, plan, status, stripeSubscriptionId ?? null]
   );
 }
 

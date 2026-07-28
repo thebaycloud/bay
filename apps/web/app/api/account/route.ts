@@ -3,16 +3,30 @@ export const dynamic = "force-dynamic";
 
 import { currentUserId } from "@/lib/session";
 import { getAccount, updateName } from "@/lib/users";
-import { storedPlan } from "@/lib/entitlements";
+import { entitlement, countOwnerApps } from "@/lib/entitlements";
 
-// The settings page's account section: who you are + which plan you're on.
+// Everything the app chrome needs: who you are, your plan, your access state
+// (trial / active / locked), the trial clock, and current usage for the meters.
 export async function GET() {
   const uid = await currentUserId();
   if (!uid) return Response.json({ error: "not signed in" }, { status: 401 });
   const account = await getAccount(uid);
   if (!account) return Response.json({ error: "not found" }, { status: 404 });
-  const plan = await storedPlan(uid);
-  return Response.json({ ...account, plan });
+  const ent = await entitlement(uid);
+  const apps = await countOwnerApps(uid);
+  return Response.json({
+    ...account,
+    plan: ent.plan,
+    access: ent.access,         // "trial" | "active" | "locked"
+    status: ent.status,
+    trialEndsAt: ent.trialEndsAt,
+    locked: ent.locked,
+    usage: {
+      apps,
+      maxApps: Number.isFinite(ent.limits.maxApps) ? ent.limits.maxApps : null,
+      maxGrants: Number.isFinite(ent.limits.maxGrants) ? ent.limits.maxGrants : null,
+    },
+  });
 }
 
 export async function PATCH(req: Request) {

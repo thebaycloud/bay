@@ -555,6 +555,39 @@ a.btn { text-decoration: none; }
 .acct-link { display: flex; align-items: center; gap: 10px; padding: 11px 12px; font-family: var(--mono); font-size: 12.5px; color: var(--ink); background: none; border: 0; cursor: pointer; text-decoration: none; text-align: left; width: 100%; }
 .acct-link:hover { background: var(--card); }
 
+/* trial banner */
+.trial-banner { display: flex; align-items: center; gap: 10px; padding: 9px 16px; background: color-mix(in srgb, var(--accent) 10%, var(--card)); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.trial-banner svg { color: var(--accent); flex: none; }
+.trial-banner .tb-btn { margin-left: auto; }
+
+/* usage meter (sidebar) */
+.usage { padding: 8px 8px 4px; border-top: 1px solid var(--line); }
+.usage-row { display: flex; align-items: center; justify-content: space-between; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); padding: 2px 6px 5px; }
+.usage-bar { height: 4px; background: var(--line); margin: 0 6px; }
+.usage-bar > span { display: block; height: 100%; background: var(--accent); transition: width .2s var(--ease); }
+
+/* paywall / plan chooser */
+.pw-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0, 0, 0, .55); display: grid; place-items: center; padding: 24px; overflow-y: auto; }
+.pw-card { position: relative; width: 100%; max-width: 660px; background: var(--paper); border: 1px solid var(--line-2); box-shadow: 0 24px 70px rgba(0, 0, 0, .35); padding: 34px 30px 30px; }
+.pw-x { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); background: var(--card); color: var(--ink-2); cursor: pointer; }
+.pw-head { text-align: center; margin-bottom: 26px; }
+.pw-head h2 { font-family: var(--mono); font-size: 19px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; }
+.pw-head p { margin: 0; color: var(--ink-2); font-size: 13.5px; }
+.pw-plans { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pw-plan { position: relative; border: 1px solid var(--line); background: var(--card); padding: 22px 20px 20px; display: flex; flex-direction: column; }
+.pw-plan.featured { border-color: var(--accent); }
+.pw-tagbadge { position: absolute; top: -10px; left: 20px; display: inline-flex; align-items: center; gap: 5px; background: var(--accent); color: var(--accent-fg); font-family: var(--mono); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; padding: 4px 9px; }
+.pw-name { font-family: var(--mono); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.pw-price { margin: 6px 0 2px; color: var(--ink-2); font-family: var(--mono); font-size: 12px; }
+.pw-price b { font-size: 26px; color: var(--ink); }
+.pw-tag { color: var(--ink-2); font-size: 12.5px; margin-bottom: 14px; min-height: 34px; }
+.pw-feats { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 9px; flex: 1; }
+.pw-feats li { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--ink); }
+.pw-feats li svg { color: var(--accent); flex: none; margin-top: 2px; }
+.pw-plan .btn { justify-content: center; width: 100%; height: 38px; }
+.pw-err { text-align: center; color: var(--down, #c33a2c); font-family: var(--mono); font-size: 11.5px; margin-top: 14px; }
+@media (max-width: 560px) { .pw-plans { grid-template-columns: 1fr; } }
+
 .env-list { }
 .env-empty { padding: 16px 18px; color: var(--faint); font-family: var(--mono); font-size: 12px; }
 .env-row { display: flex; align-items: center; gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--line); }

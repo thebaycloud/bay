@@ -2,8 +2,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { stripe, WEBHOOK_SECRET, planForPrice } from "@/lib/stripe";
-import { setPlanByUser, setPlanByCustomer, type Plan } from "@/lib/entitlements";
+import { setPlanByUser, setPlanByCustomer, type Plan, type SubStatus } from "@/lib/entitlements";
 import type Stripe from "stripe";
+
+// Collapse Stripe's subscription statuses into ours. active/trialing = usable;
+// past_due/unpaid = grace (Stripe is retrying); everything else = locked.
+function mapStatus(s: string): SubStatus {
+  if (s === "active" || s === "trialing") return "active";
+  if (s === "past_due" || s === "unpaid") return "past_due";
+  return "canceled";
+}
 
 // Stripe → our plan column. The signature is verified against the raw body, so
 // this must read req.text() (not req.json()). Unconfigured = 503; a bad
@@ -37,7 +45,7 @@ export async function POST(req: Request) {
           const sub = await s.subscriptions.retrieve(subId);
           const priceId = sub.items.data[0]?.price?.id ?? "";
           const plan: Plan = planForPrice(priceId) ?? "pro";
-          await setPlanByUser(uid, plan, customerId, subId);
+          await setPlanByUser(uid, plan, mapStatus(sub.status), customerId, subId);
         }
         break;
       }
@@ -46,16 +54,16 @@ export async function POST(req: Request) {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = idOf(sub.customer);
         const priceId = sub.items.data[0]?.price?.id ?? "";
-        const mapped = planForPrice(priceId);
-        const active = sub.status === "active" || sub.status === "trialing";
-        // An inactive or unrecognized subscription drops the user back to basic.
-        if (customerId) await setPlanByCustomer(customerId, active && mapped ? mapped : "basic", sub.id);
+        const plan: Plan = planForPrice(priceId) ?? "basic";
+        // Plan reflects the price; status controls access (locked when not paid).
+        if (customerId) await setPlanByCustomer(customerId, plan, mapStatus(sub.status), sub.id);
         break;
       }
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = idOf(sub.customer);
-        if (customerId) await setPlanByCustomer(customerId, "basic", null);
+        // Subscription gone → locked behind the paywall until they resubscribe.
+        if (customerId) await setPlanByCustomer(customerId, "basic", "canceled", null);
         break;
       }
       default:

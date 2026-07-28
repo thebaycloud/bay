@@ -19,7 +19,7 @@ import { take as takeClone } from "@/lib/clone-cache";
 import { resilientInstall } from "@/lib/install";
 import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder } from "@/lib/stages";
-import { planLimits, countOwnerApps, type Limits } from "@/lib/entitlements";
+import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -559,11 +559,19 @@ export async function POST(req: Request) {
   // the same slug by matching the friendly name against the user's existing apps.
   slug = await resolveSlug(ownerId || "", friendlyName);
 
-  // Plan enforcement (inert until GATING_ENABLED=1 — see lib/entitlements). The
-  // app-count cap is checked up front so a blocked deploy fails cleanly with a
-  // 402 instead of erroring mid-stream. `limits` also decides, further down,
-  // whether a failed deploy gets the auto-fix agent (pro) or a paste prompt (basic).
-  const limits: Limits = await planLimits(ownerId);
+  // Plan enforcement (inert until GATING_ENABLED=1 — see lib/entitlements).
+  // Checked up front so a blocked deploy fails cleanly with a 402 instead of
+  // erroring mid-stream. `limits` also decides, further down, whether a failed
+  // deploy gets the auto-fix agent (pro/trial) or a paste prompt (basic).
+  const ent = await entitlement(ownerId);
+  const limits: Limits = ent.limits;
+  if (ent.locked) {
+    // Trial ended (or subscription canceled) — hard paywall.
+    return Response.json(
+      { error: "Your free trial has ended. Pick a plan at app.supersonic.cv to keep deploying.", paywall: true },
+      { status: 402 }
+    );
+  }
   if (Number.isFinite(limits.maxApps)) {
     const existing = await countOwnerApps(ownerId, slug);
     if (existing >= limits.maxApps) {

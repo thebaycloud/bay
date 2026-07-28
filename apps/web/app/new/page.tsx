@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Zap, ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { Paywall, type PaywallReason } from "@/components/Paywall";
 
 const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-click hosting (https://supersonic.cv). I already have a Supersonic account. Run these steps from my project's root folder and keep me posted.
 
@@ -47,6 +48,7 @@ export default function NewApp() {
   const [liveUrl, setLiveUrl] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
+  const [paywall, setPaywall] = useState<PaywallReason | null>(null);
   const [isStatic, setIsStatic] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const cloneToken = useRef<string | null>(null);
@@ -102,6 +104,14 @@ export default function NewApp() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo: repoArg(), secrets, cloneToken: cloneToken.current }),
       });
+      // A billing gate returns a JSON 402 *before* the SSE stream — surface the
+      // paywall / upgrade modal instead of trying to parse it as events.
+      if (res.status === 402) {
+        const d = await res.json().catch(() => ({}));
+        setPaywall(d.paywall ? "trial_ended" : "app_limit");
+        setError(d.error || ""); setPhase("error");
+        return;
+      }
       if (!res.body) throw new Error("no response stream");
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -319,6 +329,7 @@ export default function NewApp() {
         </div>
       </div>
 
+      {paywall && <Paywall reason={paywall} onClose={paywall === "trial_ended" ? undefined : () => setPaywall(null)} />}
       <ThemeToggle />
     </div>
   );

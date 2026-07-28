@@ -5,7 +5,7 @@ import { getAppBySlug, setVisibility, listGrants, addGrant, removeGrant, type Vi
 import { listPending, resolveRequest } from "@/lib/requests";
 import { sendAccessGranted } from "@/lib/email";
 import { currentUserId } from "@/lib/session";
-import { planLimits } from "@/lib/entitlements";
+import { entitlement } from "@/lib/entitlements";
 
 const VISIBILITIES: Visibility[] = ["private", "shared", "public"];
 
@@ -74,12 +74,18 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     // Sharing cap (inert until GATING_ENABLED=1). Re-adding someone already on the
     // list is idempotent and always allowed; only a genuinely new invitee counts
     // against the cap.
-    const limits = await planLimits(app.owner_id);
-    if (Number.isFinite(limits.maxGrants)) {
+    const ent = await entitlement(app.owner_id);
+    if (ent.locked) {
+      return Response.json(
+        { error: "Your free trial has ended. Pick a plan to keep sharing.", paywall: true },
+        { status: 402, headers: cors }
+      );
+    }
+    if (Number.isFinite(ent.limits.maxGrants)) {
       const current = await listGrants(slug);
-      if (!current.includes(email) && current.length >= limits.maxGrants) {
+      if (!current.includes(email) && current.length >= ent.limits.maxGrants) {
         return Response.json(
-          { error: `Your plan allows sharing with ${limits.maxGrants} people. Upgrade to Pro for unlimited sharing.`, upgrade: true },
+          { error: `Your plan allows sharing with ${ent.limits.maxGrants} people. Upgrade to Pro for unlimited sharing.`, upgrade: true },
           { status: 402, headers: cors }
         );
       }
