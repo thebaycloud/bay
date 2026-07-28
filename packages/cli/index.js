@@ -132,17 +132,18 @@ async function validToken(url, tok) {
 }
 
 async function whoami(args) {
-  const cfg = loadCfg();
   const tok = token();
   if (!tok) { if (args.json) return json({ loggedIn: false }); print("not logged in"); return; }
-  // Prove the token by listing apps (any 200 means valid).
-  const res = await fetch(baseUrl() + "/api/apps", { headers: { Authorization: "Bearer " + tok } });
-  const ok = res.ok;
-  if (args.json) return json({ loggedIn: ok, url: baseUrl(), source: process.env.SUPERSONIC_TOKEN ? "env" : "config" });
-  if (!ok) return die("token invalid — run: supersonic login");
+  // Resolve the actual account (email + plan) so you can see WHO you are, not
+  // just that a token exists.
+  const res = await fetch(baseUrl() + "/api/account", { headers: { Authorization: "Bearer " + tok } });
+  const acct = res.ok ? await res.json().catch(() => ({})) : {};
+  if (args.json) return json({ loggedIn: res.ok, url: baseUrl(), email: acct.email || null, plan: acct.plan || null, source: process.env.SUPERSONIC_TOKEN ? "env" : "config" });
+  if (!res.ok) return die("token invalid — run: supersonic login");
   const src = process.env.SUPERSONIC_TOKEN ? "env token" : "saved token";
-  const who = !process.env.SUPERSONIC_TOKEN && cfg.email ? " as " + cfg.email : "";
-  print(`logged in to ${baseUrl()}${who} (${src})`);
+  const who = acct.email ? " as " + acct.email : "";
+  const plan = acct.plan ? ` · ${acct.plan}` : "";
+  print(`logged in to ${baseUrl()}${who}${plan} (${src})`);
 }
 
 function logout() {
