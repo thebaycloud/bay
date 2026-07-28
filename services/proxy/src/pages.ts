@@ -9,6 +9,9 @@ h1{font-size:1.3rem;margin:0 0 .5rem;letter-spacing:-.01em}p{margin:0;color:#9db
 code{background:#1d2621;padding:.1rem .35rem;border-radius:.25rem}
 .btn{display:inline-flex;align-items:center;gap:8px;margin-top:22px;background:#2ea86a;color:#05130b;
 border:0;cursor:pointer;font:600 14px sans-serif;padding:12px 20px;border-radius:10px;text-decoration:none}
+.btn.ghost{background:transparent;color:#e9efeb;border:1px solid #2a3a33}
+.btns{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:22px}
+.btns .btn{margin-top:0}
 .btn:disabled{opacity:.6;cursor:default}
 .note{margin-top:14px;font-size:13px;color:#6d7d74}
 </style><main>${body}</main>${extra}`;
@@ -35,6 +38,17 @@ b.onclick=function(){
 <p>This app is private. You can ask the owner to let you in.</p>
 <button class="btn" id="req">Request access</button>
 <div class="note" id="n"></div></div>`, script);
+}
+
+/** Shown to an anonymous visitor on a private app — a soft landing instead of an
+ * abrupt redirect to login. Both links carry callbackUrl so they return here. */
+export function pageGate(loginUrl: string, signupUrl: string): string {
+  return shell("Sign in to open", `${MARK}<h1>This app is private</h1>
+<p>Sign in or create a free account to open it — you'll come right back here.</p>
+<div class="btns">
+  <a class="btn" href="${escapeHtml(loginUrl)}">Sign in</a>
+  <a class="btn ghost" href="${escapeHtml(signupUrl)}">Create account</a>
+</div>`);
 }
 
 export function page404(): string {

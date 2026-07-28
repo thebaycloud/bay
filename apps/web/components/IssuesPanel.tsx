@@ -31,7 +31,7 @@ export function IssuesPanel({ slug }: { slug: string }) {
 
   return (
     <section className="section reveal" style={{ animationDelay: ".13s" }}>
-      <div className="section-head"><span className="idx">05</span><h2>Issues</h2><span className="note">caught in production · Cloud Logging · we never touch your code</span></div>
+      <div className="section-head"><span className="idx">05</span><h2>Issues</h2><span className="note">from your app&apos;s production logs</span></div>
       <div className="issues">
         {errors === null && !err && <div className="db-empty">loading…</div>}
         {err && <div className="db-empty">⚠ {err.slice(0, 140)}</div>}

@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { signOut } from "next-auth/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Zap, ChevronDown, LayoutGrid, Database, HardDrive, Server, Copy,
-  ArrowUpRight, Check, Lock, AlertTriangle, Settings2, GitBranch, Users, X,
+  ArrowUpRight, Check, Lock, AlertTriangle, Settings2, GitBranch, Users, X, LogOut,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
@@ -53,6 +54,16 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
 
   const [tab, setTab] = useState<Tab>("overview");
   const [shareOpen, setShareOpen] = useState(false);
+  // The real signed-in account for the sidebar footer (was hardcoded).
+  const [acct, setAcct] = useState<{ name: string | null; email: string; plan: "basic" | "pro"; access?: string } | null>(null);
+  const [apps, setApps] = useState<{ slug: string; name: string }[]>([]);
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [acctOpen, setAcctOpen] = useState(false);
+  const [confirmOut, setConfirmOut] = useState(false);
+  useEffect(() => {
+    fetch("/api/account").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.email) setAcct(d); }).catch(() => {});
+    fetch("/api/apps").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.apps) setApps(d.apps); }).catch(() => {});
+  }, []);
   // Deep-link: /apps/<slug>?tab=deployments (used by the dashboard's Building card).
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -74,11 +85,27 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
           <span className="logo"><Zap size={13} strokeWidth={2.4} /></span>
           SUPERSONIC
         </Link>
-        <button className="switch">
-          <span className="dot" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />
-          <span className="nm">{displayName}</span>
-          <ChevronDown className="chev" size={13} />
-        </button>
+        <div className="switch-wrap">
+          <button className="switch" onClick={() => setSwitchOpen((o) => !o)}>
+            <span className="dot" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />
+            <span className="nm">{displayName}</span>
+            <ChevronDown className="chev" size={13} />
+          </button>
+          {switchOpen && (
+            <>
+              <div className="dd-backdrop" onClick={() => setSwitchOpen(false)} />
+              <div className="switch-menu">
+                <Link href="/" className="dd-item dd-head"><LayoutGrid size={13} />All apps</Link>
+                {apps.filter((a) => a.slug !== appName).map((a) => (
+                  <Link key={a.slug} href={`/apps/${a.slug}`} className="dd-item" onClick={() => setSwitchOpen(false)}>
+                    <span className="dd-dot" />{a.name || a.slug}
+                  </Link>
+                ))}
+                {apps.filter((a) => a.slug !== appName).length === 0 && <div className="dd-empty">No other apps</div>}
+              </div>
+            </>
+          )}
+        </div>
         <nav>
           {tabs.map((t) => (
             <button key={t.id} className={"nav-item" + (tab === t.id ? " active" : "")} onClick={() => setTab(t.id)}>
@@ -86,9 +113,32 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
             </button>
           ))}
         </nav>
-        <div className="side-foot">
-          <div className="av">A</div>
-          <div><div className="mn">amir</div><div className="mp">Pro · burning credits</div></div>
+        <div className="foot-wrap">
+          <button className="side-foot" onClick={() => { setAcctOpen((o) => !o); setConfirmOut(false); }}>
+            <div className="av">{(acct?.name || acct?.email || "?").trim().charAt(0).toUpperCase()}</div>
+            <div className="foot-txt">
+              <div className="mn">{acct?.name || acct?.email || "…"}</div>
+              <div className="mp">{acct ? (acct.access === "trial" ? "Trial" : acct.plan === "pro" ? "Pro" : "Basic") : ""}</div>
+            </div>
+            <ChevronDown className="foot-chev" size={13} />
+          </button>
+          {acctOpen && (
+            <>
+              <div className="dd-backdrop" onClick={() => setAcctOpen(false)} />
+              <div className="foot-menu">
+                <Link href="/settings" className="dd-item"><Settings2 size={14} />Settings</Link>
+                {confirmOut ? (
+                  <>
+                    <div className="dd-confirmq">Sign out of Supersonic?</div>
+                    <button className="dd-item dd-danger" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={14} />Yes, sign out</button>
+                    <button className="dd-item" onClick={() => setConfirmOut(false)}><X size={14} />Cancel</button>
+                  </>
+                ) : (
+                  <button className="dd-item" onClick={() => setConfirmOut(true)}><LogOut size={14} />Sign out</button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </aside>
 
@@ -182,7 +232,7 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
 
             {tab === "issues" && (
               <section className="section-page reveal">
-                <div className="page-head"><h2>Issues</h2><p>Errors caught in production. We never touch your code — you get a paste-ready fix for your coding agent.</p></div>
+                <div className="page-head"><h2>Issues</h2><p>Runtime errors from your live app, pulled from its logs. Each one includes a fix you can paste into your coding agent.</p></div>
                 <IssuesPanel slug={appName} />
               </section>
             )}

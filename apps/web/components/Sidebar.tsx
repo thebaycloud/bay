@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
-import { Zap, LayoutGrid, Settings, LogOut, Sparkles } from "lucide-react";
+import { Zap, LayoutGrid, Settings, LogOut, Sparkles, X } from "lucide-react";
 import { Paywall } from "./Paywall";
 
 interface Acct {
@@ -18,6 +18,7 @@ interface Acct {
 export function Sidebar({ active }: { active?: "apps" | "settings" }) {
   const [acct, setAcct] = useState<Acct | null>(null);
   const [showPlans, setShowPlans] = useState(false);
+  const [confirmOut, setConfirmOut] = useState(false);
 
   useEffect(() => {
     fetch("/api/account").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.email) setAcct(d); }).catch(() => {});
@@ -60,7 +61,15 @@ export function Sidebar({ active }: { active?: "apps" | "settings" }) {
               <div className="usage-bar"><span style={{ width: `${Math.min(100, (meter.apps / (meter.maxApps || 1)) * 100)}%` }} /></div>
             </div>
           )}
-          <button className="side-nav-item" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={15} />Sign out</button>
+          {confirmOut ? (
+            <div className="signout-confirm">
+              <span className="dd-confirmq">Sign out?</span>
+              <button className="side-nav-item danger" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={15} />Yes, sign out</button>
+              <button className="side-nav-item" onClick={() => setConfirmOut(false)}><X size={15} />Cancel</button>
+            </div>
+          ) : (
+            <button className="side-nav-item" onClick={() => setConfirmOut(true)}><LogOut size={15} />Sign out</button>
+          )}
         </div>
       )}
 

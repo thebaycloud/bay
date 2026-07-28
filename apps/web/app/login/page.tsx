@@ -27,6 +27,18 @@ function NotInvitedNotice() {
   );
 }
 
+// The URL to return to after auth — read from ?callbackUrl and validated to be a
+// supersonic.cv address, so we never bounce a user to an attacker-supplied host.
+function safeCallback(): string {
+  try {
+    const cb = new URLSearchParams(window.location.search).get("callbackUrl");
+    if (!cb) return "";
+    const u = new URL(cb);
+    if (u.protocol === "https:" && (u.hostname === "supersonic.cv" || u.hostname.endsWith(".supersonic.cv"))) return cb;
+  } catch { /* malformed — fall through */ }
+  return "";
+}
+
 export default function Login() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -40,6 +52,9 @@ export default function Login() {
     const res = await signIn("credentials", { email, password, redirect: false });
     setBusy(false);
     if (res?.error) { setErr("Invalid email or password"); return; }
+    // Return to the app they were opening (cross-subdomain → full navigation).
+    const cb = safeCallback();
+    if (cb) { window.location.href = cb; return; }
     router.push("/"); router.refresh();
   }
 
@@ -56,10 +71,10 @@ export default function Login() {
           <button className="btn primary" type="submit" disabled={busy}>{busy ? "…" : "Sign in"}</button>
         </form>
         <div className="authoauth">
-          <button className="btn" type="button" onClick={() => signIn("google", { callbackUrl: "/" })}>
+          <button className="btn" type="button" onClick={() => signIn("google", { callbackUrl: safeCallback() || "/" })}>
             <GoogleIcon />Continue with Google
           </button>
-          <button className="btn" type="button" onClick={() => signIn("github", { callbackUrl: "/" })}>
+          <button className="btn" type="button" onClick={() => signIn("github", { callbackUrl: safeCallback() || "/" })}>
             <Github size={14} />Continue with GitHub
           </button>
         </div>

@@ -51,3 +51,14 @@ export function signInRedirect(req: IncomingMessage): string {
   const back = `https://${host}${req.url ?? "/"}`;
   return `${config.loginUrl}?callbackUrl=${encodeURIComponent(back)}`;
 }
+
+/** Login + signup URLs for the gate page, both carrying the return-here callback. */
+export function authUrls(req: IncomingMessage): { loginUrl: string; signupUrl: string } {
+  const host = (req.headers.host ?? "").split(":")[0];
+  const cb = encodeURIComponent(`https://${host}${req.url ?? "/"}`);
+  const signupBase = config.loginUrl.replace(/\/login$/, "/signup");
+  return {
+    loginUrl: `${config.loginUrl}?callbackUrl=${cb}`,
+    signupUrl: `${signupBase}?callbackUrl=${cb}`,
+  };
+}

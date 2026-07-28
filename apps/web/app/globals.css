@@ -85,10 +85,32 @@ nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 0; }
 .nav-item .tail { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
 .nav-item .ok { margin-left: auto; color: var(--faint); font-family: var(--mono); font-size: 12px; }
 
-.side-foot { margin-top: auto; border-top: 1px solid var(--line); padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
-.side-foot .av { width: 26px; height: 26px; background: var(--card); border: 1px solid var(--line); display: grid; place-items: center; font-family: var(--mono); font-size: 11px; font-weight: 600; }
-.side-foot .mn { font-family: var(--mono); font-size: 12px; font-weight: 550; line-height: 1.3; }
+.side-foot { border-top: 1px solid var(--line); padding: 12px 14px; display: flex; align-items: center; gap: 10px; width: 100%; background: none; text-align: left; cursor: pointer; transition: background .12s var(--ease); }
+.side-foot:hover { background: var(--card); }
+.side-foot .av { width: 26px; height: 26px; background: var(--card); border: 1px solid var(--line); display: grid; place-items: center; font-family: var(--mono); font-size: 11px; font-weight: 600; flex: none; }
+.side-foot .foot-txt { min-width: 0; }
+.side-foot .mn { font-family: var(--mono); font-size: 12px; font-weight: 550; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-foot .mp { font-size: 10.5px; color: var(--ink-2); line-height: 1.3; }
+.side-foot .foot-chev { margin-left: auto; color: var(--faint); flex: none; }
+
+/* cockpit sidebar dropdowns (app switcher + account) */
+.switch-wrap { position: relative; }
+.foot-wrap { position: relative; margin-top: auto; }
+.dd-backdrop { position: fixed; inset: 0; z-index: 30; }
+.switch-menu { position: absolute; top: 100%; left: 0; right: 0; z-index: 40; background: var(--paper); border: 1px solid var(--line); border-top: 0; box-shadow: 0 14px 34px rgba(0, 0, 0, .14); padding: 4px; max-height: 340px; overflow-y: auto; }
+.foot-menu { position: absolute; bottom: 100%; left: 8px; right: 8px; z-index: 40; background: var(--paper); border: 1px solid var(--line); box-shadow: 0 -10px 34px rgba(0, 0, 0, .16); padding: 4px; margin-bottom: 4px; }
+.dd-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; font-family: var(--mono); font-size: 12px; color: var(--ink); background: none; border: 0; width: 100%; text-align: left; cursor: pointer; text-decoration: none; }
+.dd-item:hover { background: var(--card); }
+.dd-item svg { color: var(--ink-2); flex: none; }
+.dd-head { border-bottom: 1px solid var(--line); margin-bottom: 4px; padding-bottom: 9px; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; font-size: 10.5px; }
+.dd-dot { width: 5px; height: 5px; background: var(--live); flex: none; }
+.dd-empty { padding: 8px 10px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.dd-confirmq { padding: 8px 10px 6px; font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.dd-danger { color: var(--down, #c33a2c); }
+.dd-danger svg { color: var(--down, #c33a2c); }
+.side-nav-item.danger { color: var(--down, #c33a2c); }
+.side-nav-item.danger svg { color: var(--down, #c33a2c); }
+.signout-confirm .dd-confirmq { display: block; }
 
 /* ---------- main ---------- */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }

@@ -7,15 +7,28 @@ import { signIn } from "next-auth/react";
 import { Zap, Github } from "lucide-react";
 import { GoogleIcon } from "@/components/BrandIcons";
 
-// OAuth sign-in that preserves the CLI hand-off: if `supersonic signup` opened
-// the browser with a ?port=, bounce through /cli after auth so the terminal gets
-// its token; otherwise land on the dashboard.
+// A supersonic.cv return URL from ?callbackUrl (validated), so signing up from a
+// shared app sends you back to it.
+function safeCallback(): string {
+  try {
+    const cb = new URLSearchParams(window.location.search).get("callbackUrl");
+    if (!cb) return "";
+    const u = new URL(cb);
+    if (u.protocol === "https:" && (u.hostname === "supersonic.cv" || u.hostname.endsWith(".supersonic.cv"))) return cb;
+  } catch { /* malformed — fall through */ }
+  return "";
+}
+
+// Where to land after auth: the CLI hand-off (if `supersonic signup` opened the
+// browser with ?port=) wins; then a shared-app callback; otherwise the dashboard.
 function oauthCallbackUrl(): string {
   const params = new URLSearchParams(window.location.search);
   const port = params.get("port");
-  if (!port) return "/";
-  const name = params.get("name") || "cli";
-  return `/cli?port=${encodeURIComponent(port)}&name=${encodeURIComponent(name)}`;
+  if (port) {
+    const name = params.get("name") || "cli";
+    return `/cli?port=${encodeURIComponent(port)}&name=${encodeURIComponent(name)}`;
+  }
+  return safeCallback() || "/";
 }
 
 export default function Signup() {
@@ -43,6 +56,9 @@ export default function Signup() {
       window.location.href = `/cli?port=${encodeURIComponent(port)}&name=${encodeURIComponent(name)}`;
       return;
     }
+    // Came from a shared app? Go back to it. Otherwise the dashboard.
+    const cb = safeCallback();
+    if (cb) { window.location.href = cb; return; }
     router.push("/"); router.refresh();
   }
 

@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
 import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./registry";
-import { page403, page404, page502 } from "./pages";
-import { readVisitor, signInRedirect } from "./session";
+import { page403, page404, page502, pageGate } from "./pages";
+import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { forward } from "./forward";
 
@@ -38,9 +38,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   const visitor = await readVisitor(req);
   if (!visitor) {
-    res.writeHead(302, { Location: signInRedirect(req) });
-    res.end();
-    return;
+    // Soft gate instead of an abrupt login redirect: offer sign-in or sign-up,
+    // both carrying a callback so they land back on this app afterward.
+    const { loginUrl, signupUrl } = authUrls(req);
+    return html(res, 401, pageGate(loginUrl, signupUrl));
   }
 
   const [visitorWorkspaceId, granted] = await Promise.all([
