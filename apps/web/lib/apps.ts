@@ -39,6 +39,58 @@ export async function markAppLive(slug: string, runUrl: string, releaseHash?: st
   );
 }
 
+export interface OwnedApp {
+  slug: string;
+  name: string;
+  url: string;
+  ready: boolean;
+  status: "deploying" | "live" | "failed";
+  visibility: Visibility;
+  createdAt: string;
+}
+
+/**
+ * Every app a person owns, from the database.
+ *
+ * This used to come from Cloud Run: list every service in the project, then keep
+ * the ones whose owner label matches. That was wrong twice over. It cost a listing
+ * of the entire platform on every dashboard load — so the page got slower for
+ * everyone each time anybody deployed anything — and it could not see static apps
+ * at all, because they have no Cloud Run service of their own; one shared server
+ * fronts all of them. The sidebar counted from this table and said "1", the list
+ * counted from Cloud Run and said "0", and the app was live the whole time.
+ *
+ * `deploys` carries the friendly name the person deployed under; an app that
+ * predates that table falls back to its slug.
+ */
+export async function listOwnedApps(ownerId: string): Promise<OwnedApp[]> {
+  if (!ownerId) return [];
+  const r = await getPool(DB).query(
+    `SELECT a.slug,
+            COALESCE(NULLIF(d.name, ''), a.slug) AS name,
+            a.run_url,
+            a.status,
+            a.visibility,
+            a.created_at
+       FROM apps a
+       LEFT JOIN deploys d ON d.slug = a.slug
+      WHERE a.owner_id = $1 AND a.status <> 'failed'
+      ORDER BY a.created_at DESC`,
+    [ownerId]
+  );
+  return r.rows.map((row) => ({
+    slug: row.slug,
+    name: row.name,
+    // A static app's run_url points at the shared static server, which is useless
+    // to show someone — their app lives at its own name.
+    url: `https://${row.slug}.supersonic.cv`,
+    ready: row.status === "live",
+    status: row.status,
+    visibility: row.visibility,
+    createdAt: row.created_at?.toISOString?.() ?? String(row.created_at ?? ""),
+  }));
+}
+
 /** The content hash of the live release, or null if there isn't one. */
 export async function liveReleaseHash(slug: string, ownerId: string): Promise<string | null> {
   const r = await getPool(DB).query(
