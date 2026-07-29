@@ -310,6 +310,9 @@ async function deploy(args) {
   // One command: sign in automatically the first time, then deploy. No separate
   // `supersonic login` step required.
   await ensureAuth();
+  // URL-first: get a live link instantly (tunnelled to your dev server) and let the
+  // real build finish in the background on the same URL.
+  if (args.tunnel) return tunnelDeploy(args);
   // GitHub / a git URL is a pickable option — the default is straight from this folder.
   if (args.github || args.repo) {
     let repo = args.repo;
@@ -345,6 +348,61 @@ async function deploy(args) {
   if (res.status === 403) die("forbidden");
   if (!res.body) die("no response stream");
   return consumeDeploy(res, args);
+}
+
+/**
+ * `supersonic deploy --tunnel` — a live URL now, the real build behind it.
+ * Reserve → print URL → start dev server → tunnel it → build in the background →
+ * the proxy serves the build on the same URL when it lands.
+ */
+async function tunnelDeploy(args) {
+  const { startDevServer, openTunnel } = require("./lib/tunnel");
+  let repo = args.repo;
+  if (args.github && !repo) { repo = await gitOrigin(); }
+  const folderName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
+
+  // 1) reserve the slug → a URL right away
+  const r = await api("/api/deploy/reserve", { method: "POST", body: repo ? { repo } : { name: folderName } });
+  const { slug, url } = r;
+  print(green("✓ ") + "your app: " + bold(url));
+  info(dim("  it goes live in a moment — the build runs in the background, same URL"));
+
+  // 2) dev server + tunnel = instant preview at that URL
+  info(dim("starting your dev server for an instant preview…"));
+  const { proc, port } = await startDevServer(process.cwd());
+  const tunnelWs = process.env.SUPERSONIC_TUNNEL_WS || `wss://${slug}.supersonic.cv/_tunnel`;
+  let ws = null;
+  if (port) {
+    ws = openTunnel({
+      wsUrl: tunnelWs, slug, token: token(), devHost: "127.0.0.1", devPort: port,
+      onOpen: () => info(green("● ") + bold(url) + dim(" is live (preview) — go do your thing")),
+      onClose: (code) => { if (code === 1008) info(red("preview tunnel rejected — token/ownership")); },
+    });
+  } else {
+    info(dim("(couldn't detect a dev server — the URL shows a building page until the build lands)"));
+  }
+  const cleanup = () => { try { ws && ws.close(); } catch { /* */ } try { proc && proc.kill(); } catch { /* */ } };
+  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+
+  // 3) the real build, on the reserved slug, on the server (your machine stays free)
+  let res;
+  if (repo) {
+    res = await api("/api/deploy", { method: "POST", body: { repo, slug }, stream: true });
+  } else {
+    info(cyan("▸ ") + "uploading " + bold(folderName) + " to build in the cloud…");
+    const tgz = await packageFolder();
+    const body = fs.readFileSync(tgz);
+    try { fs.unlinkSync(tgz); } catch { /* ignore */ }
+    res = await fetch(baseUrl() + "/api/deploy", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token(), "Content-Type": "application/gzip", "x-supersonic-upload": "1", "x-supersonic-app": folderName, "x-supersonic-slug": slug },
+      body,
+    });
+    if (res.status === 401) { cleanup(); die("token invalid or expired — run: supersonic login"); }
+  }
+  await consumeDeploy(res, args);   // when the build goes live the proxy serves it on `url`
+  print(green("✓ ") + "build is live at " + bold(url));
+  cleanup();
 }
 
 /**
