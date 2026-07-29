@@ -2,6 +2,7 @@ import { slugForName } from "./deploys";
 import { spawn } from "node:child_process";
 import { randomSlug } from "./slug";
 import { accessToken as restAccessToken, describeServiceRest, listServicesRest, invalidateToken } from "./gcp-rest";
+import { ASSETS_BUCKET } from "./static-release";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -296,9 +297,15 @@ export async function rollback(slug: string): Promise<string> {
 /** Permanently delete an app: its Cloud Run service, custom domain mapping, and
  * storage bucket. Each step is best-effort so a missing piece doesn't block. */
 export async function deleteApp(slug: string): Promise<void> {
-  await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]);
+  // Two lanes, cleaned up best-effort so either is fully removed:
+  //  - container: its own Cloud Run service + optional per-app bucket
+  //  - static: no service — its bytes live under <slug>/ in the shared assets
+  //    bucket. `run services delete` MUST be optional here, or deleting a static
+  //    app throws "service not found" and fails the whole delete.
+  try { await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* static: no per-app service */ }
   try { await capture(["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* no mapping */ }
-  try { await capture(["storage", "rm", "-r", `gs://supersonicdeploy-${slug}`, "--quiet"]); } catch { /* no bucket */ }
+  try { await capture(["storage", "rm", "-r", `gs://supersonicdeploy-${slug}`, "--quiet"]); } catch { /* no per-app bucket */ }
+  try { await capture(["storage", "rm", "-r", `gs://${ASSETS_BUCKET}/${slug}`, "--quiet"]); } catch { /* not a static release */ }
 }
 
 const DEPLOYER_SA = "supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com";
