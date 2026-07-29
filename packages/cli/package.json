@@ -1,6 +1,6 @@
 {
   "name": "supersonic-cli",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Deploy & debug Supersonic apps from your coding agent — the agent-native CLI.",
   "bin": {
     "supersonic": "./index.js"
