@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
 import { repairDeploy } from "@/lib/agent";
+import { opencodeRepair } from "@/lib/opencode-deploy";
 import { currentUserId } from "@/lib/session";
 import { pgConfig } from "@/lib/pg-config";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -239,8 +240,15 @@ async function fetchBuildError(): Promise<string> {
     if (!id) return "";
     const raw = await capture("gcloud", ["beta", "builds", "log", id, "--region", REGION, "--project", PROJECT]);
     const lines = raw.split("\n").map((l) => l.replace(/^Step #\d+ - "[^"]*":\s?/, "").replace(/\r/g, "").trimEnd()).filter((l) => l.trim());
-    const errs = lines.filter((l) => /error|fail|not found|cannot|npm ERR|\berror TS\d|Error:|exit code|Module not found|ENOENT|EACCES|SyntaxError|TypeError|denied/i.test(l));
-    return (errs.length ? errs : lines).slice(-30).join("\n");
+    // Keep the lines that actually explain a failure — not only ones containing the
+    // word "error". A build tool's real cause is often phrased as advice ("not
+    // compatible with export", "Possible solutions", "Configure X"); dropping those
+    // leaves only a generic "build step failed", which sends the repair agent down
+    // the wrong path (e.g. blaming the Node version). Fall back to the tail, where
+    // the failure always lands.
+    const keep = /error|fail|not found|cannot|npm ERR|\berror TS\d|Error:|exit code|Module not found|ENOENT|EACCES|SyntaxError|TypeError|denied|not compatible|unsupported|incompatible|invalid|Possible solutions|Configure |Read more|^\s*-\s|warning|deprecated/i;
+    const kept = lines.filter((l) => keep.test(l));
+    return (kept.length ? kept : lines).slice(-40).join("\n");
   } catch {
     return "";
   }
@@ -461,25 +469,28 @@ function staticBuildConfig(opts: {
   // Every part of this is best-effort. A cache miss, an unreadable object, a
   // failed upload: all swallowed. A caching layer that can fail a build is worse
   // than no caching layer.
+  // Shell `$` must be doubled to `$$`: Cloud Build expands `$FOO`/`$(...)` as its own
+  // substitutions on the YAML before the step runs, and a bare `$L` fails validation
+  // ("key L is not a valid built-in substitution"). `$$` is the literal-dollar escape.
   const restore = [
-    `L=$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
-    `[ -n "$L" ] || exit 0`,
-    `H=$(sha256sum "$L" | cut -c1-64)`,
-    `echo "deps cache key $H"`,
-    `gcloud storage cp gs://${ASSETS_BUCKET}/_deps/$H.tgz /workspace/.deps.tgz 2>/dev/null || exit 0`,
+    `L=$$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
+    `[ -n "$$L" ] || exit 0`,
+    `H=$$(sha256sum "$$L" | cut -c1-64)`,
+    `echo "deps cache key $$H"`,
+    `gcloud storage cp gs://${ASSETS_BUCKET}/_deps/$$H.tgz /workspace/.deps.tgz 2>/dev/null || exit 0`,
     `tar -xzf /workspace/.deps.tgz -C /workspace 2>/dev/null && echo "deps restored from cache" || true`,
   ].join("; ");
 
   const save = [
-    `L=$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
-    `[ -n "$L" ] || exit 0`,
+    `L=$$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
+    `[ -n "$$L" ] || exit 0`,
     // Only write when nothing was restored, so a warm key is not re-uploaded on
     // every deploy for no benefit.
     `[ -f /workspace/.deps.tgz ] && exit 0`,
     `[ -d node_modules ] || exit 0`,
-    `H=$(sha256sum "$L" | cut -c1-64)`,
+    `H=$$(sha256sum "$$L" | cut -c1-64)`,
     `tar -czf /tmp/deps.tgz node_modules 2>/dev/null || exit 0`,
-    `gcloud storage cp /tmp/deps.tgz gs://${ASSETS_BUCKET}/_deps/$H.tgz 2>/dev/null && echo "deps cached" || true`,
+    `gcloud storage cp /tmp/deps.tgz gs://${ASSETS_BUCKET}/_deps/$$H.tgz 2>/dev/null && echo "deps cached" || true`,
   ].join("; ");
 
   return [
@@ -901,8 +912,12 @@ export async function POST(req: Request) {
           // Timed separately: a deploy the agent rescues is a very different
           // experience from one that worked first time, and a median that mixes
           // the two hides how often we are paying for it.
+          const useOpencode = process.env.DEPLOY_ENGINE === "opencode";
+          if (useOpencode) log("Repair engine: opencode");
           const repair = stages.start("repair-agent");
-          const fixed = await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
+          const fixed = useOpencode
+            ? await opencodeRepair({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log })
+            : await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
           await stages.end(repair, fixed.ok ? "ok" : "failed");
           if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
           else {

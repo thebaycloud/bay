@@ -26,6 +26,12 @@ ENV PATH="/usr/local/google-cloud-sdk/bin:${PATH}"
 # `beta` is needed for `run domain-mappings` (pretty *.supersonic.cv domains) and `builds log`.
 RUN gcloud components install beta --quiet >/dev/null
 
+# The repair engine: opencode drives a failed deploy to green when DEPLOY_ENGINE=opencode.
+# Installs to /root/.opencode/bin; symlinked onto PATH. lib/opencode-deploy.ts finds it.
+RUN curl -fsSL https://opencode.ai/install | bash \
+  && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
+  && opencode --version
+
 WORKDIR /app
 COPY --from=webbuild /app/apps/web ./apps/web
 COPY --from=agentdeps /app/services/deploy-agent ./services/deploy-agent
