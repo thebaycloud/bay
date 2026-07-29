@@ -61,5 +61,5 @@ test("only the path is dropped — we always shoot the root", () => {
 });
 
 test("the object path is one per app", () => {
-  assert.equal(objectPath("myapp"), "_thumbs/myapp.webp");
+  assert.equal(objectPath("myapp"), "_thumbs/myapp.jpg");
 });

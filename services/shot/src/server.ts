@@ -60,7 +60,7 @@ async function capture(url: string, headers: Record<string, string>): Promise<Bu
     await page.goto(url, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
     // A beat for fonts and above-the-fold images, which arrive after load.
     await page.waitForTimeout(1200);
-    return await page.screenshot({ type: "webp", quality: 80, clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT } });
+    return await page.screenshot({ type: "jpeg", quality: 78, clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT } });
   } finally {
     await ctx.close().catch(() => {});
   }
@@ -97,7 +97,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const png = await Promise.race([capture(target.url, target.headers), deadline]);
     const path = objectPath(target.slug);
     await bucket.file(path).save(png, {
-      contentType: "image/webp",
+      contentType: "image/jpeg",
       metadata: { cacheControl: "private, max-age=60" },
     });
     json(res, 200, { ok: true, path, bytes: png.length });

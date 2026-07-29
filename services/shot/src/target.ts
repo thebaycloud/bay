@@ -58,5 +58,5 @@ export function buildTarget(slug: string, runUrl: string, idToken: string | null
 
 /** Where the image lands. One per app, overwritten on each deploy. */
 export function objectPath(slug: string): string {
-  return `_thumbs/${slug}.webp`;
+  return `_thumbs/${slug}.jpg`;
 }

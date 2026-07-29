@@ -22,12 +22,12 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   const app = await getAppBySlug(slug);
   if (!app || app.owner_id !== uid) return new Response("not found", { status: 404 });
 
-  const png = await readThumbnail(ASSETS_BUCKET, slug);
-  if (!png) return new Response("no thumbnail", { status: 404 });
+  const image = await readThumbnail(ASSETS_BUCKET, slug);
+  if (!image) return new Response("no thumbnail", { status: 404 });
 
-  return new Response(new Uint8Array(png), {
+  return new Response(new Uint8Array(image), {
     headers: {
-      "content-type": "image/webp",
+      "content-type": "image/jpeg",
       // Short and private: the picture changes on every deploy, and it belongs to
       // one person. A shared cache must never hold it.
       "cache-control": "private, max-age=300",
