@@ -557,19 +557,23 @@ export async function POST(req: Request) {
   let secrets: Record<string, string> = {};
   let archive: Buffer | null = null;
   let cloneToken: unknown = null;
+  let reservedSlug = "";
   if (isUpload) {
     archive = Buffer.from(await req.arrayBuffer());
     friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
+    reservedSlug = (req.headers.get("x-supersonic-slug") ?? "").trim();
   } else {
     const body = await req.json().catch(() => ({}));
     url = normalizeRepo(String(body.repo ?? ""));
     friendlyName = cloudRunName(url);
     secrets = (body.secrets ?? {}) as Record<string, string>;
     cloneToken = body.cloneToken ?? null;
+    reservedSlug = String(body.slug ?? "").trim();
   }
-  // Apps get a short random subdomain (e.g. as76d.supersonic.cv). Redeploys reuse
-  // the same slug by matching the friendly name against the user's existing apps.
-  slug = await resolveSlug(ownerId || "", friendlyName);
+  // Apps get a short random subdomain (e.g. as76d.supersonic.cv). A reserved slug
+  // (URL-first / tunnel deploys) is honoured so the build lands on the URL already
+  // shown; otherwise redeploys reuse the slug by matching the friendly name.
+  slug = reservedSlug || await resolveSlug(ownerId || "", friendlyName);
 
   // Plan enforcement (inert until GATING_ENABLED=1 — see lib/entitlements).
   // Checked up front so a blocked deploy fails cleanly with a 402 instead of
