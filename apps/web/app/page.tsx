@@ -1,43 +1,54 @@
-"use client";
+export const dynamic = "force-dynamic";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { Search, Plus } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sidebar } from "@/components/Sidebar";
 import { TrialBanner } from "@/components/TrialBanner";
+import { AppsGrid, type App } from "@/components/AppsGrid";
+import { currentUserId } from "@/lib/session";
+import { listOwnedApps } from "@/lib/apps";
+import { listActiveDeploys } from "@/lib/deploys";
 
-interface App {
-  slug: string; name: string; url: string; ready: boolean;
-  region: string; image: string; status?: string; stage?: string;
-  /** A screenshot captured at deploy time; absent until that pipeline exists. */
-  thumbnail?: string;
+/**
+ * Read the app list here, on the server, so it ships inside the HTML.
+ *
+ * This page used to fetch in useEffect, which meant the list arrived after the
+ * HTML, after 449 kB of JavaScript, and after hydration — the content of the page
+ * was the last thing to appear. Reading it here removes that round trip entirely;
+ * there is no HTTP hop at all, the server talks to Postgres directly.
+ *
+ * Failing means an empty list, never a failed page: the grid then behaves exactly
+ * as the old client-fetching version did. Server rendering must not be able to make
+ * this page worse than the one it replaced.
+ */
+async function initialApps(): Promise<{ apps: App[]; error?: string }> {
+  const uid = await currentUserId();
+  if (!uid) return { apps: [] };
+  try {
+    const [owned, deploys] = await Promise.all([listOwnedApps(uid), listActiveDeploys(uid)]);
+    const known = new Set(owned.map((a) => a.slug));
+    const building: App[] = deploys
+      .filter((d) => !known.has(d.slug))
+      .map((d) => ({
+        slug: d.slug, name: d.name || d.slug, url: `https://${d.slug}.supersonic.cv`,
+        ready: false, region: "us-central1", image: "",
+        status: "building", stage: d.stage || "deploying…",
+      }));
+    const live: App[] = owned.map((a) => ({
+      slug: a.slug, name: a.name, url: a.url, ready: a.ready,
+      region: "us-central1", image: "",
+      ...(a.status === "deploying" ? { status: "building", stage: "deploying…" } : {}),
+    }));
+    return { apps: [...building, ...live] };
+  } catch (e) {
+    return { apps: [], error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
-export default function Home() {
-  const [apps, setApps] = useState<App[] | null>(null);
-  const [err, setErr] = useState("");
-
-  useEffect(() => {
-    let stop = false;
-    async function load() {
-      try {
-        const d = await (await fetch("/api/apps")).json();
-        if (stop) return;
-        if (d.error) setErr(d.error);
-        setApps(d.apps ?? []);
-        // Keep polling while any deploy is still building.
-        if ((d.apps ?? []).some((a: App) => a.status === "building")) setTimeout(load, 3000);
-      } catch (e) {
-        if (!stop) { setErr(String(e)); setApps([]); }
-      }
-    }
-    load();
-    return () => { stop = true; };
-  }, []);
-
-  const live = (apps ?? []).filter((a) => a.ready).length;
+export default async function Home() {
+  const { apps, error } = await initialApps();
 
   return (
     <div className="shell shell-side">
@@ -53,67 +64,10 @@ export default function Home() {
         </header>
 
         <div className="content">
-        <div className="wrap">
-          <div className="ruler reveal" />
-          <section className="home-hero reveal" style={{ animationDelay: ".03s" }}>
-            <div className="eyebrow">/ APPS</div>
-            <h1>Your apps</h1>
-            <div className="note">
-              {apps === null ? "loading…" : `${apps.length} apps · ${live} live`}
-              {err ? ` · ⚠ ${err.slice(0, 70)}` : ""}
-            </div>
-          </section>
-
-          <section className="reveal" style={{ animationDelay: ".07s" }}>
-            <div className="apps-grid">
-              <Link href="/new" className="app-card new">
-                <span className="plusbig">+</span>New app
-              </Link>
-              {(apps ?? []).map((a) => a.status === "building" ? (
-                <Link key={a.slug} href={`/apps/${a.slug}?tab=deployments`} className="app-card building">
-                  <div className="thumb"><span className="thumb-build">◐</span></div>
-                  <div className="card-body">
-                    <div className="r1">
-                      <span className="nm">{a.name || a.slug}</span>
-                      <span className="st building"><span className="d" />Building</span>
-                    </div>
-                    <div className="url">{a.stage}</div>
-                  </div>
-                </Link>
-              ) : (
-                <Link key={a.slug} href={`/apps/${a.slug}`} className="app-card">
-                  {/*
-                    This used to be <iframe src={`https://${slug}.supersonic.cv`} /> — a
-                    live load of the app itself, to draw a 300x200 thumbnail. Opening the
-                    dashboard opened every app on it: measured at 3.4s for one app's HTML
-                    alone, before its own scripts and fonts loaded inside the frame.
-                    Private apps spent that round trip to render a 401.
-
-                    It was also the loosest possible sandbox: allow-scripts together with
-                    allow-same-origin lets the framed app reach back into the origin that
-                    framed it.
-
-                    A screenshot captured at deploy time replaces it. Until that pipeline
-                    exists, the monogram — already the fallback for apps with no URL — is
-                    what shows, and no cross-origin request is made at all.
-                  */}
-                  <div className="thumb">
-                    {a.thumbnail
-                      ? <img src={a.thumbnail} alt="" loading="lazy" decoding="async" />
-                      : <span className="thumb-mono">{a.slug.charAt(0).toUpperCase()}</span>}
-                  </div>
-                  <div className="card-body">
-                    <div className="r1">
-                      <span className="nm">{a.name || a.slug}</span>
-                      <span className={`st ${a.ready ? "live" : "error"}`}><span className="d" />{a.ready ? "Live" : "Down"}</span>
-                    </div>
-                    <div className="url">{a.slug}.supersonic.cv</div>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          </section>
-        </div>
+          <div className="wrap">
+            <div className="ruler reveal" />
+            <AppsGrid initial={apps} initialError={error} />
+          </div>
         </div>
       </div>
 
