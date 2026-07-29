@@ -30,15 +30,24 @@ function startDevServer(cwd, opts = {}) {
 
   if (devPort && !cmd) return Promise.resolve({ proc: null, port: devPort });
 
+  let needInstall = false;
   if (!cmd) {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
-      if (pkg.scripts && pkg.scripts.dev) cmd = "npm run dev";
+      if (pkg.scripts && pkg.scripts.dev) {
+        // A fresh checkout has no node_modules, so `npm run dev` can't find vite/
+        // next/etc. Install first so the live preview actually comes up. The URL is
+        // already live (deploying page) meanwhile, so this only delays the preview.
+        needInstall = !fs.existsSync(path.join(cwd, "node_modules"));
+        cmd = needInstall ? "npm install --no-audit --no-fund && npm run dev" : "npm run dev";
+      }
     } catch { /* not a node project */ }
   }
   if (!cmd) return Promise.resolve({ proc: null, port: null });
 
   return new Promise((resolve) => {
+    // A fresh install can take a while before the dev server binds — don't give up early.
+    const graceMs = needInstall ? 120000 : 20000;
     const proc = spawn(cmd, { cwd, env: process.env, shell: true });
     let done = false;
     const finish = (port) => { if (!done) { done = true; resolve({ proc, port }); } };
@@ -51,7 +60,7 @@ function startDevServer(cwd, opts = {}) {
     proc.stderr.on("data", scan);
     // With an explicit port, give the server a moment to bind, then go.
     if (devPort) setTimeout(() => finish(devPort), 1500);
-    setTimeout(() => finish(devPort || null), 20000);
+    setTimeout(() => finish(devPort || null), graceMs);
   });
 }
 

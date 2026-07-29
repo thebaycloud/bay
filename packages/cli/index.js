@@ -376,6 +376,7 @@ async function urlFirstDeploy(args) {
   //    it (--dev-cmd / --dev-port) for any stack; a Node `dev` script we start
   //    ourselves. Until it's up the URL shows the deploying page (a fraction of a
   //    second), never a dead link.
+  info(dim("  bringing up a live preview at that URL…"));
   const { proc, port } = await startDevServer(process.cwd(), { devCmd: args["dev-cmd"], devPort: args["dev-port"] });
   const tunnelWs = process.env.SUPERSONIC_TUNNEL_WS || `wss://${slug}.supersonic.cv/_tunnel`;
   let ws = null;
