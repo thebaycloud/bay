@@ -16,12 +16,14 @@ import { getPool } from "@/lib/db";
 import { resolveSlug } from "@/lib/gcloud";
 import { setDeploy } from "@/lib/deploys";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
+import { listObjectNames, readObjectText, writeObject, describeServiceRest } from "@/lib/gcp-rest";
 import { take as takeClone } from "@/lib/clone-cache";
-import { resilientInstall } from "@/lib/install";
+import { staticBuildConfig } from "@/lib/static-build";
 import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
+import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE } from "@/lib/build-config";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -240,7 +242,7 @@ async function fetchBuildError(): Promise<string> {
     const id = list.trim().split("\n")[0];
     if (!id) return "";
     const raw = await capture("gcloud", ["beta", "builds", "log", id, "--region", REGION, "--project", PROJECT]);
-    const lines = raw.split("\n").map((l) => l.replace(/^Step #\d+ - "[^"]*":\s?/, "").replace(/\r/g, "").trimEnd()).filter((l) => l.trim());
+    const lines = raw.split("\n").map((l) => l.replace(/^Step #\d+ - "[^"]*":\s?/, "").replace(/\r/g, "").trimEnd()).filter((l) => l.trim() && !CACHE_MISS_NOISE.test(l));
     // Keep the lines that actually explain a failure — not only ones containing the
     // word "error". A build tool's real cause is often phrased as advice ("not
     // compatible with export", "Possible solutions", "Configure X"); dropping those
@@ -248,6 +250,11 @@ async function fetchBuildError(): Promise<string> {
     // the wrong path (e.g. blaming the Node version). Fall back to the tail, where
     // the failure always lands.
     const keep = /error|fail|not found|cannot|npm ERR|\berror TS\d|Error:|exit code|Module not found|ENOENT|EACCES|SyntaxError|TypeError|denied|not compatible|unsupported|incompatible|invalid|Possible solutions|Configure |Read more|^\s*-\s|warning|deprecated/i;
+    // The cold-cache line is dropped upstream, when `lines` is built: buildx
+    // prints it as an ERROR and then carries on to exit 0, and it matches `keep`
+    // twice over, so left in it would be handed to the repair agent as "the
+    // actual build output" and the agent would go fix the customer's code over a
+    // warning that only means "this is the first build".
     const kept = lines.filter((l) => keep.test(l));
     return (kept.length ? kept : lines).slice(-40).join("\n");
   } catch {
@@ -334,33 +341,62 @@ function isNextApp(dir: string): boolean {
   }
 }
 
-// Kaniko build with registry layer caching + a fast build machine. Caches each
-// layer (crucially the `npm install` layer) keyed on the files it depends on, so
-// an unchanged package.json means deps are pulled from cache instead of rebuilt.
-function cachedBuildConfig(image: string): string {
-  return [
-    "steps:",
-    "  - name: gcr.io/kaniko-project/executor:latest",
-    "    args:",
-    `      - --destination=${image}:latest`,
-    "      - --dockerfile=Dockerfile",
-    "      - --cache=true",
-    "      - --cache-ttl=168h",
-    `      - --cache-repo=${image}-cache`,
-    "      - --snapshot-mode=redo",
-    "      - --use-new-run",
-    "options:",
-    // No machineType on purpose. Asking for a non-default machine makes Cloud
-    // Build provision a dedicated worker, and that wait is not small: across the
-    // last 20 builds in this project the split is perfect — every E2_HIGHCPU_8
-    // build queued 44-57s before starting, every default-pool build queued 1s.
-    // Our app builds finish in 38-72s, so paying ~50s of provisioning to shave a
-    // few seconds off an already-short build was a net loss of roughly a minute
-    // on every deploy. If app builds ever grow into the multi-minute range,
-    // measure again — at that size the bigger machine can start paying for itself.
-    "  logging: CLOUD_LOGGING_ONLY",
-    "",
-  ].join("\n");
+/**
+ * The old listing path, kept verbatim as the fallback for when REST cannot
+ * answer. `gcloud storage ls -r` prints absolute gs:// URLs, one per line.
+ */
+async function listViaGcloud(destination: string): Promise<string[]> {
+  const listing = await capture("gcloud", ["storage", "ls", "-r", `${destination}**`, "--project", PROJECT]);
+  return listing
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith(destination) && !l.endsWith("/"))
+    .map((l) => l.slice(destination.length));
+}
+
+/**
+ * Name the live release. This is the single write that makes a deploy visible,
+ * so it stays strictly last and its bytes stay exactly what they were: the
+ * release id, raw, no trailing newline.
+ *
+ * REST does it in one request; a failure falls through to the gcloud command
+ * that has always done it. A simple upload is atomic, so a failed REST attempt
+ * leaves the previous pointer untouched and the retry writes the same bytes.
+ */
+async function writePointer(slug: string, release: string): Promise<void> {
+  if (await writeObject(ASSETS_BUCKET, pointerPath(slug), release)) return;
+  await run("gcloud", ["storage", "cp", "-", `gs://${ASSETS_BUCKET}/${pointerPath(slug)}`, "--project", PROJECT], () => {}, release);
+}
+
+/**
+ * Read back what a release actually landed in storage and decide whether it may
+ * become the live one. Throws with the reason if it may not.
+ *
+ * REST first (one HTTP request), gcloud only if that could not answer. The two
+ * produce the same list — `storage ls -r 'gs://b/p**'` and objects.list over the
+ * same prefix were diffed and are identical.
+ *
+ * Both publishing lanes call this. The prebuilt lane always did; the static lane
+ * did not, and that is why a Cloud Build step that reported SUCCESS while
+ * uploading nothing was able to move `jdmis`'s pointer to a release that does
+ * not exist. A build's exit code says the step ran, not that it published.
+ */
+async function assertReleaseUploaded(prefix: string, destination: string, log: (l: string) => void): Promise<void> {
+  const present = (await listObjectNames(ASSETS_BUCKET, prefix)) ?? (await listViaGcloud(destination));
+
+  let indexHtml: string | null = null;
+  if (present.includes("index.html")) {
+    indexHtml = (await readObjectText(ASSETS_BUCKET, `${prefix}index.html`))
+      ?? (await capture("gcloud", ["storage", "cat", `${destination}index.html`, "--project", PROJECT]));
+  }
+
+  const verdict = verifyRelease(present, indexHtml);
+  if (!verdict.ok) {
+    // The release stays in storage but is never named, so the live site is
+    // exactly as it was a moment ago.
+    throw new Error(`${verdict.reason} — your site was left on the previous release`);
+  }
+  log(`${present.length} files check out`);
 }
 
 /**
@@ -401,29 +437,11 @@ async function publishPrebuilt(opts: {
 
   await stages.around("verify", async () => {
     log("Checking the build…");
-    const listing = await capture("gcloud", ["storage", "ls", "-r", `${destination}**`, "--project", PROJECT]);
-    const present = listing
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith(destination) && !l.endsWith("/"))
-      .map((l) => l.slice(destination.length));
-
-    let indexHtml: string | null = null;
-    if (present.includes("index.html")) {
-      indexHtml = await capture("gcloud", ["storage", "cat", `${destination}index.html`, "--project", PROJECT]);
-    }
-
-    const verdict = verifyRelease(present, indexHtml);
-    if (!verdict.ok) {
-      // The release stays in storage but is never named, so the live site is
-      // exactly as it was a moment ago.
-      throw new Error(`${verdict.reason} — your site was left on the previous release`);
-    }
-    log(`${present.length} files check out`);
+    await assertReleaseUploaded(prefix, destination, log);
   });
 
   // Only now, with a release known to be coherent, does it become the live one.
-  await run("gcloud", ["storage", "cp", "-", `gs://${ASSETS_BUCKET}/${pointerPath(slug)}`, "--project", PROJECT], () => {}, release);
+  await writePointer(slug, release);
   log(`Published release ${release}`);
   send({ type: "detected", stack: { framework: "prebuilt", language: "static" }, plan: [] });
   if (hash) log("Recorded this build, so an unchanged redeploy will skip the upload");
@@ -433,6 +451,11 @@ async function publishPrebuilt(opts: {
 let staticUrlCache: string | null = null;
 async function staticServiceUrl(): Promise<string | null> {
   if (staticUrlCache) return staticUrlCache;
+  // The Knative v1 resource REST returns is the same one gcloud prints, so
+  // status.url is status.url either way.
+  const svc = await describeServiceRest(STATIC_SERVICE);
+  const restUrl = typeof svc?.status?.url === "string" ? svc.status.url.trim() : "";
+  if (restUrl.startsWith("https://")) { staticUrlCache = restUrl; return restUrl; }
   try {
     const out = await capture("gcloud", [
       "run", "services", "describe", STATIC_SERVICE,
@@ -442,76 +465,6 @@ async function staticServiceUrl(): Promise<string | null> {
     if (url.startsWith("https://")) { staticUrlCache = url; return url; }
   } catch { /* not deployed yet */ }
   return null;
-}
-
-/**
- * Cloud Build config for the static lane: install, build, then copy the output
- * straight to GCS. The bytes never travel back through the control plane.
- */
-function staticBuildConfig(opts: {
-  installCommand: string | null;
-  buildCommand: string | null;
-  outputDir: string;
-  destination: string;
-}): string {
-  const shell = [resilientInstall(opts.installCommand), opts.buildCommand].filter(Boolean).join(" && ") || "true";
-  // The whole point of the warm base is the package cache it carries, and the
-  // static lane is where dependency installation dominates: measured on a real
-  // Vite deploy, 77s of an 83s deploy was this step. Pulling node:22-slim from
-  // Docker Hub instead threw that away.
-  const builder = process.env.NEXT_BASE_IMAGE || process.env.NODE_BASE_IMAGE || "node:22-slim";
-  const CLOUD_SDK = "gcr.io/google.com/cloudsdktool/google-cloud-cli:slim";
-
-  // Cloud Build shares /workspace between steps, so node_modules restored here
-  // survives into the build step. Keyed by the lockfile, because that is exactly
-  // what determines the tree — a project whose dependencies did not change gets
-  // its node_modules back as one download instead of a full install.
-  //
-  // Every part of this is best-effort. A cache miss, an unreadable object, a
-  // failed upload: all swallowed. A caching layer that can fail a build is worse
-  // than no caching layer.
-  // Shell `$` must be doubled to `$$`: Cloud Build expands `$FOO`/`$(...)` as its own
-  // substitutions on the YAML before the step runs, and a bare `$L` fails validation
-  // ("key L is not a valid built-in substitution"). `$$` is the literal-dollar escape.
-  const restore = [
-    `L=$$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
-    `[ -n "$$L" ] || exit 0`,
-    `H=$$(sha256sum "$$L" | cut -c1-64)`,
-    `echo "deps cache key $$H"`,
-    `gcloud storage cp gs://${ASSETS_BUCKET}/_deps/$$H.tgz /workspace/.deps.tgz 2>/dev/null || exit 0`,
-    `tar -xzf /workspace/.deps.tgz -C /workspace 2>/dev/null && echo "deps restored from cache" || true`,
-  ].join("; ");
-
-  const save = [
-    `L=$$(ls package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null | head -1)`,
-    `[ -n "$$L" ] || exit 0`,
-    // Only write when nothing was restored, so a warm key is not re-uploaded on
-    // every deploy for no benefit.
-    `[ -f /workspace/.deps.tgz ] && exit 0`,
-    `[ -d node_modules ] || exit 0`,
-    `H=$$(sha256sum "$$L" | cut -c1-64)`,
-    `tar -czf /tmp/deps.tgz node_modules 2>/dev/null || exit 0`,
-    `gcloud storage cp /tmp/deps.tgz gs://${ASSETS_BUCKET}/_deps/$$H.tgz 2>/dev/null && echo "deps cached" || true`,
-  ].join("; ");
-
-  return [
-    "steps:",
-    `  - name: ${CLOUD_SDK}`,
-    "    entrypoint: bash",
-    `    args: ["-lc", ${JSON.stringify(restore)}]`,
-    `  - name: ${builder}`,
-    "    entrypoint: bash",
-    `    args: ["-lc", ${JSON.stringify(shell)}]`,
-    `  - name: ${CLOUD_SDK}`,
-    "    entrypoint: bash",
-    // The cache-save runs in its own subshell: it `exit 0`s to skip a redundant
-    // upload, and without the subshell that exit would kill this step BEFORE the
-    // rsync, publishing an empty release on every warm-cache build.
-    `    args: ["-lc", ${JSON.stringify(`(${save}) || true; gcloud storage rsync -r ${opts.outputDir} ${opts.destination}`)}]`,
-    "options:",
-    "  logging: CLOUD_LOGGING_ONLY",
-    "",
-  ].join("\n");
 }
 
 // Give the app a <slug>.supersonic.cv address (the wildcard *.supersonic.cv
@@ -789,13 +742,16 @@ export async function POST(req: Request) {
         if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
         deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
 
-        // With a Dockerfile, build via Kaniko (registry layer cache + a fast build
-        // machine) and deploy the image — so an unchanged `npm install` is reused and
-        // redeploys are dramatically faster. Without one, fall back to buildpacks.
+        // With a Dockerfile, build it ourselves with a registry layer cache and
+        // deploy the image — so an unchanged `npm install` is reused and redeploys
+        // are dramatically faster. Which builder does it is BUILDER's call
+        // (buildkit vs the Kaniko default); see lib/build-config.ts. Without a
+        // Dockerfile, fall back to buildpacks.
         const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
-        const useKaniko = existsSync(join(dir, "Dockerfile"));
-        if (useKaniko) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE));
-        const buildLine = (l: string) => { if (/error|fail|step #|npm |next build|compiled|pushing|using cache|cached|denied|warming/i.test(l)) log(l); };
+        const useDockerBuild = existsSync(join(dir, "Dockerfile"));
+        const builder = selectedBuilder();
+        if (useDockerBuild) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder));
+        const buildLine = (l: string) => { const out = buildLogLine(l); if (out) log(out); };
 
         const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
           const hb = setInterval(() => log("deploying…"), 6000);
@@ -832,7 +788,8 @@ export async function POST(req: Request) {
          */
         const runStatic = async (out: { outputDir: string }): Promise<{ ok: boolean; url?: string; error?: string }> => {
           const release = releaseId();
-          const destination = `gs://${ASSETS_BUCKET}/${releasePrefix(slug, release)}`;
+          const prefix = releasePrefix(slug, release);
+          const destination = `gs://${ASSETS_BUCKET}/${prefix}`;
           const needsBuild = Boolean(s.installCommand || s.buildCommand);
 
           try {
@@ -845,6 +802,11 @@ export async function POST(req: Request) {
                   buildCommand: s.buildCommand,
                   outputDir: out.outputDir,
                   destination,
+                  // The dependency tarball a build writes may only ever be read
+                  // back by the tenant that produced it: it is not a dependency
+                  // graph, it is one project's node_modules including whatever
+                  // its postinstall scripts left in there.
+                  namespace: ownerWorkspace ?? ownerId,
                 }));
                 try {
                   await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
@@ -864,9 +826,22 @@ export async function POST(req: Request) {
             return { ok: false, error: `Build failed:\n${reason}` };
           }
 
+          // A green Cloud Build is not evidence that anything was uploaded — the
+          // step that copies the assets can exit 0 having copied nothing, which
+          // is exactly how a pointer came to name a release that does not exist.
+          // Read the release back before it is allowed to go live.
+          try {
+            await stages.around("verify", async () => {
+              log("Checking the build…");
+              await assertReleaseUploaded(prefix, destination, log);
+            });
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+
           // Last, and only now: the release is complete, so it may be named. A
           // failure above leaves the previous release live and untouched.
-          await run("gcloud", ["storage", "cp", "-", `gs://${ASSETS_BUCKET}/${pointerPath(slug)}`, "--project", PROJECT], () => {}, release);
+          await writePointer(slug, release);
           log(`Published release ${release}`);
           // The proxy routes by looking up apps.run_url, so a static app points
           // at the shared static server. The proxy tells that server which app a
@@ -881,8 +856,8 @@ export async function POST(req: Request) {
 
         const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
           if (staticServe) return runStatic(staticServe);
-          if (useKaniko) {
-            log("Building with layer cache — the first build warms it, later ones are fast…");
+          if (useDockerBuild) {
+            log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
             const hb = setInterval(() => log("building…"), 8000);
             const btail: string[] = [];
             const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };

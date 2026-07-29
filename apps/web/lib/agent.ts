@@ -8,20 +8,33 @@
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
+import { accessToken as restAccessToken, invalidateToken } from "./gcp-rest";
 
 const PROJECT = "supersonic-deploy-prod";
 const LOCATION = "us-central1";
 const MODEL = "gemini-2.5-pro";
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv;
 
+/**
+ * Shared cache first (metadata server on Cloud Run, gcloud locally), own spawn
+ * second. The local cache below is only reached when the shared one could not
+ * answer, and is deliberately short: `gcloud auth print-access-token` reports no
+ * expiry and hands back a disk-cached token that may have only minutes of life
+ * left, so trusting one for 45 minutes could serve an already-dead token.
+ */
 let cachedToken: { value: string; at: number } | null = null;
-function getToken(): Promise<string> {
-  if (cachedToken && Date.now() - cachedToken.at < 45 * 60_000) return Promise.resolve(cachedToken.value);
-  return new Promise((res, rej) => {
+async function getToken(): Promise<string> {
+  const shared = await restAccessToken();
+  if (shared) return shared;
+  if (cachedToken && Date.now() - cachedToken.at < 10 * 60_000) return cachedToken.value;
+  return new Promise<string>((res, rej) => {
     const p = spawn("gcloud", ["auth", "print-access-token"], { env: ENV });
     let out = "", err = "";
     p.stdout.on("data", (d: Buffer) => (out += d));
     p.stderr.on("data", (d: Buffer) => (err += d));
+    // Without this, a missing gcloud binary is an unhandled 'error' event, which
+    // takes the process down instead of failing this one call.
+    p.on("error", rej);
     p.on("close", (c) => (c === 0 ? (cachedToken = { value: out.trim(), at: Date.now() }, res(out.trim())) : rej(new Error(err.trim() || "token failed"))));
   });
 }
@@ -30,6 +43,10 @@ async function gemini(body: unknown): Promise<any> {
   const token = await getToken();
   const url = `https://${LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
   const r = await fetch(url, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  // The shared cache is consulted directly here rather than through gcp-rest's
+  // `authed()`, so a token the server has rejected has to be dropped by hand or
+  // every later call in this process re-sends it until its stated expiry.
+  if (r.status === 401 || r.status === 403) invalidateToken();
   const j = await r.json();
   if (j.error) throw new Error(j.error.message);
   return j;

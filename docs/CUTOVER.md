@@ -217,8 +217,9 @@ Making it work needs an `.npmrc` carrying an access token in the build environme
 and that has a trap: writing a token into a Dockerfile bakes it into an image layer,
 where it outlives the build and ships to whoever can pull the image. The static
 lane can do this safely because we own its Cloud Build steps and can write `.npmrc`
-in a step rather than a layer. The container lanes build with Kaniko from a
-customer-visible Dockerfile, so they need a build-arg or a mounted secret instead.
+in a step rather than a layer. The container lanes build from a customer-visible
+Dockerfile (Kaniko today, buildx/BuildKit under `BUILDER=buildkit` — see
+section 8), so they need a build-arg or a mounted secret instead.
 
 Until that is built, leave `NPM_REGISTRY` unset. The base images below already
 carry a warm package cache, which is where most of the cold-start win comes from.
@@ -286,6 +287,100 @@ cd apps/web && npx tsx db/migrate.ts
 
 Nothing else in this section depends on it, but the lane timings in the design are
 projections until this table has data behind them — so it is worth doing first, not last.
+
+## 8. Container builder — buildx/BuildKit, behind `BUILDER`
+
+Kaniko was archived by Google on 2025-06-03. `apps/web/lib/build-config.ts` can emit
+either builder's Cloud Build config, chosen by one env var on the control plane:
+
+```bash
+BUILDER=buildkit   # buildx/BuildKit, registry cache in mode=max
+# anything else, including unset → Kaniko (the default, unchanged)
+```
+
+Reverting is unsetting the variable and restarting — no code change, no redeploy of
+customer apps. `mode=max` is the whole point of the switch: BuildKit's default
+`mode=min` exports only layers that reach the final image, and our generated
+Dockerfiles are multi-stage, so `npm install` lives in a build stage that `mode=min`
+would throw away on every deploy.
+
+**No Artifact Registry work is needed.** The cache goes to
+`us-central1-docker.pkg.dev/supersonic-deploy-prod/cloud-run-source-deploy/<slug>-cache`,
+tag `cache` — the same repo and image path Kaniko already writes, only a new tag. A
+cache ref that does not exist yet makes buildx log an `ERROR` and continue (exit 0),
+so the first build for an app creates it. `ignore-error=true` on `--cache-to` is what
+keeps a broken or unreachable cache from failing a customer's deploy.
+
+Checking a build actually hit the cache:
+
+```bash
+gcloud builds log <BUILD_ID> --region us-central1 --project supersonic-deploy-prod \
+  | grep -E "inferred cache manifest type|failed to configure registry cache importer|writing cache image manifest|error writing layer blob|CACHED"
+```
+
+Read it like this:
+
+| line | means |
+| --- | --- |
+| `inferred cache manifest type: …` | the registry cache was found and read — **a hit** |
+| `failed to configure registry cache importer: …: not found` | cold cache, i.e. the first build for this app. Harmless, exit 0 |
+| `failed to configure registry cache importer: …` (anything else) | a real problem — no reader grant, deleted repo, unreachable registry |
+| `#N CACHED` | that layer was reused. From the registry cache *or* from the worker's local state |
+| `writing cache image manifest …` | the cache really was written for the next build |
+| `ERROR: error writing layer blob: …` | the cache export failed. `ignore-error=true` keeps the build green, but no cache was written |
+
+Two traps, both of which had this documented backwards and shipped a filter that
+lied to customers:
+
+- **`importing cache manifest from …` is not a hit.** It is the label buildx prints
+  when it *starts* the import; on a cold cache the very next line is
+  `ERROR: failed to configure registry cache importer: …: not found`. It appears on
+  every build, warm or cold, and again in buildx's closing error summary.
+- **`exporting cache to registry` is not a write.** Same story: it is the label. An
+  export that cannot reach the registry prints it and then
+  `ERROR: error writing layer blob: …`.
+
+The rule for both: match the *outcome* line, never the label.
+
+Earlier revisions of this document said "do **not** grep for `CACHED` — a layer
+fetched from the registry cache is reported as `DONE <n>s`". That is wrong; warm
+runs show `#8 CACHED` / `#9 CACHED` for exactly those layers. It is also not
+sufficient on its own — a cold build on a worker with warm *local* state prints
+`CACHED` too — which is why `inferred cache manifest type` is the line to key on.
+
+The deploy stream translates all of this into plain English (`lib/build-config.ts`,
+`buildLogLine`), so a customer never sees the cold-cache `ERROR`.
+
+**Docker Hub is on the critical path of this lane.** `docker buildx create --driver
+docker-container` pulls `moby/buildkit:buildx-stable-1` from Docker Hub on every
+build — a real captured run shows `#1 pulling image moby/buildkit:buildx-stable-1
+15.1s done`. Kaniko had no such dependency (gcr.io, Google-hosted), and Cloud Build
+workers share egress IPs, so Docker Hub's anonymous pull limit is a **hard deploy
+failure** for the whole container lane, not a slow build. This is the same class of
+problem the AR node-base mirror was created to remove ("removes a Docker Hub pull —
+and its rate limit — from every build", `app/api/deploy/route.ts`).
+
+```
+BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/…/buildkit:v0.23
+```
+
+Unset by default, deliberately: a mirror that does not exist yet must not be able to
+take deploys down either. Mirror the image into AR and set this **before** turning
+`BUILDER=buildkit` on for real traffic.
+
+**Registry auth for `--push` is unverified.** `gcr.io/cloud-builders/docker` ships no
+`/root/.docker/config.json` and no credential helper — checked by running the image.
+The push and both cache endpoints therefore depend on Cloud Build injecting a docker
+config at step runtime, that config covering `us-central1-docker.pkg.dev`, and buildx
+forwarding it into the `docker-container` driver's session. Three links, none of them
+exercised. If any fails, every Dockerfile deploy fails with `denied` the moment
+`BUILDER=buildkit` is set — total failure of the lane, not a degraded cache. Kaniko
+authenticated itself. **Test this on one app before any wider rollout.**
+
+**Before this goes wide:** `cloud-run-source-deploy` has `cleanupPolicies: NONE`, and a
+registry cache has no TTL analogue to Kaniko's `--cache-ttl=168h`. Under `mode=max`
+every intermediate layer is written on every build, so add an AR cleanup policy
+matching `*-cache` or the repo grows without bound. This is cost, not correctness.
 
 ## Not done here: the hosted-app runtime account
 

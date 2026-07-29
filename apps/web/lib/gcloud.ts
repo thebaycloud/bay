@@ -1,6 +1,7 @@
 import { slugForName } from "./deploys";
 import { spawn } from "node:child_process";
 import { randomSlug } from "./slug";
+import { accessToken as restAccessToken, describeServiceRest, listServicesRest, invalidateToken } from "./gcp-rest";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -47,9 +48,28 @@ export interface ServiceInfo {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * Every Cloud Run service in the region, over REST when that works and over
+ * gcloud when it does not. Both produce the same Knative shape — REST wraps it
+ * in `{ items: [...] }`, which listServicesRest already unwraps — so callers
+ * cannot tell which one answered.
+ */
+async function serviceList(): Promise<any[]> {
+  const rest = await listServicesRest();
+  if (rest) return rest;
+  return JSON.parse(await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=json"])) as any[];
+}
+
+/** One service, REST first, gcloud second. Same shape either way. */
+async function serviceResource(slug: string): Promise<any> {
+  const rest = await describeServiceRest(slug);
+  if (rest) return rest;
+  return JSON.parse(await capture(["run", "services", "describe", slug, "--region", REGION, "--project", PROJECT, "--format=json"]));
+}
+
 export async function listServices(ownerId?: string): Promise<AppSummary[]> {
-  const out = await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=json"]);
-  const arr = JSON.parse(out) as any[];
+  const arr = await serviceList();
   return arr
     .filter((s) => !ownerId || s.metadata?.labels?.[OWNER_LABEL] === ownerId)
     .map((s) => ({
@@ -69,8 +89,7 @@ export async function ownsApp(slug: string, ownerId: string): Promise<boolean> {
 }
 
 export async function describeService(slug: string): Promise<ServiceInfo> {
-  const out = await capture(["run", "services", "describe", slug, "--region", REGION, "--project", PROJECT, "--format=json"]);
-  const s = JSON.parse(out) as any;
+  const s = await serviceResource(slug);
   const c = s.spec?.template?.spec?.containers?.[0] ?? {};
   const ann = s.spec?.template?.metadata?.annotations ?? {};
   return {
@@ -107,8 +126,7 @@ export async function resolveSlug(ownerId: string, friendlyName: string): Promis
   const taken = new Set<string>();
   let existing: string | null = null;
   try {
-    const out = await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=json"]);
-    const arr = JSON.parse(out) as any[];
+    const arr = await serviceList();
     for (const s of arr) {
       const nm = s.metadata?.name as string | undefined;
       if (nm) taken.add(nm);
@@ -121,8 +139,15 @@ export async function resolveSlug(ownerId: string, friendlyName: string): Promis
   return slug;
 }
 
-function accessToken(): Promise<string> {
-  return capture(["auth", "print-access-token"]).then((s) => s.trim());
+/**
+ * An access token, from the in-memory cache in lib/gcp-rest (metadata server on
+ * Cloud Run, gcloud locally). The gcloud spawn stays as the last resort so this
+ * cannot become a new failure mode.
+ */
+async function accessToken(): Promise<string> {
+  const t = await restAccessToken();
+  if (t) return t;
+  return (await capture(["auth", "print-access-token"])).trim();
 }
 
 export async function listBucketObjects(bucket: string): Promise<{ name: string; size: number; updated: string; contentType: string }[]> {
@@ -130,6 +155,13 @@ export async function listBucketObjects(bucket: string): Promise<{ name: string;
   const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${bucket}/o?maxResults=200`, {
     headers: { Authorization: "Bearer " + t, "x-goog-user-project": PROJECT },
   });
+  // This is the one consumer of the shared token cache that talks to GCS
+  // directly instead of through gcp-rest's `authed()`, so nothing was dropping a
+  // token the server had already rejected. A credential revoked or rotated
+  // before its cached expiry would then be re-served to every retry inside the
+  // window, turning the dashboard's Storage tab into a stuck "Invalid
+  // Credentials". Dropping it here means the next call mints a fresh one.
+  if (r.status === 401 || r.status === 403) invalidateToken();
   const j = await r.json();
   if (j.error) throw new Error(j.error.message);
   return (j.items ?? []).map((o: { name: string; size?: string; updated: string; contentType?: string }) => ({
@@ -276,8 +308,7 @@ const DEPLOYER_SA = "supersonic-deployer@supersonic-deploy-prod.iam.gserviceacco
 // isolated instance that can't affect the serving app. The command is passed
 // base64-encoded via an env var so no shell-escaping games are needed.
 export async function execCommand(slug: string, command: string): Promise<{ output: string; exitCode: number }> {
-  const raw = await capture(["run", "services", "describe", slug, "--region", REGION, "--project", PROJECT, "--format=json"]);
-  const s = JSON.parse(raw) as any;
+  const s = await serviceResource(slug);
   const c = s.spec?.template?.spec?.containers?.[0] ?? {};
   const image = c.image as string;
   if (!image) throw new Error("could not resolve the app's container image");

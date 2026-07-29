@@ -17,6 +17,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, existsSync, symlinkSync, rmSync 
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { AddressInfo } from "node:net";
+import { accessToken as restAccessToken } from "./gcp-rest";
 
 const PROJECT = process.env.OPENCODE_VERTEX_PROJECT || "supersonic-deploy-prod";
 const LOCATION = "us-central1";
@@ -34,8 +35,11 @@ function opencodeBin(): string {
   return existsSync(home) ? home : "opencode";
 }
 
-function gcloudToken(): Promise<string> {
-  return new Promise((resolve, reject) => {
+/** Shared in-memory cache first (no subprocess), the gcloud spawn as fallback. */
+async function gcloudToken(): Promise<string> {
+  const shared = await restAccessToken();
+  if (shared) return shared;
+  return new Promise<string>((resolve, reject) => {
     const p = spawn("gcloud", ["auth", "print-access-token"], {
       env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` },
     });
