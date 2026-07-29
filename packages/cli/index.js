@@ -310,9 +310,11 @@ async function deploy(args) {
   // One command: sign in automatically the first time, then deploy. No separate
   // `supersonic login` step required.
   await ensureAuth();
-  // URL-first: get a live link instantly (tunnelled to your dev server) and let the
-  // real build finish in the background on the same URL.
-  if (args.tunnel) return tunnelDeploy(args);
+  // URL-first by default: a live link appears in ~0.1s (a "deploying…" page, or a
+  // live preview tunnelled to the dev server when one can be started) while the
+  // real build runs on the server. `--prebuilt` opts back into the old build-here-
+  // and-upload path for a project that has no server side to preview.
+  if (!args.prebuilt) return urlFirstDeploy(args);
   // GitHub / a git URL is a pickable option — the default is straight from this folder.
   if (args.github || args.repo) {
     let repo = args.repo;
@@ -351,35 +353,40 @@ async function deploy(args) {
 }
 
 /**
- * `supersonic deploy --tunnel` — a live URL now, the real build behind it.
- * Reserve → print URL → start dev server → tunnel it → build in the background →
- * the proxy serves the build on the same URL when it lands.
+ * URL-first deploy — a live URL in ~0.1s, the real build behind it. The default.
+ *
+ * Reserve the slug → print the URL (already live: a "deploying…" page for any
+ * stack, or a live preview if a dev server can be started) → run the real build on
+ * the server → the proxy serves the build on the same URL when it lands. The tunnel
+ * preview is best-effort (reliable for Node's `npm run dev`); when it can't start
+ * one, the URL is still live instantly with the deploying page. No stack is blocked.
  */
-async function tunnelDeploy(args) {
+async function urlFirstDeploy(args) {
   const { startDevServer, openTunnel } = require("./lib/tunnel");
   let repo = args.repo;
   if (args.github && !repo) { repo = await gitOrigin(); }
   const folderName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
 
-  // 1) reserve the slug → a URL right away
+  // 1) reserve the slug → a URL right away (live immediately, any stack)
   const r = await api("/api/deploy/reserve", { method: "POST", body: repo ? { repo } : { name: folderName } });
   const { slug, url } = r;
-  print(green("✓ ") + "your app: " + bold(url));
-  info(dim("  it goes live in a moment — the build runs in the background, same URL"));
+  print(green("✓ ") + "your app is live at " + bold(url) + dim("  (deploying — build finishing in the background)"));
 
-  // 2) dev server + tunnel = instant preview at that URL
-  info(dim("starting your dev server for an instant preview…"));
-  const { proc, port } = await startDevServer(process.cwd());
+  // 2) live preview: tunnel the URL to a dev server. The agent supplies how to run
+  //    it (--dev-cmd / --dev-port) for any stack; a Node `dev` script we start
+  //    ourselves. Until it's up the URL shows the deploying page (a fraction of a
+  //    second), never a dead link.
+  const { proc, port } = await startDevServer(process.cwd(), { devCmd: args["dev-cmd"], devPort: args["dev-port"] });
   const tunnelWs = process.env.SUPERSONIC_TUNNEL_WS || `wss://${slug}.supersonic.cv/_tunnel`;
   let ws = null;
   if (port) {
     ws = openTunnel({
       wsUrl: tunnelWs, slug, token: token(), devHost: "127.0.0.1", devPort: port,
-      onOpen: () => info(green("● ") + bold(url) + dim(" is live (preview) — go do your thing")),
+      onOpen: () => info(green("● ") + "live preview at " + bold(url) + dim(" — go do your thing")),
       onClose: (code) => { if (code === 1008) info(red("preview tunnel rejected — token/ownership")); },
     });
   } else {
-    info(dim("(couldn't detect a dev server — the URL shows a building page until the build lands)"));
+    info(dim("  (no dev server — pass --dev-cmd \"<how to run your app>\" for an instant live preview)"));
   }
   const cleanup = () => { try { ws && ws.close(); } catch { /* */ } try { proc && proc.kill(); } catch { /* */ } };
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
@@ -610,9 +617,13 @@ ${bold("setup")}
   supersonic logout
   supersonic whoami
 
-${bold("deploy")}
-  supersonic deploy                             deploy this folder — no git needed (auto sign-in)
+${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the background)")}
+  supersonic deploy                             deploy this folder — live URL now, build behind it
+  supersonic deploy --dev-cmd "<run in dev>"    tunnel the URL to your app live while it builds
+                                                  e.g. --dev-cmd "uvicorn main:app --port 8000"
+  supersonic deploy --dev-port <n>              tunnel to a dev server you already started
   supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead
+  supersonic deploy --prebuilt                  old path: build here, upload the result
   supersonic redeploy <app>                     rebuild from the app's source
   supersonic rollback <app>                     roll back to the previous revision
 

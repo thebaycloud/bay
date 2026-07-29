@@ -6,16 +6,28 @@ If you are a coding agent asked to publish a user's app to Supersonic, follow "P
 
 ## Publish an app
 
-From the project's root folder, run two commands:
+From the project's root folder:
 
     npm i -g supersonic-cli    # install the CLI (once)
-    supersonic deploy          # publish this folder
 
-That is the whole flow. `supersonic deploy`:
+Then deploy URL-first, so the user gets a working link in ~0.1s while the real
+build finishes in the background:
+
+    # 1. Work out how to run THIS app in dev mode from its stack — you know how:
+    #      FastAPI → uvicorn main:app --port 8000     Flask → flask run --port 8000
+    #      Vite/Next/Node → npm run dev                Go → go run .   Rails → bin/rails s
+    # 2. Pass that command to deploy. Supersonic reserves the URL, tunnels it live
+    #    to that dev server instantly, and swaps in the real build when it's ready.
+    supersonic deploy --dev-cmd "uvicorn main:app --port 8000"
+
+ALWAYS pass `--dev-cmd` — figuring out the dev command is your job, and it makes the
+URL show the running app in ~1s instead of a "deploying…" page. If you already have
+a dev server running, pass `--dev-port <n>` instead. Node projects with a `dev`
+script work with a plain `supersonic deploy` (the CLI starts it). `supersonic deploy`:
 
 - Signs the user in the FIRST time by opening a browser — a new account starts a free 3-day trial automatically (full features, nothing to pay up front). There is NO separate login/signup step to run.
-- Zips the folder (skipping node_modules, .git, .env* and .gitignore'd files), uploads it, builds it in the cloud, and streams progress.
-- On success prints `✓ live: <url>`. Report that URL to the user.
+- Prints `✓ your app is live at <url>` immediately (URL-first), keeps the preview live via the tunnel, uploads + builds in the cloud, and streams progress.
+- On success prints `✓ live: <url>` — the real build now serves that same URL. Report it to the user.
 
 IMPORTANT: if `supersonic deploy` exits WITHOUT a `✓ live:` line, it did NOT succeed. Run `supersonic diagnose <app>` (returns an AI fix-prompt), apply the fix, and run `supersonic deploy` again. Use `supersonic logs <app>` to see recent logs.
 
@@ -34,8 +46,10 @@ If the app reads secrets from environment variables, set them and redeploy:
 
 ## CLI commands
 
-- `supersonic deploy` — publish the current folder (auto sign-in the first time)
+- `supersonic deploy --dev-cmd "<how to run in dev>"` — URL-first: live link now, tunnelled to the app, real build behind it (auto sign-in the first time)
+- `supersonic deploy --dev-port <n>` — same, tunnel to a dev server you already started
 - `supersonic deploy --github [--repo <url>]` — publish from a git URL instead
+- `supersonic deploy --prebuilt` — build locally and upload the result (old path)
 - `supersonic apps` — list the user's apps
 - `supersonic status <app>` — version, URL, database, environment
 - `supersonic logs <app>` — production logs (`--follow` to stream)
