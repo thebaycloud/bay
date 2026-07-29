@@ -7,3 +7,9 @@ apps/web/.next/
 .pg.json
 *.log
 .DS_Store
+# Local dev secrets/config — must never be baked into the deployed image.
+.env.local
+**/.env.local
+.pg.json
+**/.pg.json
+.sstok
