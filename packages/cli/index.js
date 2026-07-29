@@ -395,8 +395,19 @@ async function urlFirstDeploy(args) {
       },
     });
     child.unref();
-    print(dim("  building in the background · watch: ") + bold(`supersonic logs ${slug} --follow`));
-    print(dim("  (run with --wait to stay attached and keep a live preview)"));
+    // Say — in the foreground, where the agent actually sees it — what the link
+    // shows while the build runs. A live preview needs a way to run the app
+    // locally; without one the URL is a "building…" page until the real build lands.
+    const hasDevCmd = !!(args["dev-cmd"] || args["dev-port"]);
+    let hasDevScript = false;
+    try { hasDevScript = !!((JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")).scripts) || {}).dev; } catch { /* not a node app */ }
+    if (hasDevCmd || hasDevScript) {
+      print(dim("  starting a live preview at that URL now; the real build swaps in when ready"));
+    } else {
+      print("  " + bold("no live preview") + dim(" — the link shows a “building…” page until the build finishes (~1–2 min)."));
+      print(dim("  for an instant preview, redeploy with ") + bold('--dev-cmd "<how to run your app>"'));
+    }
+    print(dim("  build finishing in the background · watch: ") + bold(`supersonic logs ${slug} --follow`));
     process.exit(0);
   }
 

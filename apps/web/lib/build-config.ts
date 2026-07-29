@@ -263,6 +263,10 @@ export function buildLogLine(l: string): string | null {
  *
  * No image is assembled or pushed: the deploy points at the shared runner image,
  * which already exists. That is the difference from the Dockerfile lane.
+ *
+ * SUPERSONIC_CACHE_* points prepare at a per-app cache object it restores before
+ * install/build and saves after — so a redeploy reuses node_modules and the
+ * framework build cache instead of doing both from scratch.
  */
 export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string }): string {
   const out = `${opts.release}.tgz`;
@@ -270,7 +274,7 @@ export function runnerPrepareConfig(opts: { image: string; bucket: string; slug:
     "steps:",
     `  - name: ${opts.image}`,
     "    entrypoint: /usr/local/bin/supersonic-prepare",
-    `    env: ["SUPERSONIC_OUT=${out}"]`,
+    `    env: ["SUPERSONIC_OUT=${out}", "SUPERSONIC_CACHE_BUCKET=${opts.bucket}", "SUPERSONIC_CACHE_OBJECT=cache/${opts.slug}.tgz"]`,
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
     "artifacts:",

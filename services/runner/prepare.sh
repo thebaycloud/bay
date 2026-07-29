@@ -10,11 +10,52 @@
 set -eu
 log() { echo "[supersonic-prepare] $*"; }
 
+# --- cross-deploy build cache (best-effort) -------------------------------
+# node_modules and the framework build cache (.next/cache) are the same between
+# most redeploys, so we stash them in GCS keyed by the app and restore them next
+# time. This is what makes a REDEPLOY fast: an unchanged lockfile means install
+# reconciles an already-present tree, and `next build` reuses its incremental
+# cache instead of recompiling from scratch. Auth is the Cloud Build worker's own
+# service account via the metadata server — same pattern as the serve entrypoint.
+# Every step here is swallowed: a cache miss or failure never fails a prepare.
+CACHE_DIRS="node_modules .next/cache"
+gcs_token() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+    | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p'
+}
+restore_cache() {
+  [ -n "${SUPERSONIC_CACHE_BUCKET:-}" ] || return 0
+  t=$(gcs_token); [ -n "$t" ] || return 0
+  enc=$(printf '%s' "$SUPERSONIC_CACHE_OBJECT" | sed 's:/:%2F:g')
+  if curl -sf -H "Authorization: Bearer $t" \
+      "https://storage.googleapis.com/storage/v1/b/$SUPERSONIC_CACHE_BUCKET/o/$enc?alt=media" -o /tmp/cache.tgz; then
+    tar -xzf /tmp/cache.tgz -C "$APP" 2>/dev/null && log "restored build cache" || log "cache entry unusable — ignoring"
+    rm -f /tmp/cache.tgz
+  else
+    log "no build cache yet — this deploy warms it for the next"
+  fi
+}
+save_cache() {
+  [ -n "${SUPERSONIC_CACHE_BUCKET:-}" ] || return 0
+  paths=""; for d in $CACHE_DIRS; do [ -e "$d" ] && paths="$paths $d"; done
+  [ -n "$paths" ] || return 0
+  t=$(gcs_token); [ -n "$t" ] || return 0
+  tar -czf /tmp/cache.tgz $paths 2>/dev/null || return 0
+  enc=$(printf '%s' "$SUPERSONIC_CACHE_OBJECT" | sed 's:/:%2F:g')
+  curl -sf -X POST -H "Authorization: Bearer $t" -H "Content-Type: application/gzip" --data-binary @/tmp/cache.tgz \
+      "https://storage.googleapis.com/upload/storage/v1/b/$SUPERSONIC_CACHE_BUCKET/o?uploadType=media&name=$enc" >/dev/null \
+    && log "saved build cache for the next deploy" || log "cache save skipped"
+  rm -f /tmp/cache.tgz
+}
+# --------------------------------------------------------------------------
+
 SRC="$(pwd)"     # Cloud Build mounts the user's source here (/workspace).
 APP=/app         # Build at the SAME path the runner serves from, so any absolute
 mkdir -p "$APP"  # paths baked into deps (a Python venv's shebangs) stay valid.
 cp -a "$SRC/." "$APP/"
 cd "$APP"
+restore_cache
 
 if [ -f package.json ]; then
   if [ -f package-lock.json ]; then
@@ -37,6 +78,8 @@ elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
     ./.venv/bin/pip install --find-links="${PIP_WHEELHOUSE:-/opt/wheels}" .
   fi
 fi
+
+save_cache
 
 OUT="${SUPERSONIC_OUT:-ready.tgz}"
 log "packaging $OUT with dependencies baked in"
