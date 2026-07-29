@@ -153,6 +153,24 @@ async function provisionStorage(slug: string, log: (l: string) => void): Promise
     const m = e instanceof Error ? e.message : String(e);
     if (!/already own|already exists|conflict|409/i.test(m)) throw e;
   }
+
+  // Apps share one runtime identity, so bucket access has to be granted per bucket
+  // rather than project-wide — a project-level grant would hand every app the keys
+  // to every other app's storage, which is the thing the runtime account exists to
+  // stop. Best-effort: an app whose binding fails still deploys, it just cannot
+  // write objects, and that is visible in its own logs rather than as a dead deploy.
+  if (APP_RUNTIME_SA) {
+    try {
+      await capture("gcloud", [
+        "storage", "buckets", "add-iam-policy-binding", `gs://${bucket}`,
+        "--member", `serviceAccount:${APP_RUNTIME_SA}`,
+        "--role", "roles/storage.objectAdmin",
+        "--project", PROJECT,
+      ]);
+    } catch (e) {
+      log(`! storage permission not granted: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   return bucket;
 }
 
