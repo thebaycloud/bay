@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { createHash } from "node:crypto";
 
 export interface AppRow {
   id: string;
@@ -74,4 +75,12 @@ export async function workspaceOfUser(userId: string): Promise<string | null> {
 export async function workspaceDomainOf(workspaceId: string): Promise<string | null> {
   const r = await db().query(`SELECT domain FROM workspaces WHERE id = $1`, [workspaceId]);
   return r.rows[0]?.domain ?? null;
+}
+
+/** Resolve a CLI bearer token to its owner's user id — for authorising a tunnel. */
+export async function userIdFromToken(token: string): Promise<string | null> {
+  if (!token) return null;
+  const hash = createHash("sha256").update(token).digest("hex");
+  const r = await db().query(`SELECT user_id FROM cli_tokens WHERE token_hash = $1`, [hash]);
+  return r.rows[0]?.user_id ?? null;
 }

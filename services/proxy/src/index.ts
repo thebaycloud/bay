@@ -1,10 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
 import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./registry";
-import { page403, page404, page502, pageGate } from "./pages";
+import { page403, page404, page502, pageGate, pageBuilding } from "./pages";
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { forward } from "./forward";
+import { attachTunnel, hasTunnel, forwardToTunnel } from "./tunnel";
 
 function slugFromHost(host: string | undefined): string | null {
   if (!host) return null;
@@ -27,12 +28,28 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   const app = await lookupApp(slug);
   if (!app) return html(res, 404, page404());
-  if (!app.run_url) return html(res, 502, page502(slug));
+
+  // A published build (run_url set) is served normally. Before the first build
+  // exists, an open tunnel to the user's dev server stands in — same URL. If it's
+  // still deploying with neither, a "building…" page that goes live on its own.
+  const buildLive = !!app.run_url;
+  const tunnelUp = hasTunnel(slug);
+  if (!buildLive && !tunnelUp) {
+    if (app.status === "deploying") return html(res, 200, pageBuilding(slug));
+    return html(res, 502, page502(slug));
+  }
+
+  // Serve from the build if it exists, otherwise the tunnel — after the app's own
+  // access rules, which apply identically to both.
+  const serve = (visitorCtx: { userId: string; email: string; name: string }, wd: string, owner: boolean) =>
+    buildLive
+      ? forward(req, res, app.run_url as string, visitorCtx, wd, { slug, owner })
+      : Promise.resolve(forwardToTunnel(req, res, slug));
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
   if (app.visibility === "public") {
     const wd = (await workspaceDomainOf(app.workspace_id)) ?? "";
-    await forward(req, res, app.run_url, { userId: "", email: "", name: "" }, wd, { slug, owner: false });
+    await serve({ userId: "", email: "", name: "" }, wd, false);
     return;
   }
 
@@ -54,13 +71,15 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   }
 
   const workspaceDomain = (await workspaceDomainOf(app.workspace_id)) ?? "";
-  await forward(req, res, app.run_url, visitor, workspaceDomain, { slug, owner: visitor.userId === app.owner_id });
+  await serve(visitor, workspaceDomain, visitor.userId === app.owner_id);
 }
 
-createServer((req, res) => {
+const server = createServer((req, res) => {
   handle(req, res).catch((e) => {
     console.error(e);
     if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain" });
     res.end("internal error");
   });
-}).listen(config.port, () => console.log(`proxy listening on :${config.port}`));
+});
+attachTunnel(server);
+server.listen(config.port, () => console.log(`proxy listening on :${config.port}`));

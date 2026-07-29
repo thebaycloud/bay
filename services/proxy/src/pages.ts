@@ -61,6 +61,14 @@ export function page502(slug: string): string {
 <p><code>${escapeHtml(slug)}</code> is deployed but not answering right now.</p>`);
 }
 
+/** Shown at a reserved URL that has neither a build nor a tunnel yet. Reloads
+ *  itself, so it becomes the live app the moment either appears. */
+export function pageBuilding(slug: string): string {
+  return `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="3">` +
+    shell("Deploying…", `<h1>🚀 Deploying <code>${escapeHtml(slug)}</code></h1>
+<p>Your app is going live — this page updates itself. Hang tight.</p>`);
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
