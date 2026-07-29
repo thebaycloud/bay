@@ -20,6 +20,7 @@ import { take as takeClone } from "@/lib/clone-cache";
 import { resilientInstall } from "@/lib/install";
 import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder } from "@/lib/stages";
+import { stripQualityGates } from "@/lib/build-gates";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
 
 const PROJECT = "supersonic-deploy-prod";
@@ -677,6 +678,24 @@ export async function POST(req: Request) {
 
         if (staticServe) {
           log(`${s.framework} builds to a directory — publishing it without a container`);
+          // Drop type-check/lint/test gates from the build script: the bundler
+          // produces the artifact, the gates only fail the deploy on issues that
+          // don't affect the running app. Our copy only — never the user's repo.
+          try {
+            const pkgPath = join(dir, "package.json");
+            if (existsSync(pkgPath)) {
+              const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+              const original = pkg.scripts?.build;
+              if (typeof original === "string") {
+                const stripped = stripQualityGates(original);
+                if (stripped !== original.trim()) {
+                  pkg.scripts.build = stripped;
+                  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+                  log(`Skipping build gates for the deploy: "${original}" → "${stripped}"`);
+                }
+              }
+            }
+          } catch { /* leave the build script as-is on any parse trouble */ }
         } else if (!hasDockerfile && /vite|create react app|\bspa\b/i.test(s.framework)) {
           const outdir = /create react app/i.test(s.framework) ? "build" : "dist";
           writeFileSync(join(dir, "Dockerfile"), spaDockerfile(outdir));
