@@ -12,10 +12,32 @@ const instrumentSerif = Instrument_Serif({
   display: "swap",
 });
 
+const TITLE = "Supersonic — Deploy anything in one click";
+const DESCRIPTION =
+  "Point us at the app you vibe-coded. We turn it into a real, live product — database, auth, everything — in one click. No infra, ever.";
+
 export const metadata: Metadata = {
-  title: "Supersonic — Deploy anything in one click",
-  description:
-    "Point us at the app you vibe-coded. We turn it into a real, live product — database, auth, everything — in one click. No infra, ever.",
+  metadataBase: new URL(process.env.APP_URL || "https://app.supersonic.cv"),
+  title: TITLE,
+  description: DESCRIPTION,
+  // Each entry is its own drawing, not one file scaled — see docs/BRAND.md.
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-32.png", type: "image/png", sizes: "32x32" },
+      { url: "/favicon-16.png", type: "image/png", sizes: "16x16" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: "/apple-touch-icon.png",
+  },
+  openGraph: {
+    type: "website",
+    siteName: "Supersonic",
+    title: TITLE,
+    description: DESCRIPTION,
+    images: [{ url: "/og.png", width: 1200, height: 630 }],
+  },
+  twitter: { card: "summary_large_image", images: ["/og.png"] },
 };
 
 export default function RootLayout({

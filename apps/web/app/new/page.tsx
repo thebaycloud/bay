@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { Zap, ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound } from "lucide-react";
+import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound } from "lucide-react";
+import { Mark } from "@/components/Mark";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
@@ -141,7 +142,7 @@ export default function NewApp() {
     <div className="shell">
       <header className="topbar">
         <Link href="/" className="topbrand">
-          <span className="logo"><Zap size={13} strokeWidth={2.4} /></span>
+          <span className="logo"><Mark size={14} onDark /></span>
           SUPERSONIC
         </Link>
         <div className="spacer" />

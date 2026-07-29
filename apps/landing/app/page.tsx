@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import {
-  Zap, Rocket, Database, Terminal, Bot, Activity, Link2,
+  Rocket, Database, Terminal, Bot, Activity, Link2,
   Check, X, ArrowRight, Github, Crown, Palette, MessageSquare, Gauge, Wrench, ChevronDown,
 } from "lucide-react";
+import { Mark } from "@/components/Mark";
 import { GridPattern } from "@/components/magicui/grid-pattern";
 import { Globe } from "@/components/magicui/globe";
 import { Terminal as Term, TypingAnimation, AnimatedSpan } from "@/components/magicui/terminal";
@@ -194,7 +195,7 @@ export default function Page() {
   return (
     <>
       <nav className="nav">
-        <a className="brand" href="/"><span className="mk"><Zap size={13} strokeWidth={2.5} /></span>SUPERSONIC</a>
+        <a className="brand" href="/"><span className="mk"><Mark size={15} onDark /></span>SUPERSONIC</a>
         <div className="links">
           <a href="#features">Product</a>
           <a href="#pricing">Pricing</a>
@@ -386,7 +387,7 @@ export default function Page() {
         <footer>
           <div className="foot">
             <div>
-              <div className="brand"><span className="mk"><Zap size={13} strokeWidth={2.5} /></span>SUPERSONIC</div>
+              <div className="brand"><span className="mk"><Mark size={15} onDark /></span>SUPERSONIC</div>
               <p style={{ color: "var(--ink-2)", fontSize: 13, marginTop: 12, maxWidth: "30ch" }}>The cloud for vibecoders. Deploy anything in one click.</p>
             </div>
             <div className="col">
@@ -416,7 +417,7 @@ export default function Page() {
       </button>
 
       <a className="ss-badge" href={APP} target="_blank" rel="noreferrer">
-        <Zap size={11} strokeWidth={2.6} />Runs on Supersonic
+        <Mark size={12} onDark />Runs on Supersonic
       </a>
     </>
   );

@@ -4,9 +4,10 @@ import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Zap, ChevronDown, LayoutGrid, Database, HardDrive, Server, Copy,
+  ChevronDown, LayoutGrid, Database, HardDrive, Server, Copy,
   ArrowUpRight, Check, Lock, AlertTriangle, Settings2, GitBranch, Users, X, LogOut,
 } from "lucide-react";
+import { Mark } from "@/components/Mark";
 import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
 import { StoragePanel } from "./StoragePanel";
@@ -82,7 +83,7 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
     <div className="app">
       <aside className="sidebar">
         <Link href="/" className="brand" style={{ textDecoration: "none", color: "inherit" }}>
-          <span className="logo"><Zap size={13} strokeWidth={2.4} /></span>
+          <span className="logo"><Mark size={14} onDark /></span>
           SUPERSONIC
         </Link>
         <div className="switch-wrap">

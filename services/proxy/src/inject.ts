@@ -45,20 +45,25 @@ var css=\`
 .reqs .ap{background:#2ea86a;color:#05130b;border:0;border-radius:6px;padding:5px 10px;font:600 11px sans-serif;cursor:pointer}
 .reqs .dn{background:none;border:0;color:#9db0a6;cursor:pointer;font:400 11px sans-serif}
 \`;
+// Supersonic mark — the knockout drawing, since it is always light-on-dark here.
+// Mirrors apps/*/components/Mark.tsx; see docs/BRAND.md before changing.
+function MARK(px,fill){return '<svg width="'+px+'" height="'+px+'" viewBox="0 0 24 24" fill="'+fill+'">'
+  +'<path d="M7.4 1.5 L14.2 1.5 L7.2 22.5 L0.4 22.5 Z"/>'
+  +'<path d="M16.8 1.5 L23.6 1.5 L16.6 22.5 L9.8 22.5 Z"/></svg>';}
 var vis='private',grants=[],reqs=[];
 function h(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;}
 var style=document.createElement('style');style.textContent=css;root.appendChild(style);
 
 // badge (everyone)
 var badge=document.createElement('a');badge.className='badge';badge.href=C.site;badge.target='_blank';
-badge.innerHTML='<svg width="11" height="11" viewBox="0 0 24 24" fill="#fff"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Runs on Supersonic';
+badge.innerHTML=MARK(12,'#fff')+'Runs on Supersonic';
 root.appendChild(badge);
 
 if(!C.owner)return;
 
 // toolbar (owner)
 var bar=h('div','bar');
-var brand=h('div','brand');brand.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="#2ea86a"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Supersonic';
+var brand=h('div','brand');brand.innerHTML=MARK(12,'#2ea86a')+'Supersonic';
 var share=h('button','share','Share');
 var open=document.createElement('a');open.className='open';open.href=C.app+'/apps/'+C.slug;open.target='_blank';open.textContent='Open in Supersonic';
 bar.appendChild(brand);bar.appendChild(share);bar.appendChild(open);root.appendChild(bar);

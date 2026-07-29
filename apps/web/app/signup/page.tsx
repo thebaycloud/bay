@@ -4,7 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Zap, Github } from "lucide-react";
+import { Github } from "lucide-react";
+import { Mark } from "@/components/Mark";
 import { GoogleIcon } from "@/components/BrandIcons";
 
 // A supersonic.cv return URL from ?callbackUrl (validated), so signing up from a
@@ -65,7 +66,7 @@ export default function Signup() {
   return (
     <div className="authpage">
       <div className="authbox">
-        <div className="authbrand"><span className="logo"><Zap size={14} strokeWidth={2.4} /></span>SUPERSONIC</div>
+        <div className="authbrand"><span className="logo"><Mark size={15} onDark /></span>SUPERSONIC</div>
         <h1>Create account</h1>
         <form onSubmit={submit}>
           <input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />

@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
-import { Zap, LayoutGrid, Settings, LogOut, Sparkles, X } from "lucide-react";
+import { LayoutGrid, Settings, LogOut, Sparkles, X } from "lucide-react";
+import { Mark } from "@/components/Mark";
 import { Paywall } from "./Paywall";
 
 interface Acct {
@@ -31,7 +32,7 @@ export function Sidebar({ active }: { active?: "apps" | "settings" }) {
 
   return (
     <aside className="sidebar">
-      <Link href="/" className="side-brand"><span className="logo"><Zap size={13} strokeWidth={2.4} /></span>SUPERSONIC</Link>
+      <Link href="/" className="side-brand"><span className="logo"><Mark size={14} onDark /></span>SUPERSONIC</Link>
 
       <nav className="side-nav">
         <Link href="/" className={"side-nav-item" + (active === "apps" ? " active" : "")}><LayoutGrid size={15} />Apps</Link>

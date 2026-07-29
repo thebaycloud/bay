@@ -4,7 +4,8 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Zap, Github } from "lucide-react";
+import { Github } from "lucide-react";
+import { Mark } from "@/components/Mark";
 import { GoogleIcon } from "@/components/BrandIcons";
 
 /**
@@ -61,7 +62,7 @@ export default function Login() {
   return (
     <div className="authpage">
       <div className="authbox">
-        <div className="authbrand"><span className="logo"><Zap size={14} strokeWidth={2.4} /></span>SUPERSONIC</div>
+        <div className="authbrand"><span className="logo"><Mark size={15} onDark /></span>SUPERSONIC</div>
         <h1>Sign in</h1>
         <form onSubmit={submit}>
           <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
