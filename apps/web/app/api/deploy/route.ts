@@ -24,7 +24,7 @@ import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
-import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig } from "@/lib/build-config";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -47,6 +47,23 @@ const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
 /** The one Cloud Run service that fronts every static app. */
 const STATIC_SERVICE = process.env.STATIC_SERVICE ?? "supersonic-static";
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
+
+/**
+ * The prebuilt-runner lane. Instead of building a container image per app
+ * (install → docker build → push → deploy, the slow path), the app's code is
+ * uploaded to GCS and a Cloud Run revision is pointed at a shared base image that
+ * ALREADY carries the popular packages (services/runner). The runner fetches the
+ * code and runs it — no per-app build. Language is a two-way Node/Python fork,
+ * not a framework matrix; the weird 10% still falls to the opencode repair loop.
+ *
+ * Behind RUNNER=1 so it ships dark and the current build path is untouched until
+ * the runner base images exist in Artifact Registry (see services/runner/build.sh).
+ */
+const RUNNER_ENABLED = process.env.RUNNER === "1";
+const RUNNER_NODE_IMAGE = process.env.RUNNER_NODE_IMAGE
+  ?? `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/runner-node:latest`;
+const RUNNER_PYTHON_IMAGE = process.env.RUNNER_PYTHON_IMAGE
+  ?? `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/runner-python:latest`;
 const ENV = {
   ...process.env,
   PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`,
@@ -579,7 +596,14 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
-      const send = (o: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
+      // Enqueue must never throw into the deploy: once the CLI returns the live
+      // URL it detaches, and a build now routinely finishes with no client
+      // listening. If the stream is already closed the progress line is simply
+      // dropped — the build carries on to completion regardless.
+      const send = (o: unknown) => {
+        try { controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`)); }
+        catch { /* client gone — keep building, just stop narrating */ }
+      };
       // The lane is only known after detection; until then everything is charged
       // to "generic", which is what the pre-detection stages actually are.
       let stages = new StageRecorder(slug, "generic");
@@ -654,8 +678,20 @@ export async function POST(req: Request) {
           ? { outputDir: String(s.serve.outputDir || ".") }
           : null;
 
+        // The prebuilt-runner lane owns every server app that doesn't ship its own
+        // Dockerfile — Node or Python. A static SPA stays on the instant static
+        // lane above (nothing to run, and the runner would only add latency); a
+        // Dockerfile author was explicit and keeps the container build. Language
+        // is the ONLY thing read here, from the runtime string — not the framework.
+        const runnerLang: "node" | "python" | null =
+          RUNNER_ENABLED && !staticServe && !hasDockerfile
+            ? (String(s.runtime || "").startsWith("node") ? "node"
+              : String(s.runtime || "").startsWith("python") ? "python"
+              : null)
+            : null;
+
         // Now that the lane is known, the rest of the deploy is charged to it.
-        stages = new StageRecorder(slug, staticServe ? "static" : hasDockerfile ? "generic" : "fast");
+        stages = new StageRecorder(slug, staticServe ? "static" : runnerLang ? "runner" : hasDockerfile ? "generic" : "fast");
 
         if (staticServe) {
           log(`${s.framework} builds to a directory — publishing it without a container`);
@@ -677,6 +713,8 @@ export async function POST(req: Request) {
               }
             }
           } catch { /* leave the build script as-is on any parse trouble */ }
+        } else if (runnerLang) {
+          log(`Using the prebuilt ${runnerLang} runner — no image to build`);
         } else if (!hasDockerfile && /vite|create react app|\bspa\b/i.test(s.framework)) {
           const outdir = /create react app/i.test(s.framework) ? "build" : "dist";
           writeFileSync(join(dir, "Dockerfile"), spaDockerfile(outdir));
@@ -734,6 +772,19 @@ export async function POST(req: Request) {
 
         for (const [k, v] of Object.entries(secrets)) {
           if (k && v) { extraEnv.push(`${k}=${v}`); log(`Injecting secret ${k}`); }
+        }
+
+        // Runner lane: the code is uploaded to GCS and the runner image fetches it
+        // at start. Point the container at that object via env — it rides the same
+        // --set-env-vars below as DATABASE_URL, STORAGE_BUCKET and the secrets, so
+        // a runner app comes up with its full environment wired.
+        let runnerObject: string | null = null;
+        if (runnerLang) {
+          // Points at the READY bundle the prepare step produces (deps baked in),
+          // not the raw source — so a starting instance fetches-and-runs.
+          runnerObject = `ready/${slug}/${releaseId()}.tgz`;
+          extraEnv.push(`SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`);
+          extraEnv.push(`SUPERSONIC_CODE_OBJECT=${runnerObject}`);
         }
 
         // Flags shared by both build paths (applied on `gcloud run deploy`).
@@ -877,6 +928,29 @@ export async function POST(req: Request) {
 
         const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
           if (staticServe) return runStatic(staticServe);
+          if (runnerLang && runnerObject) {
+            // No image is built. A one-time prepare step installs deps + builds on
+            // the runner image (warm cache) and uploads a ready-to-run bundle; the
+            // deploy then points the shared runner image at that bundle. So install
+            // happens ONCE here, not on every instance start.
+            const image = runnerLang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE;
+            const release = runnerObject.split("/").pop()!.replace(/\.tgz$/, "");
+            try {
+              await stages.around("prepare", async () => {
+                log(`Preparing on the ${runnerLang} runner (install + build once — no image)…`);
+                writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release }));
+                const hb = setInterval(() => log("preparing…"), 8000);
+                try {
+                  await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
+                } finally { clearInterval(hb); }
+              });
+            } catch (e) {
+              const buildLog = await fetchBuildError();
+              return { ok: false, error: `Prepare failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
+            }
+            log(`Deploying on the prebuilt ${runnerLang} runner…`);
+            return attempt(["run", "deploy", slug, "--image", image, ...deployFlags]);
+          }
           if (useDockerBuild) {
             log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
             const hb = setInterval(() => log("building…"), 8000);

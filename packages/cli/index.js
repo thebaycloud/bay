@@ -362,7 +362,6 @@ async function deploy(args) {
  * one, the URL is still live instantly with the deploying page. No stack is blocked.
  */
 async function urlFirstDeploy(args) {
-  const { startDevServer, openTunnel } = require("./lib/tunnel");
   let repo = args.repo;
   if (args.github && !repo) { repo = await gitOrigin(); }
   const folderName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
@@ -372,10 +371,49 @@ async function urlFirstDeploy(args) {
   const { slug, url } = r;
   print(green("✓ ") + "your app is live at " + bold(url) + dim("  (deploying — build finishing in the background)"));
 
-  // 2) live preview: tunnel the URL to a dev server. The agent supplies how to run
-  //    it (--dev-cmd / --dev-port) for any stack; a Node `dev` script we start
-  //    ourselves. Until it's up the URL shows the deploying page (a fraction of a
-  //    second), never a dead link.
+  // Default: DON'T hold the caller hostage for the whole build. A coding agent
+  // that runs `supersonic deploy` should get the live URL and its prompt back in
+  // ~1s, not sit blocked for two minutes. So the build is handed to a detached
+  // background worker that keeps the deploy connection open (the server keeps
+  // building, CPU allocated, until it lands) and logs to
+  // ~/.supersonic/deploys/<slug>.log. Pass --wait to stay attached and stream the
+  // build here instead (keeps the live-preview tunnel up the whole time).
+  if (!args.wait) {
+    const logDir = path.join(CFG_DIR, "deploys");
+    fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, `${slug}.log`);
+    const out = fs.openSync(logFile, "a");
+    const child = spawn(process.execPath, [process.argv[1], "__deploy-worker"], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: ["ignore", out, out],
+      env: {
+        ...process.env,
+        SS_BG_SLUG: slug, SS_BG_URL: url, SS_BG_REPO: repo || "",
+        SS_BG_FOLDER: folderName,
+        SS_BG_DEVCMD: args["dev-cmd"] || "", SS_BG_DEVPORT: args["dev-port"] || "",
+      },
+    });
+    child.unref();
+    print(dim("  building in the background · watch: ") + bold(`supersonic logs ${slug} --follow`));
+    print(dim("  (run with --wait to stay attached and keep a live preview)"));
+    process.exit(0);
+  }
+
+  await runBuildAndWait({ slug, url, repo, folderName, args });
+}
+
+/**
+ * Steps 2–3 of a URL-first deploy: bring up the live-preview tunnel, kick off the
+ * real build on the server, and stream it to completion. Runs either in the
+ * foreground (`--wait`) or inside the detached background worker.
+ */
+async function runBuildAndWait({ slug, url, repo, folderName, args }) {
+  const { startDevServer, openTunnel } = require("./lib/tunnel");
+
+  // Live preview: tunnel the URL to a dev server. The agent supplies how to run it
+  // (--dev-cmd / --dev-port) for any stack; a Node `dev` script we start ourselves.
+  // Until it's up the URL shows the deploying page, never a dead link.
   info(dim("  bringing up a live preview at that URL…"));
   const { proc, port } = await startDevServer(process.cwd(), { devCmd: args["dev-cmd"], devPort: args["dev-port"] });
   const tunnelWs = process.env.SUPERSONIC_TUNNEL_WS || `wss://${slug}.supersonic.cv/_tunnel`;
@@ -390,9 +428,12 @@ async function urlFirstDeploy(args) {
     info(dim("  (no dev server — pass --dev-cmd \"<how to run your app>\" for an instant live preview)"));
   }
   const cleanup = () => { try { ws && ws.close(); } catch { /* */ } try { proc && proc.kill(); } catch { /* */ } };
+  // consumeDeploy exits the process on the terminal event, so guarantee the dev
+  // server / tunnel are torn down however this process ends.
+  process.on("exit", cleanup);
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
 
-  // 3) the real build, on the reserved slug, on the server (your machine stays free)
+  // The real build, on the reserved slug, on the server (your machine stays free).
   let res;
   if (repo) {
     res = await api("/api/deploy", { method: "POST", body: { repo, slug }, stream: true });
@@ -411,6 +452,19 @@ async function urlFirstDeploy(args) {
   await consumeDeploy(res, args);   // when the build goes live the proxy serves it on `url`
   print(green("✓ ") + "build is live at " + bold(url));
   cleanup();
+}
+
+/** The detached background worker spawned by the default deploy. Finishes the
+ * build after the foreground command has already returned the live URL. */
+async function deployWorker() {
+  const slug = process.env.SS_BG_SLUG, url = process.env.SS_BG_URL;
+  if (!slug || !url) die("deploy worker: missing context");
+  await runBuildAndWait({
+    slug, url,
+    repo: process.env.SS_BG_REPO || "",
+    folderName: process.env.SS_BG_FOLDER || "app",
+    args: { "dev-cmd": process.env.SS_BG_DEVCMD || undefined, "dev-port": process.env.SS_BG_DEVPORT || undefined, _: [] },
+  });
 }
 
 /**
@@ -623,6 +677,7 @@ ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the bac
   supersonic deploy --dev-cmd "<run in dev>"    tunnel the URL to your app live while it builds
                                                   e.g. --dev-cmd "uvicorn main:app --port 8000"
   supersonic deploy --dev-port <n>              tunnel to a dev server you already started
+  supersonic deploy --wait                      stay attached and stream the build (default: returns once live)
   supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead
   supersonic deploy --prebuilt                  old path: build here, upload the result
   supersonic redeploy <app>                     rebuild from the app's source
@@ -661,7 +716,7 @@ function parse(argv) {
   return args;
 }
 
-const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, rollback, exec, open, deploy, redeploy };
+const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, rollback, exec, open, deploy, redeploy, "__deploy-worker": deployWorker };
 
 (async () => {
   const [, , cmd, ...rest] = process.argv;

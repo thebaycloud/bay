@@ -1,0 +1,34 @@
+# Popular Python packages, pre-built into a wheelhouse (/opt/wheels) in the base
+# image so a user's `pip install --find-links=/opt/wheels` resolves offline and
+# fast — including the heavy scientific wheels that otherwise dominate a cold
+# build. One requirement per line. Refreshed on a schedule.
+flask
+flask-cors
+flask-sqlalchemy
+fastapi
+uvicorn[standard]
+gunicorn
+django
+streamlit
+gradio
+requests
+httpx
+pydantic
+python-dotenv
+python-multipart
+sqlalchemy
+psycopg2-binary
+alembic
+aiosqlite
+redis
+celery
+jinja2
+aiofiles
+pandas
+numpy
+pillow
+beautifulsoup4
+openai
+anthropic
+boto3
+tqdm

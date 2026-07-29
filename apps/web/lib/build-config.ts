@@ -246,3 +246,37 @@ export function buildLogLine(l: string): string | null {
   if (CACHE_WRITE.test(l)) return "layer cache updated for the next deploy";
   return INTERESTING.test(l) ? l : null;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Prebuilt-runner prepare step                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Cloud Build config for the runner lane's ONE-TIME prepare step.
+ *
+ * It runs `supersonic-prepare` on the runner image (so the warm dependency cache
+ * baked into that image applies), which installs the app's deps and builds it,
+ * then tars everything — deps included — into `<release>.tgz`. The `artifacts`
+ * block uploads that bundle to GCS. A serving Cloud Run instance later just
+ * fetches the bundle and runs it, so it installs NOTHING on start — the cost is
+ * paid once here, not on every new instance.
+ *
+ * No image is assembled or pushed: the deploy points at the shared runner image,
+ * which already exists. That is the difference from the Dockerfile lane.
+ */
+export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string }): string {
+  const out = `${opts.release}.tgz`;
+  return [
+    "steps:",
+    `  - name: ${opts.image}`,
+    "    entrypoint: /usr/local/bin/supersonic-prepare",
+    `    env: ["SUPERSONIC_OUT=${out}"]`,
+    "options:",
+    "  logging: CLOUD_LOGGING_ONLY",
+    "artifacts:",
+    "  objects:",
+    `    location: gs://${opts.bucket}/ready/${opts.slug}/`,
+    `    paths: ["${out}"]`,
+    "",
+  ].join("\n");
+}

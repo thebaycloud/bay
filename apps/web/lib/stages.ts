@@ -2,7 +2,7 @@ import { getPool } from "./db";
 
 const DB = "supersonic_platform";
 
-export type Lane = "static" | "fast" | "generic";
+export type Lane = "static" | "fast" | "generic" | "runner";
 export type Outcome = "ok" | "failed" | "skipped";
 
 export interface StageRow {
