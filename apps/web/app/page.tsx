@@ -8,7 +8,12 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sidebar } from "@/components/Sidebar";
 import { TrialBanner } from "@/components/TrialBanner";
 
-interface App { slug: string; name: string; url: string; ready: boolean; region: string; image: string; status?: string; stage?: string; }
+interface App {
+  slug: string; name: string; url: string; ready: boolean;
+  region: string; image: string; status?: string; stage?: string;
+  /** A screenshot captured at deploy time; absent until that pipeline exists. */
+  thumbnail?: string;
+}
 
 export default function Home() {
   const [apps, setApps] = useState<App[] | null>(null);
@@ -77,9 +82,24 @@ export default function Home() {
                 </Link>
               ) : (
                 <Link key={a.slug} href={`/apps/${a.slug}`} className="app-card">
+                  {/*
+                    This used to be <iframe src={`https://${slug}.supersonic.cv`} /> — a
+                    live load of the app itself, to draw a 300x200 thumbnail. Opening the
+                    dashboard opened every app on it: measured at 3.4s for one app's HTML
+                    alone, before its own scripts and fonts loaded inside the frame.
+                    Private apps spent that round trip to render a 401.
+
+                    It was also the loosest possible sandbox: allow-scripts together with
+                    allow-same-origin lets the framed app reach back into the origin that
+                    framed it.
+
+                    A screenshot captured at deploy time replaces it. Until that pipeline
+                    exists, the monogram — already the fallback for apps with no URL — is
+                    what shows, and no cross-origin request is made at all.
+                  */}
                   <div className="thumb">
-                    {a.url
-                      ? <iframe src={`https://${a.slug}.supersonic.cv`} title={a.slug} loading="lazy" sandbox="allow-scripts allow-same-origin" />
+                    {a.thumbnail
+                      ? <img src={a.thumbnail} alt="" loading="lazy" decoding="async" />
                       : <span className="thumb-mono">{a.slug.charAt(0).toUpperCase()}</span>}
                   </div>
                   <div className="card-body">

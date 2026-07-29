@@ -366,7 +366,9 @@ a.btn { text-decoration: none; }
 .app-card:hover { background: var(--paper); }
 .app-card:nth-child(3n) { border-right: none; }
 .app-card .thumb { position: relative; height: 132px; border-bottom: 1px solid var(--line); overflow: hidden; background: var(--paper); }
-.app-card .thumb iframe { position: absolute; top: 0; left: 0; width: 1200px; height: 850px; transform: scale(.33); transform-origin: top left; border: 0; pointer-events: none; }
+/* Was an iframe scaled to a third — a whole application rendered to fill 132px of
+   card. Now a screenshot, sized to cover the same box. */
+.app-card .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; border: 0; }
 .app-card .thumb .thumb-mono { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--mono); font-size: 40px; font-weight: 500; color: var(--line-2); }
 .app-card:hover .thumb { opacity: .94; }
 .app-card .card-body { padding: 14px 16px 16px; display: flex; flex-direction: column; }
