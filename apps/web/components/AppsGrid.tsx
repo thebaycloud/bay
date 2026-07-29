@@ -22,6 +22,26 @@ export interface App {
  * only arms itself when something is actually building. Before, it ran on every
  * load and was needed on roughly one in a hundred.
  */
+/**
+ * An app's screenshot, with its initial as the fallback.
+ *
+ * Whether a screenshot exists is only known by asking for it — an app deployed
+ * before the screenshot service, or one whose page failed to render, has none.
+ * Rather than have the server check the bucket once per card before it can send
+ * any HTML, the image asks for itself and the monogram takes over on 404.
+ */
+function Thumb({ slug, src }: { slug: string; src?: string }) {
+  const [failed, setFailed] = useState(false);
+  const url = src ?? `/api/apps/${encodeURIComponent(slug)}/thumbnail`;
+  return (
+    <div className="thumb">
+      {failed
+        ? <span className="thumb-mono">{slug.charAt(0).toUpperCase()}</span>
+        : <img src={url} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />}
+    </div>
+  );
+}
+
 export function AppsGrid({ initial, initialError }: { initial: App[]; initialError?: string }) {
   const [apps, setApps] = useState<App[]>(initial);
   const [err, setErr] = useState(initialError ?? "");
@@ -87,14 +107,10 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                 allow-same-origin lets the framed app reach back into the origin that
                 framed it.
 
-                A screenshot captured at deploy time replaces it. Until that pipeline
-                exists the monogram shows, and no cross-origin request is made at all.
+                A screenshot taken at deploy time replaces it — same origin, one
+                image, no app code executed in the dashboard.
               */}
-              <div className="thumb">
-                {a.thumbnail
-                  ? <img src={a.thumbnail} alt="" loading="lazy" decoding="async" />
-                  : <span className="thumb-mono">{a.slug.charAt(0).toUpperCase()}</span>}
-              </div>
+              <Thumb slug={a.slug} src={a.thumbnail} />
               <div className="card-body">
                 <div className="r1">
                   <span className="nm">{a.name || a.slug}</span>

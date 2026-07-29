@@ -12,6 +12,7 @@ import { opencodeRepair } from "@/lib/opencode-deploy";
 import { currentUserId } from "@/lib/session";
 import { pgConfig } from "@/lib/pg-config";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
+import { requestThumbnail } from "@/lib/thumbnail";
 import { getPool } from "@/lib/db";
 import { resolveSlug } from "@/lib/gcloud";
 import { setDeploy } from "@/lib/deploys";
@@ -607,7 +608,9 @@ export async function POST(req: Request) {
           await publishPrebuilt({ dir, archive, slug, hash: prebuiltHash, log, send, stages });
           if (ownerId) setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
           if (ownerId && ownerWorkspace) {
-            await markAppLive(slug, (await staticServiceUrl()) ?? "", prebuiltHash || null);
+            const staticUrl = (await staticServiceUrl()) ?? "";
+            await markAppLive(slug, staticUrl, prebuiltHash || null);
+            void requestThumbnail(slug, staticUrl);
           }
           send({ type: "done", slug, url: `https://${slug}.supersonic.cv` });
           return;
@@ -959,7 +962,11 @@ export async function POST(req: Request) {
           await createDomainMapping(slug, log);
         }
         if (ownerId) setDeploy(slug, { status: "live", url: result.url });
-        if (ownerId && ownerWorkspace) await markAppLive(slug, result.url ?? "");
+        if (ownerId && ownerWorkspace) {
+          await markAppLive(slug, result.url ?? "");
+          // Not awaited: the deploy is finished, and a thumbnail must never hold it.
+          void requestThumbnail(slug, result.url ?? "");
+        }
         // A static app's run_url is the shared static server, which is useless to
         // show someone — their app lives at its own name, reached through the proxy.
         send({ type: "done", slug, url: SEAL_APPS || staticServe ? `https://${slug}.supersonic.cv` : result.url });
