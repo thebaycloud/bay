@@ -504,7 +504,10 @@ function staticBuildConfig(opts: {
     `    args: ["-lc", ${JSON.stringify(shell)}]`,
     `  - name: ${CLOUD_SDK}`,
     "    entrypoint: bash",
-    `    args: ["-lc", ${JSON.stringify(`${save}; gcloud storage rsync -r ${opts.outputDir} ${opts.destination}`)}]`,
+    // The cache-save runs in its own subshell: it `exit 0`s to skip a redundant
+    // upload, and without the subshell that exit would kill this step BEFORE the
+    // rsync, publishing an empty release on every warm-cache build.
+    `    args: ["-lc", ${JSON.stringify(`(${save}) || true; gcloud storage rsync -r ${opts.outputDir} ${opts.destination}`)}]`,
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
     "",
