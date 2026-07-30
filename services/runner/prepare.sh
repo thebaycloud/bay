@@ -70,8 +70,14 @@ if [ -f package.json ]; then
   else
     npm install --include=dev --prefer-offline --no-audit --no-fund
   fi
-  # Build by convention (Next/Nuxt/etc.) — the script name is the convention.
-  if node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
+  # Build. If the planner handed us an explicit build command (base64), that wins —
+  # it is app-specific and may chain steps a convention can't know (e.g. an Nx target
+  # plus `prisma generate`). Present-but-empty means the planner decided there is no
+  # build. Absent → fall back to the `build` script convention.
+  if [ -n "${SUPERSONIC_BUILD_B64+x}" ]; then
+    bcmd=$(printf '%s' "$SUPERSONIC_BUILD_B64" | base64 -d 2>/dev/null || printf '%s' "$SUPERSONIC_BUILD_B64" | base64 --decode)
+    if [ -n "$bcmd" ]; then log "build (from plan): $bcmd"; sh -c "$bcmd"; else log "plan: no build step"; fi
+  elif node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
     log "npm run build"
     npm run build
   fi

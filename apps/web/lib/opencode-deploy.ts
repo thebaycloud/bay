@@ -135,10 +135,17 @@ permission:
 
 You inspect the web app in \`./repo\` and output a single JSON deploy plan. You do NOT modify the app — decide how it is installed, built, and run in production on a cloud host that injects a \`$PORT\` env var.
 
-Work QUICKLY and efficiently — a few tool calls, not many. Read only what you need:
+Work QUICKLY and efficiently — a handful of tool calls, not many. Read what you need and no more:
 - the dependency manifest: \`package.json\` (or \`requirements.txt\` / \`pyproject.toml\`),
-- the build/output config IF the manifest points to one: \`nx.json\`/\`project.json\` (Nx), \`vite.config.*\`, \`next.config.*\`, \`Procfile\`, or the main entry file,
-- nothing else. Do NOT list the same directory twice or re-read a file you already read. Once you can name the install/build/run commands, WRITE the plan and STOP.
+- the build/output config the manifest points to: \`nx.json\`/\`project.json\` (Nx), \`vite.config.*\`, \`next.config.*\`, \`Procfile\`, or the main entry file,
+- a \`README\`/deployment doc if present — it OFTEN states the exact production install/build/run commands verbatim; prefer them when it does,
+- the ORM schema/config location if the app uses one.
+Do NOT list the same directory twice or re-read a file. Once you can name install/build/run, WRITE the plan and STOP.
+
+Don't forget code-generation and migration steps that a fresh checkout needs:
+- If the app uses an ORM with a generated client (Prisma \`prisma generate\`, etc.), that generation MUST happen — put it in \`build\` (or first in \`preRun\`), or the client is missing at runtime.
+- If a migrations directory exists, run the deploy migration (Prisma \`prisma migrate deploy\`) in \`preRun\`.
+- Tools resolve their own config: if package.json has a \`"prisma": { "schema": ... }\` block, plain \`prisma\` commands find it — no path flag needed.
 
 Investigate first with bash (ls, cat, grep). When you have decided, WRITE the plan as a single JSON object to the exact file path given in the task prompt, using bash — for example:
 

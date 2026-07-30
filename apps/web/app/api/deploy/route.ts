@@ -797,10 +797,14 @@ export async function POST(req: Request) {
         // the static build lane and it is the fallback), but the agent overrides the
         // routing decisions here. Any planner failure keeps the detector's answer, so
         // planning is a pure upgrade that can never make a deploy worse.
+        // The planner's app-specific build command, threaded to the runner's prepare
+        // step (overrides its `npm run build` convention). Undefined ⇒ convention.
+        let runnerBuild: string | undefined;
         if (PLANNER_ENABLED) {
           try {
             log("Planning the deploy — the agent reads the repo…");
             const plan = await planDeploy({ dir, log });
+            if (typeof plan.build === "string") runnerBuild = plan.build;
             if (plan.language === "node") s.runtime = "node";
             else if (plan.language === "python") s.runtime = "python";
             if (plan.static) {
@@ -1111,7 +1115,7 @@ export async function POST(req: Request) {
             try {
               await stages.around("prepare", async () => {
                 log(`Preparing on the ${runnerLang} runner (install + build once — no image)…`);
-                writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey }));
+                writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild }));
                 const hb = setInterval(() => log("preparing…"), 8000);
                 try {
                   await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);

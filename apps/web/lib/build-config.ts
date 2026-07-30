@@ -268,15 +268,26 @@ export function buildLogLine(l: string): string | null {
  * install/build and saves after — so a redeploy reuses node_modules and the
  * framework build cache instead of doing both from scratch.
  */
-export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string; codeKey: string }): string {
+export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string; codeKey: string; build?: string }): string {
   const out = `${opts.release}.tgz`;
+  // The planner's build command (app-specific: e.g. `nx build … && prisma generate`)
+  // overrides prepare.sh's `npm run build` convention. Base64 so any spaces/&&/quotes
+  // ride the YAML env array untouched; prepare.sh decodes it. Present-but-empty means
+  // "the planner decided there is no build step" — distinct from absent (use convention).
+  const env = [
+    `SUPERSONIC_OUT=${out}`,
+    `SUPERSONIC_CACHE_BUCKET=${opts.bucket}`,
+    `SUPERSONIC_CACHE_OBJECT=cache/${opts.slug}.tgz`,
+    `SUPERSONIC_CODE_KEY=${opts.codeKey}`,
+  ];
+  if (opts.build !== undefined) env.push(`SUPERSONIC_BUILD_B64=${Buffer.from(opts.build).toString("base64")}`);
   // The per-app key encrypts the bundle before it lands in the shared bucket, so a
   // shared runtime SA that can read the bytes still can't read another app's source.
   return [
     "steps:",
     `  - name: ${opts.image}`,
     "    entrypoint: /usr/local/bin/supersonic-prepare",
-    `    env: ["SUPERSONIC_OUT=${out}", "SUPERSONIC_CACHE_BUCKET=${opts.bucket}", "SUPERSONIC_CACHE_OBJECT=cache/${opts.slug}.tgz", "SUPERSONIC_CODE_KEY=${opts.codeKey}"]`,
+    `    env: [${env.map((e) => `"${e}"`).join(", ")}]`,
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
     "artifacts:",
