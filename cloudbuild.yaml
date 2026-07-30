@@ -21,7 +21,7 @@ steps:
       - |
         docker buildx create --use --name ssbuilder --driver docker-container || true
         docker buildx build \
-          --tag $_IMAGE:$SHORT_SHA \
+          --tag $_IMAGE:$_TAG \
           --tag $_IMAGE:latest \
           --cache-from type=registry,ref=$_IMAGE:cache \
           --cache-to type=registry,ref=$_IMAGE:cache,mode=max \
@@ -39,13 +39,17 @@ steps:
       - run
       - deploy
       - supersonic-control-plane
-      - --image=$_IMAGE:$SHORT_SHA
+      - --image=$_IMAGE:$_TAG
       - --region=us-central1
       - --project=$PROJECT_ID
       - --quiet
 
 substitutions:
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
+  # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
+  # passes whatever it likes. The default keeps a hand-run build from failing on an
+  # unset substitution — it is never what lands from main.
+  _TAG: manual
 
 options:
   machineType: E2_HIGHCPU_8
