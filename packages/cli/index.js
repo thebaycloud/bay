@@ -613,7 +613,14 @@ function runLocal(command) {
 function packageDir(dir) {
   return new Promise((resolve, reject) => {
     const out = path.join(os.tmpdir(), "ss-built-" + process.pid + ".tgz");
-    const p = spawn("tar", ["-czf", out, "-C", dir, "."], { stdio: ["ignore", "ignore", "pipe"] });
+    // COPYFILE_DISABLE=1 stops macOS `tar` from synthesizing AppleDouble `._*`
+    // entries. Without it those land in the archive, extract on the Linux build
+    // side, and break framework builds (Next tries to compile `._page.js`). No-op
+    // off macOS. Belt-and-suspenders: also drop any `._*` already on disk.
+    const p = spawn("tar", ["--exclude=._*", "-czf", out, "-C", dir, "."], {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
     let err = ""; p.stderr.on("data", (d) => (err += d));
     p.on("error", () => reject(new Error("could not run `tar` — is it installed?")));
     p.on("close", () => (fs.existsSync(out) ? resolve(out) : reject(new Error("packaging failed: " + err.trim()))));
@@ -635,13 +642,15 @@ function packageFolder() {
     const cwd = process.cwd();
     const out = path.join(os.tmpdir(), "ss-deploy-" + process.pid + ".tgz");
     const excludes = ["node_modules", ".git", "dist", "build", ".next", ".nuxt", ".svelte-kit",
-      "target", ".venv", "venv", "__pycache__", "vendor", ".DS_Store", ".env", ".env.local",
+      "target", ".venv", "venv", "__pycache__", "vendor", ".DS_Store", "._*", ".env", ".env.local",
       ".env.*.local", "*.pyc", ".turbo", ".cache", "out"];
     const targs = ["-czf", out, "-C", cwd];
     for (const e of excludes) targs.push("--exclude=" + e);
     if (fs.existsSync(path.join(cwd, ".gitignore"))) targs.push("--exclude-from=" + path.join(cwd, ".gitignore"));
     targs.push(".");
-    const p = spawn("tar", targs, { stdio: ["ignore", "ignore", "pipe"] });
+    // COPYFILE_DISABLE=1: stop macOS `tar` from adding AppleDouble `._*` files,
+    // which otherwise extract on the Linux build side and break framework builds.
+    const p = spawn("tar", targs, { env: { ...process.env, COPYFILE_DISABLE: "1" }, stdio: ["ignore", "ignore", "pipe"] });
     let err = ""; p.stderr.on("data", (d) => (err += d));
     p.on("error", () => reject(new Error("could not run `tar` — is it installed?")));
     p.on("close", () => (fs.existsSync(out) ? resolve(out) : reject(new Error("packaging failed: " + err.trim()))));
