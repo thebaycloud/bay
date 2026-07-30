@@ -518,6 +518,33 @@ async function createDomainMapping(slug: string, log: (l: string) => void, servi
   }
 }
 
+/**
+ * The `x-supersonic-env` header: base64 JSON of the vars the CLI read from the
+ * project's local `.env`.
+ *
+ * Everything here comes from a client we do not control, and each pair ends up on a
+ * `gcloud run deploy` command line, so the shape is checked rather than trusted: real
+ * environment-variable names, string values, and a ceiling on how many. Anything that
+ * fails the check is dropped — a malformed header must not take the deploy down with it.
+ */
+function decodeEnvHeader(header: string | null): Record<string, string> {
+  if (!header) return {};
+  const out: Record<string, string> = {};
+  try {
+    const parsed = JSON.parse(Buffer.from(header, "base64").toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;
+      if (typeof v !== "string" || !v) continue;
+      out[k] = v;
+      if (Object.keys(out).length >= 100) break;
+    }
+  } catch {
+    return {};
+  }
+  return out;
+}
+
 export async function POST(req: Request) {
   const ownerId = await currentUserId();
   // The middleware waves any request carrying an `Authorization: Bearer …`
@@ -554,6 +581,12 @@ export async function POST(req: Request) {
     archive = Buffer.from(await req.arrayBuffer());
     friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
     reservedSlug = (req.headers.get("x-supersonic-slug") ?? "").trim();
+    // The app's own secrets, from the CLI's reading of the project's local `.env`.
+    // They arrive in a header because the body is the tarball — and deliberately NOT
+    // inside it: a secret in the archive is copied into the build bucket and baked
+    // into the image, where it cannot be rotated. Here it becomes an env var on the
+    // service, applied to the first revision, so the app starts with what it needs.
+    secrets = decodeEnvHeader(req.headers.get("x-supersonic-env"));
   } else {
     const body = await req.json().catch(() => ({}));
     url = normalizeRepo(String(body.repo ?? ""));

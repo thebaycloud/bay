@@ -13,6 +13,7 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 const { spawn, spawnSync } = require("child_process");
+const { readEnvFiles, selectEnv, encodeEnvHeader } = require("./lib/envfile");
 
 const CFG_DIR = path.join(os.homedir(), ".supersonic");
 const CFG = path.join(CFG_DIR, "config.json");
@@ -392,6 +393,7 @@ async function urlFirstDeploy(args) {
         SS_BG_SLUG: slug, SS_BG_URL: url, SS_BG_REPO: repo || "",
         SS_BG_FOLDER: folderName,
         SS_BG_DEVCMD: args["dev-cmd"] || "", SS_BG_DEVPORT: args["dev-port"] || "",
+        SS_BG_NOENV: args["no-env"] ? "1" : "",
       },
     });
     child.unref();
@@ -407,11 +409,35 @@ async function urlFirstDeploy(args) {
       print("  " + bold("no live preview") + dim(" — the link shows a “building…” page until the build finishes (~1–2 min)."));
       print(dim("  for an instant preview, redeploy with ") + bold('--dev-cmd "<how to run your app>"'));
     }
+    // Said here, not in the worker's log, because this is the only output the agent
+    // that ran the deploy will read. Names only — the values must never reach a log.
+    if (!args["no-env"]) {
+      const candidates = Object.keys(selectEnv(readEnvFiles(process.cwd())).send);
+      if (candidates.length) print(dim("  carrying from .env: ") + candidates.join(", ") + dim(" (vars already set on the app are left alone)"));
+    }
     print(dim("  build finishing in the background · watch: ") + bold(`supersonic logs ${slug} --follow`));
     process.exit(0);
   }
 
   await runBuildAndWait({ slug, url, repo, folderName, args });
+}
+
+/**
+ * The vars to carry up with this deploy, read from the project's local `.env`.
+ *
+ * Asking the app which keys it already has is what keeps a redeploy from overwriting a
+ * deliberately-set production value with whatever is in the developer's `.env` — very
+ * often a test key. A slug reserved seconds ago has no service yet and answers with no
+ * keys, which is right: on a first deploy everything local is new.
+ */
+async function collectEnv(slug, args) {
+  const none = { send: {}, skipped: [] };
+  if (args["no-env"]) return none;
+  const local = readEnvFiles(process.cwd());
+  if (!Object.keys(local).length) return none;
+  let existingKeys = [];
+  try { existingKeys = (await api(`/api/apps/${slug}/env`)).keys || []; } catch { /* no service yet */ }
+  return selectEnv(local, { existingKeys });
 }
 
 /**
@@ -444,20 +470,30 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
   process.on("exit", cleanup);
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
 
+  // The app's own secrets, from the project's local .env. They ride the deploy request
+  // rather than the tarball, so they land on the first revision — an app that needs an
+  // API key comes up working instead of crash-looping until someone sets it by hand.
+  const { send: envVars } = await collectEnv(slug, args);
+  const envKeys = Object.keys(envVars);
+  if (envKeys.length) info(cyan("▸ ") + `carrying ${envKeys.length} var${envKeys.length > 1 ? "s" : ""} from .env: ` + dim(envKeys.join(", ")));
+
   // The real build, on the reserved slug, on the server (your machine stays free).
   let res;
   if (repo) {
-    res = await api("/api/deploy", { method: "POST", body: { repo, slug }, stream: true });
+    res = await api("/api/deploy", { method: "POST", body: { repo, slug, secrets: envVars }, stream: true });
   } else {
     info(cyan("▸ ") + "uploading " + bold(folderName) + " to build in the cloud…");
     const tgz = await packageFolder();
     const body = fs.readFileSync(tgz);
     try { fs.unlinkSync(tgz); } catch { /* ignore */ }
-    res = await fetch(baseUrl() + "/api/deploy", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + token(), "Content-Type": "application/gzip", "x-supersonic-upload": "1", "x-supersonic-app": folderName, "x-supersonic-slug": slug },
-      body,
-    });
+    const headers = { Authorization: "Bearer " + token(), "Content-Type": "application/gzip", "x-supersonic-upload": "1", "x-supersonic-app": folderName, "x-supersonic-slug": slug };
+    // The upload's body is the tarball, so the vars go in a header. Past what Cloud Run
+    // will carry there we say so and set nothing: silently dropping half an environment
+    // would surface later as an app that is broken for no visible reason.
+    const envHeader = encodeEnvHeader(envVars);
+    if (envHeader) headers["x-supersonic-env"] = envHeader;
+    else if (envKeys.length) info(red("! ") + ".env is too large to send with the build — set them after it lands: " + bold(`supersonic env ${slug} set KEY=VALUE`));
+    res = await fetch(baseUrl() + "/api/deploy", { method: "POST", headers, body });
     if (res.status === 401) { cleanup(); die("token invalid or expired — run: supersonic login"); }
   }
   await consumeDeploy(res, args);   // when the build goes live the proxy serves it on `url`
@@ -474,7 +510,12 @@ async function deployWorker() {
     slug, url,
     repo: process.env.SS_BG_REPO || "",
     folderName: process.env.SS_BG_FOLDER || "app",
-    args: { "dev-cmd": process.env.SS_BG_DEVCMD || undefined, "dev-port": process.env.SS_BG_DEVPORT || undefined, _: [] },
+    args: {
+      "dev-cmd": process.env.SS_BG_DEVCMD || undefined,
+      "dev-port": process.env.SS_BG_DEVPORT || undefined,
+      "no-env": process.env.SS_BG_NOENV === "1" || undefined,
+      _: [],
+    },
   });
 }
 
@@ -689,6 +730,7 @@ ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the bac
                                                   e.g. --dev-cmd "uvicorn main:app --port 8000"
   supersonic deploy --dev-port <n>              tunnel to a dev server you already started
   supersonic deploy --wait                      stay attached and stream the build (default: returns once live)
+  supersonic deploy --no-env                    don't carry .env up (default: sets vars your app doesn't have yet)
   supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead
   supersonic deploy --prebuilt                  old path: build here, upload the result
   supersonic redeploy <app>                     rebuild from the app's source
