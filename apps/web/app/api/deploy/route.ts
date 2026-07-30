@@ -61,6 +61,8 @@ const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
  * the runner base images exist in Artifact Registry (see services/runner/build.sh).
  */
 const RUNNER_ENABLED = process.env.RUNNER === "1";
+/** Memory for runner apps. 512 MiB (the Cloud Run default) OOMs a real Node app. */
+const RUNNER_MEMORY = process.env.RUNNER_MEMORY || "2Gi";
 const RUNNER_NODE_IMAGE = process.env.RUNNER_NODE_IMAGE
   ?? `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/runner-node:latest`;
 const RUNNER_PYTHON_IMAGE = process.env.RUNNER_PYTHON_IMAGE
@@ -1049,7 +1051,11 @@ export async function POST(req: Request) {
               return { ok: false, error: `Prepare failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
             }
             log(`Deploying on the prebuilt ${runnerLang} runner…`);
-            return attempt(["run", "deploy", slug, "--image", image, ...deployFlags]);
+            // Real Node apps ship a full node_modules and run `next start`; the Cloud
+            // Run default of 512 MiB OOM-kills them at startup (measured: 564 MiB used
+            // before the app even binds $PORT), which shows up as a flaky "didn't start
+            // on $PORT". Give runner apps real memory + a full CPU so startup is quick.
+            return attempt(["run", "deploy", slug, "--image", image, "--memory", RUNNER_MEMORY, "--cpu", "1", ...deployFlags]);
           }
           if (useDockerBuild) {
             log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
