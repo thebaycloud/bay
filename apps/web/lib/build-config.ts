@@ -268,13 +268,15 @@ export function buildLogLine(l: string): string | null {
  * install/build and saves after — so a redeploy reuses node_modules and the
  * framework build cache instead of doing both from scratch.
  */
-export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string }): string {
+export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string; codeKey: string }): string {
   const out = `${opts.release}.tgz`;
+  // The per-app key encrypts the bundle before it lands in the shared bucket, so a
+  // shared runtime SA that can read the bytes still can't read another app's source.
   return [
     "steps:",
     `  - name: ${opts.image}`,
     "    entrypoint: /usr/local/bin/supersonic-prepare",
-    `    env: ["SUPERSONIC_OUT=${out}", "SUPERSONIC_CACHE_BUCKET=${opts.bucket}", "SUPERSONIC_CACHE_OBJECT=cache/${opts.slug}.tgz"]`,
+    `    env: ["SUPERSONIC_OUT=${out}", "SUPERSONIC_CACHE_BUCKET=${opts.bucket}", "SUPERSONIC_CACHE_OBJECT=cache/${opts.slug}.tgz", "SUPERSONIC_CODE_KEY=${opts.codeKey}"]`,
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
     "artifacts:",

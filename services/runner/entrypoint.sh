@@ -19,11 +19,38 @@ PORT="${PORT:-8080}"
 APP="/app"
 log() { echo "[supersonic-run] $*"; }
 
-# Pull the code bundle using the container's own runtime service account via the
-# metadata server — no keys in the image. The runtime SA needs storage.objectViewer
-# on the code bucket. Object names contain slashes, so they are percent-encoded
-# into the JSON API object path.
+# Turn the downloaded /tmp/code.tgz into the app at $APP. If a per-app key is set
+# the bundle is encrypted (see below), so decrypt first. A wrong/absent key can't
+# decrypt another app's bundle — that is the isolation guarantee.
+unpack() {
+  if [ -n "${SUPERSONIC_CODE_KEY:-}" ]; then
+    openssl enc -d -aes-256-cbc -pbkdf2 -pass "pass:$SUPERSONIC_CODE_KEY" -in /tmp/code.tgz -out /tmp/code.dec 2>/dev/null \
+      || { log "FATAL: could not decrypt the code bundle (wrong key?)"; exit 1; }
+    mv /tmp/code.dec /tmp/code.tgz
+  fi
+  tar -xzf /tmp/code.tgz -C "$APP"
+  rm -f /tmp/code.tgz
+}
+
+# Pull the code bundle. Primary path: the runtime SA reads the ENCRYPTED bundle
+# from the bucket — safe because the bytes are encrypted and only this app holds
+# the key ($SUPERSONIC_CODE_KEY), so one app can never read another's source. A
+# per-object signed URL is also honoured if set (no bucket access needed). Both
+# routes fetch to /tmp/code.tgz and hand off to unpack().
 fetch_code() {
+  mkdir -p "$APP"
+  if [ -n "${SUPERSONIC_CODE_URL:-}" ]; then
+    log "fetching code (signed URL)"
+    code=$(curl -s -o /tmp/code.tgz -w '%{http_code}' "$SUPERSONIC_CODE_URL")
+    if [ "$code" != "200" ]; then
+      log "FATAL: signed-URL fetch failed — HTTP $code (the link may have expired; redeploy to refresh it)"
+      exit 1
+    fi
+    unpack
+    return 0
+  fi
+  # Fallback: read straight from GCS with the runtime SA's own token — no keys in
+  # the image. Object names contain slashes, so percent-encode into the API path.
   bucket="$SUPERSONIC_CODE_BUCKET"
   object="$SUPERSONIC_CODE_OBJECT"
   log "fetching gs://$bucket/$object"
@@ -46,12 +73,10 @@ fetch_code() {
     [ "$code" = "403" ] && log "that identity is not allowed to read the code bundle — this is a platform misconfiguration, not a problem with the app"
     exit 1
   fi
-  mkdir -p "$APP"
-  tar -xzf /tmp/code.tgz -C "$APP"
-  rm -f /tmp/code.tgz
+  unpack
 }
 
-[ -n "${SUPERSONIC_CODE_BUCKET:-}" ] && fetch_code
+{ [ -n "${SUPERSONIC_CODE_URL:-}" ] || [ -n "${SUPERSONIC_CODE_BUCKET:-}" ]; } && fetch_code
 cd "$APP"
 
 # A Python bundle prepared at deploy ships a .venv — put it first on PATH so the

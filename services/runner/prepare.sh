@@ -85,4 +85,14 @@ OUT="${SUPERSONIC_OUT:-ready.tgz}"
 log "packaging $OUT with dependencies baked in"
 # .env* is never shipped — its values arrive as injected runtime env, not baked in.
 tar -czf "$SRC/$OUT" --exclude=./.git --exclude=./.env --exclude=./.env.local --exclude="./.env.*.local" --exclude="./$OUT" .
+
+# Encrypt with the per-deploy key so the bundle sitting in the shared bucket is
+# unreadable to any other app: the runtime service account may read the bytes, but
+# only THIS app has the key (injected as env) to decrypt them. That is what lets a
+# shared runtime identity be safe without per-app IAM or an expiring signed URL.
+if [ -n "${SUPERSONIC_CODE_KEY:-}" ]; then
+  log "encrypting bundle (per-app key)"
+  openssl enc -aes-256-cbc -pbkdf2 -salt -pass "pass:$SUPERSONIC_CODE_KEY" -in "$SRC/$OUT" -out "$SRC/$OUT.enc"
+  mv "$SRC/$OUT.enc" "$SRC/$OUT"
+fi
 log "done"

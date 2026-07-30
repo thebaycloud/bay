@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,6 +95,47 @@ function capture(cmd: string, args: string[]) {
     p.on("close", (c) => (c === 0 ? resolve(out) : reject(new Error(err.trim() || `${cmd} exited ${c}`))));
   });
 }
+/** The control plane's own service account, read from the metadata server. */
+async function controlPlaneSA(): Promise<string | null> {
+  try {
+    const r = await fetch("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email", {
+      headers: { "Metadata-Flavor": "Google" },
+    });
+    return r.ok ? (await r.text()).trim() : null;
+  } catch { return null; }
+}
+
+/**
+ * Mint a per-object V4 signed GET URL for a code bundle.
+ *
+ * This is what lets the runner fetch its bundle WITHOUT the shared, locked-down
+ * runtime SA holding any bucket read — the URL is a capability scoped to one
+ * object, so one app can never read another's source. Signing is stateless
+ * (`sign-url` only calls IAM signBlob, never GCS), so the object need not exist
+ * yet; it will by the time the container fetches it. Requires the control-plane
+ * SA to hold Token Creator on itself (to signBlob) and read on the bucket.
+ *
+ * Best-effort: on any failure the caller falls back to the direct-read env, which
+ * fails loudly with the "not allowed to read the code bundle" message rather than
+ * silently. 7 days is the V4 max; a redeploy refreshes it.
+ */
+async function signedBundleUrl(bucket: string, object: string, log: (l: string) => void): Promise<string | null> {
+  try {
+    const sa = await controlPlaneSA();
+    const args = ["storage", "sign-url", `gs://${bucket}/${object}`, "--http-verb=GET", "--duration=7d", "--project", PROJECT, "--format=json"];
+    if (sa) args.push(`--impersonate-service-account=${sa}`);
+    const out = await capture("gcloud", args);
+    const start = out.indexOf("[");
+    const arr = start >= 0 ? JSON.parse(out.slice(start)) : null;
+    const o = Array.isArray(arr) ? arr[0] : arr;
+    const url = o?.signed_url || o?.signedUrl || o?.url;
+    return typeof url === "string" && url ? url : null;
+  } catch (e) {
+    log(`! bundle-URL signing failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
 function diagnose(errTail: string[]): string {
   const text = errTail.join("\n");
   if (/failed to start and listen on the port/i.test(text)) {
@@ -812,12 +854,19 @@ export async function POST(req: Request) {
         // --set-env-vars below as DATABASE_URL, STORAGE_BUCKET and the secrets, so
         // a runner app comes up with its full environment wired.
         let runnerObject: string | null = null;
+        let runnerCodeKey = "";
         if (runnerLang) {
           // Points at the READY bundle the prepare step produces (deps baked in),
           // not the raw source — so a starting instance fetches-and-runs.
           runnerObject = `ready/${slug}/${releaseId()}.tgz`;
+          // Encrypted-bundle isolation: prepare encrypts the bundle with this random
+          // per-deploy key before it lands in the shared bucket. The runtime SA reads
+          // the encrypted bytes, but only THIS app holds the key to decrypt them, so
+          // one app can never read another's source — no per-app IAM, no expiring URL.
+          runnerCodeKey = randomBytes(32).toString("hex");
           extraEnv.push(`SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`);
           extraEnv.push(`SUPERSONIC_CODE_OBJECT=${runnerObject}`);
+          extraEnv.push(`SUPERSONIC_CODE_KEY=${runnerCodeKey}`);
         }
 
         // Flags shared by both build paths (applied on `gcloud run deploy`).
@@ -978,7 +1027,7 @@ export async function POST(req: Request) {
             try {
               await stages.around("prepare", async () => {
                 log(`Preparing on the ${runnerLang} runner (install + build once — no image)…`);
-                writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release }));
+                writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey }));
                 const hb = setInterval(() => log("preparing…"), 8000);
                 try {
                   await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);

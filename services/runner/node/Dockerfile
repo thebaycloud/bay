@@ -4,7 +4,7 @@
 FROM node:22-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl tar \
+ && apt-get install -y --no-install-recommends ca-certificates curl tar openssl \
  && rm -rf /var/lib/apt/lists/*
 
 # Warm the npm on-disk cache (~/.npm) with the popular packages. We only want the
