@@ -809,7 +809,14 @@ export async function POST(req: Request) {
         // rollout note in docs/CUTOVER.md.
         if (APP_RUNTIME_SA) deployFlags.push(`--service-account=${APP_RUNTIME_SA}`);
         if (cloudsql) deployFlags.push(`--set-cloudsql-instances=${cloudsql}`);
-        if (extraEnv.length) deployFlags.push(`--set-env-vars=^~~^${extraEnv.join("~~")}`);
+        // `--update-env-vars`, never `--set-env-vars`: the latter replaces the whole
+        // environment, so every redeploy silently deleted whatever the user had put
+        // there with `supersonic env set` — their API keys and config — and the app
+        // came back up broken in a way that looked like its own fault. Caught in the
+        // end-to-end run: RESEND_API_KEY was set, listed by `env`, and gone from the
+        // next revision. Merging can leave a stale key behind after a deploy stops
+        // needing it; losing a customer's secret is the worse of the two.
+        if (extraEnv.length) deployFlags.push(`--update-env-vars=^~~^${extraEnv.join("~~")}`);
         const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
         if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
         deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
