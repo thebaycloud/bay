@@ -225,7 +225,12 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
     .catch((e: Error) => { if (/already exists/i.test(e.message)) return ""; throw e; })
     .then(() => {
       log(`Provisioned Postgres database ${dbName}`);
-      const databaseUrl = `postgresql://${cfg.user}:${cfg.password}@/${dbName}?host=/cloudsql/${cfg.connectionName}`;
+      // `localhost` is a placeholder host, NOT a real target: the `?host=` param
+      // points every client at the Cloud SQL Unix socket. But it must be present —
+      // Prisma rejects an empty host (`@/db`) with P1013, while pg/psycopg ignore it
+      // in favour of the socket param. So this one word makes the same URL work for
+      // Prisma *and* node-postgres *and* psycopg.
+      const databaseUrl = `postgresql://${cfg.user}:${cfg.password}@localhost/${dbName}?host=/cloudsql/${cfg.connectionName}`;
       return { databaseUrl, connectionName: cfg.connectionName };
     });
 }
