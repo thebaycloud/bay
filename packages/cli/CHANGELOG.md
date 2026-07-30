@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.0
+
+**Your `.env` goes up with the deploy.**
+
+An app that reads an API key used to come up crash-looping until somebody noticed and
+set the vars by hand. `deploy` now reads `.env` and `.env.local` and sets what the app
+needs, so it starts working the first time.
+
+What is deliberately left behind: vars Supersonic sets itself (`DATABASE_URL`, `PORT`,
+`STORAGE_BUCKET`), anything whose value points at your own machine, and any key the app
+already has — the value you set in production wins over the one in your `.env`, which is
+usually a test key. Only names are ever printed, never values. `--no-env` opts out.
+
+**The live preview works on every deploy, not just an app's first.**
+
+The proxy preferred a published build over an open tunnel, so from an app's second
+deploy onwards the URL showed the previous release and the preview was never reached.
+An open tunnel now wins, for the duration of the build.
+
+Finding the dev server's port no longer depends on it printing a line we recognise —
+a server that announces nothing is found anyway, so `--dev-cmd` produces a preview on
+stacks where it used to silently produce none.
+
 ## 0.7.0
 
 **`deploy` now builds on your machine and uploads only the result.**
