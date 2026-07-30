@@ -97,6 +97,31 @@ function capture(cmd: string, args: string[]) {
     p.on("close", (c) => (c === 0 ? resolve(out) : reject(new Error(err.trim() || `${cmd} exited ${c}`))));
   });
 }
+/**
+ * The container's ACTUAL startup crash, from Cloud Run's logs.
+ *
+ * A "didn't start on $PORT" is a symptom — the cause is whatever the process
+ * printed before it died (a missing env, an uncaught throw, `@prisma/client did
+ * not initialize`). Without this the repair agent only sees our generic guess and
+ * invents a fix (famously: "it must be the PORT"), then redeploys 3× chasing it.
+ * Handing it the real error is the difference between one honest fix and a loop.
+ */
+async function fetchContainerError(slug: string): Promise<string | null> {
+  try {
+    const out = await capture("gcloud", [
+      "logging", "read",
+      `resource.type=cloud_run_revision AND resource.labels.service_name=${slug} AND severity>=ERROR`,
+      "--project", PROJECT, "--limit", "25", "--freshness", "10m",
+      "--format=value(textPayload)", "--order=asc",
+    ]);
+    const lines = out.split("\n").map((l) => l.trim()).filter(Boolean)
+      .filter((l) => !/STARTUP (TCP|HTTP) probe|Default STARTUP|Connection failed with status/i.test(l));
+    const signal = lines.filter((l) => /error|exception|throw|cannot|not initialize|not found|refused|denied|undefined|EADDR|traceback|fatal|missing|required/i.test(l));
+    const pick = (signal.length ? signal : lines).slice(0, 12);
+    return pick.length ? pick.join("\n") : null;
+  } catch { return null; }
+}
+
 /** The control plane's own service account, read from the metadata server. */
 async function controlPlaneSA(): Promise<string | null> {
   try {
@@ -1092,6 +1117,17 @@ export async function POST(req: Request) {
         await stages.end(firstAttempt, result.ok ? "ok" : "failed");
         if (!result.ok) {
           log(`✕ ${result.error}`);
+          // The container started and then crashed: our error is only the symptom
+          // ("didn't start on $PORT"). Pull its real crash log so the user — and the
+          // repair agent — see the actual cause instead of guessing (which is how a
+          // 2-minute failure turns into a 10-minute redeploy loop chasing a fake fix).
+          if (/didn'?t start on|failed to start and listen/i.test(result.error ?? "")) {
+            const crash = await fetchContainerError(slug);
+            if (crash) {
+              log(`Actual container error:\n${crash}`);
+              result.error = `${result.error}\n\n--- actual container startup log ---\n${crash}`;
+            }
+          }
           // A permissions failure is ours, not the repo's — the repair agent would
           // burn redeploys on it and then bury the real cause in its summary.
           if ((result.error ?? "").includes(IAM_FAILURE)) {
