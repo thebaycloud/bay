@@ -49,9 +49,12 @@ export async function requestThumbnail(slug: string, runUrl: string): Promise<vo
       // audience to get in, the same way the deploy probe does.
       identityToken(new URL(runUrl).origin),
     ]);
-    if (!callerToken) return;
+    if (!callerToken) {
+      console.warn(`thumbnail ${slug}: no caller token — is this running on Cloud Run?`);
+      return;
+    }
 
-    await fetch(`${SHOT_SERVICE}/shot`, {
+    const r = await fetch(`${SHOT_SERVICE}/shot`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -60,8 +63,12 @@ export async function requestThumbnail(slug: string, runUrl: string): Promise<vo
       body: JSON.stringify({ slug, runUrl, idToken: appToken }),
       signal: AbortSignal.timeout(45_000),
     });
-  } catch {
-    // Swallowed on purpose. See the note at the top of this file.
+    // The failure stays swallowed — see the note at the top of this file — but it is
+    // not silent. Nothing else in the system notices a thumbnail that never arrived,
+    // so this line is the only place a broken chain shows up.
+    console.log(`thumbnail ${slug}: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
+  } catch (e) {
+    console.warn(`thumbnail ${slug}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
