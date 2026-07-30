@@ -76,7 +76,10 @@ if [ -f package.json ]; then
   # build. Absent → fall back to the `build` script convention.
   if [ -n "${SUPERSONIC_BUILD_B64+x}" ]; then
     bcmd=$(printf '%s' "$SUPERSONIC_BUILD_B64" | base64 -d 2>/dev/null || printf '%s' "$SUPERSONIC_BUILD_B64" | base64 --decode)
-    if [ -n "$bcmd" ]; then log "build (from plan): $bcmd"; sh -c "$bcmd"; else log "plan: no build step"; fi
+    # node_modules/.bin on PATH so a plan's bare `nx`/`prisma`/`tsc` resolve — this is
+    # exactly what `npm run` does for scripts, and why bare tool names work there but
+    # not in a raw `sh -c`. Without it the plan's build 127s on the first local binary.
+    if [ -n "$bcmd" ]; then log "build (from plan): $bcmd"; PATH="$APP/node_modules/.bin:$PATH" sh -c "$bcmd"; else log "plan: no build step"; fi
   elif node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
     log "npm run build"
     npm run build

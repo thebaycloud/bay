@@ -82,6 +82,9 @@ cd "$APP"
 # A Python bundle prepared at deploy ships a .venv — put it first on PATH so the
 # app's gunicorn/uvicorn/streamlit resolve from it with no global install.
 [ -d "$APP/.venv/bin" ] && export PATH="$APP/.venv/bin:$PATH"
+# Same for Node: a plan's run command may use bare `prisma`/`next`/etc. — put the
+# app's local bin on PATH so they resolve, matching how `npm run` invokes scripts.
+[ -d "$APP/node_modules/.bin" ] && export PATH="$APP/node_modules/.bin:$PATH"
 
 # If dependencies are already present, this is a prepared bundle: install and
 # build ran ONCE at deploy, so a starting instance does neither — this is the
