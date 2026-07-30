@@ -619,10 +619,16 @@ export async function POST(req: Request) {
   let archive: Buffer | null = null;
   let cloneToken: unknown = null;
   let reservedSlug = "";
+  // The production run command the deploying agent worked out for this app (e.g.
+  // `uvicorn main:app --host 0.0.0.0 --port $PORT`, `next start`). It's the reliable
+  // answer to "how do I run this" — especially for Python, which can't be guessed.
+  // The runner uses it as SUPERSONIC_RUN; empty falls back to a Node-only default.
+  let runCmd = "";
   if (isUpload) {
     archive = Buffer.from(await req.arrayBuffer());
     friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
     reservedSlug = (req.headers.get("x-supersonic-slug") ?? "").trim();
+    runCmd = decodeURIComponent(req.headers.get("x-supersonic-run") ?? "").trim();
     // The app's own secrets, from the CLI's reading of the project's local `.env`.
     // They arrive in a header because the body is the tarball — and deliberately NOT
     // inside it: a secret in the archive is copied into the build bucket and baked
@@ -636,6 +642,7 @@ export async function POST(req: Request) {
     secrets = (body.secrets ?? {}) as Record<string, string>;
     cloneToken = body.cloneToken ?? null;
     reservedSlug = String(body.slug ?? "").trim();
+    runCmd = String(body.run ?? "").trim();
   }
   // Apps get a short random subdomain (e.g. as76d.supersonic.cv). A reserved slug
   // (URL-first / tunnel deploys) is honoured so the build lands on the URL already
@@ -867,6 +874,10 @@ export async function POST(req: Request) {
           extraEnv.push(`SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`);
           extraEnv.push(`SUPERSONIC_CODE_OBJECT=${runnerObject}`);
           extraEnv.push(`SUPERSONIC_CODE_KEY=${runnerCodeKey}`);
+          // How to run it, from the agent. Without this the runner falls back to a
+          // Node-only default; Python can't start at all — so the agent must supply it.
+          if (runCmd) { extraEnv.push(`SUPERSONIC_RUN=${runCmd}`); log(`Run command: ${runCmd}`); }
+          else log("No run command supplied — using the default (Node only; Python needs one)");
         }
 
         // Flags shared by both build paths (applied on `gcloud run deploy`).

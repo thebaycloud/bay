@@ -394,6 +394,7 @@ async function urlFirstDeploy(args) {
         SS_BG_FOLDER: folderName,
         SS_BG_DEVCMD: args["dev-cmd"] || "", SS_BG_DEVPORT: args["dev-port"] || "",
         SS_BG_NOENV: args["no-env"] ? "1" : "",
+        SS_BG_RUN: args["run"] || "",
       },
     });
     child.unref();
@@ -479,14 +480,18 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
 
   // The real build, on the reserved slug, on the server (your machine stays free).
   let res;
+  const runCmd = args.run || process.env.SS_BG_RUN || "";
   if (repo) {
-    res = await api("/api/deploy", { method: "POST", body: { repo, slug, secrets: envVars }, stream: true });
+    res = await api("/api/deploy", { method: "POST", body: { repo, slug, secrets: envVars, run: runCmd }, stream: true });
   } else {
     info(cyan("▸ ") + "uploading " + bold(folderName) + " to build in the cloud…");
     const tgz = await packageFolder();
     const body = fs.readFileSync(tgz);
     try { fs.unlinkSync(tgz); } catch { /* ignore */ }
     const headers = { Authorization: "Bearer " + token(), "Content-Type": "application/gzip", "x-supersonic-upload": "1", "x-supersonic-app": folderName, "x-supersonic-slug": slug };
+    // How to run the app in production, worked out by the agent. Encoded because it
+    // has spaces/flags. The runner uses it as SUPERSONIC_RUN.
+    if (runCmd) headers["x-supersonic-run"] = encodeURIComponent(runCmd);
     // The upload's body is the tarball, so the vars go in a header. Past what Cloud Run
     // will carry there we say so and set nothing: silently dropping half an environment
     // would surface later as an app that is broken for no visible reason.
@@ -738,6 +743,8 @@ ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the bac
   supersonic deploy --dev-cmd "<run in dev>"    tunnel the URL to your app live while it builds
                                                   e.g. --dev-cmd "uvicorn main:app --port 8000"
   supersonic deploy --dev-port <n>              tunnel to a dev server you already started
+  supersonic deploy --run "<prod start cmd>"    how to run it in PROD — you know the stack
+                                                  e.g. --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
   supersonic deploy --wait                      stay attached and stream the build (default: returns once live)
   supersonic deploy --no-env                    don't carry .env up (default: sets vars your app doesn't have yet)
   supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead

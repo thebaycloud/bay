@@ -123,12 +123,25 @@ else
 fi
 
 # Run. Default to the language's conventional start; override with $SUPERSONIC_RUN.
+# How to run the app. The RIGHT source is $SUPERSONIC_RUN — the production run
+# command handed over by the deploying agent (which knows the stack). It's the
+# only reliable answer for Python (uvicorn vs gunicorn vs flask is unguessable).
+# Without it we fall back to a sensible default for Node only.
 RUN="${SUPERSONIC_RUN:-}"
 if [ -z "$RUN" ]; then
   if [ -f package.json ]; then
-    RUN="npm start"
+    # A BUILT Next app must run its production server, not the app's `start`
+    # script — real apps often set `start` to `next dev`, which binds localhost /
+    # boots too slowly to pass the health check.
+    if [ -d .next ] && node -e "var p=require('./package.json');process.exit((p.dependencies&&p.dependencies.next)||(p.devDependencies&&p.devDependencies.next)?0:1)" 2>/dev/null; then
+      RUN="npx --no-install next start -p ${PORT}"
+    else
+      RUN="npm start"
+    fi
   else
-    log "FATAL: no start command — set SUPERSONIC_RUN"; exit 1
+    log "FATAL: no run command for this app — the deploy must supply one (the agent"
+    log "       passes the production command; Python especially can't be guessed)"
+    exit 1
   fi
 fi
 log "starting on :$PORT → $RUN"

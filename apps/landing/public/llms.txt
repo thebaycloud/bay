@@ -16,14 +16,23 @@ build finishes in the background:
     # 1. Work out how to run THIS app in dev mode from its stack — you know how:
     #      FastAPI → uvicorn main:app --port 8000     Flask → flask run --port 8000
     #      Vite/Next/Node → npm run dev                Go → go run .   Rails → bin/rails s
-    # 2. Pass that command to deploy. Supersonic reserves the URL, tunnels it live
-    #    to that dev server instantly, and swaps in the real build when it's ready.
-    supersonic deploy --dev-cmd "uvicorn main:app --port 8000"
+    # 2. Work out the PRODUCTION run command too — how it should run once deployed,
+    #    binding 0.0.0.0 and the $PORT the platform injects:
+    #      FastAPI → uvicorn main:app --host 0.0.0.0 --port $PORT
+    #      Flask   → gunicorn app:app --bind 0.0.0.0:$PORT
+    #      Django  → gunicorn <proj>.wsgi --bind 0.0.0.0:$PORT
+    #      Next    → next start        Node/Express → node server.js (must read process.env.PORT)
+    # 3. Pass both. Supersonic reserves the URL, tunnels the dev server live instantly,
+    #    and runs the app in production with --run when the real build is ready.
+    supersonic deploy --dev-cmd "uvicorn main:app --port 8000" --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
 
-ALWAYS pass `--dev-cmd` — figuring out the dev command is your job, and it makes the
-URL show the running app in ~1s instead of a "deploying…" page. If you already have
-a dev server running, pass `--dev-port <n>` instead. Node projects with a `dev`
-script work with a plain `supersonic deploy` (the CLI starts it). `supersonic deploy`:
+ALWAYS pass `--run` — this is how the app runs once deployed, and figuring it out is
+your job (you know the stack). It is REQUIRED for Python/other non-Node stacks, which
+cannot be guessed; without it the deploy has no way to start the app. `--dev-cmd` is
+separate and optional (it powers the instant live preview) — pass it too when you can.
+Node projects with a `dev` script work with a plain `supersonic deploy` (the CLI starts
+the preview), but still pass `--run` unless `npm start` runs the production server.
+`supersonic deploy`:
 
 - Signs the user in the FIRST time by opening a browser — a new account starts a free 3-day trial automatically (full features, nothing to pay up front). There is NO separate login/signup step to run.
 - Prints `✓ your app is live at <url>` immediately (URL-first), keeps the preview live via the tunnel, uploads + builds in the cloud, and streams progress.
