@@ -96,10 +96,13 @@ if [ -n "$prepared" ]; then
   log "prepared bundle — dependencies already installed, skipping install/build"
 else
   if [ -f package.json ]; then
+    # --include=dev: NODE_ENV=production (image default) makes npm skip devDeps, but the
+    # build needs them. HUSKY=0: skip the common `prepare: husky` hook (no .git here).
+    export HUSKY=0
     if [ -f package-lock.json ]; then
-      npm ci --prefer-offline --no-audit --no-fund || npm install --prefer-offline --no-audit --no-fund
+      npm ci --include=dev --prefer-offline --no-audit --no-fund || npm install --include=dev --prefer-offline --no-audit --no-fund
     else
-      npm install --prefer-offline --no-audit --no-fund
+      npm install --include=dev --prefer-offline --no-audit --no-fund
     fi
   elif [ -f requirements.txt ]; then
     pip install --no-cache-dir --find-links="${PIP_WHEELHOUSE:-/opt/wheels}" -r requirements.txt

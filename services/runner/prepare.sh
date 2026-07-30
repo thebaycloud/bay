@@ -58,10 +58,17 @@ cd "$APP"
 restore_cache
 
 if [ -f package.json ]; then
+  # --include=dev is mandatory: the base image sets NODE_ENV=production (correct for
+  # runtime), and under that npm install SKIPS devDependencies — but the build needs
+  # them (typescript, tailwind, bundlers all live in devDeps for most real apps). Without
+  # this the install "succeeds" and then `next build` fails on missing tooling.
+  # HUSKY=0 neutralises the near-universal `"prepare": "husky"` git-hooks script, which
+  # 127s here because the bundle has no .git (and shouldn't run hooks in a build anyway).
+  export HUSKY=0
   if [ -f package-lock.json ]; then
-    npm ci --prefer-offline --no-audit --no-fund || npm install --prefer-offline --no-audit --no-fund
+    npm ci --include=dev --prefer-offline --no-audit --no-fund || npm install --include=dev --prefer-offline --no-audit --no-fund
   else
-    npm install --prefer-offline --no-audit --no-fund
+    npm install --include=dev --prefer-offline --no-audit --no-fund
   fi
   # Build by convention (Next/Nuxt/etc.) — the script name is the convention.
   if node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
