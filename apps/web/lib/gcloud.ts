@@ -89,6 +89,20 @@ export async function ownsApp(slug: string, ownerId: string): Promise<boolean> {
   try { return (await describeService(slug)).owner === ownerId; } catch { return false; }
 }
 
+/**
+ * The revision taking the most traffic, or null when the split says nothing.
+ *
+ * Cloud Run reports traffic as a list of shares; a normal service has one entry at
+ * 100%, and a tagged revision can sit in the list with no percent at all.
+ */
+function servingRevision(s: any): string | null {
+  const traffic = (s.status?.traffic ?? []) as Array<{ revisionName?: string; percent?: number }>;
+  const best = traffic
+    .filter((t) => t.revisionName && (t.percent ?? 0) > 0)
+    .sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0))[0];
+  return best?.revisionName ?? null;
+}
+
 export async function describeService(slug: string): Promise<ServiceInfo> {
   const s = await serviceResource(slug);
   const c = s.spec?.template?.spec?.containers?.[0] ?? {};
@@ -100,7 +114,11 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
     ready: (s.status?.conditions ?? []).find((x: any) => x.type === "Ready")?.status === "True",
     region: REGION,
     created: s.metadata?.creationTimestamp ?? "",
-    revision: s.status?.latestReadyRevisionName ?? s.status?.latestCreatedRevisionName ?? "",
+    // The revision actually SERVING, not the newest one that happens to be ready.
+    // Those differ after a rollback, and reporting the newest made a successful
+    // rollback look like it did nothing: the CLI said "now serving <old>" and the
+    // next `status` printed the revision we had just rolled away from.
+    revision: servingRevision(s) ?? s.status?.latestReadyRevisionName ?? s.status?.latestCreatedRevisionName ?? "",
     image: c.image ?? "",
     envKeys: (c.env ?? []).map((e: any) => e.name).filter((n: string) => n && n !== "SUPERSONIC_REPO"),
     cloudsql: ann["run.googleapis.com/cloudsql-instances"] ?? "",
