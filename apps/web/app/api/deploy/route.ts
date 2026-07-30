@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
 import { repairDeploy } from "@/lib/agent";
-import { opencodeRepair } from "@/lib/opencode-deploy";
+import { opencodeRepair, planDeploy } from "@/lib/opencode-deploy";
 import { currentUserId } from "@/lib/session";
 import { pgConfig } from "@/lib/pg-config";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -61,6 +61,11 @@ const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
  * the runner base images exist in Artifact Registry (see services/runner/build.sh).
  */
 const RUNNER_ENABLED = process.env.RUNNER === "1";
+// Agent planner: opencode reads the repo and decides how to install/build/run,
+// replacing the hardcoded stack detector's recipes. Dark until proven; the
+// deterministic detector stays as the fallback so a deploy never dies because
+// planning hiccuped. Needs RUNNER=1 to actually route server apps to the runner.
+const PLANNER_ENABLED = process.env.PLANNER === "1";
 /** Memory for runner apps. 512 MiB (the Cloud Run default) OOMs a real Node app. */
 const RUNNER_MEMORY = process.env.RUNNER_MEMORY || "2Gi";
 const RUNNER_NODE_IMAGE = process.env.RUNNER_NODE_IMAGE
@@ -784,6 +789,39 @@ export async function POST(req: Request) {
         if (s.database?.engine) log(`Provision ${s.database.engine} (via ${s.database.via})`);
         if (s.cache) log(`Provision ${s.cache} cache`);
         if (s.secretsNeeded?.length) log(`Will ask for secrets: ${s.secretsNeeded.join(", ")}`);
+
+        // Agent-native plan. Instead of trusting the detector's hardcoded per-stack
+        // recipes, let opencode READ the repo and decide the judgment calls: which
+        // language, static vs server, the production run command, and whether it
+        // needs a database. The detector still ran (its install/build commands feed
+        // the static build lane and it is the fallback), but the agent overrides the
+        // routing decisions here. Any planner failure keeps the detector's answer, so
+        // planning is a pure upgrade that can never make a deploy worse.
+        if (PLANNER_ENABLED) {
+          try {
+            log("Planning the deploy — the agent reads the repo…");
+            const plan = await planDeploy({ dir, log });
+            if (plan.language === "node") s.runtime = "node";
+            else if (plan.language === "python") s.runtime = "python";
+            if (plan.static) {
+              s.serve = { mode: "static", outputDir: plan.outputDir || "dist" };
+            } else {
+              s.serve = { mode: "container" };
+              if (plan.run && !runCmd) runCmd = plan.run;               // agent supplies the run cmd
+              if (Array.isArray(plan.preRun) && plan.preRun.length && runCmd) {
+                // One-shot pre-serve steps (migrations). Folded ahead of the run cmd;
+                // `prisma migrate deploy` and friends are idempotent, so re-running on
+                // each instance start is safe.
+                runCmd = plan.preRun.filter(Boolean).join(" && ") + " && " + runCmd;
+              }
+            }
+            s.database = plan.needsDB ? { engine: "postgres", via: "agent" } : s.database;
+            if (plan.envNeeded?.length) log(`App reads env: ${plan.envNeeded.join(", ")}`);
+            log(`Plan ready: ${plan.reason || `${plan.language}${plan.static ? " static" : ""}`}`);
+          } catch (e) {
+            log(`Planner unavailable — keeping deterministic detection (${e instanceof Error ? e.message : String(e)})`);
+          }
+        }
 
         // A project that ships its own Dockerfile always takes a container lane,
         // whatever the detector concluded. The author was explicit.

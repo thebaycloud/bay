@@ -103,6 +103,162 @@ fi
 `;
 }
 
+// ============================ PLANNER =====================================
+// Instead of a hardcoded stack detector, opencode READS the repo once and hands
+// back a deploy plan the runner executes verbatim. This is the "USE AGENTS"
+// path: no framework matrix baked into the platform, no per-stack Dockerfiles —
+// the agent that can read the code decides how to install/build/run it.
+
+export interface DeployPlan {
+  language: "node" | "python" | "static" | "other";
+  install?: string;      // override the runner's language-default install
+  build?: string;        // build step, or "" for none
+  run: string;           // production run cmd; MUST bind 0.0.0.0 on $PORT (server apps)
+  static?: boolean;      // true → serve built assets statically, no server process
+  outputDir?: string;    // static only: the built directory (e.g. "dist", "out", "build")
+  needsDB?: boolean;     // provision Postgres and inject DATABASE_URL
+  preRun?: string[];     // one-shot pre-serve steps (migrations, e.g. "npx prisma migrate deploy")
+  port?: number;         // only if the app hardcodes a port instead of reading $PORT
+  envNeeded?: string[];  // env var NAMES the app reads (surfaced to the user; never values)
+  reason?: string;       // one line: how the agent read the stack (for logs)
+}
+
+const PLAN_AGENT_MD = `---
+description: Reads a repo and outputs a deploy plan as JSON
+mode: primary
+temperature: 0
+permission:
+  bash: allow
+  edit: deny
+  webfetch: deny
+---
+
+You inspect the web app in \`./repo\` and output a single JSON deploy plan. You do NOT modify anything — read files (package.json, requirements.txt/pyproject.toml, config, entrypoints, Procfile, README) and decide how the app is installed, built, and run in production on a cloud host that injects a \`$PORT\` env var.
+
+Investigate first with bash (ls, cat, grep), then output EXACTLY ONE JSON object as your FINAL message and nothing else. Shape:
+
+{
+  "language": "node" | "python" | "static" | "other",
+  "install": "<install cmd, or omit to use the platform default (npm ci / pip install)>",
+  "build": "<build cmd, or \\"\\" if none>",
+  "run": "<production run command that binds 0.0.0.0 on $PORT>",
+  "static": <true only for pure client-side apps with no server>,
+  "outputDir": "<for static: the built directory, e.g. dist / out / build>",
+  "needsDB": <true if the app needs a Postgres database>,
+  "preRun": ["<one-shot steps before serving, e.g. npx prisma migrate deploy>"],
+  "envNeeded": ["<env var NAMES the app reads, excluding PORT and DATABASE_URL>"],
+  "reason": "<one short line: how you read the stack>"
+}
+
+Rules:
+- The run command is the most important field. It MUST bind 0.0.0.0 and use the \`$PORT\` the platform injects — never a hardcoded port, never a dev server that binds localhost.
+  - FastAPI: \`uvicorn main:app --host 0.0.0.0 --port $PORT\`  · Flask: \`gunicorn app:app --bind 0.0.0.0:$PORT\` · Django: \`gunicorn <proj>.wsgi --bind 0.0.0.0:$PORT\`
+  - Next (built): \`next start -p $PORT\` · Node/Express: the real server entry, e.g. \`node server.js\` (it must read process.env.PORT)
+- A React/Vite/CRA SPA with no backend is \`"static": true\` with its build output in \`outputDir\`; \`run\` may be "".
+- Never invent secrets. \`envNeeded\` is names only. Omit DATABASE_URL — the platform provides it when needsDB is true.
+- Prefer the app's own scripts/config over guessing. If a Procfile or a documented start command exists, use it.
+- Output ONLY the JSON object as your final message. No markdown fences, no prose around it.
+`;
+
+/** Pull the last well-formed JSON object out of opencode's final text. */
+function extractPlan(text: string): DeployPlan | null {
+  // opencode may wrap it in prose or a ```json fence; scan for the last balanced {...}.
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidates: string[] = [];
+  if (fence) candidates.push(fence[1]);
+  // Greedy last-object fallback: find each top-level { ... } by brace balance.
+  let depth = 0, start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") { if (depth === 0) start = i; depth++; }
+    else if (ch === "}") { depth--; if (depth === 0 && start >= 0) candidates.push(text.slice(start, i + 1)); }
+  }
+  for (const c of candidates.reverse()) {
+    try {
+      const o = JSON.parse(c);
+      if (o && typeof o === "object" && ("run" in o || "static" in o || "language" in o)) return o as DeployPlan;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+
+/**
+ * Ask opencode to read the repo and produce a deploy plan. Read-only (edit denied),
+ * no redeploy bridge — it inspects and returns. Throws on any failure so the caller
+ * can fall back to the deterministic detector. Same env-hardening as opencodeRepair.
+ */
+export async function planDeploy(opts: {
+  dir: string;
+  log: (l: string) => void;
+  timeoutMs?: number;
+}): Promise<DeployPlan> {
+  const { dir, log } = opts;
+  const timeoutMs = opts.timeoutMs ?? Number(process.env.PLANNER_TIMEOUT_MS || 180000);
+
+  const ws = mkdtempSync(join(tmpdir(), "ss-plan-"));
+  const dataHome = mkdtempSync(join(tmpdir(), "ss-plandata-"));
+  let finalText = "";
+  try {
+    symlinkSync(dir, join(ws, "repo"));
+    const token = await gcloudToken();
+    writeFileSync(join(ws, "opencode.json"), JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      provider: { vertex: { npm: "@ai-sdk/openai-compatible", name: "Vertex Gemini", options: {
+        baseURL: `https://${LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT}/locations/${LOCATION}/endpoints/openapi`,
+        apiKey: token,
+      }, models: { "google/gemini-2.5-pro": { name: "Gemini 2.5 Pro" } } } },
+    }, null, 2));
+    mkdirSync(join(ws, ".opencode", "agent"), { recursive: true });
+    writeFileSync(join(ws, ".opencode", "agent", "plan.md"), PLAN_AGENT_MD);
+
+    const prompt = `Read the app in ./repo and output its deploy plan as a single JSON object (see your instructions). Investigate the files first, then output ONLY the JSON.`;
+    const args = ["run", "--agent", "plan", "--model", MODEL, "--auto", "--format", "json", prompt];
+
+    await new Promise<void>((resolve) => {
+      const childEnv: NodeJS.ProcessEnv = {
+        NODE_ENV: process.env.NODE_ENV || "production",
+        HOME: homedir(),
+        PATH: `${join(homedir(), ".opencode", "bin")}:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin"}`,
+        TMPDIR: tmpdir(),
+        LANG: process.env.LANG || "en_US.UTF-8",
+        USER: process.env.USER || "supersonic",
+        XDG_DATA_HOME: dataHome,
+      };
+      const p = spawn(opencodeBin(), args, { cwd: ws, stdio: ["ignore", "pipe", "pipe"], env: childEnv });
+      const killer = setTimeout(() => { log("planner · timed out"); try { p.kill("SIGKILL"); } catch { /* ignore */ } }, timeoutMs);
+      let buf = "";
+      const handle = (o: any) => {
+        const type = o?.type;
+        const part = o?.part ?? {};
+        if (type === "tool_use" || type === "tool") {
+          const name = part?.tool || o?.tool || part?.name;
+          const input = part?.state?.input ?? o?.state?.input ?? {};
+          const detail = input.command || input.filePath || input.pattern || "";
+          if (name) log(`planner · ${name}${detail ? " " + String(detail).slice(0, 70) : ""}`);
+        } else if (type === "text") {
+          const text = part?.text ?? o?.text;
+          if (typeof text === "string" && text.trim()) { finalText = text; log(`planner · ${text.trim().replace(/\s+/g, " ").slice(0, 120)}`); }
+        } else if (type === "error") {
+          log(`planner error: ${o?.error?.data?.message || o?.error?.name || "opencode error"}`);
+        }
+      };
+      p.stdout.on("data", (d: Buffer) => { buf += d.toString(); let nl; while ((nl = buf.indexOf("\n")) >= 0) { const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (line) { try { handle(JSON.parse(line)); } catch { /* noise */ } } } });
+      p.stderr.on("data", (d: Buffer) => { const l = d.toString().trim(); if (l) log(`planner: ${l.slice(0, 120)}`); });
+      p.on("error", (e) => { log(`planner spawn failed: ${e.message}`); clearTimeout(killer); resolve(); });
+      p.on("close", () => { clearTimeout(killer); resolve(); });
+    });
+  } finally {
+    try { rmSync(ws, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(dataHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+
+  const plan = extractPlan(finalText);
+  if (!plan) throw new Error("planner produced no usable JSON plan");
+  if (!plan.static && !plan.run) throw new Error("planner returned no run command for a server app");
+  log(`planner · ${plan.language}${plan.static ? " (static)" : ""}${plan.needsDB ? " +db" : ""} → ${plan.static ? plan.outputDir : plan.run}`);
+  return plan;
+}
+
 export async function opencodeRepair(opts: {
   dir: string;              // the repo copy the agent edits (same as repairDeploy)
   slug: string;
