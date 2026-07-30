@@ -57,7 +57,18 @@ cp -a "$SRC/." "$APP/"
 cd "$APP"
 restore_cache
 
-if [ -f package.json ]; then
+# A "shipped" bundle was built on the agent's own machine and arrives complete —
+# node_modules (with any generated client, e.g. Prisma) and the build output are
+# already here. There is NOTHING to install or build; we only encrypt and ship it.
+# This is the fast path: the ~minutes of cloud install+build collapse to seconds,
+# because the work happened locally where the deps and build cache were already warm.
+shipped=""
+{ [ -f package.json ] && [ -d node_modules ]; } && shipped=1
+{ { [ -f requirements.txt ] || [ -f pyproject.toml ]; } && [ -d .venv ]; } && shipped=1
+
+if [ -n "$shipped" ]; then
+  log "shipped bundle — already built on the agent's machine, skipping install + build"
+elif [ -f package.json ]; then
   # --include=dev is mandatory: the base image sets NODE_ENV=production (correct for
   # runtime), and under that npm install SKIPS devDependencies — but the build needs
   # them (typescript, tailwind, bundlers all live in devDeps for most real apps). Without
