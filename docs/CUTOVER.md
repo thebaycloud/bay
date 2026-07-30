@@ -424,3 +424,40 @@ Two constraints that are not obvious and did break in production:
 Calls are fire-and-forget: a deploy never waits for a picture, and a failed screenshot is
 logged and dropped. An app that answers non-2xx gets no picture at all, so a card falls
 back to its monogram rather than showing a photograph of an error page.
+
+## 10. Deploys happen on push — pending one authorization
+
+`cloudbuild.yaml` at the repo root builds the control plane and deploys it to Cloud Run.
+It runs on every push to `main`, so a merged fix reaches production without anyone
+remembering to run anything. There is deliberately no test or lint gate in it: this is
+deployment, not CI.
+
+The build step passes `--image` and nothing else. That is not an oversight — the live
+service carries `AUTH_SECRET`, `PG_PASSWORD`, the Stripe keys and the lane flags in its
+environment, and `--set-env-vars` in a pipeline would wipe them. For the same reason it
+never passes `--tag` or `--no-traffic`: a deploy from `main` is meant to serve. Pinning
+traffic once already left a fix dark for half an hour while everyone believed it was out.
+
+**Still needed, once, by a human:** the Cloud Build GitHub App is not installed on
+`The-Red-Onion/supersonic`, so the trigger cannot be created yet. At
+`console.cloud.google.com/cloud-build/triggers?project=supersonic-deploy-prod` →
+*Connect repository* → GitHub → authorize → pick the repo. After that:
+
+```bash
+gcloud builds triggers create github --project supersonic-deploy-prod --region=global \
+  --name=deploy-control-plane-on-main \
+  --repo-owner=The-Red-Onion --repo-name=supersonic \
+  --branch-pattern='^main$' --build-config=cloudbuild.yaml
+```
+
+Cloud Build's runtime account already holds `run.admin`, `iam.serviceAccountUser` and
+`artifactregistry.writer`, so no IAM change is needed.
+
+Deploying by hand still works and is the fallback if the trigger is down:
+
+```bash
+gcloud builds submit --project supersonic-deploy-prod \
+  --tag us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane:manual
+gcloud run deploy supersonic-control-plane --project supersonic-deploy-prod \
+  --region us-central1 --image us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane:manual
+```

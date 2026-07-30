@@ -1,0 +1,54 @@
+# Deploy the control plane on every push to main.
+#
+# This replaces two commands that were run by hand every time, which meant deploys
+# happened when someone remembered to do them and a fix could sit merged-but-dark
+# for hours. No test or lint gate here on purpose — the point is that main reaches
+# production, quickly and without ceremony.
+#
+# The image is tagged with the commit SHA, so the running revision can always be
+# traced back to the code it came from, and `latest` moves with it for humans.
+
+steps:
+  # BuildKit with a registry cache: the image is a multi-stage Node build and a cold
+  # build takes ~6 minutes, almost all of it npm install. mode=max caches the
+  # intermediate stages too, so an unchanged dependency tree is restored instead of
+  # reinstalled.
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker buildx create --use --name ssbuilder --driver docker-container || true
+        docker buildx build \
+          --tag $_IMAGE:$SHORT_SHA \
+          --tag $_IMAGE:latest \
+          --cache-from type=registry,ref=$_IMAGE:cache \
+          --cache-to type=registry,ref=$_IMAGE:cache,mode=max \
+          --push \
+          -f Dockerfile .
+
+  # Only --image. Never env vars: the live service carries AUTH_SECRET, PG_PASSWORD,
+  # the Stripe keys and the lane flags, and a pipeline that passed --set-env-vars
+  # would wipe them. Never --tag or --no-traffic either: a deploy from main is meant
+  # to serve, and pinning traffic once already left a fix dark for half an hour.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - supersonic-control-plane
+      - --image=$_IMAGE:$SHORT_SHA
+      - --region=us-central1
+      - --project=$PROJECT_ID
+      - --quiet
+
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 2400s
