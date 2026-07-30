@@ -762,13 +762,16 @@ export async function POST(req: Request) {
           ? { outputDir: String(s.serve.outputDir || ".") }
           : null;
 
-        // The prebuilt-runner lane owns every server app that doesn't ship its own
-        // Dockerfile — Node or Python. A static SPA stays on the instant static
-        // lane above (nothing to run, and the runner would only add latency); a
-        // Dockerfile author was explicit and keeps the container build. Language
-        // is the ONLY thing read here, from the runtime string — not the framework.
+        // The prebuilt-runner lane owns server apps — Node or Python. A static SPA
+        // stays on the instant static lane above. A Dockerfile normally keeps the
+        // container build (the author was explicit) — EXCEPT when the agent hands us
+        // a run command (--run): that means the agent decided how to run this, which
+        // overrides a repo Dockerfile that may not even be self-contained (e.g. an
+        // Nx `COPY dist/api` Dockerfile that assumes a prior build). Language is the
+        // ONLY thing read here, from the runtime string — not the framework.
+        const dockerfileOverridden = hasDockerfile && Boolean(runCmd);
         const runnerLang: "node" | "python" | null =
-          RUNNER_ENABLED && !staticServe && !hasDockerfile
+          RUNNER_ENABLED && !staticServe && (!hasDockerfile || dockerfileOverridden)
             ? (String(s.runtime || "").startsWith("node") ? "node"
               : String(s.runtime || "").startsWith("python") ? "python"
               : null)
