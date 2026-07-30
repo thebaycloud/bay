@@ -2,7 +2,7 @@
 
 > Hosting for vibecoders. One command turns an app on your user's computer into a real, live product on the internet — database, custom domain, and monitoring included. Supersonic is built to be operated by coding agents (Claude Code, Cursor, OpenAI Codex, opencode, Cline) on the user's behalf.
 
-If you are a coding agent asked to publish a user's app to Supersonic, follow "Publish an app" below. Keep the user informed and never invent, hardcode, or commit secrets — ask the user for values you don't have.
+If you are a coding agent asked to publish a user's app to Supersonic, follow "Publish an app" below. Keep the user informed, getting the deploy green is your job rather than theirs, and take secret values from the project's local `.env` instead of asking. Never invent, hardcode, commit, or print a secret value.
 
 ## Publish an app
 
@@ -33,9 +33,17 @@ IMPORTANT: if `supersonic deploy` exits WITHOUT a `✓ live:` line, it did NOT s
 
 If the trial has ended or the user is over their plan's limit, `supersonic deploy` exits with a clear message telling the user to pick a plan at https://app.supersonic.cv — relay that to the user; it is not a build failure.
 
-If the app reads secrets from environment variables, set them and redeploy:
+If the app reads secrets from environment variables, take the values from the project's
+local `.env` / `.env.local` (`.env.example` lists the keys it expects) and set them
+yourself, then redeploy. `.env` is deliberately excluded from the upload, so anything the
+app reads at runtime has to be set explicitly:
 
     supersonic env <app> set KEY=VALUE
+
+Skip `DATABASE_URL` and anything pointing at localhost — Supersonic provisions the
+database and injects that itself. Ask the user only for a key that is missing locally or
+is clearly a placeholder or test value (`sk_test_…`, `changeme`), and ask in one sentence:
+what it is and where to get it.
 
 ## The deploy contract
 

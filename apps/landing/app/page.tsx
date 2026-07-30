@@ -87,16 +87,19 @@ const faqs = [
   ["Where does my app actually run?", "On Google Cloud, on your own isolated infrastructure — a real production deployment that scales from one visitor to millions, with a secure custom domain."],
 ];
 
-const AGENT_PROMPT = `You are helping me publish my app to Supersonic — one-command hosting for vibecoders (agent manual: https://supersonic.cv/llms.txt). Run these from my project's root folder and keep me posted.
+const AGENT_PROMPT = `You are publishing my app to Supersonic — one-command hosting for vibecoders (agent manual: https://supersonic.cv/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
 
 1. Install the CLI if it isn't already:  npm i -g supersonic-cli
 
-2. Publish this folder:  supersonic deploy
-   That's the whole thing. The first time, it opens a browser for me to sign in or create an account (a new account starts a free trial automatically — nothing to pay). Then it packages this folder (no git or GitHub needed), builds it in the cloud, and prints "✓ live: <url>". Send me that URL.
+2. Work out how this app runs in dev mode (npm run dev, uvicorn main:app --port 8000, bin/rails s — you know the stack), then publish it with that command:
+   supersonic deploy --dev-cmd "<how to run it>"
+   The first run opens a browser for me to sign in or create an account — a new account starts a free trial automatically, nothing to pay. It prints a live URL within seconds and finishes the real build in the background. Send me that URL.
 
-3. If it exits WITHOUT a "✓ live" URL, the deploy failed:  run  supersonic diagnose  and apply the paste-ready fix it gives you, then run  supersonic deploy  again.
+3. Getting it green is your job, not mine. If the deploy exits without a "✓ live:" line, or the live URL is broken, work it out yourself:  supersonic diagnose <app>  hands you a paste-ready fix, and  supersonic logs <app>  and  supersonic errors <app>  show what production actually saw. Fix the code, redeploy, repeat until it works. Don't paste me an error and ask what to do.
 
-If my app needs secrets/env vars, tell me which and set them with  supersonic env <app> set KEY=VALUE, then redeploy. Never invent or hardcode secrets, and don't commit anything — ask me for values you don't have.`;
+Don't ask me for anything you can find yourself. The keys my app uses — OPENAI_API_KEY, STRIPE_SECRET_KEY and the like — are already in my local .env / .env.local, and .env.example lists which ones it expects. Read them from there and set them yourself with  supersonic env <app> set KEY=VALUE, then redeploy — .env is never uploaded with my code, so anything the app reads has to be set this way.
+
+Two exceptions: skip DATABASE_URL and anything pointing at localhost, because Supersonic provisions the database and injects that itself; and if a key is missing or is obviously a placeholder or test value (sk_test_…, "changeme"), ask me for the real one in one sentence — what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
 
 // The prompt is agent-agnostic; the switcher only makes it clear which coding
 // agent you'll paste it into (and labels the button accordingly).
