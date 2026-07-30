@@ -57,7 +57,13 @@ async function capture(url: string, headers: Record<string, string>): Promise<Bu
     page.setDefaultTimeout(NAV_TIMEOUT_MS);
     // `load` rather than `networkidle`: a page with a websocket or a poll never
     // goes idle, and we would wait out the timeout on exactly the liveliest apps.
-    await page.goto(url, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+    const resp = await page.goto(url, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+    // An error page is a picture of nothing anyone wants on a card, and storing it
+    // makes a broken app look photographed rather than broken. The first backfill
+    // caught two apps whose rows say live while the static server answers "not
+    // found"; both got a white JPEG of that text. No picture is the better answer.
+    const status = resp?.status() ?? 0;
+    if (status >= 400 || status === 0) throw new Error(`app answered HTTP ${status || "nothing"}`);
     // A beat for fonts and above-the-fold images, which arrive after load.
     await page.waitForTimeout(1200);
     return await page.screenshot({ type: "jpeg", quality: 78, clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT } });
