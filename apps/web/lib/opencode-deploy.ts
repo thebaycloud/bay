@@ -13,7 +13,7 @@
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { AddressInfo } from "node:net";
@@ -133,9 +133,20 @@ permission:
   webfetch: deny
 ---
 
-You inspect the web app in \`./repo\` and output a single JSON deploy plan. You do NOT modify anything — read files (package.json, requirements.txt/pyproject.toml, config, entrypoints, Procfile, README) and decide how the app is installed, built, and run in production on a cloud host that injects a \`$PORT\` env var.
+You inspect the web app in \`./repo\` and output a single JSON deploy plan. You do NOT modify the app — decide how it is installed, built, and run in production on a cloud host that injects a \`$PORT\` env var.
 
-Investigate first with bash (ls, cat, grep), then output EXACTLY ONE JSON object as your FINAL message and nothing else. Shape:
+Work QUICKLY and efficiently — a few tool calls, not many. Read only what you need:
+- the dependency manifest: \`package.json\` (or \`requirements.txt\` / \`pyproject.toml\`),
+- the build/output config IF the manifest points to one: \`nx.json\`/\`project.json\` (Nx), \`vite.config.*\`, \`next.config.*\`, \`Procfile\`, or the main entry file,
+- nothing else. Do NOT list the same directory twice or re-read a file you already read. Once you can name the install/build/run commands, WRITE the plan and STOP.
+
+Investigate first with bash (ls, cat, grep). When you have decided, WRITE the plan as a single JSON object to the exact file path given in the task prompt, using bash — for example:
+
+    cat > /the/given/path/plan.json <<'JSON'
+    { ...the plan... }
+    JSON
+
+Writing that file is how you deliver the plan (do not rely on printing it in chat). After writing it, stop. The JSON shape:
 
 {
   "language": "node" | "python" | "static" | "other",
@@ -157,7 +168,7 @@ Rules:
 - A React/Vite/CRA SPA with no backend is \`"static": true\` with its build output in \`outputDir\`; \`run\` may be "".
 - Never invent secrets. \`envNeeded\` is names only. Omit DATABASE_URL — the platform provides it when needsDB is true.
 - Prefer the app's own scripts/config over guessing. If a Procfile or a documented start command exists, use it.
-- Output ONLY the JSON object as your final message. No markdown fences, no prose around it.
+- Deliver the plan by WRITING it to the given file path. That file is the deliverable.
 `;
 
 /** Pull the last well-formed JSON object out of opencode's final text. */
@@ -193,11 +204,13 @@ export async function planDeploy(opts: {
   timeoutMs?: number;
 }): Promise<DeployPlan> {
   const { dir, log } = opts;
-  const timeoutMs = opts.timeoutMs ?? Number(process.env.PLANNER_TIMEOUT_MS || 180000);
+  const timeoutMs = opts.timeoutMs ?? Number(process.env.PLANNER_TIMEOUT_MS || 240000);
 
   const ws = mkdtempSync(join(tmpdir(), "ss-plan-"));
   const dataHome = mkdtempSync(join(tmpdir(), "ss-plandata-"));
+  const planPath = join(ws, "plan.json");   // the agent writes the plan here (proven pattern; robust to event-stream shape)
   let finalText = "";
+  let fileText = "";
   try {
     symlinkSync(dir, join(ws, "repo"));
     const token = await gcloudToken();
@@ -211,7 +224,7 @@ export async function planDeploy(opts: {
     mkdirSync(join(ws, ".opencode", "agent"), { recursive: true });
     writeFileSync(join(ws, ".opencode", "agent", "plan.md"), PLAN_AGENT_MD);
 
-    const prompt = `Read the app in ./repo and output its deploy plan as a single JSON object (see your instructions). Investigate the files first, then output ONLY the JSON.`;
+    const prompt = `Read the app in ./repo and produce its deploy plan (see your instructions). Investigate the files first, then WRITE the plan as a single JSON object to this exact file path using bash:\n\n    ${planPath}\n\nThat file is your deliverable. After writing it, stop.`;
     const args = ["run", "--agent", "plan", "--model", MODEL, "--auto", "--format", "json", prompt];
 
     await new Promise<void>((resolve) => {
@@ -235,9 +248,11 @@ export async function planDeploy(opts: {
           const input = part?.state?.input ?? o?.state?.input ?? {};
           const detail = input.command || input.filePath || input.pattern || "";
           if (name) log(`planner · ${name}${detail ? " " + String(detail).slice(0, 70) : ""}`);
-        } else if (type === "text") {
-          const text = part?.text ?? o?.text;
-          if (typeof text === "string" && text.trim()) { finalText = text; log(`planner · ${text.trim().replace(/\s+/g, " ").slice(0, 120)}`); }
+        } else if (type === "text" || type === "message" || part?.type === "text") {
+          // Accumulate ALL assistant text (not just the last event): the JSON may be
+          // followed by narration, and event shapes vary across opencode versions.
+          const text = part?.text ?? o?.text ?? part?.content;
+          if (typeof text === "string" && text.trim()) { finalText += text + "\n"; log(`planner · ${text.trim().replace(/\s+/g, " ").slice(0, 120)}`); }
         } else if (type === "error") {
           log(`planner error: ${o?.error?.data?.message || o?.error?.name || "opencode error"}`);
         }
@@ -247,12 +262,15 @@ export async function planDeploy(opts: {
       p.on("error", (e) => { log(`planner spawn failed: ${e.message}`); clearTimeout(killer); resolve(); });
       p.on("close", () => { clearTimeout(killer); resolve(); });
     });
+    // Primary: the plan the agent WROTE to plan.json (robust — no dependence on the
+    // event-stream shape). Fallback: whatever JSON we can find in its chat text.
+    if (existsSync(planPath)) { try { fileText = readFileSync(planPath, "utf8"); } catch { /* fall back to text */ } }
   } finally {
     try { rmSync(ws, { recursive: true, force: true }); } catch { /* ignore */ }
     try { rmSync(dataHome, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 
-  const plan = extractPlan(finalText);
+  const plan = extractPlan(fileText) || extractPlan(finalText);
   if (!plan) throw new Error("planner produced no usable JSON plan");
   if (!plan.static && !plan.run) throw new Error("planner returned no run command for a server app");
   log(`planner · ${plan.language}${plan.static ? " (static)" : ""}${plan.needsDB ? " +db" : ""} → ${plan.static ? plan.outputDir : plan.run}`);

@@ -24,14 +24,20 @@ build finishes in the background:
     #      Next    → next start        Node/Express → node server.js (must read process.env.PORT)
     # 3. Pass both. Supersonic reserves the URL, tunnels the dev server live instantly,
     #    and runs the app in production with --run when the real build is ready.
-    supersonic deploy --dev-cmd "uvicorn main:app --port 8000" --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    supersonic deploy
 
-ALWAYS pass `--run` — this is how the app runs once deployed, and figuring it out is
-your job (you know the stack). It is REQUIRED for Python/other non-Node stacks, which
-cannot be guessed; without it the deploy has no way to start the app. `--dev-cmd` is
-separate and optional (it powers the instant live preview) — pass it too when you can.
-Node projects with a `dev` script work with a plain `supersonic deploy` (the CLI starts
-the preview), but still pass `--run` unless `npm start` runs the production server.
+Supersonic reads the repo itself and works out how to install, build, and run the app —
+including the production run command (Python, Node, static SPAs, and databases all
+handled). You do NOT need to tell it how to run the app; a plain `supersonic deploy` is
+the normal path.
+
+Two optional flags, only if you want them:
+- `--run "<production command>"` — an OVERRIDE. Pass it only if you know a quirk the
+  platform can't infer (an unusual monorepo entrypoint, a custom server). When present it
+  wins; when absent Supersonic decides. Example: `--run "uvicorn main:app --host 0.0.0.0 --port $PORT"`.
+- `--dev-cmd "<how to run in dev>"` — powers the instant live preview (the tunnel). Pass
+  it when you can; it doesn't affect the deployed app.
+
 `supersonic deploy`:
 
 - Signs the user in the FIRST time by opening a browser — a new account starts a free 3-day trial automatically (full features, nothing to pay up front). There is NO separate login/signup step to run.
