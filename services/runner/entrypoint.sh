@@ -32,9 +32,20 @@ fetch_code() {
     | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p')
   [ -n "$token" ] || { log "FATAL: no token from metadata server"; exit 1; }
   enc=$(printf '%s' "$object" | sed 's:/:%2F:g')
-  curl -sf -H "Authorization: Bearer $token" \
-    "https://storage.googleapis.com/storage/v1/b/$bucket/o/$enc?alt=media" \
-    -o /tmp/code.tgz || { log "FATAL: code download failed"; exit 1; }
+  # Keep the HTTP status. "code download failed" sent the repair agent hunting
+  # through the customer's code for six minutes and three redeploys over what was
+  # a 403: the runtime service account these apps run as has no read access to the
+  # assets bucket, so the container never had its code. The status says which of
+  # those it is, and the message names the identity that was refused.
+  code=$(curl -s -o /tmp/code.tgz -w '%{http_code}' -H "Authorization: Bearer $token" \
+    "https://storage.googleapis.com/storage/v1/b/$bucket/o/$enc?alt=media")
+  if [ "$code" != "200" ]; then
+    sa=$(curl -sf -H "Metadata-Flavor: Google" \
+      "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email" || echo "unknown")
+    log "FATAL: could not read gs://$bucket/$object — HTTP $code as $sa"
+    [ "$code" = "403" ] && log "that identity is not allowed to read the code bundle — this is a platform misconfiguration, not a problem with the app"
+    exit 1
+  fi
   mkdir -p "$APP"
   tar -xzf /tmp/code.tgz -C "$APP"
   rm -f /tmp/code.tgz
