@@ -271,7 +271,8 @@ export async function setEnv(slug: string, set: Record<string, string>, unset: s
   await capture(args);
 }
 
-export interface Revision { name: string; created: string; active: boolean; }
+/** `ready` is whether the revision ever started — a failed deploy leaves one that never did. */
+export interface Revision { name: string; created: string; active: boolean; ready: boolean; }
 
 export async function listRevisions(slug: string): Promise<Revision[]> {
   const out = await capture(["run", "revisions", "list", "--service", slug, "--region", REGION, "--project", PROJECT, "--format=json"]);
@@ -281,15 +282,24 @@ export async function listRevisions(slug: string): Promise<Revision[]> {
       name: r.metadata?.name ?? "",
       created: r.metadata?.creationTimestamp ?? "",
       active: (r.status?.conditions ?? []).some((c: any) => c.type === "Active" && c.status === "True"),
+      ready: (r.status?.conditions ?? []).some((c: any) => c.type === "Ready" && c.status === "True"),
     }))
     .sort((a, b) => (a.created < b.created ? 1 : -1));
 }
 
-/** Roll traffic back to the previous ready revision. Returns the revision now serving. */
+/**
+ * Roll traffic back to the last revision that can actually serve.
+ *
+ * "The one before" is not good enough: a deploy that failed to start still leaves
+ * a revision behind, and Cloud Run refuses to route to it — so rolling back off a
+ * repaired app aimed straight at the broken revision it had just replaced and died
+ * with a raw gcloud error. Skip anything that never became Ready.
+ */
 export async function rollback(slug: string): Promise<string> {
   const revs = await listRevisions(slug);
   if (revs.length < 2) throw new Error("no previous revision to roll back to");
-  const target = revs[1].name; // [0] is current, [1] is the one before
+  const target = revs.slice(1).find((r) => r.ready)?.name;
+  if (!target) throw new Error("no earlier revision of this app ever started, so there is nothing to roll back to");
   await capture(["run", "services", "update-traffic", slug, "--to-revisions", `${target}=100`, "--region", REGION, "--project", PROJECT]);
   return target;
 }
