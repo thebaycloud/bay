@@ -488,3 +488,5 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 `supersonic-deployer` already holds `cloudbuild.builds.editor`, `run.admin`,
 `storage.admin` and `iam.serviceAccountUser`, so nothing else needs granting.
+
+<!-- deploy pipeline live: this line exists to prove a push reaches production on its own -->
