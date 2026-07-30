@@ -311,9 +311,6 @@ async function deploy(args) {
   // One command: sign in automatically the first time, then deploy. No separate
   // `supersonic login` step required.
   await ensureAuth();
-  // Agent-only: the agent built a static site and tells us the output directory.
-  // No detection — we ship exactly what it points at, via the static lane.
-  if (args.out) return deployOut(args);
   // URL-first by default: a live link appears in ~0.1s (a "deploying…" page, or a
   // live preview tunnelled to the dev server when one can be started) while the
   // real build runs on the server. `--prebuilt` opts back into the old build-here-
@@ -611,43 +608,6 @@ async function tryPrebuilt(appName, args) {
   return consumeDeploy(res, args);
 }
 
-/**
- * Agent-only static deploy: the agent already built the site and passes the output
- * directory with --out. We package that directory and publish it via the static
- * lane — no detector, no cloud build, no guessing where the output is. This is the
- * reliable path for anything that builds to files (Vite/React/Next-export/etc.).
- */
-async function deployOut(args) {
-  const outDir = path.resolve(process.cwd(), String(args.out));
-  if (!fs.existsSync(outDir)) die(`--out directory not found: ${args.out}`);
-  if (!fs.existsSync(path.join(outDir, "index.html"))) {
-    info(dim(`! no index.html in ${args.out}/ — shipping it anyway, but a static site usually has one`));
-  }
-  const appName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
-  const tok = token();
-  if (!tok) die("not authenticated — run: supersonic login");
-  info(cyan("▸ ") + "shipping built output from " + bold(args.out) + " (static)");
-  const tgz = await packageDir(outDir);
-  const body = fs.readFileSync(tgz);
-  try { fs.unlinkSync(tgz); } catch { /* ignore */ }
-  info(dim(`uploading ${(body.length / 1048576).toFixed(1)} MB`));
-  const res = await fetch(baseUrl() + "/api/deploy", {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + tok,
-      "Content-Type": "application/gzip",
-      "x-supersonic-upload": "1",
-      "x-supersonic-prebuilt": "1",
-      "x-supersonic-app": appName,
-    },
-    body,
-  });
-  if (res.status === 401) die("token invalid or expired — run: supersonic login");
-  if (res.status === 403) die("forbidden");
-  if (!res.body) die("no response stream");
-  return consumeDeploy(res, args);
-}
-
 /** Run a shell command in the project, streaming its output. True when it succeeded. */
 function runLocal(command) {
   const r = spawnSync(command, { shell: true, stdio: "inherit", cwd: process.cwd() });
@@ -783,8 +743,6 @@ ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the bac
   supersonic deploy --dev-cmd "<run in dev>"    tunnel the URL to your app live while it builds
                                                   e.g. --dev-cmd "uvicorn main:app --port 8000"
   supersonic deploy --dev-port <n>              tunnel to a dev server you already started
-  supersonic deploy --out <dir>                 you built a static site — ship that dir (no cloud build)
-                                                  e.g. build, then: supersonic deploy --out dist
   supersonic deploy --run "<prod start cmd>"    how to run it in PROD — you know the stack
                                                   e.g. --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
   supersonic deploy --wait                      stay attached and stream the build (default: returns once live)
