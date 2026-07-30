@@ -461,3 +461,30 @@ gcloud builds submit --project supersonic-deploy-prod \
 gcloud run deploy supersonic-control-plane --project supersonic-deploy-prod \
   --region us-central1 --image us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane:manual
 ```
+
+### How the deploy is authorized
+
+GitHub Actions holds no service-account key. GitHub mints a short-lived OIDC token,
+Google exchanges it for credentials, and the exchange is allowed only for pushes to
+`The-Red-Onion/supersonic` — that restriction is the `--attribute-condition` on the
+provider, and without it any repository on GitHub could ask for the same token.
+
+Set up once (the workload identity pool `github` already exists):
+
+```bash
+gcloud iam workload-identity-pools providers create-oidc github-oidc \
+  --project supersonic-deploy-prod --location=global --workload-identity-pool=github \
+  --display-name="GitHub OIDC" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository=='The-Red-Onion/supersonic'"
+
+gcloud iam service-accounts add-iam-policy-binding \
+  supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com \
+  --project supersonic-deploy-prod \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/540236122367/locations/global/workloadIdentityPools/github/attribute.repository/The-Red-Onion/supersonic"
+```
+
+`supersonic-deployer` already holds `cloudbuild.builds.editor`, `run.admin`,
+`storage.admin` and `iam.serviceAccountUser`, so nothing else needs granting.

@@ -1,0 +1,54 @@
+# Push to main → production deploys itself, from GitHub.
+#
+# Deploying used to be two long gcloud commands someone had to remember, so a
+# merged fix could sit dark for hours while everyone believed it was out.
+#
+# No service-account key lives in this repo or in GitHub secrets. GitHub hands
+# Google a short-lived OIDC token instead, and Google trusts it only for pushes to
+# this repository — see the attribute condition on the provider in docs/CUTOVER.md.
+name: Deploy control plane
+
+on:
+  push:
+    branches: [main]
+  # Deploying the current main by hand, from the Actions tab, when a run needs redoing.
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel one that is already running: a half-applied
+# Cloud Run rollout is worse than a queued one.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # required to mint the OIDC token; without it auth fails
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/540236122367/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # The build and the Cloud Run deploy both live in cloudbuild.yaml, so a hand-run
+      # deploy and this one are the same thing and cannot drift apart.
+      - name: Build and deploy
+        run: |
+          gcloud builds submit . \
+            --project supersonic-deploy-prod \
+            --config cloudbuild.yaml \
+            --substitutions _TAG=${{ github.sha }}
+
+      - name: Check the site answers
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://app.supersonic.cv/login)
+          echo "app.supersonic.cv/login → $code"
+          [ "$code" = "200" ]
