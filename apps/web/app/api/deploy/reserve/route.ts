@@ -15,6 +15,7 @@ import { createAppRecord } from "@/lib/apps";
 import { cloudRunName } from "@/lib/slug";
 import { getPool } from "@/lib/db";
 import { setDeploy } from "@/lib/deploys";
+import { entitlement, countOwnerApps } from "@/lib/entitlements";
 
 export async function POST(req: Request) {
   const uid = await currentUserId();
@@ -24,6 +25,29 @@ export async function POST(req: Request) {
   const name = String(body.name ?? body.repo ?? "app").trim() || "app";
   const friendly = cloudRunName(name);
   const slug = await resolveSlug(uid, friendly);
+
+  // The plan gate belongs HERE, not only in /api/deploy. This endpoint is what
+  // makes the CLI print "✓ your app is live at <url>"; the build then runs in a
+  // detached worker whose output nobody reads. A user over their app limit got the
+  // success line, a URL, and a "building…" page that answered 200 forever, while
+  // the actual refusal sat in ~/.supersonic/deploys/<slug>.log. Refuse before we
+  // promise anything.
+  const ent = await entitlement(uid);
+  if (ent.locked) {
+    return Response.json(
+      { error: "Your free trial has ended. Pick a plan at app.supersonic.cv to keep deploying.", paywall: true },
+      { status: 402 }
+    );
+  }
+  if (Number.isFinite(ent.limits.maxApps) && (await countOwnerApps(uid, slug)) >= ent.limits.maxApps) {
+    return Response.json(
+      {
+        error: `Your plan includes ${ent.limits.maxApps} app. Upgrade to Pro for unlimited apps at app.supersonic.cv.`,
+        upgrade: true,
+      },
+      { status: 402 }
+    );
+  }
 
   const workspaceId = (await getPool("supersonic_platform").query(
     "SELECT workspace_id FROM users WHERE id = $1", [uid]

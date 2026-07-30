@@ -2,10 +2,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-import { deleteApp, ownsApp } from "@/lib/gcloud";
+import { deleteApp } from "@/lib/gcloud";
 import { getAppBySlug } from "@/lib/apps";
 import { getPool } from "@/lib/db";
 import { currentUserId } from "@/lib/session";
+import { ownsApp } from "@/lib/ownership";
 
 export async function POST(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);

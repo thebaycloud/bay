@@ -1,8 +1,9 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { listJobs, createJob, deleteJob, runJob, describeService, ownsApp } from "@/lib/gcloud";
+import { listJobs, createJob, deleteJob, runJob, describeService } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
+import { ownsApp } from "@/lib/ownership";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 

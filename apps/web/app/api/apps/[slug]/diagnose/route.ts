@@ -6,8 +6,9 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describeService, getErrors, ownsApp } from "@/lib/gcloud";
+import { describeService, getErrors } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
+import { ownsApp } from "@/lib/ownership";
 import { diagnoseError } from "@/lib/agent";
 
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv;

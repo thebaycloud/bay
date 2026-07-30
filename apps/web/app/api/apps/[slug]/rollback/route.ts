@@ -1,8 +1,9 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { rollback, ownsApp } from "@/lib/gcloud";
+import { rollback } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
+import { ownsApp } from "@/lib/ownership";
 
 export async function POST(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);

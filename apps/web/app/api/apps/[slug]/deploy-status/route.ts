@@ -2,8 +2,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { getDeploy } from "@/lib/deploys";
-import { ownsApp } from "@/lib/gcloud";
+
 import { currentUserId } from "@/lib/session";
+import { ownsApp } from "@/lib/ownership";
 
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);

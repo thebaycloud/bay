@@ -1,8 +1,9 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { describeService, setEnv, ownsApp } from "@/lib/gcloud";
+import { describeService, setEnv } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
+import { ownsApp } from "@/lib/ownership";
 
 // GET  -> list env var KEYS (values are never exposed)
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {

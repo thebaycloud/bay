@@ -2,8 +2,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-import { execCommand, ownsApp } from "@/lib/gcloud";
+import { execCommand } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
+import { ownsApp } from "@/lib/ownership";
 
 // Run a command in a one-off container built from the app's image (isolated
 // from the serving instances, but with the app's env + Cloud SQL attached).
