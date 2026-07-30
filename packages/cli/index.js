@@ -398,7 +398,6 @@ async function urlFirstDeploy(args) {
         SS_BG_DEVCMD: args["dev-cmd"] || "", SS_BG_DEVPORT: args["dev-port"] || "",
         SS_BG_NOENV: args["no-env"] ? "1" : "",
         SS_BG_RUN: args["run"] || "",
-        SS_BG_SHIPPED: args["shipped"] ? "1" : "",
       },
     });
     child.unref();
@@ -485,17 +484,11 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
   // The real build, on the reserved slug, on the server (your machine stays free).
   let res;
   const runCmd = args.run || process.env.SS_BG_RUN || "";
-  const shipped = Boolean(args.shipped || process.env.SS_BG_SHIPPED === "1");
   if (repo) {
     res = await api("/api/deploy", { method: "POST", body: { repo, slug, secrets: envVars, run: runCmd }, stream: true });
   } else {
-    if (shipped && !fs.existsSync(path.join(process.cwd(), "node_modules"))) {
-      info(dim("! --shipped but no node_modules here — build the app first (install + build), then re-run"));
-    }
-    info(cyan("▸ ") + (shipped
-      ? "uploading your BUILT app (node_modules + output) — no cloud build…"
-      : "uploading " + bold(folderName) + " to build in the cloud…"));
-    const tgz = shipped ? await packageBuilt() : await packageFolder();
+    info(cyan("▸ ") + "uploading " + bold(folderName) + " to build in the cloud…");
+    const tgz = await packageFolder();
     const body = fs.readFileSync(tgz);
     try { fs.unlinkSync(tgz); } catch { /* ignore */ }
     const headers = { Authorization: "Bearer " + token(), "Content-Type": "application/gzip", "x-supersonic-upload": "1", "x-supersonic-app": folderName, "x-supersonic-slug": slug };
@@ -709,28 +702,6 @@ function packageFolder() {
   });
 }
 
-/**
- * Package a folder the agent ALREADY BUILT — keep node_modules + the build output,
- * so the runner just runs it (no cloud install/build). The opposite of
- * packageFolder: we KEEP dist/build/node_modules/.venv and drop only VCS, secrets,
- * and build-tool caches. .gitignore is NOT applied (it hides the very output we ship).
- */
-function packageBuilt() {
-  return new Promise((resolve, reject) => {
-    const cwd = process.cwd();
-    const out = path.join(os.tmpdir(), "ss-shipped-" + process.pid + ".tgz");
-    const excludes = [".git", ".env", ".env.local", ".env.*.local", ".DS_Store", "._*",
-      ".nx", ".cache", ".turbo", "__pycache__", "*.pyc", "*.log"];
-    const targs = ["-czf", out, "-C", cwd];
-    for (const e of excludes) targs.push("--exclude=" + e);
-    targs.push(".");
-    const p = spawn("tar", targs, { env: { ...process.env, COPYFILE_DISABLE: "1" }, stdio: ["ignore", "ignore", "pipe"] });
-    let err = ""; p.stderr.on("data", (d) => (err += d));
-    p.on("error", () => reject(new Error("could not run `tar` — is it installed?")));
-    p.on("close", () => (fs.existsSync(out) ? resolve(out) : reject(new Error("packaging failed: " + err.trim()))));
-  });
-}
-
 async function consumeDeploy(res, args) {
   const reader = res.body.getReader();
   const dec = new TextDecoder();
@@ -816,8 +787,6 @@ ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the bac
                                                   e.g. build, then: supersonic deploy --out dist
   supersonic deploy --run "<prod start cmd>"    how to run it in PROD — you know the stack
                                                   e.g. --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
-  supersonic deploy --shipped --run "<cmd>"     you already BUILT it (deps + output present) —
-                                                  ship it as-is, no cloud build (fastest server path)
   supersonic deploy --wait                      stay attached and stream the build (default: returns once live)
   supersonic deploy --no-env                    don't carry .env up (default: sets vars your app doesn't have yet)
   supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead
