@@ -389,3 +389,38 @@ inherit the default compute account and its project-wide admin roles. Creating a
 locked-down account and trimming the default one's roles is a separate, higher-risk
 change — Cloud Build and the control plane both lean on those roles, and cutting them
 blind will take the platform down. It needs its own careful pass.
+
+## 9. The screenshot service — done
+
+Applied on 2026-07-30. `services/shot` is a Cloud Run service running Chromium; it takes
+one picture of an app and writes it to `gs://supersonic-static-assets/_thumbs/<slug>.jpg`.
+The dashboard shows that image instead of what it used to do, which was render a live
+`<iframe>` of every app on the page.
+
+What it is wired to:
+
+```
+supersonic-shot           us-central1, sealed, SA supersonic-shot@…
+  ← invoked by            supersonic-deployer@…            (run.invoker)
+  → writes                gs://supersonic-static-assets    (storage.objectAdmin)
+control plane env         SHOT_SERVICE_URL=https://supersonic-shot-uyuwsbguuq-uc.a.run.app
+```
+
+The control plane mints both tokens — one for the shot service's audience, one for the
+app's — and passes the app's token in the request body. The shot service never mints
+anything, which is why it needs no `run.invoker` on user apps: adding one per deploy would
+be another IAM write on the hot path. The deployer account needed `run.invoker` on
+`supersonic-static` for this; it had it on container apps already, via the same grant
+`probeApp` depends on.
+
+Two constraints that are not obvious and did break in production:
+
+- **`playwright-core`'s version must match the base image tag exactly**, and is pinned for
+  that reason. A `^1.49.0` range resolved to 1.62.0 against a `v1.49.0-jammy` image and
+  Chromium was not where that build looked for it.
+- **`page.screenshot()` takes png or jpeg only.** WebP is refused at runtime, not at
+  build time.
+
+Calls are fire-and-forget: a deploy never waits for a picture, and a failed screenshot is
+logged and dropped. An app that answers non-2xx gets no picture at all, so a card falls
+back to its monogram rather than showing a photograph of an error page.
