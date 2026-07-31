@@ -17,7 +17,16 @@ export function pgConfig(): PgConfig {
   return JSON.parse(readFileSync(p, "utf8"));
 }
 
-/** True when running on Cloud Run (use the Cloud SQL unix socket instead of the local proxy). */
+/**
+ * True when running on Cloud Run (use the Cloud SQL unix socket instead of the
+ * local proxy).
+ *
+ * `K_SERVICE` alone is not enough: Cloud Run sets it for *services* only, and
+ * a **job** gets `CLOUD_RUN_JOB` / `CLOUD_RUN_EXECUTION` instead. With just the
+ * service check, the deploy job decided it was a developer's laptop and tried to
+ * reach Postgres through cloud-sql-proxy on 127.0.0.1:5433 — it died on
+ * ECONNREFUSED before it could read the deploy it was started to run.
+ */
 export function isCloudRun(): boolean {
-  return !!process.env.K_SERVICE;
+  return !!(process.env.K_SERVICE || process.env.CLOUD_RUN_JOB);
 }

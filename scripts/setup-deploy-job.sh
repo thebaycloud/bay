@@ -8,9 +8,9 @@
 # the only way to keep those in step is to copy them from the live service every
 # time rather than maintain a second list by hand.
 #
-# Run this after adding an env var to the control plane, or to recreate the job
-# from scratch. Routine image updates do NOT need it — cloudbuild.yaml updates the
-# job's image on every deploy from main, the same way it updates the service.
+# Run this after changing the control plane's configuration, or to recreate the
+# job from scratch. Routine image updates do NOT need it — cloudbuild.yaml moves
+# the job's image with the service on every deploy from main.
 #
 #   ./scripts/setup-deploy-job.sh
 set -euo pipefail
@@ -19,22 +19,53 @@ PROJECT=supersonic-deploy-prod
 REGION=us-central1
 SERVICE=supersonic-control-plane
 JOB=${JOB:-supersonic-deploy-job}
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
 
 echo "reading the control plane's configuration…"
-IMAGE=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
-  --format='value(spec.template.spec.containers[0].image)')
-SA=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
-  --format='value(spec.template.spec.serviceAccountName)')
-# name=value pairs, comma-separated, with any commas inside a value escaped the
-# way gcloud expects. A missing PG_PASSWORD here is a job that cannot reach the
-# database and a deploy that dies before it prints anything.
-ENV_VARS=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
-  --format='value[delimiter=","](spec.template.spec.containers[0].env.flatten("name","value",separator="="))' \
-  | sed 's/,/^@^/g')
+gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json > "$WORK/service.json"
 
+# Read the whole service and emit the flag VALUES, rather than trying to coax
+# them out of --format strings. Three things make that the only workable route:
+# a value may legally contain a comma, most of the interesting variables are
+# Secret Manager references rather than literals (so they need --set-secrets, and
+# a flatten() of them produces confident nonsense), and the Cloud SQL instance
+# lives in an annotation rather than anywhere env-shaped. Getting any of the
+# three wrong yields a job that starts and then cannot reach the database.
+python3 - "$WORK/service.json" "$WORK" <<'PY'
+import json, sys
+service, out = sys.argv[1], sys.argv[2]
+d = json.load(open(service))
+tpl = d["spec"]["template"]
+c = tpl["spec"]["containers"][0]
+ann = tpl["metadata"].get("annotations") or {}
+
+def write(name, text):
+    open(f"{out}/{name}", "w").write(text)
+
+# A YAML file, not --set-env-vars. Every delimiter gcloud offers has to be a
+# character that appears in no value, and these values include commas, colons,
+# slashes and an `@` (APP_RUNTIME_SERVICE_ACCOUNT is an email address) — the
+# first attempt at this picked `@` and produced a job whose runtime service
+# account had become an environment variable name. A file has no delimiter.
+write("env.yaml", "".join(
+    f'{e["name"]}: {json.dumps(e["value"])}\n' for e in c["env"] if "value" in e))
+write("secrets", ",".join(
+    f'{e["name"]}={e["valueFrom"]["secretKeyRef"]["name"]}:{e["valueFrom"]["secretKeyRef"]["key"]}'
+    for e in c["env"] if "valueFrom" in e))
+write("image", c["image"])
+write("sa", tpl["spec"].get("serviceAccountName", ""))
+write("cloudsql", ann.get("run.googleapis.com/cloudsql-instances", ""))
+print(f'  {len([e for e in c["env"] if "value" in e])} env vars, '
+      f'{len([e for e in c["env"] if "valueFrom" in e])} secrets')
+PY
+
+IMAGE=$(cat "$WORK/image"); SA=$(cat "$WORK/sa"); CLOUDSQL=$(cat "$WORK/cloudsql")
+SECRETS=$(cat "$WORK/secrets")
 [ -n "$IMAGE" ] || { echo "could not read the service image — is $SERVICE deployed?" >&2; exit 1; }
 echo "  image: $IMAGE"
 echo "  service account: ${SA:-<default>}"
+echo "  cloud sql: ${CLOUDSQL:-<none>}"
 
 # --max-retries 0 is not a preference. A retried execution would claim the same
 # run again and deploy a second time, and a deploy is not idempotent: it pushes
@@ -56,8 +87,31 @@ gcloud run jobs deploy "$JOB" \
   --memory 4Gi --cpu 2 \
   --max-retries 0 \
   --task-timeout 60m \
-  --set-env-vars "^@^${ENV_VARS}" \
+  --env-vars-file "$WORK/env.yaml" \
+  ${SECRETS:+--set-secrets "$SECRETS"} \
+  ${CLOUDSQL:+--set-cloudsql-instances "$CLOUDSQL"} \
   --quiet
+
+echo
+echo "checking the job matches the service…"
+python3 - "$JOB" "$REGION" "$PROJECT" <<'PY'
+import json, subprocess, sys
+job, region, project = sys.argv[1:4]
+d = json.loads(subprocess.check_output([
+    "gcloud", "run", "jobs", "describe", job, "--region", region,
+    "--project", project, "--format=json"]))
+spec = d["spec"]["template"]["spec"]["template"]["spec"]
+env = spec["containers"][0].get("env", [])
+plain = [e for e in env if "value" in e]
+secret = [e for e in env if "valueFrom" in e]
+ann = d["spec"]["template"]["metadata"].get("annotations") or {}
+print(f'  {len(plain)} env vars, {len(secret)} secrets, '
+      f'cloudsql={ann.get("run.googleapis.com/cloudsql-instances", "<none>")}')
+missing = [n for n in ("PG_CONN", "PG_PASSWORD", "ASSETS_BUCKET") if n not in {e["name"] for e in env}]
+if missing:
+    print(f"  MISSING: {', '.join(missing)} — the job cannot run a deploy without these", file=sys.stderr)
+    sys.exit(1)
+PY
 
 echo
 echo "done. Switch deploys over with:"
