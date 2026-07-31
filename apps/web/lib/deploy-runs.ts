@@ -149,6 +149,17 @@ export async function claimRun(runId: string): Promise<{ request: DeployRunReque
   return { request: row.request as DeployRunRequest, archive };
 }
 
+/** The run ids recorded for an app, so its in-flight deploys can be found and stopped. */
+export async function runIdsForSlug(slug: string): Promise<string[]> {
+  try {
+    await ensure();
+    const r = await getPool(DB).query(`SELECT run_id FROM deploy_runs WHERE slug = $1`, [slug]);
+    return r.rows.map((row: { run_id: string }) => row.run_id);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Forget a finished run.
  *

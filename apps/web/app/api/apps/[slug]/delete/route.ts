@@ -5,6 +5,7 @@ export const maxDuration = 120;
 import { deleteApp } from "@/lib/gcloud";
 import { getAppBySlug } from "@/lib/apps";
 import { getPool } from "@/lib/db";
+import { deleteDeploy } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 
@@ -28,6 +29,9 @@ export async function POST(_req: Request, { params }: { params: { slug: string }
     await getPool("supersonic_platform")
       .query("DELETE FROM apps WHERE slug = $1 AND owner_id = $2", [slug, uid])
       .catch(() => {});
+    // And its deploy history. Left behind, a row still reading 'building' keeps
+    // the dashboard showing "Deploying…" for an app that no longer exists.
+    await deleteDeploy(slug);
     return Response.json({ ok: true });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

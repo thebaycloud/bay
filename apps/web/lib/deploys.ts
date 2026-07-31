@@ -93,10 +93,39 @@ export async function getDeploy(slug: string): Promise<DeployRow | null> {
   try {
     await ensure();
     const r = await getPool(DB).query(`${SELECT_DEPLOY} WHERE slug=$1`, [slug]);
-    return r.rows[0] ?? null;
+    return markStale(r.rows[0] ?? null);
   } catch {
     return null;
   }
+}
+
+/**
+ * How long a deploy may go without reporting before it is presumed dead.
+ * Matches the edge's bound (services/proxy/src/edge.ts) on purpose: the
+ * dashboard and the URL must not disagree about whether an app is still coming.
+ */
+const STALE_AFTER_MS = 15 * 60_000;
+
+/**
+ * A deploy whose process died writes no terminal status, so its row stays
+ * 'building' forever and the dashboard shows "Deploying…" for an app that is
+ * never going to arrive — including one that has since been DELETED. Reported as
+ * failed once it has been silent long enough. `listActiveDeploys` has always
+ * applied this bound in its WHERE clause; reading one row by slug did not.
+ */
+function markStale(row: DeployRow | null): DeployRow | null {
+  if (!row || row.status !== "building") return row;
+  const at = row.updatedAt ? Date.parse(row.updatedAt) : NaN;
+  if (!Number.isFinite(at) || Date.now() - at <= STALE_AFTER_MS) return row;
+  return { ...row, status: "failed", error: row.error || "the deploy stopped reporting and never finished" };
+}
+
+/** Forget an app's deploy history. Called when the app itself is deleted. */
+export async function deleteDeploy(slug: string): Promise<void> {
+  try {
+    await ensure();
+    await getPool(DB).query("DELETE FROM deploys WHERE slug = $1", [slug]);
+  } catch { /* the app is going away regardless */ }
 }
 
 /** Deploys still building for a user (ignoring stale ones from crashed deploys). */

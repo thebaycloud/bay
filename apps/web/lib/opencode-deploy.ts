@@ -174,6 +174,20 @@ Rules:
 - Do NOT change how the app is served. Do not add or remove a Dockerfile, do not convert a static site into a server or a server into a static site, and do not swap the web server for a different one. That decision was already made from a reading of the whole repo; changing it here turns one broken thing into a differently broken thing, and has done exactly that. Fix the error in front of you.
 - Read the error literally. \`not found\` / exit 127 means a program is missing — install it or call it by a path that exists. It never means a port is wrong.
 - When the app is live, stop and briefly report what you changed and the URL.
+
+## What the platform decided
+
+\`deploy-plan.json\` (next to this file, NOT in \`./repo\`) is how the platform chose to install, build and run this app. Read it first — it tells you which half of the failure you are looking at.
+
+Some failures are NOT in the repository and you must not try to fix them by editing it:
+- permission errors, \`PermissionDenied\`, IAM, service accounts, quota
+- a secret or environment variable the PLATFORM was supposed to provide (the plan's \`needsDB\` is true and \`DATABASE_URL\` is missing, for example)
+- anything failing inside the build infrastructure rather than inside your app's own commands
+- the plan naming a command or a directory that does not match this repository
+
+For any of those: STOP, and report what is wrong with the plan or the platform, quoting the error. Do not invent a value to get past it. Writing a placeholder \`DATABASE_URL\`, deleting the migration step, or hard-coding a dummy connection string does not fix the deploy — it produces an app that starts and is broken, which is worse than a deploy that fails with a clear reason. This has happened, more than once, at real cost.
+
+Ending without a live URL, with an accurate explanation, is a correct and valuable outcome.
 `;
 
 function redeployScript(port: number): string {
@@ -456,10 +470,12 @@ export async function opencodeRepair(opts: {
   dir: string;              // the repo copy the agent edits (same as repairDeploy)
   slug: string;
   initialError: string;
+  /** What the platform decided to do with this repo. See the note in AGENT_MD. */
+  plan?: DeployPlan | null;
   redeploy: Redeploy;
   log: (l: string) => void;
 }): Promise<RepairResult> {
-  const { dir, slug, initialError, redeploy, log } = opts;
+  const { dir, slug, initialError, plan, redeploy, log } = opts;
   const tokens: TokenUsage = { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
   const changes = new Set<string>();
   let steps = 0, redeploys = 0;
@@ -507,6 +523,18 @@ export async function opencodeRepair(opts: {
   let agentError: string | null = null;
   try {
     symlinkSync(dir, join(ws, "repo"));
+    // The plan, written where the agent can read it.
+    //
+    // Without this the agent sees an error and a repo and nothing else — it does
+    // not know which parts of what failed were ITS repo and which were decisions
+    // the platform made, and the only surface it can change is the repo. So when
+    // the real fault was ours it edited the customer's code to compensate: it
+    // wrote a fake .env with a placeholder DATABASE_URL, `sed`-ed a migrate script
+    // out of package.json, and once wrote an entire application. The last of those
+    // burned 287k tokens against a bug whose actual fix was an IAM grant.
+    if (plan) {
+      writeFileSync(join(ws, "deploy-plan.json"), JSON.stringify(plan, null, 2));
+    }
     const token = await gcloudToken();
     writeFileSync(join(ws, "opencode.json"), JSON.stringify(opencodeConfig(token), null, 2));
     mkdirSync(join(ws, ".opencode", "agent"), { recursive: true });

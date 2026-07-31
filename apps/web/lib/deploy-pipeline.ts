@@ -829,6 +829,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // convention, which is right for a single-app repo and wrong for every
     // monorepo — see prepare.sh.
     let runnerInstall: string | undefined;
+    // Kept so the repair agent can be told what the platform decided.
+    let activePlan: DeployPlan | null = null;
 
     // A repo that already says how to deploy itself does not need a model to
     // guess. `supersonic.json` is read first and, when present, replaces the
@@ -858,6 +860,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           log("Planning the deploy — the agent reads the repo…");
           plan = await planDeploy({ dir, log });
         }
+        activePlan = plan;
         if (typeof plan.build === "string") runnerBuild = plan.build;
         if (typeof plan.install === "string") runnerInstall = plan.install;
         if (plan.language === "node") s.runtime = "node";
@@ -1352,7 +1355,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       if (useOpencode) log("Repair engine: opencode");
       const repair = stages.start("repair-agent");
       const fixed = useOpencode
-        ? await opencodeRepair({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log })
+        ? await opencodeRepair({ dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy: runDeploy, log })
         : await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
       await stages.end(repair, fixed.ok ? "ok" : "failed");
       if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }

@@ -5,10 +5,12 @@ import { accessToken as restAccessToken, describeServiceRest, listServicesRest, 
 import { ASSETS_BUCKET } from "./static-release";
 import { dbNameForSlug } from "./db";
 import { deleteAppSecrets } from "./app-secrets";
+import { runIdsForSlug } from "./deploy-runs";
 
 const PROJECT = "supersonic-deploy-prod";
 // The one shared Cloud SQL instance every app's database lives on.
 const PG_INSTANCE = "supersonic-shared-pg";
+const DEPLOY_JOB_NAME = process.env.DEPLOY_JOB_NAME || "supersonic-deploy-job";
 const REGION = "us-central1";
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } as NodeJS.ProcessEnv;
 
@@ -366,6 +368,42 @@ export async function deleteApp(slug: string): Promise<void> {
   // that no longer exists, and the slug space is small enough that the name will
   // eventually be handed to somebody else.
   await deleteAppSecrets(slug);
+
+  // And any deploy still running for it.
+  //
+  // Deploys were moved into a Cloud Run Job precisely so they survive the client
+  // that started them — which also means deleting an app does not stop one. A job
+  // orphaned this way keeps going against infrastructure that has just been torn
+  // down: it burns repair-agent tokens on failures it can no longer fix, and it
+  // can RECREATE the Cloud Run service after the delete has removed it. Observed
+  // running thirty minutes past the deletion of its own app.
+  await cancelDeploysFor(slug);
+}
+
+/**
+ * Cancel any job execution currently deploying this slug.
+ *
+ * Executions are matched by the run id in their arguments, so this asks the
+ * deploy_runs table which runs belong to the app and cancels the executions
+ * carrying those ids. Best-effort throughout: a deploy that cannot be cancelled
+ * must not stop the app from being deleted.
+ */
+export async function cancelDeploysFor(slug: string): Promise<void> {
+  try {
+    const runIds = await runIdsForSlug(slug);
+    if (!runIds.length) return;
+    const out = await capture(["run", "jobs", "executions", "list",
+      "--job", DEPLOY_JOB_NAME, "--region", REGION, "--project", PROJECT,
+      "--filter", "status.runningCount>0", "--format=value(metadata.name)"]);
+    for (const name of out.split("\n").map((l) => l.trim()).filter(Boolean)) {
+      const args = await capture(["run", "jobs", "executions", "describe", name,
+        "--region", REGION, "--project", PROJECT,
+        "--format=value(spec.template.spec.containers[0].args)"]).catch(() => "");
+      if (!runIds.some((id: string) => args.includes(id))) continue;
+      await capture(["run", "jobs", "executions", "cancel", name,
+        "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
+    }
+  } catch { /* nothing running, or listing failed */ }
 }
 
 const DEPLOYER_SA = "supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com";
