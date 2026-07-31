@@ -43,10 +43,24 @@ export async function markAppLive(
   // gone live with two services must not be reachable for even one request with
   // the routes of the deploy before it. Null clears them, so an app that drops
   // back to a single service stops being split.
-  await getPool(DB).query(
-    `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3, routes = $4::jsonb WHERE slug = $1`,
-    [slug, runUrl, releaseHash ?? null, routes && routes.length ? JSON.stringify(routes) : null]
-  );
+  //
+  // Written defensively: `routes` arrives in a migration, and a control plane
+  // that has shipped ahead of it must NOT fail every deploy at the moment it goes
+  // live. Marking an app live is the last thing a deploy does, so a failure here
+  // discards a build that actually worked. The column is used when present and
+  // skipped when not.
+  try {
+    await getPool(DB).query(
+      `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3, routes = $4::jsonb WHERE slug = $1`,
+      [slug, runUrl, releaseHash ?? null, routes && routes.length ? JSON.stringify(routes) : null]
+    );
+  } catch (e) {
+    if (!/column .*routes.* does not exist/i.test(e instanceof Error ? e.message : String(e))) throw e;
+    await getPool(DB).query(
+      `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3 WHERE slug = $1`,
+      [slug, runUrl, releaseHash ?? null]
+    );
+  }
 }
 
 export interface OwnedApp {
