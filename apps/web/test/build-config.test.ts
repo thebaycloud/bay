@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   cachedBuildConfig, kanikoBuildConfig, buildkitBuildConfig, selectedBuilder,
-  buildkitImage, buildLogLine, CACHE_MISS_NOISE,
+  buildkitImage, buildLogLine, CACHE_MISS_NOISE, cloudBuildIdFrom, appBuildTag,
+  runnerPrepareConfig,
 } from "../lib/build-config";
 
 const IMAGE = "us-central1-docker.pkg.dev/supersonic-deploy-prod/cloud-run-source-deploy/demo-app";
@@ -193,4 +194,58 @@ test("real build output still reaches the customer, noise still does not", () =>
   assert.equal(buildLogLine("denied: Permission \"artifactregistry.repositories.uploadArtifacts\" denied"), "denied: Permission \"artifactregistry.repositories.uploadArtifacts\" denied");
   assert.equal(buildLogLine("#4 transferring context: 2.1MB"), null);
   assert.equal(buildLogLine("Creating temporary archive of 41 file(s)"), null);
+});
+
+/**
+ * Which build was MINE.
+ *
+ * The implementation this replaced asked "what was the last build in the
+ * project?" (`gcloud builds list --limit 1`, no filter). Under any concurrency at
+ * all that is somebody else's build, and the log is not decoration: it is the
+ * evidence the repair agent debugs from, so a stranger's failure sends the agent
+ * editing this customer's code over a bug that was never in it. Every line below
+ * is copied from real gcloud output.
+ */
+test("a deploy can identify its own Cloud Build", () => {
+  const id = "d3f4a1b2-9c8d-4e7f-a6b5-0123456789ab";
+
+  // `gcloud builds submit` — the static, runner and Dockerfile lanes.
+  assert.equal(cloudBuildIdFrom(
+    `Logs are available at [https://console.cloud.google.com/cloud-build/builds;region=us-central1/${id}?project=540236122367].`), id);
+  assert.equal(cloudBuildIdFrom(
+    `Created [https://cloudbuild.googleapis.com/v1/projects/supersonic-deploy-prod/locations/us-central1/builds/${id}].`), id);
+  // `gcloud run deploy --source` — the buildpack lane, whose build we never
+  // configure and therefore cannot tag. This line is its only identification.
+  assert.equal(cloudBuildIdFrom(
+    `Building Container... Logs are available at [https://console.cloud.google.com/cloud-build/builds;region=us-central1/${id}?project=p].`), id);
+
+  // A deploy's output is full of OTHER uuids. Answering with one of those would
+  // be exactly the bug this fixes, just sourced differently.
+  assert.equal(cloudBuildIdFrom("Creating Revision... operation 4a1b2c3d-5e6f-4071-8293-a4b5c6d7e8f9"), null);
+  assert.equal(cloudBuildIdFrom("Setting IAM policy for request 4a1b2c3d-5e6f-4071-8293-a4b5c6d7e8f9"), null);
+  assert.equal(cloudBuildIdFrom("Creating temporary archive of 41 file(s)"), null);
+  assert.equal(cloudBuildIdFrom("Logs are available at [https://console.cloud.google.com/cloud-build/builds]"), null);
+});
+
+test("every config we generate is tagged with its app", () => {
+  // The fallback when no id was printed: this app's own most recent build. It
+  // only works if the tag is actually on the builds we submit.
+  const tag = appBuildTag("demo-app");
+  assert.equal(tag, "supersonic-app-demo-app");
+  // Cloud Build rejects a tag outside [\w][\w.-]{0,127} at submit — i.e. the tag
+  // being wrong takes the deploy down, not just the log lookup.
+  assert.match(tag, /^[\w][\w.-]{0,127}$/);
+
+  for (const [lane, yaml] of [
+    ["kaniko", kanikoBuildConfig(IMAGE, "demo-app")],
+    ["buildkit", buildkitBuildConfig(IMAGE, null, "demo-app")],
+    ["cached/kaniko", cachedBuildConfig(IMAGE, "kaniko", "demo-app")],
+    ["cached/buildkit", cachedBuildConfig(IMAGE, "buildkit", "demo-app")],
+    ["runner prepare", runnerPrepareConfig({ image: "r", bucket: "b", slug: "demo-app", release: "rel", codeKey: "k" })],
+  ] as const) {
+    assert.match(yaml, /^tags:\n  - supersonic-app-demo-app$/m, `${lane} must tag its build`);
+  }
+
+  // No slug (a caller that has none yet) must not emit a malformed empty block.
+  assert.doesNotMatch(kanikoBuildConfig(IMAGE), /tags:/);
 });

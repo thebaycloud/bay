@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { ASSETS_BUCKET } from "./static-release";
+import { buildTagsBlock } from "./build-config";
 import { resilientInstall } from "./install";
 
 /**
@@ -309,6 +310,8 @@ export function staticBuildConfig(opts: {
   destination: string;
   /** The tenant the cache entry belongs to — a workspace id, or the owner's id. */
   namespace: string;
+  /** Tags the build so its log can be found again by app rather than by recency. */
+  slug?: string;
   /** Overridable so a test can pin the config without depending on the environment. */
   builder?: string;
   bucket?: string;
@@ -344,6 +347,7 @@ export function staticBuildConfig(opts: {
     // E2_HIGHCPU_8 build queued 44-57s before starting and every default-pool
     // build queued 1s, which is more than the bigger machine ever gave back.
     "  logging: CLOUD_LOGGING_ONLY",
+    ...buildTagsBlock(opts.slug),
     "",
   ].join("\n");
 }

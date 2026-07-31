@@ -28,10 +28,28 @@ steps:
           --push \
           -f Dockerfile .
 
-  # Only --image. Never env vars: the live service carries AUTH_SECRET, PG_PASSWORD,
-  # the Stripe keys and the lane flags, and a pipeline that passed --set-env-vars
-  # would wipe them. Never --tag or --no-traffic either: a deploy from main is meant
-  # to serve, and pinning traffic once already left a fix dark for half an hour.
+  # Never env vars: the live service carries AUTH_SECRET, PG_PASSWORD, the Stripe
+  # keys and the lane flags, and a pipeline that passed --set-env-vars would wipe
+  # them. Never --tag or --no-traffic either: a deploy from main is meant to serve,
+  # and pinning traffic once already left a fix dark for half an hour.
+  #
+  # The resource flags DO belong here. They were applied by hand for months and
+  # existed nowhere in the repo, so the settings that took the service down had no
+  # source of truth to read: a deploy runs INSIDE this service's request handler
+  # (clone + planner subprocess + gcloud), and at the old 2Gi/concurrency=160 four
+  # concurrent deploys landed on one instance and OOM-killed it mid-build
+  # ("Memory limit of 2048 MiB exceeded with 2092 MiB used", twice in one test run).
+  #
+  # concurrency=4 with 4Gi is ~1GB of headroom per concurrent deploy — 2x the
+  # measured peak. Not concurrency=1: this service also serves the dashboard, env
+  # sets, deploy-status and `logs --follow` polling every 2.5s, and giving each of
+  # those its own cold Next.js instance trades an OOM for cold-start latency
+  # everywhere. min-instances=1 keeps one warm so the common case never pays it.
+  #
+  # This is a STOPGAP. The real fix is moving deploy execution out of the request
+  # into a Cloud Run Job, which also fixes the 600s maxDuration cap and scale-down
+  # SIGTERM killing an in-flight deploy. Until that lands, these numbers are what
+  # stands between a busy minute and a dead build.
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy
     entrypoint: gcloud
@@ -42,6 +60,10 @@ steps:
       - --image=$_IMAGE:$_TAG
       - --region=us-central1
       - --project=$PROJECT_ID
+      - --memory=4Gi
+      - --cpu=2
+      - --concurrency=4
+      - --min-instances=1
       - --quiet
 
 substitutions:

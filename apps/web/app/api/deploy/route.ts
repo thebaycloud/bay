@@ -25,7 +25,7 @@ import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
-import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -193,7 +193,11 @@ function fixPrompt(slug: string, error: string): string {
   ].join("\n");
 }
 
-function gcloudDeploy(args: string[], onLine: (l: string) => void) {
+// onRaw sees EVERY line; onLine only the ones worth showing a user. The
+// distinction matters for `--source` deploys: gcloud prints the id of the build
+// it just started on an ordinary informational line, which the onLine filter
+// drops — and that id is the only thing that later identifies whose build failed.
+function gcloudDeploy(args: string[], onLine: (l: string) => void, onRaw?: (l: string) => void) {
   return new Promise<string>((resolve, reject) => {
     const p = spawn("gcloud", args, { env: ENV });
     let out = "";
@@ -203,6 +207,7 @@ function gcloudDeploy(args: string[], onLine: (l: string) => void) {
       d.toString().split(/\r?\n/).forEach((raw) => {
         const l = raw.trim();
         if (!l) return;
+        onRaw?.(l);
         errTail.push(l);
         if (errTail.length > 60) errTail.shift();
         if (/fail|error|listen on the port|Revision|Cloud Run error/i.test(l)) onLine(l);
@@ -349,12 +354,50 @@ async function probeApp(url: string, log: (l: string) => void, sealed: boolean):
   }
 }
 
+/**
+ * Tracks which Cloud Build belongs to THIS deploy, so its failure can be read
+ * back without asking "what was the last build in the project?".
+ *
+ * That question used to be the implementation (`builds list --limit 1`, no
+ * filter) and it is wrong the moment two deploys overlap — which is the normal
+ * state of an agent platform. The consequence is not a cosmetic mix-up: this log
+ * is the evidence the repair agent debugs from, so a stranger's build failure
+ * sends it editing this customer's code to fix a bug that was never in it, and
+ * the customer reads someone else's build output as their own.
+ *
+ * Primary source is the build's own id, sniffed from the log-URL line the
+ * command prints. Fallback is this app's tagged builds. If neither is available
+ * the answer is nothing — an unattributed log is worse than no log, because the
+ * caller falls back to the real exception instead of being confidently misled.
+ */
+function buildWatcher(slug: string) {
+  let id: string | null = null;
+  return {
+    /** Feed every raw line of a build command's output through this. */
+    note(line: string) {
+      const found = cloudBuildIdFrom(line);
+      if (found) id = found;
+    },
+    /** Before starting a build: a retry must not read the previous attempt's log. */
+    reset() { id = null; },
+    error() { return fetchBuildError(id, slug); },
+  };
+}
+
 // A failed `gcloud run deploy --source` only says "Build failed; check logs".
 // Pull the actual Cloud Build output so the repair agent fixes the real error.
-async function fetchBuildError(): Promise<string> {
+async function fetchBuildError(buildId: string | null, slug: string): Promise<string> {
   try {
-    const list = await capture("gcloud", ["builds", "list", "--region", REGION, "--project", PROJECT, "--limit", "1", "--format=value(id)"]);
-    const id = list.trim().split("\n")[0];
+    let id = buildId;
+    if (!id) {
+      // No id was printed (or parsed). Fall back to this app's OWN most recent
+      // build — every config we generate carries the slug as a Cloud Build tag —
+      // and never to an unfiltered `--limit 1`, which returns whichever tenant
+      // happened to build last.
+      const list = await capture("gcloud", ["builds", "list", "--region", REGION, "--project", PROJECT,
+        "--filter", `tags=${appBuildTag(slug)}`, "--limit", "1", "--format=value(id)"]);
+      id = list.trim().split("\n")[0] || null;
+    }
     if (!id) return "";
     const raw = await capture("gcloud", ["beta", "builds", "log", id, "--region", REGION, "--project", PROJECT]);
     const lines = raw.split("\n").map((l) => l.replace(/^Step #\d+ - "[^"]*":\s?/, "").replace(/\r/g, "").trimEnd()).filter((l) => l.trim() && !CACHE_MISS_NOISE.test(l));
@@ -999,13 +1042,18 @@ export async function POST(req: Request) {
         const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
         const useDockerBuild = existsSync(join(dir, "Dockerfile"));
         const builder = selectedBuilder();
-        if (useDockerBuild) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder));
-        const buildLine = (l: string) => { const out = buildLogLine(l); if (out) log(out); };
+        if (useDockerBuild) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder, slug));
+        // Which Cloud Build is ours. Every command below that can start one feeds
+        // its raw output through builds.note(), so a failure is read back from the
+        // build this deploy started rather than from whatever built most recently.
+        const builds = buildWatcher(slug);
+        const buildLine = (l: string) => { builds.note(l); const out = buildLogLine(l); if (out) log(out); };
 
         const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
           const hb = setInterval(() => log("deploying…"), 6000);
+          builds.reset();
           try {
-            const o = await gcloudDeploy(args, log);
+            const o = await gcloudDeploy(args, log, (l) => builds.note(l));
             clearInterval(hb);
             const svc = JSON.parse(o.slice(o.indexOf("{")));
             const liveUrl = svc?.status?.url ?? "";
@@ -1023,7 +1071,7 @@ export async function POST(req: Request) {
             let err = e instanceof Error ? e.message : String(e);
             if (/build failed/i.test(err)) {
               log("fetching the real build log for the agent…");
-              const buildLog = await fetchBuildError();
+              const buildLog = await builds.error();
               if (buildLog) err = `Cloud Build failed. Actual build output:\n${buildLog}`;
             }
             return { ok: false, error: err };
@@ -1056,7 +1104,9 @@ export async function POST(req: Request) {
                   // graph, it is one project's node_modules including whatever
                   // its postinstall scripts left in there.
                   namespace: ownerWorkspace ?? ownerId,
+                  slug,
                 }));
+                builds.reset();
                 try {
                   await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
                 } finally { clearInterval(hb); }
@@ -1070,7 +1120,7 @@ export async function POST(req: Request) {
               });
             }
           } catch (e) {
-            const buildLog = await fetchBuildError();
+            const buildLog = await builds.error();
             const reason = buildLog || (e instanceof Error ? e.message : String(e));
             return { ok: false, error: `Build failed:\n${reason}` };
           }
@@ -1117,12 +1167,13 @@ export async function POST(req: Request) {
                 log(`Preparing on the ${runnerLang} runner (install + build once — no image)…`);
                 writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild }));
                 const hb = setInterval(() => log("preparing…"), 8000);
+                builds.reset();
                 try {
                   await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
                 } finally { clearInterval(hb); }
               });
             } catch (e) {
-              const buildLog = await fetchBuildError();
+              const buildLog = await builds.error();
               return { ok: false, error: `Prepare failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
             }
             log(`Deploying on the prebuilt ${runnerLang} runner…`);
@@ -1137,11 +1188,12 @@ export async function POST(req: Request) {
             const hb = setInterval(() => log("building…"), 8000);
             const btail: string[] = [];
             const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
+            builds.reset();
             try {
               await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], onBuild);
             } catch {
               clearInterval(hb);
-              const buildLog = await fetchBuildError();
+              const buildLog = await builds.error();
               const reason = buildLog
                 || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
                 || btail.slice(-6).join("\n");

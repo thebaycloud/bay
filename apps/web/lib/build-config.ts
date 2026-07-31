@@ -25,13 +25,52 @@ export function selectedBuilder(env: Record<string, string | undefined> = proces
 }
 
 /**
+ * The Cloud Build tag marking which app a build belongs to.
+ *
+ * Cloud Build offers no other way to ask "which build was this app's?" after the
+ * fact, and the answer matters: a failed build's log is the evidence the repair
+ * agent debugs from, so picking the wrong build sends it editing a customer's
+ * code over a stranger's error. Tags must match [\w][\w.-]{0,127} and slugs are
+ * lowercase alphanumeric, so the prefix is both a namespace and the guarantee
+ * that a slug can never collide with some other tag in the project.
+ */
+export function appBuildTag(slug: string): string {
+  return `supersonic-app-${slug}`;
+}
+
+/** The `tags:` block for a generated config. Omitted entirely when no slug is known. */
+export function buildTagsBlock(slug?: string): string[] {
+  return slug ? ["tags:", `  - ${appBuildTag(slug)}`] : [];
+}
+
+/**
+ * The Cloud Build id in one line of gcloud output, if there is one.
+ *
+ * Both `builds submit` and `run deploy --source` announce the build they just
+ * started by printing its log URL, and the id sits in the path. That line is the
+ * only moment a deploy learns which build is *its own* — everything after it
+ * (the log, the failure, the evidence handed to the repair agent) depends on
+ * having caught it, so this is pinned by test rather than left to a regex nobody
+ * re-reads.
+ *
+ * The `builds` guard is what keeps it honest: build ids are bare UUIDs, and a
+ * deploy's output is full of other UUIDs (revision suffixes, operation names,
+ * request ids). Only a line that is talking about builds is allowed to answer.
+ */
+const CLOUD_BUILD_ID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/;
+export function cloudBuildIdFrom(line: string): string | null {
+  if (!line.includes("builds")) return null;
+  return line.match(CLOUD_BUILD_ID)?.[0] ?? null;
+}
+
+/**
  * Kaniko build with registry layer caching. Caches each layer (crucially the
  * `npm install` layer) keyed on the files it depends on, so an unchanged
  * package.json means deps are pulled from cache instead of rebuilt.
  *
  * Kept as the default and as the revert path for BUILDER=buildkit.
  */
-export function kanikoBuildConfig(image: string): string {
+export function kanikoBuildConfig(image: string, slug?: string): string {
   return [
     "steps:",
     "  - name: gcr.io/kaniko-project/executor:latest",
@@ -53,6 +92,7 @@ export function kanikoBuildConfig(image: string): string {
     // on every deploy. If app builds ever grow into the multi-minute range,
     // measure again — at that size the bigger machine can start paying for itself.
     "  logging: CLOUD_LOGGING_ONLY",
+    ...buildTagsBlock(slug),
     "",
   ].join("\n");
 }
@@ -116,7 +156,7 @@ export function buildkitImage(env: Record<string, string | undefined> = process.
   return ref && SAFE_IMAGE_REF.test(ref) ? ref : null;
 }
 
-export function buildkitBuildConfig(image: string, daemonImage: string | null = buildkitImage()): string {
+export function buildkitBuildConfig(image: string, daemonImage: string | null = buildkitImage(), slug?: string): string {
   const cache = `${image}-cache:cache`;
   const script = [
     "docker buildx version",
@@ -146,13 +186,14 @@ export function buildkitBuildConfig(image: string, daemonImage: string | null = 
     "options:",
     // No machineType, for the same measured reason as the Kaniko config above.
     "  logging: CLOUD_LOGGING_ONLY",
+    ...buildTagsBlock(slug),
     "",
   ].join("\n");
 }
 
 /** The Cloud Build config for a Dockerfile build, per the BUILDER env var. */
-export function cachedBuildConfig(image: string, builder: Builder = selectedBuilder()): string {
-  return builder === "buildkit" ? buildkitBuildConfig(image) : kanikoBuildConfig(image);
+export function cachedBuildConfig(image: string, builder: Builder = selectedBuilder(), slug?: string): string {
+  return builder === "buildkit" ? buildkitBuildConfig(image, buildkitImage(), slug) : kanikoBuildConfig(image, slug);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -294,6 +335,7 @@ export function runnerPrepareConfig(opts: { image: string; bucket: string; slug:
     "  objects:",
     `    location: gs://${opts.bucket}/ready/${opts.slug}/`,
     `    paths: ["${out}"]`,
+    ...buildTagsBlock(opts.slug),
     "",
   ].join("\n");
 }
