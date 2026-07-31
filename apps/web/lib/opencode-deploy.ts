@@ -81,6 +81,9 @@ Step 1 is not paperwork. Every expensive failure in this system has been the sam
 
 Rules:
 - Only edit files inside \`./repo\`.
+- NEVER create an application that was not already there. Do not write a new entrypoint, a new server, or new source files to make the deploy go green. You are repairing someone's app, not supplying one.
+  This is the most important rule here, and it has been broken: given a repository whose only container exited immediately, an agent wrote \`main.py\`, \`requirements.txt\`, \`index.html\` and a new \`Dockerfile\`, and reported a successful deploy. The URL then served an application its owner had never written, under their name, and everything downstream — the log line, the dashboard, the CLI — called it a success. A deploy that fails honestly is FAR better than one that succeeds by replacing the code.
+  If the repository does not contain a deployable application, or the only way you can see to fix it is to write one, STOP and report exactly that. Ending without a live URL is a valid and correct outcome.
 - Make minimal, targeted changes that fix the actual error — do not rewrite whole files.
 - Read the error output's own hints (for example a "Possible solutions" section) before guessing.
 - Never edit \`redeploy.sh\`, \`opencode.json\`, or anything under \`.opencode/\`.
