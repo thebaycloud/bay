@@ -192,18 +192,29 @@ export async function pruneRuns(hours = 6): Promise<void> {
 }
 
 /**
+ * How the job is invoked, minus the run id.
+ *
+ * Kept here rather than only in the job's own definition because `--args` on an
+ * execution REPLACES the job's arguments — it does not append to them. Passing
+ * just the run id would leave `node <uuid>`, which fails instantly and for a
+ * reason nobody would guess from the message. scripts/setup-deploy-job.sh
+ * creates the job with this same list.
+ */
+export const DEPLOY_JOB_ARGS = ["--import", "tsx", "scripts/deploy-job.ts"];
+
+/**
  * Start the job that will run this deploy.
  *
- * The run id goes in as an argument, not an environment variable: `--update-env-vars`
- * on an execution mutates the shared job, so two deploys starting at the same
- * moment would race and one would run the other's id. An args override applies to
- * one execution only.
+ * The run id goes in as an argument, not an environment variable: an env-var
+ * override is applied to the execution, but arguments keep the whole invocation
+ * in one place and visible in the execution record, which is where anyone
+ * debugging a lost deploy will look first.
  */
 export function startDeployJob(runId: string, region: string, job: string): Promise<void> {
   return gcloud([
     "run", "jobs", "execute", job,
     "--region", region, "--project", PROJECT,
-    "--args", runId,
+    "--args", [...DEPLOY_JOB_ARGS, runId].join(","),
     // Return as soon as the execution is accepted. Waiting for it would put the
     // build back on the request's clock, which is the entire thing being fixed.
     "--async", "--quiet",

@@ -43,12 +43,16 @@ echo "  service account: ${SA:-<default>}"
 # --task-timeout 60m is the point of the whole exercise: the request handler this
 # replaces was capped at 600s, which a cold monorepo build is already within
 # minutes of.
+#
+# The --args here must match DEPLOY_JOB_ARGS in apps/web/lib/deploy-runs.ts. Each
+# execution passes that list plus the run id, because `--args` on an execution
+# REPLACES the job's arguments rather than appending to them.
 gcloud run jobs deploy "$JOB" \
   --image "$IMAGE" \
   --region "$REGION" --project "$PROJECT" \
   ${SA:+--service-account "$SA"} \
   --command node \
-  --args --import,tsx,scripts/deploy-job.ts \
+  --args=--import,tsx,scripts/deploy-job.ts \
   --memory 4Gi --cpu 2 \
   --max-retries 0 \
   --task-timeout 60m \
