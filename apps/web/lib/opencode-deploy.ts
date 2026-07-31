@@ -50,8 +50,12 @@ function vertexBaseUrl(location: string): string {
  * model change is meaningless if only one of them moved.
  */
 const MODEL = process.env.OPENCODE_MODEL || "vertex/google/gemini-2.5-pro";
-/** The part after `vertex/` — what the provider block has to declare. */
-const VERTEX_MODEL = MODEL.replace(/^vertex\//, "");
+/** `vertex` or `google` — which of the two Gemini APIs below to speak. */
+const PROVIDER_ID = MODEL.split("/")[0];
+/** The model id the provider block has to declare, i.e. everything after the provider. */
+const MODEL_ID = MODEL.slice(PROVIDER_ID.length + 1);
+/** AI Studio key. Present ⇒ the Gemini Developer API is available. */
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const MAX_REDEPLOYS = Number(process.env.OPENCODE_MAX_REDEPLOYS || 3);
 
 /**
@@ -64,6 +68,32 @@ const MAX_REDEPLOYS = Number(process.env.OPENCODE_MAX_REDEPLOYS || 3);
  * actually a code change waiting to happen.
  */
 function opencodeConfig(token: string) {
+  // The Gemini Developer API (AI Studio key), spoken natively.
+  //
+  // This exists because the Vertex path CANNOT run a Gemini 3.x agent. Vertex is
+  // reached through `@ai-sdk/openai-compatible`, and the OpenAI chat-completions
+  // shape has nowhere to carry `thought_signature` — which Gemini 3.x requires to
+  // be echoed back on every tool call after the first. The result is a hard 400 on
+  // the SECOND tool call of any conversation ("Function call is missing a
+  // thought_signature… position 2"), so the planner half-works and the repair
+  // agent, which is a tool loop by construction, cannot work at all.
+  //
+  // `@ai-sdk/google` speaks the real Gemini API, which has the field. Verified by
+  // running three sequential bash calls on 3.1-pro-preview and 3.6-flash.
+  if (PROVIDER_ID === "google") {
+    if (!GEMINI_API_KEY) throw new Error("OPENCODE_MODEL selects the google provider but GEMINI_API_KEY is not set");
+    return {
+      $schema: "https://opencode.ai/config.json",
+      provider: {
+        google: {
+          npm: "@ai-sdk/google",
+          name: "Gemini Developer API",
+          options: { apiKey: GEMINI_API_KEY },
+          models: { [MODEL_ID]: { name: MODEL_ID } },
+        },
+      },
+    };
+  }
   return {
     $schema: "https://opencode.ai/config.json",
     provider: {
@@ -71,7 +101,7 @@ function opencodeConfig(token: string) {
         npm: "@ai-sdk/openai-compatible",
         name: "Vertex Gemini",
         options: { baseURL: vertexBaseUrl(LOCATION), apiKey: token },
-        models: { [VERTEX_MODEL]: { name: VERTEX_MODEL } },
+        models: { [MODEL_ID]: { name: MODEL_ID } },
       },
     },
   };
