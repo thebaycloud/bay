@@ -87,6 +87,31 @@ function run(cmd: string, args: string[], onLine: (l: string) => void, stdin?: s
     if (stdin !== undefined) { p.stdin.on("error", reject); p.stdin.end(stdin); }
   });
 }
+/**
+ * Run a command, and if it fails, say what it said.
+ *
+ * `run()` takes a line callback, and two call sites passed `() => {}` — which
+ * discards the process's entire output, so a failure surfaced as nothing but
+ * `gcloud exited 1`. On the static lane that was the whole diagnosis available:
+ * it builds nothing, so there is no Cloud Build log to fall back on, and a plain
+ * HTML site failed to deploy with no cause recorded anywhere in the system. The
+ * repair agent then spent 428k tokens guessing, and settled on deleting a favicon
+ * tag. Output that is not shown live still has to be kept for the error.
+ */
+async function runOrExplain(cmd: string, args: string[], onLine?: (l: string) => void): Promise<void> {
+  const tail: string[] = [];
+  try {
+    await run(cmd, args, (l) => {
+      tail.push(l);
+      if (tail.length > 40) tail.shift();
+      onLine?.(l);
+    });
+  } catch (e) {
+    const said = tail.filter((l) => l.trim()).join("\n");
+    throw new Error(said ? `${e instanceof Error ? e.message : String(e)}\n${said}` : String(e));
+  }
+}
+
 function capture(cmd: string, args: string[]) {
   return new Promise<string>((resolve, reject) => {
     const p = spawn(cmd, args, { env: ENV });
@@ -302,7 +327,11 @@ async function grantInvokers(slug: string, log: (l: string) => void): Promise<vo
       throw new Error(`${IAM_FAILURE} for ${member}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  log("Sealed — reachable only through Supersonic");
+  // Says what the visitor will actually experience, not what the platform did.
+  // "Sealed" described our end of it and left people clicking their own brand-new
+  // URL, hitting a sign-in wall, and concluding the deploy was broken — the one
+  // remaining way a successful deploy still looked like a failure.
+  log("Private by default — anyone opening this link has to sign in. Change that in the dashboard.");
 }
 
 /** Mint an ID token for a Cloud Run URL so we can call a sealed service. */
@@ -803,9 +832,24 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // language with no lane routes nothing.
         const routable = plan.language === "node" || plan.language === "python" || plan.static;
         if (!routable) {
-          log(`Plan: ${plan.language} — no runner lane for that, building it as a container (its Dockerfile, or buildpacks)`);
+          // Not `plan.language` — that is the raw enum value `other`, and printing
+          // it next to a reason line naming the real language ("Go app with
+          // go.mod") reads as the platform contradicting itself.
+          log("Plan: not a Node or Python app — building it as a container (its Dockerfile, or buildpacks)");
         } else if (plan.static) {
-          s.serve = { mode: "static", outputDir: plan.outputDir || "dist" };
+          // `|| "dist"` was wrong, and wrong in the direction that breaks the
+          // simplest possible site. A hand-written HTML page has no build and no
+          // output directory — its output IS the repository root — so a planner
+          // correctly answering "" or "." had that replaced by a `dist` which
+          // does not exist, and the deploy died on an rsync from nowhere. Empty
+          // is a real answer here, not a missing one. (static-build.ts already
+          // carries the same lesson in the other direction, about `??` vs `||`.)
+          //
+          // Only a site that BUILDS can be assumed to build into `dist`; one that
+          // doesn't is already the thing to publish.
+          const stated = typeof plan.outputDir === "string" ? plan.outputDir.trim() : "";
+          const hasBuild = Boolean(plan.build || s.buildCommand);
+          s.serve = { mode: "static", outputDir: stated || (hasBuild ? "dist" : ".") };
         } else {
           s.serve = { mode: "container" };
           if (plan.run && !runCmd) runCmd = plan.run;               // agent supplies the run cmd
@@ -1079,7 +1123,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // straight up from here and skips Cloud Build entirely.
           await stages.around("upload", async () => {
             log("Uploading…");
-            await run("gcloud", ["storage", "rsync", "-r", join(dir, out.outputDir), destination, "--project", PROJECT], () => {});
+            const source = join(dir, out.outputDir);
+            // Checked before the copy, because `rsync` from a directory that is
+            // not there fails in a way nothing downstream can explain: this lane
+            // runs no Cloud Build, so there is no build log to fall back on and
+            // the deploy reports `gcloud exited 1` with no cause anywhere. Saying
+            // which directory was expected is the whole diagnosis.
+            if (!existsSync(source)) {
+              throw new Error(
+                `this site has no \`${out.outputDir}\` directory to publish.\n` +
+                `The files to serve should be at the repository root, or in the directory the build writes.`
+              );
+            }
+            await runOrExplain("gcloud", ["storage", "rsync", "-r", source, destination, "--project", PROJECT]);
           });
         }
       } catch (e) {
@@ -1231,7 +1287,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         return;
       }
     }
-    log(`Live at ${result.url}`);
+    // `result.url` is the Cloud Run URL, and printing it as "Live at" was a lie
+    // in both of the cases that actually occur. A sealed app REFUSES that URL by
+    // design — clicking it gets a Google 404 — and a static app does not have one
+    // at all: the value is the shared static server every static app points at,
+    // so every one of them printed the same address as though it were theirs. It
+    // also leaks the project's Cloud Run hash. Shown only when it is genuinely
+    // the app's own reachable address.
+    if (!SEAL_APPS && !staticServe && result.url) log(`Live at ${result.url}`);
     // The two routing models are mutually exclusive: a per-app domain
     // mapping points straight at Cloud Run, which a sealed app refuses.
     if (SEAL_APPS || staticServe) {

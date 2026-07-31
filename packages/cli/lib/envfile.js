@@ -15,7 +15,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 // Read in this order; later files win, matching how dotenv-style tooling layers them.
-const ENV_FILES = [".env", ".env.local"];
+//
+// `.env.production` belongs here and its absence was the worst of both worlds: the
+// tarball's exclude list did not cover it either, so a project keeping its real
+// values there had them SHIPPED into the build bundle and never applied to the
+// app. Deploying is production, so the production files are the ones whose values
+// should win — and every one of them is excluded from the bundle (see
+// packageFolder), because a value baked into an image cannot be rotated.
+const ENV_FILES = [".env", ".env.production", ".env.local", ".env.production.local"];
 
 // Set by the platform on every deploy — a local value would overwrite the real one and
 // point the app at a database that does not exist in production.

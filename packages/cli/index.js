@@ -23,7 +23,22 @@ const DEFAULT_URL = "https://app.supersonic.cv";
 const COLOR = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (n) => (s) => (COLOR ? `\x1b[${n}m${s}\x1b[0m` : String(s));
 const dim = c("2"), bold = c("1"), green = c("32"), red = c("31"), cyan = c("36");
-function info(s) { process.stderr.write(s + "\n"); }         // logs -> stderr
+// Set once a deploy knows its slug: every progress line is also appended to
+// ~/.supersonic/deploys/<slug>.log, so a build survives the terminal it was
+// started in. Best-effort — a log that cannot be written must never stop a deploy.
+let deployLog = null;
+function startDeployLog(slug) {
+  try {
+    const dir = path.join(CFG_DIR, "deploys");
+    fs.mkdirSync(dir, { recursive: true });
+    deployLog = fs.openSync(path.join(dir, `${slug}.log`), "a");
+  } catch { deployLog = null; }
+}
+function info(s) {
+  process.stderr.write(s + "\n");                            // logs -> stderr
+  // eslint-disable-next-line no-control-regex
+  if (deployLog !== null) { try { fs.writeSync(deployLog, s.replace(/\x1b\[[0-9;]*m/g, "") + "\n"); } catch { /* full disk, etc. */ } }
+}
 function print(s) { process.stdout.write(s + "\n"); }         // data -> stdout
 function die(s, code = 1) { process.stderr.write(red("✗ ") + s + "\n"); process.exit(code); }
 function json(o) { print(JSON.stringify(o, null, 2)); }
@@ -454,11 +469,23 @@ async function collectEnv(slug, args) {
 async function runBuildAndWait({ slug, url, repo, folderName, args }) {
   const { startDevServer, openTunnel } = require("./lib/tunnel");
 
+  // Keep a local copy of the build output whichever path this is.
+  //
+  // The log file used to be written only by the detached worker, because that is
+  // where its stdout was redirected — so `--wait`, the mode where you are watching
+  // and most likely to lose the terminal, was the one mode that kept no record.
+  // `supersonic logs` then reads from the server and shows the RUNNING app's logs,
+  // which for a failed deploy is nothing at all.
+  startDeployLog(slug);
+
   // Live preview: tunnel the URL to a dev server. The agent supplies how to run it
   // (--dev-cmd / --dev-port) for any stack; a Node `dev` script we start ourselves.
   // Until it's up the URL shows the deploying page, never a dead link.
-  info(dim("  bringing up a live preview at that URL…"));
+  // Announced only once there is something to announce. Said up front, it was
+  // immediately contradicted by the very next line on every project without a dev
+  // server — the CLI promising a preview and retracting it one line later.
   const { proc, port } = await startDevServer(process.cwd(), { devCmd: args["dev-cmd"], devPort: args["dev-port"] });
+  if (port) info(dim("  bringing up a live preview at that URL…"));
   const tunnelWs = process.env.SUPERSONIC_TUNNEL_WS || `wss://${slug}.supersonic.cv/_tunnel`;
   let ws = null;
   if (port) {
@@ -489,7 +516,10 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
   if (repo) {
     res = await api("/api/deploy", { method: "POST", body: { repo, slug, secrets: envVars, run: runCmd }, stream: true });
   } else {
-    info(cyan("▸ ") + "uploading " + bold(folderName) + " to build in the cloud…");
+    // Not "to build in the cloud" — most apps take the prebuilt runner and the
+    // server says "no image to build" twenty lines later, so the two read as a
+    // contradiction. What is true of every deploy is that the code is going up.
+    info(cyan("▸ ") + "uploading " + bold(folderName) + "…");
     const tgz = await packageFolder();
     const body = fs.readFileSync(tgz);
     try { fs.unlinkSync(tgz); } catch { /* ignore */ }
@@ -651,9 +681,15 @@ function packageFolder() {
   return new Promise((resolve, reject) => {
     const cwd = process.cwd();
     const out = path.join(os.tmpdir(), "ss-deploy-" + process.pid + ".tgz");
+    // `.env` and EVERY variant of it. The old list named `.env`, `.env.local` and
+    // `.env.*.local` one by one, which quietly let `.env.production` — the file
+    // most likely to hold real credentials — ride into the build bundle, where a
+    // baked value cannot be rotated. The values are not lost by excluding them:
+    // readEnvFiles carries them up separately and they land as env vars on the
+    // service, which is the whole point of sending them out of band.
     const excludes = ["node_modules", ".git", "dist", "build", ".next", ".nuxt", ".svelte-kit",
-      "target", ".venv", "venv", "__pycache__", "vendor", ".DS_Store", "._*", ".env", ".env.local",
-      ".env.*.local", "*.pyc", ".turbo", ".cache", "out"];
+      "target", ".venv", "venv", "__pycache__", "vendor", ".DS_Store", "._*", ".env", ".env.*",
+      "*.pyc", ".turbo", ".cache", "out"];
     const targs = ["-czf", out, "-C", cwd];
     for (const e of excludes) targs.push("--exclude=" + e);
     if (fs.existsSync(path.join(cwd, ".gitignore"))) targs.push("--exclude-from=" + path.join(cwd, ".gitignore"));

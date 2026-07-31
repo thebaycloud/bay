@@ -193,6 +193,24 @@ Rules:
 - Deliver the plan by WRITING it to the given file path. That file is the deliverable.
 `;
 
+/**
+ * One line describing what the planner just did, for someone watching a deploy.
+ *
+ * The raw tool input is not that. Writing the plan is a heredoc — `cat >
+ * /tmp/ss-plan-xIYOsQ/plan.json <<'JSON'` followed by the opening brace of the
+ * JSON — and truncating it at 70 characters produced a fragment cut off mid-object
+ * that every tester read as a crash, twice in a row, complete with a host temp
+ * path that means nothing to them. The interesting fact is "it wrote the plan".
+ */
+function describeCall(name: string, detail: string): string {
+  if (/plan\.json/.test(detail)) return "writing the plan";
+  const d = detail.trim().replace(/\s+/g, " ");
+  if (!d) return name;
+  // Paths inside our own scratch workspace are an implementation detail.
+  if (/^\/(tmp|var)\//.test(d)) return name;
+  return `${name} ${d.slice(0, 70)}`;
+}
+
 /** Pull the last well-formed JSON object out of opencode's final text. */
 function extractPlan(text: string): DeployPlan | null {
   // opencode may wrap it in prose or a ```json fence; scan for the last balanced {...}.
@@ -277,6 +295,12 @@ export async function planDeploy(opts: {
       const REPEATS_ALLOWED = 3;
       const MAX_CALLS = 40;
       const stop = (why: string) => { log(`planner · ${why}`); try { p.kill("SIGKILL"); } catch { /* already gone */ } };
+      // Nothing is said twice in a row. The agent re-reads the same file and
+      // re-lists the same directory constantly, and every repeat was printed —
+      // which is how a successful deploy came to show the identical line eight
+      // times and read as a malfunction.
+      let lastSaid = "";
+      const say = (line: string) => { if (line !== lastSaid) { lastSaid = line; log(line); } };
       const handle = (o: any) => {
         const type = o?.type;
         const part = o?.part ?? {};
@@ -285,7 +309,7 @@ export async function planDeploy(opts: {
           const input = part?.state?.input ?? o?.state?.input ?? {};
           const detail = input.command || input.filePath || input.pattern || "";
           if (name) {
-            log(`planner · ${name}${detail ? " " + String(detail).slice(0, 70) : ""}`);
+            say(`planner · ${describeCall(String(name), String(detail))}`);
             const key = `${name}:${detail}`;
             const n = (calls.get(key) ?? 0) + 1;
             calls.set(key, n);
@@ -296,7 +320,15 @@ export async function planDeploy(opts: {
           // Accumulate ALL assistant text (not just the last event): the JSON may be
           // followed by narration, and event shapes vary across opencode versions.
           const text = part?.text ?? o?.text ?? part?.content;
-          if (typeof text === "string" && text.trim()) { finalText += text + "\n"; log(`planner · ${text.trim().replace(/\s+/g, " ").slice(0, 120)}`); }
+          // The full text is accumulated for parsing; only a first sentence is
+          // shown. Slicing at 120 chars cut narration off mid-word ("plan.jso",
+          // "This s") and looked like the process had died.
+          if (typeof text === "string" && text.trim()) {
+            finalText += text + "\n";
+            const flat = text.trim().replace(/\s+/g, " ");
+            const sentence = flat.split(/(?<=[.!?])\s/)[0] ?? flat;
+            say(`planner · ${sentence.length > 140 ? sentence.slice(0, 137).replace(/\s+\S*$/, "") + "…" : sentence}`);
+          }
         } else if (type === "error") {
           log(`planner error: ${o?.error?.data?.message || o?.error?.name || "opencode error"}`);
         }
@@ -324,7 +356,11 @@ export async function planDeploy(opts: {
   if (!plan.static && !plan.run && plan.language !== "other") {
     throw new Error("planner returned no run command for a server app");
   }
-  log(`planner · ${plan.language}${plan.static ? " (static)" : ""}${plan.needsDB ? " +db" : ""} → ${plan.static ? plan.outputDir : plan.run}`);
+  // `plan.run` is optional now that `other` (Go, Rust, Java) is a legal plan with
+  // no run command — those are built as containers and carry their own entrypoint.
+  // Interpolating it unconditionally printed a literal `undefined` at the user.
+  const outcome = plan.static ? (plan.outputDir || "the repository root") : (plan.run || "built as a container");
+  log(`planner · ${plan.language}${plan.static ? " (static)" : ""}${plan.needsDB ? " +db" : ""} → ${outcome}`);
   return plan;
 }
 

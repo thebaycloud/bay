@@ -1,5 +1,5 @@
-function shell(title: string, body: string, extra = ""): string {
-  return `<!doctype html><meta charset="utf-8"><title>${title}</title>
+function shell(title: string, body: string, extra = "", head = ""): string {
+  return `<!doctype html><meta charset="utf-8">${head}<title>${title}</title>
 <style>
 body{font:15px/1.6 -apple-system,BlinkMacSystemFont,ui-sans-serif,system-ui,sans-serif;margin:0;min-height:100vh;
 display:grid;place-items:center;background:#0e1512;color:#e9efeb}
@@ -64,9 +64,12 @@ export function page502(slug: string): string {
 /** Shown at a reserved URL that has neither a build nor a tunnel yet. Reloads
  *  itself, so it becomes the live app the moment either appears. */
 export function pageBuilding(slug: string): string {
-  return `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="3">` +
-    shell("Deploying…", `<h1>🚀 Deploying <code>${escapeHtml(slug)}</code></h1>
-<p>Your app is going live — this page updates itself. Hang tight.</p>`);
+  // The refresh goes through `shell`'s head slot. Prepending a second
+  // `<!doctype html><meta charset>` in front of a document that already opens
+  // with both emitted two doctypes on every deploying page.
+  return shell("Deploying…", `<h1>🚀 Deploying <code>${escapeHtml(slug)}</code></h1>
+<p>Your app is going live — this page updates itself. Hang tight.</p>`,
+    "", `<meta http-equiv="refresh" content="3">`);
 }
 
 /**
