@@ -1,7 +1,7 @@
 // Everything below moved here from app/api/deploy/route.ts unchanged; see runDeploy.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
@@ -415,6 +415,48 @@ function buildWatcher(slug: string) {
 }
 
 /**
+ * Delete symlinks whose target is not there.
+ *
+ * `gcloud builds submit` CRASHES on a dangling symlink — not "fails", crashes:
+ * `gcloud crashed (FileNotFoundError): [Errno 2] No such file or directory` while
+ * it packs the source, with no indication which file or that a symlink is
+ * involved. A repair agent handed that error has nothing to work with and cannot
+ * fix it anyway; one spent 626k tokens editing package.json and tsconfig before
+ * giving up.
+ *
+ * And the dangling links are usually OURS. The CLI excludes `.venv`,
+ * `node_modules` and friends from the upload, so any symlink pointing INTO one of
+ * them arrives with its target removed — links that resolve perfectly on the
+ * developer's machine. Found on fastapi/full-stack-fastapi-template, whose
+ * `.agents/skills/*` point into `.venv`.
+ *
+ * Removed rather than followed: the target was deliberately excluded, so
+ * dereferencing would drag a whole virtualenv into the build.
+ */
+function pruneBrokenSymlinks(root: string, log: (l: string) => void): void {
+  const removed: string[] = [];
+  const walk = (d: string, depth: number) => {
+    if (depth > 12) return;
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = join(d, e.name);
+      if (e.isSymbolicLink()) {
+        if (!existsSync(full)) {                 // existsSync follows the link
+          try { unlinkSync(full); removed.push(full.slice(root.length + 1)); } catch { /* nothing to do */ }
+        }
+        continue;                                 // never descend through a link
+      }
+      if (e.isDirectory() && e.name !== ".git") walk(full, depth + 1);
+    }
+  };
+  walk(root, 0);
+  if (removed.length) {
+    log(`Ignoring ${removed.length} broken symlink${removed.length > 1 ? "s" : ""} (${removed.slice(0, 3).join(", ")}${removed.length > 3 ? "…" : ""}) — their targets are not part of a deploy`);
+  }
+}
+
+/**
  * Make sure the program the plan says to run will be there when it runs.
  *
  * The planner writes the production run command, and it writes good ones — but
@@ -654,6 +696,7 @@ async function publishPrebuilt(opts: {
     const tgz = `${dir}.tgz`;
     writeFileSync(tgz, archive);
     await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+    pruneBrokenSymlinks(dir, log);
   });
 
   await stages.around("upload", async () => {
@@ -791,6 +834,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         const tgz = `${dir}.tgz`;
         writeFileSync(tgz, archive);
         await run("tar", ["-xzf", tgz, "-C", dir], () => {});
+        pruneBrokenSymlinks(dir, log);
       });
     } else if (reused) {
       log(`Using the copy of ${url} we already fetched`);

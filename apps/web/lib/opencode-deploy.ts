@@ -183,6 +183,7 @@ Some failures are NOT in the repository and you must not try to fix them by edit
 - permission errors, \`PermissionDenied\`, IAM, service accounts, quota
 - a secret or environment variable the PLATFORM was supposed to provide (the plan's \`needsDB\` is true and \`DATABASE_URL\` is missing, for example)
 - anything failing inside the build infrastructure rather than inside your app's own commands
+- the BUILD TOOL ITSELF crashing. \`gcloud crashed\`, a Python traceback out of gcloud, a \`FileNotFoundError\` while the source is being packed, an internal Cloud Build error — none of those are your repository failing to build, and no edit to it will change them. An agent met \`gcloud crashed (FileNotFoundError)\` and spent 626k tokens rewriting package.json and tsconfig.json before giving up; the cause was a broken symlink in the source tree and the fix was in the platform.
 - the plan naming a command or a directory that does not match this repository
 
 For any of those: STOP, and report what is wrong with the plan or the platform, quoting the error. Do not invent a value to get past it. Writing a placeholder \`DATABASE_URL\`, deleting the migration step, or hard-coding a dummy connection string does not fix the deploy — it produces an app that starts and is broken, which is worse than a deploy that fails with a clear reason. This has happened, more than once, at real cost.
