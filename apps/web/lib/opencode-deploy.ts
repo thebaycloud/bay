@@ -84,6 +84,7 @@ Rules:
 - Make minimal, targeted changes that fix the actual error — do not rewrite whole files.
 - Read the error output's own hints (for example a "Possible solutions" section) before guessing.
 - Never edit \`redeploy.sh\`, \`opencode.json\`, or anything under \`.opencode/\`.
+- \`cloudbuild.yaml\` in the repo is NOT the app's file — the platform writes it fresh on every deploy from the plan, so anything you change there is overwritten before your next redeploy runs. Reading it to understand what happened is fine; editing it accomplishes nothing and has cost whole redeploy cycles.
 - Do NOT change how the app is served. Do not add or remove a Dockerfile, do not convert a static site into a server or a server into a static site, and do not swap the web server for a different one. That decision was already made from a reading of the whole repo; changing it here turns one broken thing into a differently broken thing, and has done exactly that. Fix the error in front of you.
 - Read the error literally. \`not found\` / exit 127 means a program is missing — install it or call it by a path that exists. It never means a port is wrong.
 - When the app is live, stop and briefly report what you changed and the URL.
