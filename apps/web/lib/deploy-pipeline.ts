@@ -806,7 +806,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         log(`Plan ready: ${plan.reason || `${plan.language}${plan.static ? " static" : ""}`}`);
         if (!plan.static) ensureRunDeps(dir, plan, log);
       } catch (e) {
-        log(`Planner unavailable — keeping deterministic detection (${e instanceof Error ? e.message : String(e)})`);
+        // Said out loud AND recorded on the deploy row, because it changes what
+        // deployed this app. A planner that gave up quietly left someone reading a
+        // failure from the fallback detector with no way to know that the plan
+        // they had been told about never existed.
+        const why = `Planner produced no plan (${e instanceof Error ? e.message : String(e)}) — deploying with the built-in detector instead`;
+        log(why);
+        setDeploy(slug, { stage: why });
       }
     }
 

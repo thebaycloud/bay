@@ -70,17 +70,22 @@ To (re)deploy, run this exact command:
 It runs the real deploy pipeline and prints \`DEPLOY_OK: <url>\` when the app is live, or \`DEPLOY_FAIL: <the real error>\` when it fails again. Each run is slow (a real cloud build + deploy).
 
 Workflow:
-1. Read the error you were given, inspect the relevant files in \`./repo\`, and make the smallest correct change that addresses that specific error.
-2. Run \`bash redeploy.sh\`.
-3. If it prints \`DEPLOY_OK\`, you are done: report the live URL and stop.
-4. If it prints \`DEPLOY_FAIL\`, read the new error and repeat.
+1. QUOTE the exact line of the error you are fixing, verbatim, before you change anything. One line, copied — not your summary of it.
+2. Say in one sentence how the file you are about to edit produces that line.
+3. Make the smallest correct change that addresses that specific error.
+4. Run \`bash redeploy.sh\`.
+5. If it prints \`DEPLOY_OK\`, you are done: report the live URL and stop.
+6. If it prints \`DEPLOY_FAIL\`, read the NEW error and start again at step 1.
+
+Step 1 is not paperwork. Every expensive failure in this system has been the same shape: an error was read as the kind of problem the reader expected rather than the one it says. \`gunicorn: not found\` (exit 127 — a program that is not installed) was "fixed" three times as a port-binding problem. A missing binary was "fixed" by moving a dependency between sections. If you cannot find a line in the error that your edit addresses, you have not diagnosed it yet — go and read more of the repo instead of editing.
 
 Rules:
 - Only edit files inside \`./repo\`.
 - Make minimal, targeted changes that fix the actual error — do not rewrite whole files.
 - Read the error output's own hints (for example a "Possible solutions" section) before guessing.
 - Never edit \`redeploy.sh\`, \`opencode.json\`, or anything under \`.opencode/\`.
-- Do not add a web server or Dockerfile unless the error clearly calls for it; prefer fixing configuration.
+- Do NOT change how the app is served. Do not add or remove a Dockerfile, do not convert a static site into a server or a server into a static site, and do not swap the web server for a different one. That decision was already made from a reading of the whole repo; changing it here turns one broken thing into a differently broken thing, and has done exactly that. Fix the error in front of you.
+- Read the error literally. \`not found\` / exit 127 means a program is missing — install it or call it by a path that exists. It never means a port is wrong.
 - When the app is live, stop and briefly report what you changed and the URL.
 `;
 
@@ -252,6 +257,21 @@ export async function planDeploy(opts: {
       const p = spawn(opencodeBin(), args, { cwd: ws, stdio: ["ignore", "pipe", "pipe"], env: childEnv });
       const killer = setTimeout(() => { log("planner · timed out"); try { p.kill("SIGKILL"); } catch { /* ignore */ } }, timeoutMs);
       let buf = "";
+      // A stuck agent looks exactly like a working one from out here: it keeps
+      // making tool calls and the timeout keeps not firing. One Go repo spent the
+      // entire 240s budget running `ls -F repo/` over and over, and a Flask deploy
+      // did the same thing sixteen times before recovering. Waiting out the full
+      // timeout for a loop that will never converge costs four minutes of a deploy
+      // that has a five-minute budget, so the loop is detected instead of endured.
+      //
+      // Killing it is not the same as giving up: the plan file is read afterwards
+      // either way, so an agent that had already written its plan and then started
+      // wandering still delivers one.
+      const calls = new Map<string, number>();
+      let totalCalls = 0;
+      const REPEATS_ALLOWED = 3;
+      const MAX_CALLS = 40;
+      const stop = (why: string) => { log(`planner · ${why}`); try { p.kill("SIGKILL"); } catch { /* already gone */ } };
       const handle = (o: any) => {
         const type = o?.type;
         const part = o?.part ?? {};
@@ -259,7 +279,14 @@ export async function planDeploy(opts: {
           const name = part?.tool || o?.tool || part?.name;
           const input = part?.state?.input ?? o?.state?.input ?? {};
           const detail = input.command || input.filePath || input.pattern || "";
-          if (name) log(`planner · ${name}${detail ? " " + String(detail).slice(0, 70) : ""}`);
+          if (name) {
+            log(`planner · ${name}${detail ? " " + String(detail).slice(0, 70) : ""}`);
+            const key = `${name}:${detail}`;
+            const n = (calls.get(key) ?? 0) + 1;
+            calls.set(key, n);
+            if (++totalCalls > MAX_CALLS) stop(`explored ${MAX_CALLS} times without deciding — stopping it`);
+            else if (n > REPEATS_ALLOWED) stop(`repeating \`${key.slice(0, 60)}\` — stopping it`);
+          }
         } else if (type === "text" || type === "message" || part?.type === "text") {
           // Accumulate ALL assistant text (not just the last event): the JSON may be
           // followed by narration, and event shapes vary across opencode versions.

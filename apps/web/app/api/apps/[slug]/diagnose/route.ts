@@ -10,6 +10,7 @@ import { describeService, getErrors } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { diagnoseError } from "@/lib/agent";
+import { getDeploy } from "@/lib/deploys";
 
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv;
 
@@ -34,8 +35,24 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   let { error } = await req.json().catch(() => ({}));
   if (!error) {
     const errs = await getErrors(slug);
-    if (!errs.length) return Response.json({ healthy: true, message: "no production errors in the last 7 days — nothing to diagnose" });
-    error = errs[0].message;
+    if (errs.length) {
+      error = errs[0].message;
+    } else {
+      // "No production errors" is only good news for an app that reached
+      // production. An app whose deploy failed has no service, so it logs no
+      // errors — and this route used to congratulate it on being healthy, which
+      // is the single most misleading thing it could say to someone who came
+      // here precisely because their app is not working. The deploy record
+      // knows the difference.
+      const deploy = await getDeploy(slug);
+      if (deploy?.status === "failed") {
+        error = deploy.error || "the last deploy failed";
+      } else if (deploy?.status === "building") {
+        return Response.json({ healthy: false, message: `${slug} is still deploying — nothing to diagnose until it lands` });
+      } else {
+        return Response.json({ healthy: true, message: "no production errors in the last 7 days — nothing to diagnose" });
+      }
+    }
   }
 
   const svc = await describeService(slug);

@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { getLogs } from "@/lib/gcloud";
+import { appLogs } from "@/lib/app-logs";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 
@@ -11,7 +11,7 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ logs: [], error: "forbidden" }, { status: 403 });
   const sp = new URL(req.url).searchParams;
   try {
-    const logs = await getLogs(slug, {
+    const logs = await appLogs(slug, {
       limit: sp.get("limit") ? Number(sp.get("limit")) : undefined,
       severity: sp.get("severity") ?? undefined,
       freshness: sp.get("since") ?? undefined,
