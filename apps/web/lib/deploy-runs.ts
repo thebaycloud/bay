@@ -1,0 +1,211 @@
+import { spawn } from "node:child_process";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getPool } from "./db";
+import { ASSETS_BUCKET } from "./static-release";
+
+const DB = "supersonic_platform";
+const PROJECT = "supersonic-deploy-prod";
+
+/**
+ * The handoff between the request that asked for a deploy and the job that runs it.
+ *
+ * A deploy needs three things the HTTP request has and a job does not: what to
+ * deploy (a git URL, or a tarball of the user's folder), who for, and the app's
+ * own secrets. This module parks all three somewhere durable, hands back an id,
+ * and lets the job pick them up — so the request can return the moment the work
+ * is safely recorded instead of staying open for the whole build.
+ *
+ * Where each part goes is a deliberate split. The request — including the app's
+ * secrets — goes into Postgres, which is private to the platform and from which
+ * the row is DELETED as soon as the run ends, so a secret's window is one build
+ * long. The source tarball is too big for that and goes to the assets bucket,
+ * encrypted under a per-run key that only exists in that Postgres row. The
+ * bucket is readable by the shared app runtime identity, so unencrypted source
+ * sitting there would be readable by every other customer's container — the same
+ * reasoning that already governs the prebuilt code bundles.
+ */
+
+let ensured: Promise<void> | null = null;
+function ensure(): Promise<void> {
+  if (!ensured) {
+    ensured = getPool(DB).query(
+      `CREATE TABLE IF NOT EXISTS deploy_runs (
+         run_id        text PRIMARY KEY,
+         slug          text        NOT NULL,
+         request       jsonb       NOT NULL,
+         source_object text,
+         source_key    text,
+         created_at    timestamptz NOT NULL DEFAULT now()
+       )`
+    ).then(() => undefined).catch((e) => { ensured = null; throw e; });
+  }
+  return ensured;
+}
+
+/** Everything runDeploy needs except the source bytes, which travel separately. */
+export interface DeployRunRequest {
+  ownerId: string;
+  ownerWorkspace: string | null;
+  slug: string;
+  friendlyName: string;
+  repoUrl: string;
+  isUpload: boolean;
+  isPrebuilt: boolean;
+  prebuiltHash: string;
+  secrets: Record<string, string>;
+  cloneToken: unknown;
+  runCmd: string;
+  limits: unknown;
+}
+
+function gcloud(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("gcloud", args, { stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    p.stderr.on("data", (d: Buffer) => (err += d));
+    p.on("error", reject);
+    p.on("close", (c) => (c === 0 ? resolve() : reject(new Error(err.trim() || `gcloud exited ${c}`))));
+  });
+}
+
+// A passphrase rather than a raw key, so the stored secret is a printable string
+// that survives JSON and a psql session unmangled. Fixed salt: the passphrase is
+// already 32 random bytes and used exactly once, so a salt adds nothing here
+// except a second value to keep alongside it.
+const KEY_SALT = "supersonic-deploy-run";
+const keyFor = (pass: string) => scryptSync(pass, KEY_SALT, 32);
+
+function encrypt(buf: Buffer, pass: string): Buffer {
+  const iv = randomBytes(16);
+  const c = createCipheriv("aes-256-cbc", keyFor(pass), iv);
+  return Buffer.concat([iv, c.update(buf), c.final()]);
+}
+
+function decrypt(buf: Buffer, pass: string): Buffer {
+  const iv = buf.subarray(0, 16);
+  const d = createDecipheriv("aes-256-cbc", keyFor(pass), iv);
+  return Buffer.concat([d.update(buf.subarray(16)), d.final()]);
+}
+
+const objectFor = (runId: string) => `runs/${runId}.tgz.enc`;
+
+/**
+ * Record a deploy so a job can run it. Returns the id the job will be given.
+ *
+ * Throws if anything fails to persist — deliberately. A run that is only half
+ * recorded is a deploy that will start and then not find its own source, which
+ * is a far worse failure than refusing the request outright.
+ */
+export async function createRun(request: DeployRunRequest, archive: Buffer | null): Promise<string> {
+  await ensure();
+  const runId = randomUUID();
+  let sourceObject: string | null = null;
+  let sourceKey: string | null = null;
+
+  if (archive) {
+    sourceKey = randomBytes(32).toString("hex");
+    sourceObject = objectFor(runId);
+    const dir = mkdtempSync(join(tmpdir(), "ss-run-"));
+    try {
+      const file = join(dir, "source.enc");
+      writeFileSync(file, encrypt(archive, sourceKey));
+      await gcloud(["storage", "cp", file, `gs://${ASSETS_BUCKET}/${sourceObject}`, "--project", PROJECT]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  await getPool(DB).query(
+    `INSERT INTO deploy_runs(run_id, slug, request, source_object, source_key)
+       VALUES($1,$2,$3::jsonb,$4,$5)`,
+    [runId, request.slug, JSON.stringify(request), sourceObject, sourceKey],
+  );
+  return runId;
+}
+
+/** Pick up a recorded run: its request and, if it had one, its source bytes. */
+export async function claimRun(runId: string): Promise<{ request: DeployRunRequest; archive: Buffer | null } | null> {
+  await ensure();
+  const r = await getPool(DB).query(
+    `SELECT request, source_object, source_key FROM deploy_runs WHERE run_id = $1`, [runId],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+
+  let archive: Buffer | null = null;
+  if (row.source_object && row.source_key) {
+    const dir = mkdtempSync(join(tmpdir(), "ss-run-"));
+    try {
+      const file = join(dir, "source.enc");
+      await gcloud(["storage", "cp", `gs://${ASSETS_BUCKET}/${row.source_object}`, file, "--project", PROJECT]);
+      archive = decrypt(readFileSync(file), row.source_key);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  return { request: row.request as DeployRunRequest, archive };
+}
+
+/**
+ * Forget a finished run.
+ *
+ * This is what bounds how long the app's secrets sit in the database, so it runs
+ * whatever the deploy did — the row is of no use to anyone once the job has read
+ * it, and a failed deploy is not a reason to keep a copy of someone's .env.
+ */
+export async function finishRun(runId: string): Promise<void> {
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      `DELETE FROM deploy_runs WHERE run_id = $1 RETURNING source_object`, [runId],
+    );
+    const object = r.rows[0]?.source_object;
+    if (object) {
+      await gcloud(["storage", "rm", `gs://${ASSETS_BUCKET}/${object}`, "--project", PROJECT]).catch(() => {});
+    }
+  } catch { /* a leftover row is swept below; never fail a finished deploy over it */ }
+}
+
+/**
+ * Drop runs nobody claimed.
+ *
+ * A job execution that never started (quota, a bad rollout) leaves its row and
+ * its source behind, and those rows hold secrets. Swept on the way in to a new
+ * run rather than on a schedule, for the same reason as the event prune.
+ */
+export async function pruneRuns(hours = 6): Promise<void> {
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      `DELETE FROM deploy_runs WHERE created_at < now() - ($1 || ' hours')::interval RETURNING source_object`,
+      [String(hours)],
+    );
+    for (const row of r.rows) {
+      if (row.source_object) {
+        await gcloud(["storage", "rm", `gs://${ASSETS_BUCKET}/${row.source_object}`, "--project", PROJECT]).catch(() => {});
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * Start the job that will run this deploy.
+ *
+ * The run id goes in as an argument, not an environment variable: `--update-env-vars`
+ * on an execution mutates the shared job, so two deploys starting at the same
+ * moment would race and one would run the other's id. An args override applies to
+ * one execution only.
+ */
+export function startDeployJob(runId: string, region: string, job: string): Promise<void> {
+  return gcloud([
+    "run", "jobs", "execute", job,
+    "--region", region, "--project", PROJECT,
+    "--args", runId,
+    // Return as soon as the execution is accepted. Waiting for it would put the
+    // build back on the request's clock, which is the entire thing being fixed.
+    "--async", "--quiet",
+  ]);
+}

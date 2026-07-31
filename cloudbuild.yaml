@@ -66,6 +66,24 @@ steps:
       - --min-instances=1
       - --quiet
 
+  # The deploy job runs the SAME image with a different command, so it has to move
+  # with the service or a deploy from main would leave every actual deploy running
+  # the previous commit's pipeline — the worst kind of drift, because the thing
+  # that looks deployed is not the thing doing the work.
+  #
+  # Only --image, and never fails the build: the job may not exist yet in a fresh
+  # environment, and the service being live is what matters. Create or reconfigure
+  # it with scripts/setup-deploy-job.sh.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy-job
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run jobs update supersonic-deploy-job \
+          --image=$_IMAGE:$_TAG --region=us-central1 --project=$PROJECT_ID --quiet \
+        || echo "no supersonic-deploy-job yet — skipping (see scripts/setup-deploy-job.sh)"
+
 substitutions:
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`

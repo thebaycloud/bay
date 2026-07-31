@@ -8,6 +8,81 @@ import { getPool } from "@/lib/db";
 import { resolveSlug } from "@/lib/gcloud";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
 import { runDeploy } from "@/lib/deploy-pipeline";
+import { createRun, startDeployJob, pruneRuns } from "@/lib/deploy-runs";
+import { readEvents, pruneEvents } from "@/lib/deploy-events";
+import { getDeploy } from "@/lib/deploys";
+
+const REGION = "us-central1";
+// Dark until set, and the in-request path below stays exactly as it was. This
+// changes where every deploy runs, so it gets the same treatment as the runner
+// and the planner did: switch it on, watch it, and keep the old path one env var
+// away for as long as that is worth having.
+const DEPLOY_JOB = process.env.DEPLOY_JOB === "1";
+const DEPLOY_JOB_NAME = process.env.DEPLOY_JOB_NAME || "supersonic-deploy-job";
+
+const SSE_HEADERS = {
+  headers: {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  },
+};
+
+/**
+ * Narrate a job-run deploy by reading its event log.
+ *
+ * The events are already durable before this reads them, which is the whole
+ * point: this stream can die, reconnect, or never be read at all and the deploy
+ * is unaffected — and a client that lost it can catch up from the same table via
+ * deploy-status rather than guessing from a closed socket.
+ *
+ * Two ways to end. Normally a `done` or `error` event arrives and the stream
+ * closes behind it. Otherwise the deploys row is consulted: a job that was killed
+ * outright writes no terminal event, and without this check the reader would sit
+ * on a silent stream until it timed out, which is exactly the false "it hung"
+ * this is meant to remove.
+ */
+function tailDeployRun(runId: string, slug: string): ReadableStream {
+  const enc = new TextEncoder();
+  return new ReadableStream({
+    async start(controller) {
+      const send = (o: unknown) => {
+        try { controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`)); return true; }
+        catch { return false; }        // client gone — stop reading, the job carries on
+      };
+      let after = 0;
+      let silentFor = 0;
+      try {
+        for (;;) {
+          const events = await readEvents(runId, after);
+          for (const { id, event } of events) {
+            after = id;
+            if (!send(event)) return;
+            if (event?.type === "done" || event?.type === "error") return;
+          }
+          silentFor = events.length ? 0 : silentFor + 1;
+          // ~15s of nothing new: ask the record whether this deploy is over. A
+          // job that died mid-build never gets to say so itself.
+          if (silentFor >= 30) {
+            silentFor = 0;
+            const row = await getDeploy(slug);
+            if (row && (row.status === "live" || row.status === "failed")) {
+              // One more pass, in case the terminal event landed between the last
+              // read and this check.
+              for (const { id, event } of await readEvents(runId, after)) { after = id; send(event); }
+              if (row.status === "live") send({ type: "done", slug, url: row.url });
+              else send({ type: "error", message: row.error || "the deploy failed" });
+              return;
+            }
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      } finally {
+        controller.close();
+      }
+    },
+  });
+}
 
 function normalizeRepo(raw: string): string {
   const r = raw.trim();
@@ -133,6 +208,30 @@ export async function POST(req: Request) {
   }
 
 
+  const input = {
+    ownerId, ownerWorkspace, slug, friendlyName, repoUrl: url,
+    isUpload, isPrebuilt, prebuiltHash, secrets, cloneToken, runCmd, limits,
+  };
+
+  // Hand the deploy to a job and stream back its event log. The request stops
+  // being the worker: it records the work, starts it, and narrates. Whether this
+  // connection survives no longer decides whether the app gets deployed.
+  if (DEPLOY_JOB) {
+    let runId: string;
+    try {
+      runId = await createRun(input, archive);
+      await startDeployJob(runId, REGION, DEPLOY_JOB_NAME);
+    } catch (e) {
+      // Nothing has started, so this is an honest, immediate failure rather than
+      // a deploy that will quietly never happen.
+      return Response.json({ error: `could not start the deploy: ${e instanceof Error ? e.message : String(e)}` }, { status: 503 });
+    }
+    // Housekeeping for whatever previous runs were abandoned. Not awaited: it is
+    // maintenance, and a slow sweep must not delay someone's deploy.
+    void pruneRuns(); void pruneEvents();
+    return new Response(tailDeployRun(runId, slug), SSE_HEADERS);
+  }
+
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
@@ -145,10 +244,7 @@ export async function POST(req: Request) {
         catch { /* client gone — keep building, just stop narrating */ }
       };
       try {
-        await runDeploy({
-          ownerId, ownerWorkspace, slug, friendlyName, repoUrl: url,
-          isUpload, isPrebuilt, prebuiltHash, secrets, archive, cloneToken, runCmd, limits,
-        }, send);
+        await runDeploy({ ...input, archive }, send);
       } finally {
         controller.close();
       }
@@ -156,11 +252,5 @@ export async function POST(req: Request) {
   });
 
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-    },
-  });
+  return new Response(stream, SSE_HEADERS);
 }
