@@ -40,9 +40,15 @@ const REGION = "us-central1";
  * it. See docs/CUTOVER.md for the order of operations.
  */
 const SEAL_APPS = process.env.SEAL_APPS === "1";
-// Cloud Build's own identity — what actually runs the prepare step, and therefore
-// what must be able to read the app's secrets.
-const BUILD_SA = process.env.CLOUD_BUILD_SERVICE_ACCOUNT || "540236122367@cloudbuild.gserviceaccount.com";
+// The identity the prepare step actually runs as, and therefore what must be able
+// to read the app's secrets.
+//
+// NOT `<project-number>@cloudbuild.gserviceaccount.com`, which is the obvious
+// guess and is wrong here: builds submitted without an explicit service account
+// run as the project's DEFAULT COMPUTE account. Guessing cost a deploy that
+// failed with "Permission 'secretmanager.versions.access' denied" on a secret
+// that existed and was granted — to somebody else.
+const BUILD_SA = process.env.CLOUD_BUILD_SERVICE_ACCOUNT || "540236122367-compute@developer.gserviceaccount.com";
 /** Runtime identity for the apps we host. Empty = inherit the project default. */
 const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
 /** The one Cloud Run service that fronts every static app. */
