@@ -91,7 +91,14 @@ cd "$APP"
 # whole point (install once, run many). If they're absent, fall back to
 # reconciling here so a raw-source deploy still works. Language is inferred from
 # the manifest present — a two-way Node/Python fork, not a framework matrix.
+# prepare.sh leaves this marker. It used to be inferred from a root package.json
+# plus node_modules (or a root requirements.txt plus .venv) — a guess that is
+# simply false for a monorepo, whose manifests live in subdirectories. Such an app
+# looked unprepared to every starting instance and reinstalled its dependencies on
+# each cold start, which is the exact cost this whole lane exists to avoid.
 prepared=""
+[ -f .supersonic-prepared ] && prepared=1
+# Bundles built before the marker existed still have to start.
 { [ -f package.json ] && [ -d node_modules ]; } && prepared=1
 { { [ -f requirements.txt ] || [ -f pyproject.toml ]; } && [ -d .venv ]; } && prepared=1
 

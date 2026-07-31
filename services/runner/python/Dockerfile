@@ -7,6 +7,25 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl tar openssl build-essential \
  && rm -rf /var/lib/apt/lists/*
 
+# Node, for PREPARE time only — not because Python apps need it at runtime.
+#
+# A monorepo with a Python backend and a JS frontend has to install and build
+# both, in one prepare step, in one image. Neither runner could: this one had no
+# npm, the node one has no pip, so `backend/` + `frontend/` was undeployable no
+# matter what the plan said. The serving process still decides which image runs,
+# so a FastAPI app that builds a React frontend prepares here and then serves with
+# uvicorn alone.
+#
+# Copied from the official image rather than installed from apt or NodeSource: it
+# is the same binary the node runner uses (no version skew between the two lanes),
+# it needs no extra apt index, and it does not drag in a second package manager's
+# opinion about /usr/lib.
+COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && node --version && npm --version
+
 # Pre-build a wheelhouse of the popular packages so a user's
 # `pip install --find-links=/opt/wheels` resolves offline and fast — this is where
 # the heavy scientific wheels (numpy/pandas/pillow) stop dominating cold starts.

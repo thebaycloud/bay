@@ -57,32 +57,57 @@ cp -a "$SRC/." "$APP/"
 cd "$APP"
 restore_cache
 
-if [ -f package.json ]; then
+# ── install ────────────────────────────────────────────────────────────────
+#
+# An explicit install command from the plan replaces the convention entirely.
+#
+# The convention is "look at the repo root: package.json means Node, else
+# requirements.txt means Python" — which answers "what is this repo" by inspecting
+# exactly one directory. A monorepo does not have that shape:
+# `backend/requirements.txt` beside `frontend/package.json` matches NEITHER
+# branch, so NOTHING was installed and the app died at start with no
+# dependencies. The planner could already see the right answer — `plan.install`
+# has existed all along — and it was dropped on the way here, so the agent had no
+# way to say it.
+#
+# Both runner images now carry both toolchains for exactly this: one command may
+# install Python and Node dependencies from different subdirectories.
+plan_cmd() {  # $1 = env var name; echoes the decoded command
+  eval "v=\${$1:-}"
+  printf '%s' "$v" | base64 -d 2>/dev/null || printf '%s' "$v" | base64 --decode
+}
+
+# node_modules/.bin and .venv/bin on PATH for every plan-supplied command, so a
+# bare `nx` / `prisma` / `tsc` / `alembic` resolves the way it does under `npm run`
+# or inside an activated venv. Without this the first local binary 127s.
+bin_path() { printf '%s' "$APP/node_modules/.bin:$APP/.venv/bin:$PATH"; }
+
+export HUSKY=0    # the near-universal `"prepare": "husky"` hook 127s with no .git
+
+if [ -n "${SUPERSONIC_INSTALL_B64+x}" ]; then
+  icmd=$(plan_cmd SUPERSONIC_INSTALL_B64)
+  # The venv is created up front for a Python app and put on PATH, so a
+  # `pip install -r backend/requirements.txt` anywhere in the command lands in it
+  # rather than in the image's global site-packages, which the serving container
+  # does not carry forward.
+  if [ "${SUPERSONIC_LANG:-}" = "python" ] && [ ! -d .venv ]; then
+    log "creating .venv"
+    python -m venv .venv 2>/dev/null || python3 -m venv .venv
+  fi
+  if [ -n "$icmd" ]; then
+    log "install (from plan): $icmd"
+    PATH="$(bin_path)" sh -c "$icmd"
+  else
+    log "plan: no install step"
+  fi
+elif [ -f package.json ]; then
   # --include=dev is mandatory: the base image sets NODE_ENV=production (correct for
   # runtime), and under that npm install SKIPS devDependencies — but the build needs
-  # them (typescript, tailwind, bundlers all live in devDeps for most real apps). Without
-  # this the install "succeeds" and then `next build` fails on missing tooling.
-  # HUSKY=0 neutralises the near-universal `"prepare": "husky"` git-hooks script, which
-  # 127s here because the bundle has no .git (and shouldn't run hooks in a build anyway).
-  export HUSKY=0
+  # them (typescript, tailwind, bundlers all live in devDeps for most real apps).
   if [ -f package-lock.json ]; then
     npm ci --include=dev --prefer-offline --no-audit --no-fund || npm install --include=dev --prefer-offline --no-audit --no-fund
   else
     npm install --include=dev --prefer-offline --no-audit --no-fund
-  fi
-  # Build. If the planner handed us an explicit build command (base64), that wins —
-  # it is app-specific and may chain steps a convention can't know (e.g. an Nx target
-  # plus `prisma generate`). Present-but-empty means the planner decided there is no
-  # build. Absent → fall back to the `build` script convention.
-  if [ -n "${SUPERSONIC_BUILD_B64+x}" ]; then
-    bcmd=$(printf '%s' "$SUPERSONIC_BUILD_B64" | base64 -d 2>/dev/null || printf '%s' "$SUPERSONIC_BUILD_B64" | base64 --decode)
-    # node_modules/.bin on PATH so a plan's bare `nx`/`prisma`/`tsc` resolve — this is
-    # exactly what `npm run` does for scripts, and why bare tool names work there but
-    # not in a raw `sh -c`. Without it the plan's build 127s on the first local binary.
-    if [ -n "$bcmd" ]; then log "build (from plan): $bcmd"; PATH="$APP/node_modules/.bin:$PATH" sh -c "$bcmd"; else log "plan: no build step"; fi
-  elif node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
-    log "npm run build"
-    npm run build
   fi
 elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
   # A venv ships with the bundle so serving needs no install and the app's
@@ -94,6 +119,31 @@ elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
     ./.venv/bin/pip install --find-links="${PIP_WHEELHOUSE:-/opt/wheels}" .
   fi
 fi
+
+# ── build ──────────────────────────────────────────────────────────────────
+#
+# Hoisted out of the Node branch, where it used to live. Nested there it could
+# only ever run for a repo with a package.json at its ROOT — so a Python app with
+# a frontend to build, or any monorepo, silently skipped its build step even when
+# the plan named one.
+if [ -n "${SUPERSONIC_BUILD_B64+x}" ]; then
+  bcmd=$(plan_cmd SUPERSONIC_BUILD_B64)
+  if [ -n "$bcmd" ]; then
+    log "build (from plan): $bcmd"
+    PATH="$(bin_path)" sh -c "$bcmd"
+  else
+    log "plan: no build step"
+  fi
+elif [ -f package.json ] && node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
+  log "npm run build"
+  npm run build
+fi
+
+# Proof for the serving container that install and build already happened here.
+# It used to infer that from a root package.json + node_modules, which a monorepo
+# does not have — so a prepared bundle looked unprepared and reinstalled on every
+# cold start.
+: > "$APP/.supersonic-prepared"
 
 save_cache
 

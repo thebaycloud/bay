@@ -814,11 +814,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // The planner's app-specific build command, threaded to the runner's prepare
     // step (overrides its `npm run build` convention). Undefined ⇒ convention.
     let runnerBuild: string | undefined;
+    // The plan's install command. Undefined ⇒ the runner's root-manifest
+    // convention, which is right for a single-app repo and wrong for every
+    // monorepo — see prepare.sh.
+    let runnerInstall: string | undefined;
     if (PLANNER_ENABLED) {
       try {
         log("Planning the deploy — the agent reads the repo…");
         const plan = await planDeploy({ dir, log });
         if (typeof plan.build === "string") runnerBuild = plan.build;
+        if (typeof plan.install === "string") runnerInstall = plan.install;
         if (plan.language === "node") s.runtime = "node";
         else if (plan.language === "python") s.runtime = "python";
 
@@ -1184,7 +1189,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         try {
           await stages.around("prepare", async () => {
             log(`Preparing on the ${runnerLang} runner (install + build once — no image)…`);
-            writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild }));
+            writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild, install: runnerInstall, language: runnerLang }));
             const hb = setInterval(() => log("preparing…"), 8000);
             builds.reset();
             try {

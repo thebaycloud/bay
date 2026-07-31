@@ -234,6 +234,17 @@ Work QUICKLY and efficiently — a handful of tool calls, not many. Read what yo
 - the ORM schema/config location if the app uses one.
 Do NOT list the same directory twice or re-read a file. Once you can name install/build/run, WRITE the plan and STOP.
 
+MONOREPOS: the app does NOT have to live at the repository root, and its parts do not have to share a language. If the manifests are in subdirectories, SAY SO in \`install\`, \`build\` and \`run\` — every one of them runs from the repository root and may \`cd\`, chain with \`&&\`, and touch more than one directory. Both toolchains (Node and Python) are available, so a single \`install\` may set up both sides.
+
+A Python backend with a JavaScript frontend, for example:
+- \`"language": "python"\` — the language of the process that SERVES; that decides the runtime.
+- \`"install": "pip install -r backend/requirements.txt && npm --prefix frontend ci"\`
+- \`"build": "npm --prefix frontend run build"\`
+- \`"run": "cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT"\`
+That works when the backend serves the frontend's built assets — check whether it does (a StaticFiles mount, \`app.static_folder\`, an express.static). If BOTH halves need their own long-running server, say so plainly in \`reason\`: only one process can be started, so pick the one that serves HTTP to the outside world.
+
+If you give an explicit \`install\`, it REPLACES the platform's default entirely — so it must install everything the build and the run command need, including the backend's own dependencies.
+
 Every program your \`run\` and \`preRun\` commands invoke must be one the project actually installs. Check the dependency manifest before you name one:
 - A Flask/Django project served with \`gunicorn\` needs \`gunicorn\` in \`requirements.txt\`; FastAPI with \`uvicorn\` needs \`uvicorn\`. Projects developed with \`flask run\` / \`python manage.py runserver\` very often do NOT have the production server listed.
 - If the server you want is missing, say so by putting the install in \`install\` (e.g. \`pip install -r requirements.txt gunicorn\`) — do not just name a command that will not exist.

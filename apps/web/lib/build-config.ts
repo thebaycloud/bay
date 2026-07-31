@@ -323,7 +323,7 @@ export function buildLogLine(l: string): string | null {
  * install/build and saves after — so a redeploy reuses node_modules and the
  * framework build cache instead of doing both from scratch.
  */
-export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string; codeKey: string; build?: string }): string {
+export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string; codeKey: string; build?: string; install?: string; language?: string }): string {
   const out = `${opts.release}.tgz`;
   // The planner's build command (app-specific: e.g. `nx build … && prisma generate`)
   // overrides prepare.sh's `npm run build` convention. Base64 so any spaces/&&/quotes
@@ -336,6 +336,15 @@ export function runnerPrepareConfig(opts: { image: string; bucket: string; slug:
     `SUPERSONIC_CODE_KEY=${opts.codeKey}`,
   ];
   if (opts.build !== undefined) env.push(`SUPERSONIC_BUILD_B64=${Buffer.from(opts.build).toString("base64")}`);
+  // The plan's install command, which the runner needs for any repo whose
+  // manifests are not at the root. Without it prepare.sh falls back to inspecting
+  // the root directory, and a monorepo matches none of its cases — so nothing is
+  // installed and the app starts with no dependencies at all.
+  if (opts.install !== undefined) env.push(`SUPERSONIC_INSTALL_B64=${Buffer.from(opts.install).toString("base64")}`);
+  // Tells prepare.sh to create the venv before running a plan-supplied install,
+  // so a `pip install -r backend/requirements.txt` lands somewhere the serving
+  // container will still have.
+  if (opts.language) env.push(`SUPERSONIC_LANG=${opts.language}`);
   // The per-app key encrypts the bundle before it lands in the shared bucket, so a
   // shared runtime SA that can read the bytes still can't read another app's source.
   return [
