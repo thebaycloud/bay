@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { createHash } from "node:crypto";
+import { parseRoutes, type Route } from "./routes";
 
 export interface AppRow {
   id: string;
@@ -12,6 +13,8 @@ export interface AppRow {
   status: "deploying" | "live" | "failed";
   /** The latest deploy record, so the edge can tell "still building" from "died". */
   deploy: { status: string; error: string | null; updatedAt: number | null } | null;
+  /** Path-prefix routes when the app has more than one service. Null for the rest. */
+  routes: Route[] | null;
 }
 
 const CACHE_MS = 30_000;
@@ -82,6 +85,7 @@ export async function lookupApp(slug: string): Promise<AppRow | null> {
   const row: AppRow | null = raw
     ? {
         ...raw,
+        routes: parseRoutes((raw as unknown as { routes?: unknown }).routes),
         deploy: raw.deploy_status
           ? {
               status: raw.deploy_status,

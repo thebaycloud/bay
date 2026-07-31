@@ -5,6 +5,7 @@ import { page403, page404, pageGate, pageBuilding, pageFailed, pageStalled } fro
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
+import { pickRoute } from "./routes";
 import { forward } from "./forward";
 import { attachTunnel, hasTunnel, forwardToTunnel } from "./tunnel";
 
@@ -61,10 +62,15 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return html(res, 503, pageStalled(slug));
   }
 
+  // Which service gets this request. One-service apps have no routes and land on
+  // run_url exactly as before; a two-service app is split by path prefix so the
+  // frontend can call `/api/…` on its own origin with no CORS and nothing to bake
+  // into its bundle at build time.
+  const target = pickRoute(app.routes, req.url ?? "/", app.run_url);
   const serve = (visitorCtx: { userId: string; email: string; name: string }, wd: string, owner: boolean) =>
     action.serve === "tunnel"
       ? Promise.resolve(forwardToTunnel(req, res, slug))
-      : forward(req, res, app.run_url as string, visitorCtx, wd, { slug, owner });
+      : forward(req, res, target as string, visitorCtx, wd, { slug, owner });
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
   if (app.visibility === "public") {
