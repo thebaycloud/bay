@@ -881,6 +881,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // convention, which is right for a single-app repo and wrong for every
     // monorepo — see prepare.sh.
     let runnerInstall: string | undefined;
+    // Whether the install command is the plan's rather than the detector's. A
+    // command we were GIVEN is never rewritten; see runStatic.
+    let installFromPlan = false;
     // Kept so the repair agent can be told what the platform decided.
     let activePlan: DeployPlan | null = null;
 
@@ -958,7 +961,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // so the detector's root-level `npm run build` ran and the deploy died
           // on `Did not find existing container at: frontend/dist` — a build that
           // never ran where the config said it would.
-          if (typeof plan.install === "string") s.installCommand = plan.install || null;
+          if (typeof plan.install === "string") { s.installCommand = plan.install || null; installFromPlan = true; }
           if (typeof plan.build === "string") s.buildCommand = plan.build || null;
         } else {
           s.serve = { mode: "container" };
@@ -1244,15 +1247,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             log("Building assets…");
             const hb = setInterval(() => log("building…"), 8000);
             writeFileSync(join(dir, "cloudbuild.yaml"), staticBuildConfig({
-              // The npm flags are appended only to a command that is actually
-              // npm. The detector always produces one, so this was safe until a
-              // plan could supply its own — `pip install -r requirements.txt
-              // --prefer-offline --no-audit --no-fund` is not a command.
-              installCommand: s.installCommand
-                ? (/\bnpm (ci|install)\b/.test(s.installCommand) && !s.installCommand.includes("--prefer-offline")
-                    ? `${s.installCommand} --prefer-offline --no-audit --no-fund`
-                    : s.installCommand)
-                : null,
+              // A command the plan supplied is run exactly as written.
+              //
+              // These flags are a convenience for the command the DETECTOR
+              // generates, and appending them to somebody else's is wrong twice
+              // over: `pip install -r requirements.txt --no-audit` is not a
+              // command, and `(cd frontend && npm ci) --prefer-offline` is a
+              // syntax error — a subdirectory command is a subshell, and nothing
+              // can be appended after its closing paren. Both were produced by
+              // trying to be helpful with a string we did not write.
+              installCommand: !s.installCommand
+                ? null
+                : installFromPlan
+                  ? s.installCommand
+                  : `${s.installCommand} --prefer-offline --no-audit --no-fund`,
               buildCommand: s.buildCommand,
               outputDir: out.outputDir,
               destination,
