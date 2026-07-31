@@ -214,7 +214,9 @@ export function startDeployJob(runId: string, region: string, job: string): Prom
   return gcloud([
     "run", "jobs", "execute", job,
     "--region", region, "--project", PROJECT,
-    "--args", [...DEPLOY_JOB_ARGS, runId].join(","),
+    // `--args=…`, one token. Passed as two, gcloud reads the value's leading
+    // `--import` as a flag of its own and refuses with "expected one argument".
+    `--args=${[...DEPLOY_JOB_ARGS, runId].join(",")}`,
     // Return as soon as the execution is accepted. Waiting for it would put the
     // build back on the request's clock, which is the entire thing being fixed.
     "--async", "--quiet",
