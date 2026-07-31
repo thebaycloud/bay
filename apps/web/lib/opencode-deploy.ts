@@ -20,9 +20,62 @@ import { AddressInfo } from "node:net";
 import { accessToken as restAccessToken } from "./gcp-rest";
 
 const PROJECT = process.env.OPENCODE_VERTEX_PROJECT || "supersonic-deploy-prod";
-const LOCATION = "us-central1";
+/**
+ * Which Vertex location serves the model — NOT where anything is deployed.
+ *
+ * Newer Gemini models are published to `global` before any region carries them:
+ * every `gemini-3.x` id 404s on us-central1 and answers on global. Separate from
+ * the deploy region on purpose, so moving to a newer model is a config change
+ * rather than a decision about where customer workloads run.
+ */
+const LOCATION = process.env.OPENCODE_VERTEX_LOCATION || "us-central1";
+
+/**
+ * The OpenAI-compatible Vertex endpoint for a location.
+ *
+ * `global` is not a region and does not take the regional host prefix — it is
+ * `aiplatform.googleapis.com`, not `global-aiplatform.googleapis.com`, which is
+ * the difference between the model answering and a 404 that looks like the model
+ * does not exist.
+ */
+function vertexBaseUrl(location: string): string {
+  const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+  return `https://${host}/v1beta1/projects/${PROJECT}/locations/${location}/endpoints/openapi`;
+}
+/**
+ * The model both agents run on, as `vertex/<vertex-model-id>`.
+ *
+ * One constant, because the planner and the repair agent must never diverge:
+ * the repair agent's job is to fix what the planner produced, and comparing a
+ * model change is meaningless if only one of them moved.
+ */
 const MODEL = process.env.OPENCODE_MODEL || "vertex/google/gemini-2.5-pro";
+/** The part after `vertex/` — what the provider block has to declare. */
+const VERTEX_MODEL = MODEL.replace(/^vertex\//, "");
 const MAX_REDEPLOYS = Number(process.env.OPENCODE_MAX_REDEPLOYS || 3);
+
+/**
+ * The opencode config both agents run under.
+ *
+ * Shared so the model is genuinely one env var. The provider block used to
+ * hardcode `google/gemini-2.5-pro` in two places while the model came from
+ * OPENCODE_MODEL, so setting that variable alone handed opencode a model it had
+ * never been told existed — the switch looked like a config change and was
+ * actually a code change waiting to happen.
+ */
+function opencodeConfig(token: string) {
+  return {
+    $schema: "https://opencode.ai/config.json",
+    provider: {
+      vertex: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "Vertex Gemini",
+        options: { baseURL: vertexBaseUrl(LOCATION), apiKey: token },
+        models: { [VERTEX_MODEL]: { name: VERTEX_MODEL } },
+      },
+    },
+  };
+}
 
 export interface TokenUsage { total: number; input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; }
 export interface RepairResult { ok: boolean; url?: string; changes: string[]; summary: string; tokens: TokenUsage; steps: number; redeploys: number; }
@@ -254,13 +307,7 @@ export async function planDeploy(opts: {
   try {
     symlinkSync(dir, join(ws, "repo"));
     const token = await gcloudToken();
-    writeFileSync(join(ws, "opencode.json"), JSON.stringify({
-      $schema: "https://opencode.ai/config.json",
-      provider: { vertex: { npm: "@ai-sdk/openai-compatible", name: "Vertex Gemini", options: {
-        baseURL: `https://${LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT}/locations/${LOCATION}/endpoints/openapi`,
-        apiKey: token,
-      }, models: { "google/gemini-2.5-pro": { name: "Gemini 2.5 Pro" } } } },
-    }, null, 2));
+    writeFileSync(join(ws, "opencode.json"), JSON.stringify(opencodeConfig(token), null, 2));
     mkdirSync(join(ws, ".opencode", "agent"), { recursive: true });
     writeFileSync(join(ws, ".opencode", "agent", "plan.md"), PLAN_AGENT_MD);
 
@@ -420,13 +467,7 @@ export async function opencodeRepair(opts: {
   try {
     symlinkSync(dir, join(ws, "repo"));
     const token = await gcloudToken();
-    writeFileSync(join(ws, "opencode.json"), JSON.stringify({
-      $schema: "https://opencode.ai/config.json",
-      provider: { vertex: { npm: "@ai-sdk/openai-compatible", name: "Vertex Gemini", options: {
-        baseURL: `https://${LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT}/locations/${LOCATION}/endpoints/openapi`,
-        apiKey: token,
-      }, models: { "google/gemini-2.5-pro": { name: "Gemini 2.5 Pro" } } } },
-    }, null, 2));
+    writeFileSync(join(ws, "opencode.json"), JSON.stringify(opencodeConfig(token), null, 2));
     mkdirSync(join(ws, ".opencode", "agent"), { recursive: true });
     writeFileSync(join(ws, ".opencode", "agent", "deploy.md"), AGENT_MD);
     writeFileSync(join(ws, "redeploy.sh"), redeployScript(port));
