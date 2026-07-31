@@ -1,0 +1,145 @@
+import { spawn } from "node:child_process";
+
+const PROJECT = "supersonic-deploy-prod";
+
+/**
+ * The app's own secrets, in Secret Manager rather than in a Cloud Run spec.
+ *
+ * Two problems, one cause. The values used to be passed as `--update-env-vars`,
+ * which writes them verbatim into the revision spec — readable by anyone with
+ * console or `run services describe` access, printed in deploy diffs, and
+ * retained in every past revision forever. That is the wrong home for a Stripe
+ * key.
+ *
+ * And it left them unavailable exactly where a build needs them. The prepare step
+ * runs in Cloud Build with only the SUPERSONIC_* plumbing, so an app whose BUILD
+ * reads its environment could not deploy at all: Prisma 7 loads
+ * `prisma.config.js` on every CLI command, `env('DATABASE_URL')` throws when
+ * unset, and `prisma generate` died — while the log one line earlier said
+ * "Injecting DATABASE_URL". The platform had provisioned a database the build
+ * could not see.
+ *
+ * Secret Manager solves both: Cloud Run mounts them with `--set-secrets`, Cloud
+ * Build reads the same versions through `availableSecrets`, and neither copy
+ * lives in a spec.
+ */
+
+function gcloud(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("gcloud", args, { env: { ...process.env, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } });
+    let out = "", err = "";
+    p.stdout.on("data", (d: Buffer) => (out += d));
+    p.stderr.on("data", (d: Buffer) => (err += d));
+    p.on("error", reject);
+    p.on("close", (c) => (c === 0 ? resolve(out) : reject(new Error(err.trim() || `gcloud exited ${c}`))));
+  });
+}
+
+function gcloudIn(args: string[], stdin: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("gcloud", args, { env: { ...process.env, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } });
+    let out = "", err = "";
+    p.stdout.on("data", (d: Buffer) => (out += d));
+    p.stderr.on("data", (d: Buffer) => (err += d));
+    p.on("error", reject);
+    p.on("close", (c) => (c === 0 ? resolve(out) : reject(new Error(err.trim() || `gcloud exited ${c}`))));
+    p.stdin.on("error", reject);
+    p.stdin.end(stdin);
+  });
+}
+
+/**
+ * One secret per app per variable.
+ *
+ * Per-variable rather than one blob, because that is the shape both consumers
+ * want: `--set-secrets KEY=name:latest` on Cloud Run and one `secretEnv` entry
+ * per variable in Cloud Build both map a single secret to a single variable. A
+ * blob would have to be unpacked by something at runtime, which puts the values
+ * back into a process environment we control less carefully.
+ */
+export function secretName(slug: string, key: string): string {
+  return `app-${slug}-${key}`;
+}
+
+/** Secret Manager ids are [A-Za-z0-9_-]; env var names are already a subset. */
+const VALID_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export interface SecretRef { key: string; name: string }
+
+/**
+ * Store (or update) the app's secrets and grant the runtime identity access.
+ *
+ * Best-effort per variable: one key that cannot be stored must not take down a
+ * deploy that would otherwise work, so failures are reported and skipped rather
+ * than thrown. The caller falls back to a plain env var for anything skipped,
+ * which is exactly the old behaviour and no worse.
+ */
+export async function putAppSecrets(
+  slug: string,
+  vars: Record<string, string>,
+  runtimeServiceAccount: string,
+  log: (l: string) => void,
+): Promise<{ stored: SecretRef[]; skipped: string[] }> {
+  const stored: SecretRef[] = [];
+  const skipped: string[] = [];
+  for (const [key, value] of Object.entries(vars)) {
+    if (!VALID_KEY.test(key)) { skipped.push(key); continue; }
+    const name = secretName(slug, key);
+    try {
+      // Create-or-add-version. `describe` first so an existing secret gets a new
+      // version rather than an error, and so the IAM grant is only applied once.
+      let existed = true;
+      try {
+        await gcloud(["secrets", "describe", name, "--project", PROJECT]);
+      } catch {
+        existed = false;
+        await gcloudIn(["secrets", "create", name, "--data-file=-", "--replication-policy=automatic", "--project", PROJECT], value);
+      }
+      if (existed) {
+        await gcloudIn(["secrets", "versions", "add", name, "--data-file=-", "--project", PROJECT], value);
+      } else if (runtimeServiceAccount) {
+        await gcloud(["secrets", "add-iam-policy-binding", name,
+          "--member", `serviceAccount:${runtimeServiceAccount}`,
+          "--role", "roles/secretmanager.secretAccessor", "--project", PROJECT]);
+      }
+      stored.push({ key, name });
+    } catch (e) {
+      // Named, not silent: a value that did not make it to Secret Manager is
+      // about to be set as a plain env var instead, and that is worth saying.
+      log(`could not store ${key} in Secret Manager (${e instanceof Error ? e.message.split("\n")[0] : String(e)}) — setting it directly`);
+      skipped.push(key);
+    }
+  }
+  return { stored, skipped };
+}
+
+/** `--set-secrets` value: `KEY=secret-name:latest,…` */
+export function setSecretsFlag(refs: SecretRef[]): string {
+  return refs.map((r) => `${r.key}=${r.name}:latest`).join(",");
+}
+
+/** Grant the Cloud Build service account read access, so the prepare step can use them. */
+export async function grantBuildAccess(refs: SecretRef[], buildServiceAccount: string, log: (l: string) => void): Promise<void> {
+  if (!buildServiceAccount) return;
+  for (const r of refs) {
+    try {
+      await gcloud(["secrets", "add-iam-policy-binding", r.name,
+        "--member", `serviceAccount:${buildServiceAccount}`,
+        "--role", "roles/secretmanager.secretAccessor", "--project", PROJECT]);
+    } catch (e) {
+      log(`build cannot read ${r.key} (${e instanceof Error ? e.message.split("\n")[0] : String(e)})`);
+    }
+  }
+}
+
+/** Forget every secret belonging to an app. Called from the delete path. */
+export async function deleteAppSecrets(slug: string): Promise<void> {
+  try {
+    const out = await gcloud(["secrets", "list", "--project", PROJECT,
+      "--filter", `name~^projects/.*/secrets/app-${slug}-`, "--format=value(name)"]);
+    for (const name of out.split("\n").map((l) => l.trim()).filter(Boolean)) {
+      const id = name.split("/").pop()!;
+      await gcloud(["secrets", "delete", id, "--project", PROJECT, "--quiet"]).catch(() => {});
+    }
+  } catch { /* nothing stored, or listing failed — the app is going away regardless */ }
+}

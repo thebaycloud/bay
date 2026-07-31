@@ -323,7 +323,7 @@ export function buildLogLine(l: string): string | null {
  * install/build and saves after — so a redeploy reuses node_modules and the
  * framework build cache instead of doing both from scratch.
  */
-export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string; codeKey: string; build?: string; install?: string; language?: string }): string {
+export function runnerPrepareConfig(opts: { image: string; bucket: string; slug: string; release: string; codeKey: string; build?: string; install?: string; language?: string; secretEnv?: { key: string; name: string }[] }): string {
   const out = `${opts.release}.tgz`;
   // The planner's build command (app-specific: e.g. `nx build … && prisma generate`)
   // overrides prepare.sh's `npm run build` convention. Base64 so any spaces/&&/quotes
@@ -347,13 +347,31 @@ export function runnerPrepareConfig(opts: { image: string; bucket: string; slug:
   if (opts.language) env.push(`SUPERSONIC_LANG=${opts.language}`);
   // The per-app key encrypts the bundle before it lands in the shared bucket, so a
   // shared runtime SA that can read the bytes still can't read another app's source.
+  //
+  // The app's own environment is read from Secret Manager by the build, by
+  // reference. Without it the prepare step runs with only the SUPERSONIC_*
+  // plumbing, so a build that reads its environment simply cannot work: Prisma 7
+  // evaluates `env('DATABASE_URL')` while loading prisma.config.js on EVERY cli
+  // command, so `prisma generate` died on an app whose database the platform had
+  // just provisioned. Referenced by version and never written into this file,
+  // which is uploaded to the build bucket and would otherwise be a second copy.
+  const secrets = opts.secretEnv ?? [];
   return [
     "steps:",
     `  - name: ${opts.image}`,
     "    entrypoint: /usr/local/bin/supersonic-prepare",
     `    env: [${env.map((e) => `"${e}"`).join(", ")}]`,
+    ...(secrets.length ? [`    secretEnv: [${secrets.map((sec) => `"${sec.key}"`).join(", ")}]`] : []),
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
+    ...(secrets.length ? [
+      "availableSecrets:",
+      "  secretManager:",
+      ...secrets.flatMap((sec) => [
+        `    - versionName: projects/supersonic-deploy-prod/secrets/${sec.name}/versions/latest`,
+        `      env: "${sec.key}"`,
+      ]),
+    ] : []),
     "artifacts:",
     "  objects:",
     `    location: gs://${opts.bucket}/ready/${opts.slug}/`,

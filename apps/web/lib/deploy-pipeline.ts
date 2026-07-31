@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps } from "@/lib/plan-deps";
+import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME } from "@/lib/app-config";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
@@ -39,6 +40,9 @@ const REGION = "us-central1";
  * it. See docs/CUTOVER.md for the order of operations.
  */
 const SEAL_APPS = process.env.SEAL_APPS === "1";
+// Cloud Build's own identity — what actually runs the prepare step, and therefore
+// what must be able to read the app's secrets.
+const BUILD_SA = process.env.CLOUD_BUILD_SERVICE_ACCOUNT || "540236122367@cloudbuild.gserviceaccount.com";
 /** Runtime identity for the apps we host. Empty = inherit the project default. */
 const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
 /** The one Cloud Run service that fronts every static app. */
@@ -967,6 +971,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
     const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
     let cloudsql: string | null = null;
+    // The provisioned connection string. Held here rather than pushed straight
+    // into the environment, so it can go to Secret Manager where the BUILD can
+    // read it too — not only the running container.
+    let databaseUrl = "";
 
     // Provisioning does not depend on the build, so it is started here and
     // awaited only where its results are actually needed — the database and
@@ -994,9 +1002,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         log("Provisioning Postgres…");
         const r = await pgPromise;
         if (r.ok) {
-          extraEnv.push(`DATABASE_URL=${r.pg.databaseUrl}`);
+          // Held, not pushed: it goes to Secret Manager below with the app's own
+          // secrets, so the BUILD can read it too. Announcing "Injecting
+          // DATABASE_URL" and then failing the build with "Cannot resolve
+          // environment variable: DATABASE_URL" is precisely what this replaces.
+          databaseUrl = r.pg.databaseUrl;
           cloudsql = r.pg.connectionName;
-          log("Injecting DATABASE_URL + wiring Cloud SQL");
+          log("Provisioned the database — wiring Cloud SQL");
         } else {
           log(`! ${r.error} — deploying without a database`);
         }
@@ -1011,8 +1023,28 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       }
     }
 
-    for (const [k, v] of Object.entries(secrets)) {
-      if (k && v) { extraEnv.push(`${k}=${v}`); log(`Injecting secret ${k}`); }
+    // The app's own secrets go to Secret Manager, not into the revision spec.
+    //
+    // `--update-env-vars` writes values verbatim into the Cloud Run spec, where
+    // they are readable by anyone with console or `run services describe` access
+    // and retained in every past revision forever. That is the wrong home for a
+    // Stripe key. It also leaves them unreachable from the BUILD, which is why an
+    // app whose build reads its environment (Prisma 7 evaluates
+    // `env('DATABASE_URL')` on every CLI command) could not deploy at all.
+    //
+    // Anything that cannot be stored falls back to a plain env var — the old
+    // behaviour, and no worse than it was.
+    const secretEnv: Record<string, string> = { ...secrets };
+    if (databaseUrl) secretEnv.DATABASE_URL = databaseUrl;
+    let secretRefs: SecretRef[] = [];
+    if (Object.keys(secretEnv).length) {
+      const put = await putAppSecrets(slug, secretEnv, APP_RUNTIME_SA, log);
+      secretRefs = put.stored;
+      if (secretRefs.length) log(`Stored ${secretRefs.map((r) => r.key).join(", ")} in Secret Manager`);
+      for (const k of put.skipped) {
+        const v = secretEnv[k];
+        if (k && v) extraEnv.push(`${k}=${v}`);
+      }
     }
 
     // Runner lane: the code is uploaded to GCS and the runner image fetches it
@@ -1069,6 +1101,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // next revision. Merging can leave a stale key behind after a deploy stops
     // needing it; losing a customer's secret is the worse of the two.
     if (extraEnv.length) deployFlags.push(`--update-env-vars=^~~^${extraEnv.join("~~")}`);
+    // Mounted by reference. `--update-secrets` merges, for the same reason
+    // `--update-env-vars` does: a redeploy must not drop a key the previous one set.
+    if (secretRefs.length) deployFlags.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
     const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
     if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
     deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
@@ -1216,7 +1251,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         try {
           await stages.around("prepare", async () => {
             log(`Preparing on the ${runnerLang} runner (install + build once — no image)…`);
-            writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild, install: runnerInstall, language: runnerLang }));
+            // Cloud Build runs as its own service account, so it needs its own
+            // grant — the runtime account's access does not carry over.
+            if (secretRefs.length) await grantBuildAccess(secretRefs, BUILD_SA, log);
+            writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild, install: runnerInstall, language: runnerLang, secretEnv: secretRefs }));
             const hb = setInterval(() => log("preparing…"), 8000);
             builds.reset();
             try {

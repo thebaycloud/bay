@@ -4,6 +4,7 @@ import { randomSlug } from "./slug";
 import { accessToken as restAccessToken, describeServiceRest, listServicesRest, invalidateToken } from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
 import { dbNameForSlug } from "./db";
+import { deleteAppSecrets } from "./app-secrets";
 
 const PROJECT = "supersonic-deploy-prod";
 // The one shared Cloud SQL instance every app's database lives on.
@@ -360,6 +361,11 @@ export async function deleteApp(slug: string): Promise<void> {
   // silently until a five-character slug is reused and the new app finds
   // somebody else's tables already in it.
   try { await capture(["sql", "databases", "delete", dbNameForSlug(slug), "--instance", PG_INSTANCE, "--project", PROJECT, "--quiet"]); } catch { /* never had one */ }
+
+  // The app's secrets. Left behind they are live credentials belonging to an app
+  // that no longer exists, and the slug space is small enough that the name will
+  // eventually be handed to somebody else.
+  await deleteAppSecrets(slug);
 }
 
 const DEPLOYER_SA = "supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com";
