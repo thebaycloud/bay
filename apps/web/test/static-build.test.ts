@@ -174,6 +174,10 @@ test("the emitted YAML is pinned byte for byte", () => {
     `    args: ["-lc", "${SCRATCH_RM}; gcloud storage rsync -r 'dist' '${DEST}'"]`,
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
+    // Cloud Build's default is 10 minutes, and a cold monorepo install plus a
+    // framework build runs past it — at which point the step is killed and
+    // reported as a generic failure, so a slow deploy reads as a broken app.
+    "timeout: 1200s",
     "",
   ].join("\n"));
 });

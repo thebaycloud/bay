@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ASSETS_BUCKET } from "./static-release";
-import { buildTagsBlock } from "./build-config";
+import { buildTagsBlock, BUILD_TIMEOUT } from "./build-config";
 import { resilientInstall } from "./install";
 
 /**
@@ -348,6 +348,7 @@ export function staticBuildConfig(opts: {
     // build queued 1s, which is more than the bigger machine ever gave back.
     "  logging: CLOUD_LOGGING_ONLY",
     ...buildTagsBlock(opts.slug),
+    ...BUILD_TIMEOUT,
     "",
   ].join("\n");
 }

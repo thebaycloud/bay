@@ -3,8 +3,11 @@ import { spawn } from "node:child_process";
 import { randomSlug } from "./slug";
 import { accessToken as restAccessToken, describeServiceRest, listServicesRest, invalidateToken } from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
+import { dbNameForSlug } from "./db";
 
 const PROJECT = "supersonic-deploy-prod";
+// The one shared Cloud SQL instance every app's database lives on.
+const PG_INSTANCE = "supersonic-shared-pg";
 const REGION = "us-central1";
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } as NodeJS.ProcessEnv;
 
@@ -322,10 +325,22 @@ export async function rollback(slug: string): Promise<string> {
   return target;
 }
 
-/** Permanently delete an app: its Cloud Run service, custom domain mapping, and
- * storage bucket. Each step is best-effort so a missing piece doesn't block. */
+/**
+ * Permanently delete an app and everything a deploy of it created.
+ *
+ * "Everything" is the hard part, and this used to get four of nine. The rest —
+ * the prepared code bundles, the dependency cache, the thumbnail, and the app's
+ * own Postgres database — kept accumulating in shared infrastructure under the
+ * name of an app that no longer existed, and had to be swept by hand. The
+ * database is the one that actually bites: the slug space is five characters, so
+ * a name WILL eventually be reused, and the new app would have inherited a
+ * stranger's tables.
+ *
+ * Every step is best-effort and independent: most apps have never had most of
+ * these, and a missing piece must never stop the rest from being cleaned up.
+ */
 export async function deleteApp(slug: string): Promise<void> {
-  // Two lanes, cleaned up best-effort so either is fully removed:
+  // Two serving lanes, either of which may be absent:
   //  - container: its own Cloud Run service + optional per-app bucket
   //  - static: no service — its bytes live under <slug>/ in the shared assets
   //    bucket. `run services delete` MUST be optional here, or deleting a static
@@ -334,6 +349,17 @@ export async function deleteApp(slug: string): Promise<void> {
   try { await capture(["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* no mapping */ }
   try { await capture(["storage", "rm", "-r", `gs://supersonicdeploy-${slug}`, "--quiet"]); } catch { /* no per-app bucket */ }
   try { await capture(["storage", "rm", "-r", `gs://${ASSETS_BUCKET}/${slug}`, "--quiet"]); } catch { /* not a static release */ }
+
+  // What the runner lane leaves in the shared assets bucket: the prepared
+  // bundles it serves from, and the cross-deploy dependency cache.
+  try { await capture(["storage", "rm", "-r", `gs://${ASSETS_BUCKET}/ready/${slug}`, "--quiet"]); } catch { /* never ran on the runner */ }
+  try { await capture(["storage", "rm", `gs://${ASSETS_BUCKET}/cache/${slug}.tgz`, "--quiet"]); } catch { /* no build cache */ }
+  try { await capture(["storage", "rm", `gs://${ASSETS_BUCKET}/_thumbs/${slug}.jpg`, "--quiet"]); } catch { /* no thumbnail */ }
+
+  // The app's database on the shared instance. Left behind, these accumulate
+  // silently until a five-character slug is reused and the new app finds
+  // somebody else's tables already in it.
+  try { await capture(["sql", "databases", "delete", dbNameForSlug(slug), "--instance", PG_INSTANCE, "--project", PROJECT, "--quiet"]); } catch { /* never had one */ }
 }
 
 const DEPLOYER_SA = "supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com";

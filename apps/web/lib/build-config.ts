@@ -44,6 +44,18 @@ export function buildTagsBlock(slug?: string): string[] {
 }
 
 /**
+ * How long a customer's build may take.
+ *
+ * Cloud Build's default is 10 minutes, which every one of these configs
+ * inherited by saying nothing. A cold monorepo install plus a framework build
+ * runs past that — and when it does, Cloud Build kills the step and reports a
+ * generic step failure, so a deploy that merely needed twelve minutes looked
+ * like a broken app and got handed to the repair agent to "fix". Twenty minutes
+ * is well past anything measured here and still bounded.
+ */
+export const BUILD_TIMEOUT = ["timeout: 1200s"];
+
+/**
  * The Cloud Build id in one line of gcloud output, if there is one.
  *
  * Both `builds submit` and `run deploy --source` announce the build they just
@@ -93,6 +105,7 @@ export function kanikoBuildConfig(image: string, slug?: string): string {
     // measure again — at that size the bigger machine can start paying for itself.
     "  logging: CLOUD_LOGGING_ONLY",
     ...buildTagsBlock(slug),
+    ...BUILD_TIMEOUT,
     "",
   ].join("\n");
 }
@@ -187,6 +200,7 @@ export function buildkitBuildConfig(image: string, daemonImage: string | null = 
     // No machineType, for the same measured reason as the Kaniko config above.
     "  logging: CLOUD_LOGGING_ONLY",
     ...buildTagsBlock(slug),
+    ...BUILD_TIMEOUT,
     "",
   ].join("\n");
 }
@@ -336,6 +350,7 @@ export function runnerPrepareConfig(opts: { image: string; bucket: string; slug:
     `    location: gs://${opts.bucket}/ready/${opts.slug}/`,
     `    paths: ["${out}"]`,
     ...buildTagsBlock(opts.slug),
+    ...BUILD_TIMEOUT,
     "",
   ].join("\n");
 }

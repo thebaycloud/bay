@@ -312,7 +312,14 @@ export async function planDeploy(opts: {
 
   const plan = extractPlan(fileText) || extractPlan(finalText);
   if (!plan) throw new Error("planner produced no usable JSON plan");
-  if (!plan.static && !plan.run) throw new Error("planner returned no run command for a server app");
+  // A run command is required for the lanes that need one to start the app —
+  // and `other` is not one of them. A Go or Rust app is built as a container
+  // from its own Dockerfile or by buildpacks, both of which carry their own
+  // entrypoint, so demanding a run command here threw away every correct plan
+  // for those languages and silently fell back to the detector.
+  if (!plan.static && !plan.run && plan.language !== "other") {
+    throw new Error("planner returned no run command for a server app");
+  }
   log(`planner · ${plan.language}${plan.static ? " (static)" : ""}${plan.needsDB ? " +db" : ""} → ${plan.static ? plan.outputDir : plan.run}`);
   return plan;
 }

@@ -8,6 +8,7 @@ import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps } from "@/lib/plan-deps";
 import { pgConfig } from "@/lib/pg-config";
+import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -216,7 +217,9 @@ function gcloudDeploy(args: string[], onLine: (l: string) => void, onRaw?: (l: s
 function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string }> {
   let cfg;
   try { cfg = pgConfig(); } catch (e) { return Promise.reject(e); }
-  const dbName = slug.replace(/-/g, "_").slice(0, 60);
+  // Same helper the delete path uses, so an app's database can always be found
+  // again by name — a second, drifting copy of this rule is how they got orphaned.
+  const dbName = dbNameForSlug(slug);
   return capture("gcloud", ["sql", "databases", "create", dbName, "--instance=supersonic-shared-pg", "--project", PROJECT])
     .catch((e: Error) => { if (/already exists/i.test(e.message)) return ""; throw e; })
     .then(() => {
