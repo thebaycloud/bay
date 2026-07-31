@@ -789,7 +789,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (typeof plan.build === "string") runnerBuild = plan.build;
         if (plan.language === "node") s.runtime = "node";
         else if (plan.language === "python") s.runtime = "python";
-        if (plan.static) {
+
+        // The runner has a Node lane and a Python lane and nothing else. `other`
+        // — Go, Rust, Java — used to fall through this block in silence and get
+        // deployed by the detector, which worked but was nobody's decision: the
+        // logs announced a plan and then quietly did something else with it. And
+        // it was not merely cosmetic. `plan.run` was still taken, which both
+        // overrides a repo's own Dockerfile and, if the detector had guessed
+        // "node", hands a Go run command to the Node runner. A plan for a
+        // language with no lane routes nothing.
+        const routable = plan.language === "node" || plan.language === "python" || plan.static;
+        if (!routable) {
+          log(`Plan: ${plan.language} — no runner lane for that, building it as a container (its Dockerfile, or buildpacks)`);
+        } else if (plan.static) {
           s.serve = { mode: "static", outputDir: plan.outputDir || "dist" };
         } else {
           s.serve = { mode: "container" };
@@ -801,10 +813,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             runCmd = plan.preRun.filter(Boolean).join(" && ") + " && " + runCmd;
           }
         }
+        // needsDB is language-independent: a Go app with migrations needs its
+        // database provisioned exactly as much as a Node one does.
         s.database = plan.needsDB ? { engine: "postgres", via: "agent" } : s.database;
         if (plan.envNeeded?.length) log(`App reads env: ${plan.envNeeded.join(", ")}`);
         log(`Plan ready: ${plan.reason || `${plan.language}${plan.static ? " static" : ""}`}`);
-        if (!plan.static) ensureRunDeps(dir, plan, log);
+        if (routable && !plan.static) ensureRunDeps(dir, plan, log);
       } catch (e) {
         // Said out loud AND recorded on the deploy row, because it changes what
         // deployed this app. A planner that gave up quietly left someone reading a

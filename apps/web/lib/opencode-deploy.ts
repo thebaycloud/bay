@@ -183,6 +183,7 @@ Rules:
   - FastAPI: \`uvicorn main:app --host 0.0.0.0 --port $PORT\`  · Flask: \`gunicorn app:app --bind 0.0.0.0:$PORT\` · Django: \`gunicorn <proj>.wsgi --bind 0.0.0.0:$PORT\`
   - Next (built): \`next start -p $PORT\` · Node/Express: the real server entry, e.g. \`node server.js\` (it must read process.env.PORT)
 - A React/Vite/CRA SPA with no backend is \`"static": true\` with its build output in \`outputDir\`; \`run\` may be "".
+- \`"other"\` means exactly one thing: the app is not Node, not Python, and not a static site — Go, Rust, Java, Elixir. Use it honestly rather than forcing a fit; the platform builds those as containers (their own Dockerfile, or buildpacks) and does not need a run command from you. Still set \`needsDB\` and \`envNeeded\` — those matter whatever the language is. For Go specifically: a repo with \`go.mod\` and a \`main\` package is \`"other"\`, and if it has no Dockerfile say so in \`reason\`, because buildpacks will have to infer the entrypoint.
 - Never invent secrets. \`envNeeded\` is names only. Omit DATABASE_URL — the platform provides it when needsDB is true.
 - Prefer the app's own scripts/config over guessing. If a Procfile or a documented start command exists, use it.
 - Deliver the plan by WRITING it to the given file path. That file is the deliverable.
