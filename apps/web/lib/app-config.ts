@@ -177,11 +177,22 @@ export function servicePath(s: ServiceConfig): string {
   return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
 }
 
-/** `cd <dir> && <cmd>`, unless there is nothing to do. */
+/**
+ * Run a command inside a subdirectory, in a SUBSHELL.
+ *
+ * The parentheses are the whole point. Each command is prefixed independently,
+ * and the lanes disagree about how they run them: the runner executes install
+ * and build as separate `sh -c` calls, while the static lane joins them into one
+ * shell with `&&`. A bare `cd frontend && npm ci && cd frontend && npm run build`
+ * therefore installs correctly and then fails with
+ * `cd: frontend: No such file or directory`, because the first `cd` is still in
+ * effect and there is no frontend/frontend. A subshell cannot leak its directory
+ * to whatever runs next, so the same string is correct under both lanes.
+ */
 export function inDir(cmd: string | undefined, dir: string): string | undefined {
   if (cmd === undefined) return undefined;
   if (!cmd.trim()) return "";
-  return dir === "." ? cmd : `cd ${dir} && ${cmd}`;
+  return dir === "." ? cmd : `(cd ${dir} && ${cmd})`;
 }
 
 /**

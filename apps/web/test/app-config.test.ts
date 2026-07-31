@@ -21,9 +21,9 @@ test("a config becomes the same plan shape a planner would produce", () => {
   // cannot drift into differently-behaved code paths.
   const plan = planFromConfig(parseAppConfig(polyglot));
   assert.equal(plan.language, "python");
-  assert.equal(plan.install, "cd backend && pip install -r requirements.txt");
-  assert.equal(plan.run, "cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT");
-  assert.deepEqual(plan.preRun, ["cd backend && alembic upgrade head"]);
+  assert.equal(plan.install, "(cd backend && pip install -r requirements.txt)");
+  assert.equal(plan.run, "(cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT)");
+  assert.deepEqual(plan.preRun, ["(cd backend && alembic upgrade head)"]);
   assert.equal(plan.needsDB, true);
   assert.deepEqual(plan.envNeeded, ["SECRET_KEY"]);
   assert.match(plan.reason!, /supersonic\.json/);
@@ -31,7 +31,12 @@ test("a config becomes the same plan shape a planner would produce", () => {
 
 test("commands run from the repo root, so a subdirectory has to be entered", () => {
   assert.equal(inDir("npm ci", "."), "npm ci");
-  assert.equal(inDir("npm ci", "frontend"), "cd frontend && npm ci");
+  assert.equal(inDir("npm ci", "frontend"), "(cd frontend && npm ci)");
+  // A SUBSHELL, because the static lane joins install and build into one shell
+  // with `&&`: without the parentheses the second command inherits the first's
+  // directory and `cd frontend` fails looking for frontend/frontend.
+  const joined = [inDir("npm ci", "frontend"), inDir("npm run build", "frontend")].join(" && ");
+  assert.equal(joined, "(cd frontend && npm ci) && (cd frontend && npm run build)");
   // Present-but-empty means "there is deliberately no step here" and must stay
   // distinguishable from absent — the same distinction that, got wrong elsewhere,
   // turned an empty outputDir into a `dist` that did not exist.
@@ -45,7 +50,7 @@ test("a static service's output directory is relative to its own directory", () 
   })));
   assert.equal(plan.static, true);
   assert.equal(plan.outputDir, "frontend/dist");
-  assert.equal(plan.build, "cd frontend && npm run build");
+  assert.equal(plan.build, "(cd frontend && npm run build)");
 });
 
 test("a config that is present and wrong fails loudly", () => {
@@ -80,8 +85,8 @@ test("the service on / is the primary, whatever order they are declared in", () 
   assert.deepEqual(extraServices(cfg).map((s) => s.name), ["api"]);
   assert.equal(servicePath(extraServices(cfg)[0]), "/api");
   // Each service plans independently, from its own directory.
-  assert.equal(planFromConfig(cfg, extraServices(cfg)[0]).run, "cd backend && uvicorn app.main:app --port $PORT");
-  assert.equal(planFromConfig(cfg).run, "cd frontend && next start -p $PORT");
+  assert.equal(planFromConfig(cfg, extraServices(cfg)[0]).run, "(cd backend && uvicorn app.main:app --port $PORT)");
+  assert.equal(planFromConfig(cfg).run, "(cd frontend && next start -p $PORT)");
 });
 
 test("with no explicit path the first service is primary", () => {
