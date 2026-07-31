@@ -370,7 +370,12 @@ async function urlFirstDeploy(args) {
   // 1) reserve the slug → a URL right away (live immediately, any stack)
   const r = await api("/api/deploy/reserve", { method: "POST", body: repo ? { repo } : { name: folderName } });
   const { slug, url } = r;
-  print(green("✓ ") + "your app is live at " + bold(url) + dim("  (deploying — build finishing in the background)"));
+  // Not "✓ live". Nothing has been built yet — this is the moment the slug was
+  // reserved, and the build can still fail. Eight agents in a row read that
+  // checkmark as "done", stopped watching, and reported a working deploy for an
+  // app that never came up. The URL is real and does work from here (it serves a
+  // build page), so it stays; what leaves is the claim that the app is on it.
+  print(dim("⧗ ") + "deploying — your app will be live at " + bold(url));
 
   // Default: DON'T hold the caller hostage for the whole build. A coding agent
   // that runs `supersonic deploy` should get the live URL and its prompt back in
@@ -501,7 +506,7 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
     res = await fetch(baseUrl() + "/api/deploy", { method: "POST", headers, body });
     if (res.status === 401) { cleanup(); die("token invalid or expired — run: supersonic login"); }
   }
-  await consumeDeploy(res, args);   // when the build goes live the proxy serves it on `url`
+  await consumeDeploy(res, args, slug);   // when the build goes live the proxy serves it on `url`
   print(green("✓ ") + "build is live at " + bold(url));
   cleanup();
 }
@@ -638,7 +643,7 @@ async function redeploy(args) {
   if (!d.repo) die(`${app} was deployed from a computer — run \`supersonic deploy\` in its folder to ship an update`);
   info(cyan("▸ ") + "redeploying " + bold(app));
   const res = await api("/api/deploy", { method: "POST", body: { repo: d.repo }, stream: true });
-  return consumeDeploy(res, args);
+  return consumeDeploy(res, args, app);
 }
 
 // Zip the current folder into a temp .tgz, skipping deps/build junk + .gitignore.
@@ -662,10 +667,46 @@ function packageFolder() {
   });
 }
 
-async function consumeDeploy(res, args) {
+/**
+ * Follow a deploy on the server after the stream to it has died.
+ *
+ * The build runs on the control plane, not here — so a dropped socket says
+ * nothing about whether the deploy worked. It has already gone both ways: a
+ * Prisma app was reported failed six seconds before its own health probe passed,
+ * and a killed instance ended streams on deploys that went on to land. The
+ * server's own record is the only thing that knows, so ask it rather than
+ * inferring from a closed connection.
+ */
+async function followDeployOnServer(slug, ms = 180000) {
+  const deadline = Date.now() + ms;
+  let announced = false;
+  for (;;) {
+    let deploy = null;
+    // Deliberately not `api()`: it exits the process on a non-200, and a blip
+    // while polling must not become the verdict.
+    try {
+      const r = await fetch(baseUrl() + `/api/apps/${slug}/deploy-status`, {
+        headers: { Authorization: "Bearer " + token() },
+      });
+      if (r.ok) deploy = (await r.json().catch(() => ({}))).deploy || null;
+    } catch { /* transient — keep waiting */ }
+    if (deploy && (deploy.status === "live" || deploy.status === "failed")) return deploy;
+    if (Date.now() >= deadline) return null;
+    if (!announced) {
+      announced = true;
+      info(dim("  lost the connection to the build — following it on the server instead…"));
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+
+async function consumeDeploy(res, args, knownSlug) {
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  // The deploy stream announces the slug up front, so even the call paths that
+  // let the server pick one can follow the deploy after the stream dies.
+  let slug = knownSlug || null;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -676,6 +717,7 @@ async function consumeDeploy(res, args) {
       const raw = p.replace(/^data: /, "").trim();
       if (!raw) continue;
       let ev; try { ev = JSON.parse(raw); } catch { continue; }
+      if (ev.slug) slug = ev.slug;
       if (ev.type === "log") info("  " + dim(ev.line));
       else if (ev.type === "detected") info("  " + cyan(`detected ${ev.stack?.framework || "app"}`));
       else if (ev.type === "done") { if (args.json) json({ ok: true, slug: ev.slug, url: ev.url }); else print(green("✓ live: ") + ev.url); process.exit(0); }
@@ -695,8 +737,28 @@ async function consumeDeploy(res, args) {
     }
   }
 
-  // Stream closed with no terminal `done`/`error` — the build likely timed out or
-  // the connection dropped mid-repair. Never report this as success.
+  // Stream closed with no terminal `done`/`error`. That is a fact about this
+  // connection, not about the deploy: the build is still running on the server.
+  // Ask the server what actually happened before saying anything.
+  if (slug) {
+    const deploy = await followDeployOnServer(slug);
+    if (deploy?.status === "live") {
+      const url = deploy.url || `https://${slug}.supersonic.cv`;
+      if (args.json) json({ ok: true, slug, url });
+      else print(green("✓ live: ") + url);
+      process.exit(0);
+    }
+    if (deploy?.status === "failed") {
+      const why = deploy.error || deploy.stage || "the deploy failed";
+      if (args.json) json({ ok: false, slug, error: why });
+      die(why);
+    }
+    // Still building when we ran out of patience. Say that, rather than calling a
+    // deploy failed that may be minutes from landing.
+    if (args.json) json({ ok: false, slug, error: "still building — connection lost", pending: true });
+    die(`lost contact with the build and it was still running after 3 minutes. It may still land — check: supersonic logs ${slug}`);
+  }
+
   if (args.json) json({ ok: false, error: "deploy stream ended without a result" });
   die("the deploy ended without confirming it went live — the build may have failed or timed out. Check: supersonic apps  ·  supersonic logs <app>");
 }

@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloudRunName } from "@/lib/slug";
 import { repairDeploy } from "@/lib/agent";
-import { opencodeRepair, planDeploy } from "@/lib/opencode-deploy";
+import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
+import { checkPlanDeps } from "@/lib/plan-deps";
 import { currentUserId } from "@/lib/session";
 import { pgConfig } from "@/lib/pg-config";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -382,6 +383,44 @@ function buildWatcher(slug: string) {
     reset() { id = null; },
     error() { return fetchBuildError(id, slug); },
   };
+}
+
+/**
+ * Make sure the program the plan says to run will be there when it runs.
+ *
+ * The planner writes the production run command, and it writes good ones — but
+ * "how is Flask served in production" has an answer (`gunicorn`) that is correct
+ * everywhere except in a project that never installed gunicorn. Nothing about
+ * that repo is wrong, so the model cannot see it; install and build both succeed,
+ * so the build cannot see it. It surfaces only at container start, as exit 127,
+ * which reaches the repair agent disguised as "the app didn't listen on $PORT" —
+ * and that disguise has already cost one deploy three redeploys chasing a port
+ * bug that did not exist.
+ *
+ * The fix is the one a person would make: add the missing server to
+ * requirements.txt. In OUR copy of the repo, never the user's — same rule as
+ * stripQualityGates. Everything the check is not certain about is logged instead,
+ * so a 127 that still happens is one line away from being understood.
+ */
+function ensureRunDeps(dir: string, plan: DeployPlan, log: (l: string) => void) {
+  const reqPath = join(dir, "requirements.txt");
+  const pkgPath = join(dir, "package.json");
+  const readOr = (p: string) => { try { return existsSync(p) ? readFileSync(p, "utf8") : null; } catch { return null; } };
+  const requirements = readOr(reqPath);
+  let packageJson: unknown = null;
+  try { const raw = readOr(pkgPath); if (raw) packageJson = JSON.parse(raw); } catch { /* unparseable — treated as absent */ }
+
+  const { install, unknown } = checkPlanDeps(plan, { language: plan.language, requirements, packageJson });
+
+  if (install.length && requirements !== null) {
+    const suffix = requirements.endsWith("\n") || requirements === "" ? "" : "\n";
+    writeFileSync(reqPath, `${requirements}${suffix}${install.join("\n")}\n`);
+    log(`The run command needs ${install.join(", ")}, which this project does not install — adding it (our copy only)`);
+  }
+  // Not an error: the check is narrow on purpose, and most of what lands here is a
+  // binary that really does exist (a transitive dep's bin, a workspace tool). It is
+  // here so that when one of them *is* the reason for a 127, the log already says so.
+  if (unknown.length) log(`Note: could not confirm ${unknown.join(", ")} will be installed — if the app exits 127, this is why`);
 }
 
 // A failed `gcloud run deploy --source` only says "Build failed; check logs".
@@ -792,7 +831,7 @@ export async function POST(req: Request) {
         if (isPrebuilt && archive) {
           stages = new StageRecorder(slug, "static");
           await publishPrebuilt({ dir, archive, slug, hash: prebuiltHash, log, send, stages });
-          if (ownerId) setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
+          setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
           if (ownerId && ownerWorkspace) {
             const staticUrl = (await staticServiceUrl()) ?? "";
             await markAppLive(slug, staticUrl, prebuiltHash || null);
@@ -865,6 +904,7 @@ export async function POST(req: Request) {
             s.database = plan.needsDB ? { engine: "postgres", via: "agent" } : s.database;
             if (plan.envNeeded?.length) log(`App reads env: ${plan.envNeeded.join(", ")}`);
             log(`Plan ready: ${plan.reason || `${plan.language}${plan.static ? " static" : ""}`}`);
+            if (!plan.static) ensureRunDeps(dir, plan, log);
           } catch (e) {
             log(`Planner unavailable — keeping deterministic detection (${e instanceof Error ? e.message : String(e)})`);
           }
@@ -1230,6 +1270,7 @@ export async function POST(req: Request) {
           // A permissions failure is ours, not the repo's — the repair agent would
           // burn redeploys on it and then bury the real cause in its summary.
           if ((result.error ?? "").includes(IAM_FAILURE)) {
+            setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
             if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
             send({ type: "error", message: result.error });
             return;
@@ -1237,7 +1278,7 @@ export async function POST(req: Request) {
           // The auto-fix agent is a Pro feature. Basic gets a paste-ready prompt
           // for its own coding agent instead of us fixing the code in the cloud.
           if (!limits.autoFix) {
-            if (ownerId) setDeploy(slug, { status: "failed", stage: result.error ?? "deploy failed" });
+            setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
             if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
             log("Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
             send({
@@ -1261,7 +1302,7 @@ export async function POST(req: Request) {
           await stages.end(repair, fixed.ok ? "ok" : "failed");
           if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
           else {
-            if (ownerId) setDeploy(slug, { status: "failed", stage: fixed.summary });
+            setDeploy(slug, { status: "failed", error: fixed.summary });
             if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
             send({ type: "error", message: fixed.summary });
             return;
@@ -1279,7 +1320,7 @@ export async function POST(req: Request) {
         } else {
           await createDomainMapping(slug, log);
         }
-        if (ownerId) setDeploy(slug, { status: "live", url: result.url });
+        setDeploy(slug, { status: "live", url: result.url });
         if (ownerId && ownerWorkspace) {
           await markAppLive(slug, result.url ?? "");
           // Not awaited: the deploy is finished, and a thumbnail must never hold it.
@@ -1290,7 +1331,7 @@ export async function POST(req: Request) {
         send({ type: "done", slug, url: SEAL_APPS || staticServe ? `https://${slug}.supersonic.cv` : result.url });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (ownerId) setDeploy(slug, { status: "failed", stage: msg });
+        setDeploy(slug, { status: "failed", error: msg });
         // Anything thrown after the row was created — a clone failure, bad
         // detector output, a provisioning error — would otherwise leave the app
         // stuck at status 'deploying' forever.

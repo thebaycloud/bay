@@ -18,43 +18,81 @@ function ensure(): Promise<void> {
          url         text,
          updated_at  timestamptz NOT NULL DEFAULT now()
        )`
-    ).then(() => undefined).catch((e) => { ensured = null; throw e; });
+    // `error` and `finished_at` are what make this row an ANSWER rather than a
+    // progress indicator. Until now the only durable record of why a deploy failed
+    // was the reason crammed into `stage` — a field the next progress line
+    // overwrites — so anything that lost the stream lost the reason with it. And a
+    // deploy whose process died left `status='building'` with no end date, which is
+    // indistinguishable from one still running. Added separately because the table
+    // already exists in production.
+    ).then(() => getPool(DB).query(
+      `ALTER TABLE deploys
+         ADD COLUMN IF NOT EXISTS error       text,
+         ADD COLUMN IF NOT EXISTS finished_at timestamptz`
+    )).then(() => undefined).catch((e) => { ensured = null; throw e; });
   }
   return ensured;
 }
 
-export interface DeployRow { slug: string; name: string | null; status: string; stage: string | null; url: string | null; }
+/** The states a deploy can end in. Anything else means it is still running. */
+export const TERMINAL_STATUSES = new Set(["live", "failed"]);
+
+export interface DeployRow {
+  slug: string;
+  name: string | null;
+  status: string;
+  stage: string | null;
+  url: string | null;
+  error: string | null;
+  updatedAt: string | null;
+  finishedAt: string | null;
+}
 
 /** Upsert deploy progress. Fire-and-forget from the deploy stream — never let a
  * DB hiccup break a deploy. */
 export async function setDeploy(
   slug: string,
-  d: { ownerId?: string | null; name?: string; status?: string; stage?: string; url?: string },
+  d: { ownerId?: string | null; name?: string; status?: string; stage?: string; url?: string; error?: string },
 ): Promise<void> {
   try {
     await ensure();
+    // A terminal status stamps finished_at in the same write that sets it, so the
+    // two can never disagree. A non-terminal one clears it: a redeploy of a
+    // previously failed app is running again, and a stale end date would make the
+    // proxy and the CLI call it finished.
+    const terminal = d.status ? TERMINAL_STATUSES.has(d.status) : null;
     await getPool(DB).query(
-      `INSERT INTO deploys(slug, owner_id, name, status, stage, url, updated_at)
-         VALUES($1,$2,$3,COALESCE($4,'building'),$5,$6,now())
+      `INSERT INTO deploys(slug, owner_id, name, status, stage, url, error, finished_at, updated_at)
+         VALUES($1,$2,$3,COALESCE($4,'building'),$5,$6,$7,
+                CASE WHEN $8::boolean THEN now() ELSE NULL END, now())
        ON CONFLICT(slug) DO UPDATE SET
          status = COALESCE($4, deploys.status),
          stage  = COALESCE($5, deploys.stage),
          url    = COALESCE($6, deploys.url),
+         -- Explicitly nullable: a redeploy that succeeds must clear the old reason,
+         -- so this one is driven by the status, not COALESCEd away.
+         error  = CASE WHEN $4 IS NULL THEN deploys.error ELSE $7 END,
+         finished_at = CASE WHEN $4 IS NULL THEN deploys.finished_at
+                            WHEN $8::boolean THEN now() ELSE NULL END,
          name   = COALESCE($3, deploys.name),
          owner_id = COALESCE($2, deploys.owner_id),
          updated_at = now()`,
-      [slug, d.ownerId ?? null, d.name ?? null, d.status ?? null, d.stage ?? null, d.url ?? null],
+      [slug, d.ownerId ?? null, d.name ?? null, d.status ?? null, d.stage ?? null, d.url ?? null,
+       d.error ?? null, terminal ?? false],
     );
   } catch { /* ignore — progress tracking is best-effort */ }
 }
+
+const SELECT_DEPLOY = `SELECT slug, name, status, stage, url, error,
+         to_char(updated_at,  'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "updatedAt",
+         to_char(finished_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "finishedAt"
+    FROM deploys`;
 
 /** The latest deploy record for one app (for the Deployments live view). */
 export async function getDeploy(slug: string): Promise<DeployRow | null> {
   try {
     await ensure();
-    const r = await getPool(DB).query(
-      "SELECT slug, name, status, stage, url FROM deploys WHERE slug=$1", [slug],
-    );
+    const r = await getPool(DB).query(`${SELECT_DEPLOY} WHERE slug=$1`, [slug]);
     return r.rows[0] ?? null;
   } catch {
     return null;
@@ -66,7 +104,7 @@ export async function listActiveDeploys(ownerId: string): Promise<DeployRow[]> {
   try {
     await ensure();
     const r = await getPool(DB).query(
-      `SELECT slug, name, status, stage, url FROM deploys
+      `${SELECT_DEPLOY}
        WHERE owner_id=$1 AND status='building' AND updated_at > now() - interval '15 minutes'
        ORDER BY updated_at DESC`,
       [ownerId],

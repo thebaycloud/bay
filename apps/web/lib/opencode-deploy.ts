@@ -142,6 +142,11 @@ Work QUICKLY and efficiently — a handful of tool calls, not many. Read what yo
 - the ORM schema/config location if the app uses one.
 Do NOT list the same directory twice or re-read a file. Once you can name install/build/run, WRITE the plan and STOP.
 
+Every program your \`run\` and \`preRun\` commands invoke must be one the project actually installs. Check the dependency manifest before you name one:
+- A Flask/Django project served with \`gunicorn\` needs \`gunicorn\` in \`requirements.txt\`; FastAPI with \`uvicorn\` needs \`uvicorn\`. Projects developed with \`flask run\` / \`python manage.py runserver\` very often do NOT have the production server listed.
+- If the server you want is missing, say so by putting the install in \`install\` (e.g. \`pip install -r requirements.txt gunicorn\`) — do not just name a command that will not exist.
+- \`gunicorn: not found\` at container start is exit 127, and it looks like a port problem to everyone downstream. Getting this right here is the whole point of reading the repo.
+
 Don't forget code-generation and migration steps that a fresh checkout needs:
 - If the app uses an ORM with a generated client (Prisma \`prisma generate\`, etc.), that generation MUST happen — put it in \`build\` (or first in \`preRun\`), or the client is missing at runtime.
 - If a migrations directory exists, run the deploy migration (Prisma \`prisma migrate deploy\`) in \`preRun\`.
