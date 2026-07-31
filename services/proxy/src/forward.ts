@@ -4,6 +4,7 @@ import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, type VisitorIdenti
 import { idTokenFor } from "./idtoken";
 import { config } from "./config";
 import { injectOverlay, isHtmlDocument } from "./inject";
+import { page502 } from "./pages";
 
 export async function forward(
   req: IncomingMessage,
@@ -77,8 +78,12 @@ export async function forward(
 
     upstream.on("error", (e) => {
       console.error("upstream error", e);
-      if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/plain" });
-      res.end("upstream unavailable");
+      // This is the one case page502 is actually for — an app that HAS a build
+      // and is not answering — and until now it went out as the plain text
+      // "upstream unavailable" while the page itself sat unused. A person who
+      // opened a link deserves to be told which of their apps is down.
+      if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(page502(inject?.slug ?? ""));
       done();
     });
 

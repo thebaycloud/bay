@@ -69,6 +69,44 @@ export function pageBuilding(slug: string): string {
 <p>Your app is going live — this page updates itself. Hang tight.</p>`);
 }
 
+/**
+ * Shown when the deploy failed.
+ *
+ * This case used to reach "deployed but not answering right now", which
+ * describes a working app having a bad moment — not one that never built. The
+ * reason was in the deploys row the whole time; it just had nowhere to go.
+ *
+ * Deliberately does NOT reload itself. Nothing is coming.
+ */
+export function pageFailed(slug: string, reason: string | null): string {
+  // The first line of a build failure is the useful one; the rest is a stack of
+  // Cloud Build framing. Trimmed rather than hidden — a visitor who is not the
+  // owner should still see enough to know it is not their fault.
+  const first = (reason ?? "").split("\n").map((l) => l.trim()).filter(Boolean)[0] ?? "";
+  const detail = first
+    ? `<p class="note">${escapeHtml(first.slice(0, 200))}</p>`
+    : "";
+  return shell("Deploy failed", `<h1>This app didn't deploy</h1>
+<p>The last deploy of <code>${escapeHtml(slug)}</code> failed, so there's nothing here to show yet.</p>
+${detail}
+<p class="note">The owner can see the full log with <code>supersonic logs ${escapeHtml(slug)}</code>.</p>`);
+}
+
+/**
+ * Shown when a deploy stopped reporting and never finished.
+ *
+ * The state this replaces is the one that mattered: a deploy whose process died
+ * leaves apps.status at 'deploying' with nothing to serve, and the edge answered
+ * a 200 "Deploying…" page for as long as anyone cared to look. A dead URL that
+ * returns OK is worse than one that returns an error — monitoring calls it
+ * healthy and an agent calls it shipped.
+ */
+export function pageStalled(slug: string): string {
+  return shell("Deploy didn't finish", `<h1>This deploy stopped</h1>
+<p><code>${escapeHtml(slug)}</code> started deploying and never finished, so there's nothing here yet.</p>
+<p class="note">Deploying again is usually all it takes: <code>supersonic deploy</code>.</p>`);
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);

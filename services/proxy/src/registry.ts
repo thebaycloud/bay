@@ -10,9 +10,23 @@ export interface AppRow {
   run_url: string | null;
   visibility: "private" | "shared" | "workspace" | "public";
   status: "deploying" | "live" | "failed";
+  /** The latest deploy record, so the edge can tell "still building" from "died". */
+  deploy: { status: string; error: string | null; updatedAt: number | null } | null;
 }
 
 const CACHE_MS = 30_000;
+/**
+ * A row mid-deploy is cached for barely any time at all.
+ *
+ * The flat 30s made a deploy's own success invisible for up to half a minute
+ * after it landed: the app was live, the row said so, and the URL went on
+ * serving "Deploying…" out of a cache nothing invalidates. Half a minute is a
+ * long time to stare at a page that is lying to you, and the ONLY rows this
+ * affects are ones we already know are about to change — an app that is live or
+ * failed still gets the full window, which is where all the traffic is.
+ */
+const CACHE_MS_DEPLOYING = 2_000;
+const ttlFor = (row: AppRow | null) => (row && row.status === "deploying" ? CACHE_MS_DEPLOYING : CACHE_MS);
 /**
  * Cache keys come straight from the Host header, so anyone can mint new ones by
  * walking subdomains — and misses cache too. Bound the map and evict oldest
@@ -43,15 +57,40 @@ function db(): Pool {
 
 export async function lookupApp(slug: string): Promise<AppRow | null> {
   const hit = cache.get(slug);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.row;
+  if (hit && Date.now() - hit.at < ttlFor(hit.row)) return hit.row;
 
+  // The deploys row rides along because apps.status alone cannot distinguish a
+  // deploy that is working from one whose process died: both read 'deploying'
+  // forever. `deploy_updated_at` is when that deploy last reported progress, and
+  // `deploy_error` is the reason a failed one gives.
   const r = await db().query(
-    `SELECT a.*, u.email AS owner_email
-     FROM apps a JOIN users u ON u.id = a.owner_id
+    `SELECT a.*, u.email AS owner_email,
+            d.status AS deploy_status,
+            d.error  AS deploy_error,
+            d.updated_at AS deploy_updated_at
+     FROM apps a
+     JOIN users u ON u.id = a.owner_id
+     LEFT JOIN deploys d ON d.slug = a.slug
      WHERE a.slug = $1`,
     [slug]
   );
-  const row = (r.rows[0] as AppRow | undefined) ?? null;
+  const raw = r.rows[0] as (AppRow & {
+    deploy_status?: string | null;
+    deploy_error?: string | null;
+    deploy_updated_at?: Date | null;
+  }) | undefined;
+  const row: AppRow | null = raw
+    ? {
+        ...raw,
+        deploy: raw.deploy_status
+          ? {
+              status: raw.deploy_status,
+              error: raw.deploy_error ?? null,
+              updatedAt: raw.deploy_updated_at ? new Date(raw.deploy_updated_at).getTime() : null,
+            }
+          : null,
+      }
+    : null;
   remember(slug, row);
   return row;
 }
