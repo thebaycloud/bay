@@ -120,6 +120,22 @@ function markStale(row: DeployRow | null): DeployRow | null {
   return { ...row, status: "failed", error: row.error || "the deploy stopped reporting and never finished" };
 }
 
+/**
+ * Who a slug belongs to, according to its deploy record.
+ *
+ * The last identity still attached to an app whose `apps` row has already been
+ * removed — which is what makes a half-deleted app deletable at all.
+ */
+export async function deployOwner(slug: string): Promise<string | null> {
+  try {
+    await ensure();
+    const r = await getPool(DB).query("SELECT owner_id FROM deploys WHERE slug = $1", [slug]);
+    return r.rows[0]?.owner_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Forget an app's deploy history. Called when the app itself is deleted. */
 export async function deleteDeploy(slug: string): Promise<void> {
   try {

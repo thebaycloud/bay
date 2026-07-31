@@ -5,7 +5,7 @@ export const maxDuration = 120;
 import { deleteApp } from "@/lib/gcloud";
 import { getAppBySlug } from "@/lib/apps";
 import { getPool } from "@/lib/db";
-import { deleteDeploy } from "@/lib/deploys";
+import { deleteDeploy, deployOwner } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 
@@ -19,7 +19,16 @@ export async function POST(_req: Request, { params }: { params: { slug: string }
   // so it 403'd even the real owner. Fall back to the Cloud Run label only for a
   // legacy app with no row.
   const app = await getAppBySlug(slug);
-  const owns = app ? app.owner_id === uid : await ownsApp(slug, uid);
+  // Third fallback: the deploy record's owner.
+  //
+  // A delete that partly succeeded — apps row gone, deploy row left behind — was
+  // unrecoverable without it. getAppBySlug finds nothing, there is no Cloud Run
+  // service to carry an owner label, so ownership could not be established and
+  // every retry returned "forbidden". The leftovers then stay forever, and the
+  // dashboard keeps rendering an app that does not exist. The one identity still
+  // recorded for the slug is on the deploy row.
+  const owns = app ? app.owner_id === uid
+    : (await ownsApp(slug, uid)) || (await deployOwner(slug)) === uid;
   if (!owns) return Response.json({ error: "forbidden" }, { status: 403 });
 
   try {
