@@ -1,7 +1,18 @@
 # Python runner base image — built ONCE, shared by every Python app. Build context
 # is the runner root (services/runner):
 #     docker build -f python/Dockerfile -t <registry>/runner-python:latest .
-FROM python:3.12-slim
+# Pinned deliberately, and bumped deliberately.
+#
+# NOT `:latest`. A floating base makes a deploy non-reproducible — an app that
+# worked yesterday can fail today with no change from its owner — and the
+# wheelhouse below is built against whatever this is, so it has to be a version
+# the ecosystem has caught up with. 3.14 is that; 3.12 was not enough for repos
+# declaring `requires-python = ">=3.14"`, which is now common.
+#
+# Moving this does not disturb anything already running: Cloud Run resolves the
+# tag to a digest at deploy time and revisions are immutable, so a live app keeps
+# the image it was deployed with until its next deploy.
+FROM python:3.14-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl tar openssl build-essential \

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { commandBinaries, requirementNames, checkPlanDeps } from "../lib/plan-deps";
+import { commandBinaries, requirementNames, checkPlanDeps, runtimeMismatch } from "../lib/plan-deps";
 
 test("the programs a run command invokes", () => {
   // The shapes the planner actually emits, one per stack it has produced.
@@ -114,4 +114,23 @@ test("paths and base-image programs are not treated as missing packages", () => 
     { language: "node", packageJson: {} },
   );
   assert.deepEqual(check.unknown, [], "node and npm ship in the image; ./scripts/… is a path");
+});
+
+test("an app asking for a runtime we do not have is told so plainly", () => {
+  // The failure without this is a pip line forty lines into a build log —
+  // "Package 'app' requires a different Python: 3.12.13 not in '<4.0,>=3.14'" —
+  // which reads as the app being broken rather than the platform being behind.
+  // Verbatim from fastapi/full-stack-fastapi-template.
+  assert.match(
+    runtimeMismatch({ pyproject: 'requires-python = ">=3.15,<4.0"\n' }) ?? "",
+    /needs Python >=3\.15.*runner has 3\.14/,
+  );
+  assert.equal(runtimeMismatch({ pyproject: 'requires-python = ">=3.14,<4.0"\n' }), null, "exactly what we have is fine");
+  assert.equal(runtimeMismatch({ pyproject: 'requires-python = ">=3.10"\n' }), null, "older is fine");
+  assert.equal(runtimeMismatch({ pyproject: null }), null);
+
+  assert.match(runtimeMismatch({ packageJson: { engines: { node: ">=26" } } }) ?? "", /needs Node >=26.*runner has 24/);
+  assert.equal(runtimeMismatch({ packageJson: { engines: { node: ">=20" } } }), null);
+  // A range with no lower bound says nothing about what we must provide.
+  assert.equal(runtimeMismatch({ packageJson: { engines: { node: "*" } } }), null);
 });

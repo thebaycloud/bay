@@ -159,3 +159,53 @@ export function checkPlanDeps(
   for (const bin of bins) if (!declared.has(bin)) unknown.push(bin);
   return { install: [], unknown };
 }
+
+
+/* -------------------------------------------------------------------------- */
+/* Runtime versions                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the runner images actually provide. Bumped with the Dockerfiles under
+ * services/runner — they are the source of truth and these must follow.
+ */
+export const RUNTIME_VERSIONS = { python: "3.14", node: "24" } as const;
+
+/** `>=3.14,<4.0` → the lowest version it will accept, as [major, minor]. */
+function lowestAccepted(spec: string): [number, number] | null {
+  // Only the lower bound matters here: an app asking for MORE than we have is
+  // the case that fails, and it fails at install with a message nobody reads.
+  const m = spec.match(/>=\s*(\d+)(?:\.(\d+))?/);
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : null;
+}
+
+function below(have: string, need: [number, number]): boolean {
+  const [hMaj, hMin] = have.split(".").map(Number);
+  return hMaj < need[0] || (hMaj === need[0] && (hMin ?? 0) < need[1]);
+}
+
+/**
+ * A plain sentence when the repo asks for a runtime the platform does not have.
+ *
+ * The failure without it is a pip line forty lines into a build log — "Package
+ * 'app' requires a different Python: 3.12.13 not in '<4.0,>=3.14'" — which reads
+ * as the app being broken rather than the platform being behind. Both manifests
+ * state the requirement plainly and neither was ever read.
+ */
+export function runtimeMismatch(manifests: { pyproject?: string | null; packageJson?: unknown }): string | null {
+  const py = manifests.pyproject?.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (py) {
+    const need = lowestAccepted(py);
+    if (need && below(RUNTIME_VERSIONS.python, need)) {
+      return `this app needs Python ${py} and the runner has ${RUNTIME_VERSIONS.python}`;
+    }
+  }
+  const engines = (manifests.packageJson as { engines?: { node?: string } } | null)?.engines?.node;
+  if (engines) {
+    const need = lowestAccepted(engines);
+    if (need && below(RUNTIME_VERSIONS.node, need)) {
+      return `this app needs Node ${engines} and the runner has ${RUNTIME_VERSIONS.node}`;
+    }
+  }
+  return null;
+}

@@ -1,7 +1,15 @@
 # Node runner base image — built ONCE, shared by every Node app. Build context is
 # the runner root (services/runner), so COPY sees entrypoint.sh + the list:
 #     docker build -f node/Dockerfile -t <registry>/runner-node:latest .
-FROM node:22-slim
+# The active LTS, pinned deliberately.
+#
+# NOT `:latest` and never an odd-numbered release: those never become LTS, go
+# end-of-life within months, and a great many packages simply do not support
+# them. A floating tag would also make deploys non-reproducible.
+#
+# Moving this does not disturb anything already running — Cloud Run pins the
+# resolved digest into each revision.
+FROM node:24-slim
 
 # python3 + venv + pip for PREPARE time only — the mirror of the node runner's
 # reason. A monorepo whose frontend is JS and whose backend is Python has to

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
-import { checkPlanDeps } from "@/lib/plan-deps";
+import { checkPlanDeps, runtimeMismatch } from "@/lib/plan-deps";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
@@ -480,6 +480,13 @@ function ensureRunDeps(dir: string, plan: DeployPlan, log: (l: string) => void) 
   const requirements = readOr(reqPath);
   let packageJson: unknown = null;
   try { const raw = readOr(pkgPath); if (raw) packageJson = JSON.parse(raw); } catch { /* unparseable — treated as absent */ }
+
+  // Said before anything is built. Without it the mismatch surfaces as a pip line
+  // deep in a build log — "Package 'app' requires a different Python: 3.12.13 not
+  // in '<4.0,>=3.14'" — which reads as the app being broken rather than the
+  // platform being behind, and which no amount of editing the repo can fix.
+  const mismatch = runtimeMismatch({ pyproject: readOr(join(dir, "pyproject.toml")), packageJson });
+  if (mismatch) log(`Heads up: ${mismatch}. The build will probably fail on it — this is a platform limit, not your app.`);
 
   const { install, unknown } = checkPlanDeps(plan, { language: plan.language, requirements, packageJson });
 
