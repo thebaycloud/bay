@@ -1332,6 +1332,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // Sealed apps refuse the control plane's own probe until the binding
         // exists, exactly as for the primary.
         if (SEAL_APPS) await grantInvokers(name, log);
+        // Then WAIT for that binding to take effect before calling this live.
+        //
+        // Cloud Run IAM does not apply instantly to a service created seconds
+        // earlier, and the deploy used to report the app live as soon as the
+        // sibling had a URL. The first person to open it got a Google 403 from a
+        // deploy that had just announced success — observed on the first
+        // two-service deploy, and gone ~30s later on its own. The primary never
+        // showed this because it is probed before go-live; the sibling was not.
+        for (let attempt = 0; ; attempt++) {
+          const probe = await probeApp(url, log, SEAL_APPS);
+          if (probe.ok) break;
+          if (attempt >= 5 || !/cannot invoke it/i.test(probe.reason ?? "")) {
+            return { ok: false, name, error: `${label} is not answering: ${probe.reason ?? "no response"}` };
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+        }
         return { ok: true, name, url };
       } catch (e) {
         return { ok: false, name, error: `Deploying ${label} failed: ${e instanceof Error ? e.message : String(e)}` };

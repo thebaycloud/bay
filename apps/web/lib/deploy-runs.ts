@@ -101,6 +101,14 @@ const objectFor = (runId: string) => `runs/${runId}.tgz.enc`;
  */
 export async function createRun(request: DeployRunRequest, archive: Buffer | null): Promise<string> {
   await ensure();
+  // Supersede whatever was already deploying this app.
+  //
+  // A deploy outlives the client that started it, by design — so hitting Ctrl-C
+  // and running `supersonic deploy` again leaves TWO jobs building the same app,
+  // racing to deploy the same Cloud Run service and to write the same row. I did
+  // exactly that during testing and ended up with three. The newest request is
+  // the one the user means; the older ones are abandoned work.
+  await supersedeRunsFor(request.slug).catch(() => { /* never block a deploy on cleanup */ });
   const runId = randomUUID();
   let sourceObject: string | null = null;
   let sourceKey: string | null = null;
@@ -147,6 +155,43 @@ export async function claimRun(runId: string): Promise<{ request: DeployRunReque
     }
   }
   return { request: row.request as DeployRunRequest, archive };
+}
+
+/**
+ * Stop anything already deploying this slug, so a new deploy supersedes it.
+ *
+ * Cancelling the execution is what actually stops the work; deleting the row is
+ * what stops it being found again. Both are best-effort: a stale job that cannot
+ * be cancelled is much less bad than refusing the deploy somebody just asked for.
+ */
+export async function supersedeRunsFor(slug: string): Promise<void> {
+  const ids = await runIdsForSlug(slug);
+  if (!ids.length) return;
+  for (const id of ids) await finishRun(id).catch(() => {});
+  await cancelExecutionsFor(ids).catch(() => {});
+}
+
+/** Cancel the job executions carrying any of these run ids. */
+async function cancelExecutionsFor(runIds: string[]): Promise<void> {
+  const job = process.env.DEPLOY_JOB_NAME || "supersonic-deploy-job";
+  const region = "us-central1";
+  const out = await new Promise<string>((resolve) => {
+    const p = spawn("gcloud", ["run", "jobs", "executions", "list", "--job", job,
+      "--region", region, "--project", PROJECT,
+      "--filter", "status.runningCount>0", "--format=value(metadata.name)"], { stdio: ["ignore", "pipe", "ignore"] });
+    let o = ""; p.stdout.on("data", (d: Buffer) => (o += d));
+    p.on("error", () => resolve("")); p.on("close", () => resolve(o));
+  });
+  for (const name of out.split("\n").map((l) => l.trim()).filter(Boolean)) {
+    const args = await new Promise<string>((resolve) => {
+      const p = spawn("gcloud", ["run", "jobs", "executions", "describe", name, "--region", region,
+        "--project", PROJECT, "--format=value(spec.template.spec.containers[0].args)"], { stdio: ["ignore", "pipe", "ignore"] });
+      let o = ""; p.stdout.on("data", (d: Buffer) => (o += d));
+      p.on("error", () => resolve("")); p.on("close", () => resolve(o));
+    });
+    if (!runIds.some((id) => args.includes(id))) continue;
+    await gcloud(["run", "jobs", "executions", "cancel", name, "--region", region, "--project", PROJECT, "--quiet"]).catch(() => {});
+  }
 }
 
 /** The run ids recorded for an app, so its in-flight deploys can be found and stopped. */
