@@ -8,7 +8,7 @@ import { getPool } from "@/lib/db";
 import { resolveSlug } from "@/lib/gcloud";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
 import { runDeploy } from "@/lib/deploy-pipeline";
-import { createRun, startDeployJob, pruneRuns } from "@/lib/deploy-runs";
+import { createRun, startDeployJob, finishRun, pruneRuns } from "@/lib/deploy-runs";
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
 import { getDeploy } from "@/lib/deploys";
 
@@ -217,11 +217,16 @@ export async function POST(req: Request) {
   // being the worker: it records the work, starts it, and narrates. Whether this
   // connection survives no longer decides whether the app gets deployed.
   if (DEPLOY_JOB) {
-    let runId: string;
+    let runId: string | null = null;
     try {
       runId = await createRun(input, archive);
       await startDeployJob(runId, REGION, DEPLOY_JOB_NAME);
     } catch (e) {
+      // The record holds the app's secrets and exists only so a job can pick it
+      // up. If no job ever will, it is deleted now rather than left for the
+      // six-hour sweep — the window those secrets are stored for should be the
+      // length of a build, not the length of a timeout nobody is watching.
+      if (runId) await finishRun(runId).catch(() => {});
       // Nothing has started, so this is an honest, immediate failure rather than
       // a deploy that will quietly never happen.
       return Response.json({ error: `could not start the deploy: ${e instanceof Error ? e.message : String(e)}` }, { status: 503 });
