@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAppConfig, planFromConfig, inDir, ConfigError } from "../lib/app-config";
+import { parseAppConfig, planFromConfig, inDir, ConfigError, primaryService, extraServices, servicePath } from "../lib/app-config";
 
 const polyglot = JSON.stringify({
   services: [{
@@ -67,10 +67,34 @@ test("a dir cannot climb out of the repository", () => {
   assert.equal(parseAppConfig('{"services":[{}]}').services[0].dir, ".");
 });
 
-test("more than one service is refused, not silently half-deployed", () => {
-  const two = JSON.stringify({ services: [{ start: "a" }, { start: "b" }] });
-  assert.throws(() => planFromConfig(parseAppConfig(two)), /only one is supported/);
-  // But it PARSES — the array is the schema going forward, so files written today
-  // stay valid when the second service lands.
-  assert.equal(parseAppConfig(two).services.length, 2);
+test("the service on / is the primary, whatever order they are declared in", () => {
+  // The API is listed first and the frontend second; the frontend still owns the
+  // app's bare URL, because it says so.
+  const cfg = parseAppConfig(JSON.stringify({
+    services: [
+      { name: "api", dir: "backend", language: "python", path: "/api", start: "uvicorn app.main:app --port $PORT" },
+      { name: "web", dir: "frontend", language: "node", path: "/", start: "next start -p $PORT" },
+    ],
+  }));
+  assert.equal(primaryService(cfg).name, "web");
+  assert.deepEqual(extraServices(cfg).map((s) => s.name), ["api"]);
+  assert.equal(servicePath(extraServices(cfg)[0]), "/api");
+  // Each service plans independently, from its own directory.
+  assert.equal(planFromConfig(cfg, extraServices(cfg)[0]).run, "cd backend && uvicorn app.main:app --port $PORT");
+  assert.equal(planFromConfig(cfg).run, "cd frontend && next start -p $PORT");
+});
+
+test("with no explicit path the first service is primary", () => {
+  const cfg = parseAppConfig(JSON.stringify({ services: [{ name: "a", start: "x" }, { name: "b", path: "/b", start: "y" }] }));
+  assert.equal(primaryService(cfg).name, "a");
+  assert.deepEqual(extraServices(cfg).map((s) => s.name), ["b"]);
+});
+
+test("two services cannot claim the same path", () => {
+  // One of them would silently never receive a request, which is
+  // indistinguishable from that service being broken.
+  assert.throws(() => parseAppConfig(JSON.stringify({
+    services: [{ name: "a", path: "/api", start: "x" }, { name: "b", path: "/api/", start: "y" }],
+  })), /both serve \/api/);
+  assert.throws(() => parseAppConfig(JSON.stringify({ services: [{ path: "api", start: "x" }] })), /must start with/);
 });

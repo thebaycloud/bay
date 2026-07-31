@@ -8,7 +8,8 @@ import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps } from "@/lib/plan-deps";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
-import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME } from "@/lib/app-config";
+import { cloudRunName } from "@/lib/slug";
+import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -838,9 +839,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // time. Written by the user's own coding agent, which knows the repo better
     // than a planner rediscovering it from `ls`.
     let configured: DeployPlan | null = null;
+    // Kept for the sibling services declared alongside the primary.
+    let appConfig: AppConfig | null = null;
     try {
       const cfg = readAppConfig(dir);
       if (cfg) {
+        appConfig = cfg;
         configured = planFromConfig(cfg);
         log(`Using ${CONFIG_FILENAME} — no planning needed`);
       }
@@ -1248,6 +1252,92 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       return { ok: true, url: upstream };
     };
 
+    /**
+     * Deploy one of an app's NON-primary services.
+     *
+     * A second service exists for one reason: the app has two things that both
+     * have to listen. A Next.js frontend doing SSR is itself a server and cannot
+     * be mounted inside FastAPI, so "Next + Python" is genuinely two Cloud Run
+     * services — and it is a shape people build constantly.
+     *
+     * Deliberately narrower than the primary path. A sibling is always a runner
+     * service: no static lane (a static sibling is just files the primary can
+     * serve), no Dockerfile lane, no domain mapping, and no database provisioning
+     * of its own — it shares the app's. What it gets is its own prepared bundle,
+     * built from the same source with its own install/build, and its own URL,
+     * which the proxy then routes to by path prefix.
+     */
+    const deploySibling = async (svc: ServiceConfig): Promise<{ ok: boolean; url?: string; error?: string; name: string }> => {
+      const label = (svc.name || servicePath(svc).replace(/[^a-z0-9]+/gi, "") || "svc").toLowerCase();
+      const name = cloudRunName(`${slug}-${label}`);
+      const plan = planFromConfig({ services: [svc] }, svc);
+      const lang: "node" | "python" | null =
+        plan.language === "node" ? "node" : plan.language === "python" ? "python" : null;
+      if (!lang) {
+        return { ok: false, name, error: `service "${label}" is ${plan.language}; a second service must be node or python` };
+      }
+      if (!plan.run) return { ok: false, name, error: `service "${label}" has no start command` };
+
+      const image = lang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE;
+      const release = `${label}-${releaseId()}`;
+      const key = randomBytes(32).toString("hex");
+      // preRun folds ahead of the start command exactly as it does for the
+      // primary — see the note there about migrations and cold starts.
+      const startCmd = plan.preRun?.length ? `${plan.preRun.filter(Boolean).join(" && ")} && ${plan.run}` : plan.run;
+
+      try {
+        await stages.around("prepare", async () => {
+          log(`Preparing ${label} on the ${lang} runner…`);
+          if (secretRefs.length) await grantBuildAccess(secretRefs, BUILD_SA, log);
+          writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({
+            image, bucket: ASSETS_BUCKET, slug, release, codeKey: key,
+            build: plan.build, install: plan.install, language: lang, secretEnv: secretRefs,
+          }));
+          const hb = setInterval(() => log(`preparing ${label}…`), 8000);
+          builds.reset();
+          try {
+            await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
+          } finally { clearInterval(hb); }
+        });
+      } catch (e) {
+        const buildLog = await builds.error();
+        return { ok: false, name, error: `Preparing ${label} failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
+      }
+
+      // Its own environment: the shared app env, plus the pointers to ITS bundle.
+      // Not the primary's — those name a different tarball and a different key.
+      const env = [
+        ...extraEnv.filter((e) => !e.startsWith("SUPERSONIC_CODE_") && !e.startsWith("SUPERSONIC_RUN=")),
+        `SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`,
+        `SUPERSONIC_CODE_OBJECT=ready/${slug}/${release}.tgz`,
+        `SUPERSONIC_CODE_KEY=${key}`,
+        `SUPERSONIC_RUN=${startCmd}`,
+      ];
+      const flags = [
+        "--region", REGION, SEAL_APPS ? "--no-allow-unauthenticated" : "--allow-unauthenticated",
+        "--project", PROJECT, "--format=json",
+        "--image", image, "--memory", RUNNER_MEMORY, "--cpu", "1",
+      ];
+      if (APP_RUNTIME_SA) flags.push(`--service-account=${APP_RUNTIME_SA}`);
+      if (cloudsql) flags.push(`--set-cloudsql-instances=${cloudsql}`);
+      if (secretRefs.length) flags.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
+      flags.push(`--update-env-vars=^~~^${env.join("~~")}`);
+      flags.push(`--update-labels=supersonic-name=${friendlyName},supersonic-parent=${slug}`);
+
+      log(`Deploying ${label} on the prebuilt ${lang} runner…`);
+      try {
+        const out = await gcloudDeploy(["run", "deploy", name, ...flags], log, (l) => builds.note(l));
+        const url = JSON.parse(out.slice(out.indexOf("{")))?.status?.url ?? "";
+        if (!url) return { ok: false, name, error: `${label} deployed but reported no URL` };
+        // Sealed apps refuse the control plane's own probe until the binding
+        // exists, exactly as for the primary.
+        if (SEAL_APPS) await grantInvokers(name, log);
+        return { ok: true, name, url };
+      } catch (e) {
+        return { ok: false, name, error: `Deploying ${label} failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    };
+
     const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
       if (staticServe) return runStatic(staticServe);
       if (runnerLang && runnerObject) {
@@ -1374,6 +1464,33 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // also leaks the project's Cloud Run hash. Shown only when it is genuinely
     // the app's own reachable address.
     if (!SEAL_APPS && !staticServe && result.url) log(`Live at ${result.url}`);
+
+    // Any sibling services, once the primary is up.
+    //
+    // In this order deliberately: the primary owns the app's URL, so a repo that
+    // declares two services still has something serving on it if a sibling fails.
+    // A sibling failure is reported and does NOT fail the deploy — an app whose
+    // frontend is live and whose API did not come up is in a worse state if we
+    // also tear the frontend down.
+    let routes: { path: string; url: string }[] | null = null;
+    if (appConfig && result.ok) {
+      const extras = extraServices(appConfig);
+      if (extras.length) {
+        const built: { path: string; url: string }[] = [
+          { path: servicePath(primaryService(appConfig)), url: result.url ?? "" },
+        ];
+        for (const svc of extras) {
+          const r = await deploySibling(svc);
+          if (r.ok && r.url) {
+            built.push({ path: servicePath(svc), url: r.url });
+            log(`${servicePath(svc)} → ${r.name}`);
+          } else {
+            log(`! ${r.error} — ${servicePath(svc)} will not be served`);
+          }
+        }
+        if (built.length > 1) routes = built;
+      }
+    }
     // The two routing models are mutually exclusive: a per-app domain
     // mapping points straight at Cloud Run, which a sealed app refuses.
     if (SEAL_APPS || staticServe) {
@@ -1387,7 +1504,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
     setDeploy(slug, { status: "live", url: result.url });
     if (ownerId && ownerWorkspace) {
-      await markAppLive(slug, result.url ?? "");
+      await markAppLive(slug, result.url ?? "", null, routes);
       // Not awaited: the deploy is finished, and a thumbnail must never hold it.
       void requestThumbnail(slug, result.url ?? "");
     }

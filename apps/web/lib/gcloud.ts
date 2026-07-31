@@ -349,6 +349,15 @@ export async function deleteApp(slug: string): Promise<void> {
   //    bucket. `run services delete` MUST be optional here, or deleting a static
   //    app throws "service not found" and fails the whole delete.
   try { await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* static: no per-app service */ }
+  // Sibling services from a multi-service app (`<slug>-api`, `<slug>-worker`).
+  // Deleting only the primary would leave them running and billing under the name
+  // of an app that no longer exists, reachable by nothing.
+  try {
+    const all = await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
+    for (const name of all.split("\n").map((l) => l.trim()).filter((n) => n.startsWith(`${slug}-`))) {
+      await capture(["run", "services", "delete", name, "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
+    }
+  } catch { /* listing failed — the primary is already gone */ }
   try { await capture(["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* no mapping */ }
   try { await capture(["storage", "rm", "-r", `gs://supersonicdeploy-${slug}`, "--quiet"]); } catch { /* no per-app bucket */ }
   try { await capture(["storage", "rm", "-r", `gs://${ASSETS_BUCKET}/${slug}`, "--quiet"]); } catch { /* not a static release */ }

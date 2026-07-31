@@ -50,6 +50,13 @@ export interface ServiceConfig {
   needsDB?: boolean;
   /** Env var NAMES the service reads. Never values. */
   env?: string[];
+  /**
+   * The path prefix this service serves, on the app's single hostname. Default "/".
+   *
+   * Path routing rather than a hostname each: same origin means no CORS and
+   * nothing to bake into a frontend bundle at build time. See services/proxy/src/routes.ts.
+   */
+  path?: string;
 }
 
 export interface AppConfig {
@@ -122,9 +129,52 @@ export function parseAppConfig(text: string): AppConfig {
       outputDir: str(svc.outputDir, `${where}.outputDir`),
       needsDB: svc.needsDB === undefined ? undefined : Boolean(svc.needsDB),
       env: svc.env as string[] | undefined,
+      path: str(svc.path, `${where}.path`),
     };
   });
+  // Checked here rather than at deploy time: two services claiming the same
+  // prefix means one of them silently never receives a request, which is
+  // indistinguishable from that service being broken.
+  const seen = new Set<string>();
+  for (const s of services) {
+    const p = servicePath(s);
+    if (seen.has(p)) throw new ConfigError(`${CONFIG_FILENAME}: two services both serve ${p}`);
+    seen.add(p);
+  }
   return { version: typeof o.version === "number" ? o.version : 1, services };
+}
+
+
+/**
+ * Which service owns "/" — the one the app's URL lands on, and the one deployed
+ * as the app itself rather than as a sibling.
+ *
+ * The service explicitly claiming "/" wins; otherwise the first declared. A repo
+ * that lists its API first and its frontend second still gets the frontend on
+ * the bare URL if it says `"path": "/"`, which is what anyone would expect.
+ */
+export function primaryService(config: AppConfig): ServiceConfig {
+  return config.services.find((s) => (s.path ?? "/") === "/") ?? config.services[0];
+}
+
+/** Every service except the primary, in declaration order. */
+export function extraServices(config: AppConfig): ServiceConfig[] {
+  const primary = primaryService(config);
+  return config.services.filter((s) => s !== primary);
+}
+
+/**
+ * A service's path prefix, normalised.
+ *
+ * Two services cannot share one, and nothing may be routed to a prefix that
+ * cannot be matched: `pickRoute` in the proxy only ever matches at a path
+ * boundary, so a prefix without a leading slash would silently receive no
+ * traffic at all rather than failing.
+ */
+export function servicePath(s: ServiceConfig): string {
+  const p = (s.path ?? "/").trim();
+  if (!p.startsWith("/")) throw new ConfigError(`${CONFIG_FILENAME}: "path" must start with / (got ${JSON.stringify(s.path)})`);
+  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
 }
 
 /** `cd <dir> && <cmd>`, unless there is nothing to do. */
@@ -142,14 +192,8 @@ export function inDir(cmd: string | undefined, dir: string): string | undefined 
  * takes exactly the same path as a planned deploy and cannot drift into a second,
  * differently-behaved code path.
  */
-export function planFromConfig(config: AppConfig): DeployPlan {
-  if (config.services.length > 1) {
-    throw new ConfigError(
-      `${CONFIG_FILENAME} declares ${config.services.length} services; only one is supported so far. ` +
-      `Deploy the service that serves HTTP, and have it serve the other's built assets.`
-    );
-  }
-  const s = config.services[0];
+export function planFromConfig(config: AppConfig, service?: ServiceConfig): DeployPlan {
+  const s = service ?? primaryService(config);
   const dir = s.dir ?? ".";
   const isStatic = s.language === "static";
   return {

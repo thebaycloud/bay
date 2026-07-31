@@ -28,14 +28,24 @@ export async function createAppRecord(o: {
   return r.rows[0].id;
 }
 
-export async function markAppLive(slug: string, runUrl: string, releaseHash?: string | null): Promise<void> {
+export async function markAppLive(
+  slug: string,
+  runUrl: string,
+  releaseHash?: string | null,
+  routes?: { path: string; url: string }[] | null,
+): Promise<void> {
   // The hash is written in the same statement that marks the app live, so the live
   // release and the hash a redeploy compares against can never disagree. Passing
   // nothing clears it, which is right for a cloud build: we did not hash that output,
   // so no later deploy should believe it matches.
+  //
+  // Routes are written the same way and for the same reason: an app that has just
+  // gone live with two services must not be reachable for even one request with
+  // the routes of the deploy before it. Null clears them, so an app that drops
+  // back to a single service stops being split.
   await getPool(DB).query(
-    `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3 WHERE slug = $1`,
-    [slug, runUrl, releaseHash ?? null]
+    `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3, routes = $4::jsonb WHERE slug = $1`,
+    [slug, runUrl, releaseHash ?? null, routes && routes.length ? JSON.stringify(routes) : null]
   );
 }
 
