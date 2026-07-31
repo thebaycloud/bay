@@ -294,6 +294,15 @@ Rules:
 - The run command is the most important field. It MUST bind 0.0.0.0 and use the \`$PORT\` the platform injects — never a hardcoded port, never a dev server that binds localhost.
   - FastAPI: \`uvicorn main:app --host 0.0.0.0 --port $PORT\`  · Flask: \`gunicorn app:app --bind 0.0.0.0:$PORT\` · Django: \`gunicorn <proj>.wsgi --bind 0.0.0.0:$PORT\`
   - Next (built): \`next start -p $PORT\` · Node/Express: the real server entry, e.g. \`node server.js\` (it must read process.env.PORT)
+
+A Next.js app can sometimes be served as a static site instead, which is cheaper, starts instantly, and lets another service in the same repo serve it. Choose that ONLY when BOTH are true:
+1. \`next.config.*\` already sets \`output: "export"\` — you cannot add it, you do not edit the repo, and \`next build\` without it produces a server build and no \`out/\` directory; and
+2. the app genuinely has no server needs: no API routes (\`app/api/**\`, \`pages/api/**\`), no server actions, no \`getServerSideProps\`, no middleware, no ISR/revalidation.
+Then it is \`"static": true\`, \`"build": "next build"\`, \`"outputDir": "out"\`.
+
+If the app has no server needs but does NOT set \`output: "export"\`, deploy it as a normal Next server and say so in \`reason\` — that it would export cleanly if the config asked for it. Do not guess your way into a build that produces nothing.
+
+That case matters most in a monorepo where a JS frontend sits beside a Python or Go backend: if the frontend is exportable, the backend serves its built files and the whole repo is ONE service. Only when the frontend genuinely needs its own Node server are two required, and this platform can currently deploy one — so if you conclude two are needed, say so plainly in \`reason\` and plan the service that faces the outside world.
 - A React/Vite/CRA SPA with no backend is \`"static": true\` with its build output in \`outputDir\`; \`run\` may be "".
 - \`"other"\` means exactly one thing: the app is not Node, not Python, and not a static site — Go, Rust, Java, Elixir. Use it honestly rather than forcing a fit; the platform builds those as containers (their own Dockerfile, or buildpacks) and does not need a run command from you. Still set \`needsDB\` and \`envNeeded\` — those matter whatever the language is. For Go specifically: a repo with \`go.mod\` and a \`main\` package is \`"other"\`, and if it has no Dockerfile say so in \`reason\`, because buildpacks will have to infer the entrypoint.
 - Never invent secrets. \`envNeeded\` is names only. Omit DATABASE_URL — the platform provides it when needsDB is true.
