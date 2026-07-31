@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps } from "@/lib/plan-deps";
+import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME } from "@/lib/app-config";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -818,10 +819,35 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // convention, which is right for a single-app repo and wrong for every
     // monorepo — see prepare.sh.
     let runnerInstall: string | undefined;
-    if (PLANNER_ENABLED) {
+
+    // A repo that already says how to deploy itself does not need a model to
+    // guess. `supersonic.json` is read first and, when present, replaces the
+    // planner entirely — no inference, no 40-180s, and the same answer every
+    // time. Written by the user's own coding agent, which knows the repo better
+    // than a planner rediscovering it from `ls`.
+    let configured: DeployPlan | null = null;
+    try {
+      const cfg = readAppConfig(dir);
+      if (cfg) {
+        configured = planFromConfig(cfg);
+        log(`Using ${CONFIG_FILENAME} — no planning needed`);
+      }
+    } catch (e) {
+      // Present and wrong is a hard stop. Falling back to the planner here would
+      // make a typo look like the platform ignoring what the user asked for, and
+      // they would have no way to tell the difference.
+      throw e instanceof ConfigError ? new Error(e.message) : e;
+    }
+
+    if (configured || PLANNER_ENABLED) {
       try {
-        log("Planning the deploy — the agent reads the repo…");
-        const plan = await planDeploy({ dir, log });
+        let plan: DeployPlan;
+        if (configured) {
+          plan = configured;
+        } else {
+          log("Planning the deploy — the agent reads the repo…");
+          plan = await planDeploy({ dir, log });
+        }
         if (typeof plan.build === "string") runnerBuild = plan.build;
         if (typeof plan.install === "string") runnerInstall = plan.install;
         if (plan.language === "node") s.runtime = "node";
@@ -872,6 +898,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         log(`Plan ready: ${plan.reason || `${plan.language}${plan.static ? " static" : ""}`}`);
         if (routable && !plan.static) ensureRunDeps(dir, plan, log);
       } catch (e) {
+        if (configured) throw e;   // a config error is the user's to fix, not ours to route around
         // Said out loud AND recorded on the deploy row, because it changes what
         // deployed this app. A planner that gave up quietly left someone reading a
         // failure from the fallback detector with no way to know that the plan
