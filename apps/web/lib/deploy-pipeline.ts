@@ -942,6 +942,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           const stated = typeof plan.outputDir === "string" ? plan.outputDir.trim() : "";
           const hasBuild = Boolean(plan.build || s.buildCommand);
           s.serve = { mode: "static", outputDir: stated || (hasBuild ? "dist" : ".") };
+          // The static lane builds with the DETECTOR's commands, so a plan that
+          // supplies its own has to overwrite them here — the runner lane reads
+          // plan.install/plan.build directly and this one does not.
+          //
+          // Without this, a config pointing at a subdirectory was half-obeyed:
+          // its outputDir was honoured while its install and build were dropped,
+          // so the detector's root-level `npm run build` ran and the deploy died
+          // on `Did not find existing container at: frontend/dist` — a build that
+          // never ran where the config said it would.
+          if (typeof plan.install === "string") s.installCommand = plan.install || null;
+          if (typeof plan.build === "string") s.buildCommand = plan.build || null;
         } else {
           s.serve = { mode: "container" };
           if (plan.run && !runCmd) runCmd = plan.run;               // agent supplies the run cmd
@@ -1226,7 +1237,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             log("Building assets…");
             const hb = setInterval(() => log("building…"), 8000);
             writeFileSync(join(dir, "cloudbuild.yaml"), staticBuildConfig({
-              installCommand: s.installCommand ? `${s.installCommand} --prefer-offline --no-audit --no-fund` : null,
+              // The npm flags are appended only to a command that is actually
+              // npm. The detector always produces one, so this was safe until a
+              // plan could supply its own — `pip install -r requirements.txt
+              // --prefer-offline --no-audit --no-fund` is not a command.
+              installCommand: s.installCommand
+                ? (/\bnpm (ci|install)\b/.test(s.installCommand) && !s.installCommand.includes("--prefer-offline")
+                    ? `${s.installCommand} --prefer-offline --no-audit --no-fund`
+                    : s.installCommand)
+                : null,
               buildCommand: s.buildCommand,
               outputDir: out.outputDir,
               destination,
