@@ -25,6 +25,13 @@ export const SERVICE_LANES: Lane[] = ["runner", "container", "buildpack"];
 
 export const DB_HOST = "127.0.0.1";
 export const DB_PORT = "5432";
+/**
+ * Where the proxy answers health checks, as opposed to database traffic.
+ *
+ * A separate port because it is the only thing bound beyond loopback — Cloud
+ * Run's prober has to reach it, and the database port must stay unreachable.
+ */
+export const DB_HEALTH_PORT = "9801";
 
 const CLOUD_SQL_PROXY_IMAGE = process.env.CLOUD_SQL_PROXY_IMAGE
   ?? "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1";
@@ -80,25 +87,33 @@ export function dbContainerArgs(connectionName: string): string[] {
     // Identical to the mistake already fixed in startDeployJob — the value
     // beginning with a dash is what makes it look like a flag, and the fix is
     // never to let it be a separate argv entry.
-    `--args=--port=${DB_PORT},--address=${DB_HOST},${connectionName}`,
+    // The database port stays on loopback; the HEALTH port is what Cloud Run is
+    // allowed to reach. See the probe below for why they cannot be the same one.
+    `--args=--port=${DB_PORT},--address=${DB_HOST},--health-check,--http-address=0.0.0.0,--http-port=${DB_HEALTH_PORT},${connectionName}`,
     // Required, not optional. Cloud Run refuses any revision whose `--depends-on`
     // names a container without one:
     //
     //   spec.template.spec.containers[0].depends_on: Dependent container
     //   'cloudsql-proxy' must have startup probe specified
     //
-    // Which means no app with a database has ever deployed on a lane that
+    // Which means no app with a database had ever deployed on a lane that
     // attaches this sidecar — the flag pair was written, the revision was
     // rejected, and the failure went to a repair agent that correctly reported
     // it could not fix the platform from inside the repository.
     //
-    // A TCP probe on the port the app will use, rather than the proxy's HTTP
-    // health server: it needs no extra flags on the proxy, and it tests the one
-    // thing `--depends-on` is being asked to guarantee — that something is
-    // listening on 5432 before the app starts. That also closes the readiness
-    // half of the gap, since --depends-on alone orders container START, not the
-    // port being open.
-    `--startup-probe=tcpSocket.port=${DB_PORT},periodSeconds=1,failureThreshold=30,timeoutSeconds=1`,
+    // NOT a TCP probe on 5432, which was the obvious first answer and is wrong.
+    // The proxy binds the database port to 127.0.0.1 deliberately, and Cloud
+    // Run's prober connects to the container's address rather than its loopback,
+    // so it cannot see a loopback-only listener. The proxy logs "ready for new
+    // connections" and the probe fails 30 times against the same port:
+    //
+    //   STARTUP TCP probe failed 30 times consecutively ... DEADLINE_EXCEEDED
+    //
+    // Binding 5432 to 0.0.0.0 would satisfy the probe by widening what listens
+    // for the database — the wrong half to move. The proxy's own health server
+    // is the right one: it answers /startup only once the instance is genuinely
+    // ready, and it is the only thing exposed beyond loopback.
+    `--startup-probe=httpGet.path=/startup,httpGet.port=${DB_HEALTH_PORT},periodSeconds=1,failureThreshold=30,timeoutSeconds=2`,
   ];
 }
 

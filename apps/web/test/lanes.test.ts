@@ -167,7 +167,14 @@ test("the proxy carries a startup probe, without which Cloud Run refuses the rev
   const args = dbContainerArgs("proj:region:inst");
   const probe = args.find((a) => a.startsWith("--startup-probe="));
   assert.ok(probe, "a --depends-on target without a startup probe is rejected outright");
-  assert.match(probe!, /tcpSocket\.port=5432/);
+  // NOT a TCP probe on 5432: the proxy binds that to loopback and the prober
+  // connects to the container address, so it fails 30 times against a proxy that
+  // is running perfectly.
+  assert.match(probe!, /httpGet\.path=\/startup/);
+  assert.ok(!probe!.includes("tcpSocket"));
+  assert.ok(args.some((a) => a.includes("--health-check")), "the health server has to be switched on");
+  assert.ok(args.some((a) => a.includes("--http-address=0.0.0.0")), "the prober cannot reach a loopback-only health port");
+  assert.ok(args.every((a) => !a.includes("--address=0.0.0.0")), "the DATABASE port must stay on loopback");
 });
 
 for (const lane of SERVICE_LANES) {
