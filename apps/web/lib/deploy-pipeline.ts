@@ -33,7 +33,7 @@ import { deployArgs, databaseEnv, DB_HOST, DB_PORT, DEFAULT_SCALE, type Scale } 
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
-import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs } from "@/lib/release-job";
+import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan } from "@/lib/release-job";
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
@@ -1113,25 +1113,25 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         } else {
           s.serve = { mode: "container" };
           if (plan.run && !runCmd) runCmd = plan.run;               // agent supplies the run cmd
-          // Held, not folded.
-          //
-          // "`prisma migrate deploy` and friends are idempotent, so re-running
-          // on each instance start is safe" was true of Prisma and of nothing
-          // else. Folded into the start command a migration re-runs on every
-          // cold start and every scale-out instance, CONCURRENTLY: Prisma takes
-          // an advisory lock and survives that, Alembic does not. It also pays
-          // migration time on every cold start and lets Cloud Run's startup
-          // probe kill the container mid-migration. app-config.ts documented
-          // exactly this, and then three call sites did it anyway.
-          //
-          // It runs once now, in its own Cloud Run job, before the pointer
-          // moves. See lib/release-job.ts.
-          if (Array.isArray(plan.preRun) && plan.preRun.length) {
-            releaseCmd = plan.preRun.filter(Boolean).join(" && ");
-          }
         }
+        // Held, not folded — and read for EVERY lane, which is the whole point of
+        // it being out here.
+        //
+        // "`prisma migrate deploy` and friends are idempotent, so re-running on
+        // each instance start is safe" was true of Prisma and of nothing else.
+        // Folded into the start command a migration re-runs on every cold start
+        // and every scale-out instance, CONCURRENTLY: Prisma takes an advisory
+        // lock and survives that, Alembic does not. It also pays migration time
+        // on every cold start and lets Cloud Run's startup probe kill the
+        // container mid-migration. app-config.ts documented exactly this, and
+        // then three call sites did it anyway.
+        //
+        // It runs once now, in its own Cloud Run job, before the pointer moves.
+        // See lib/release-job.ts.
+        releaseCmd = releaseFromPlan(plan);
         // needsDB is language-independent: a Go app with migrations needs its
-        // database provisioned exactly as much as a Node one does.
+        // database provisioned exactly as much as a Node one does. So is the
+        // release — and it was the one thing here still asking the language.
         s.database = plan.needsDB ? { engine: "postgres", via: "agent" } : s.database;
         if (plan.envNeeded?.length) log(`App reads env: ${plan.envNeeded.join(", ")}`);
         log(`Plan ready: ${plan.reason || `${plan.language}${plan.static ? " static" : ""}`}`);

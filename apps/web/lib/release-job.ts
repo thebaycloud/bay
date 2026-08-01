@@ -101,6 +101,33 @@ export interface ReleaseJob {
 }
 
 /**
+ * The one-shot command a plan carries, for any lane it could possibly run on.
+ *
+ * It exists as a function because the pipeline read it inside the branch that
+ * handles Node and Python, and nowhere else. So `language: "other"` — which is
+ * the schema's own spelling for tier 3, "I committed a Dockerfile, build that" —
+ * reached the container lane with `releaseCmd` still `""`, and `runRelease`
+ * returns early on an empty command. A container-lane app that declared
+ * `release: "prisma migrate deploy"`, passed `supersonic check`, and watched the
+ * check print the command back, deployed with no release job created at all and
+ * no line of output saying so. Observed on umami: the deploy reported success,
+ * the health path answered 200, and every page that read a table was an error.
+ *
+ * Which lane runs the release is a LANE question, and the lane is derived from
+ * whether the author committed a Dockerfile — never from the language. The
+ * database provisioning two lines below it already knew that, with a comment
+ * saying so; the release was the last thing here still asking the language.
+ *
+ * Static is the one real exception, and it is not a language exception either: a
+ * static site has nothing to run before traffic, which `LANE_CONSUMES` and
+ * `releaseJobArgs` both already refuse.
+ */
+export function releaseFromPlan(plan: { static?: boolean; preRun?: string[] }): string {
+  if (plan.static) return "";
+  return (plan.preRun ?? []).filter(Boolean).join(" && ");
+}
+
+/**
  * One job per service, named deterministically so a redeploy updates it.
  *
  * `gcloud run jobs deploy` is create-or-update, so idempotence is entirely a

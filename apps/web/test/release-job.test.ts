@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseJobName, proxyWait,
-  RELEASE_CONTAINER, RELEASE_TIMEOUT, type ReleaseJob,
+  RELEASE_CONTAINER, RELEASE_TIMEOUT, releaseFromPlan, type ReleaseJob,
 } from "../lib/release-job";
 import { dbContainerArgs, DEFAULT_SCALE, withScale, SERVICE_LANES, type Lane } from "../lib/lanes";
 
@@ -238,4 +238,35 @@ test("an empty release command is refused rather than executed", () => {
   // An empty `--args=-c` would exec /bin/sh with no script, exit 0, and report
   // a release that never ran as a release that succeeded.
   assert.throws(() => releaseJobArgs(job("runner", { release: "   " })), /has no release command/);
+});
+
+/**
+ * The release is a LANE question, and the pipeline asked the LANGUAGE.
+ *
+ * `planFromConfig` puts `release` on `preRun` whatever the service says it is
+ * written in, but the pipeline only read `preRun` inside the branch for Node and
+ * Python. `language: "other"` — the schema's own spelling for "I committed a
+ * Dockerfile, build that" — therefore reached the container lane with no release
+ * command, and `runRelease` returns early on an empty one. No job, no migration,
+ * no log line, and a deploy that reports success.
+ */
+test("a release survives a language the runner has no lane for", () => {
+  // The plan shape is identical for all three — `planFromConfig` reads `release`
+  // without looking at `language` — so what is asserted here is that nothing
+  // downstream reintroduces the distinction.
+  assert.equal(releaseFromPlan({ preRun: ["prisma migrate deploy"] }), "prisma migrate deploy");
+});
+
+test("several release steps become one command, in order", () => {
+  assert.equal(
+    releaseFromPlan({ preRun: ["python manage.py migrate", "", "python manage.py collectstatic"] }),
+    "python manage.py migrate && python manage.py collectstatic",
+  );
+});
+
+test("a static site has no release, because there is nothing to run before traffic", () => {
+  // Not a language exception — LANE_CONSUMES and releaseJobArgs both refuse it
+  // too, and three agreeing is the point.
+  assert.equal(releaseFromPlan({ static: true, preRun: ["prisma migrate deploy"] }), "");
+  assert.equal(releaseFromPlan({}), "");
 });
