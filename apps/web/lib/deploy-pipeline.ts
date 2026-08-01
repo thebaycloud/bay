@@ -251,7 +251,7 @@ function gcloudDeploy(args: string[], onLine: (l: string) => void, onRaw?: (l: s
 }
 
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
-function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string }> {
+function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string }> {
   let cfg;
   try { cfg = pgConfig(); } catch (e) { return Promise.reject(e); }
   // Same helper the delete path uses, so an app's database can always be found
@@ -261,14 +261,74 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
     .catch((e: Error) => { if (/already exists/i.test(e.message)) return ""; throw e; })
     .then(() => {
       log(`Provisioned Postgres database ${dbName}`);
-      // `localhost` is a placeholder host, NOT a real target: the `?host=` param
-      // points every client at the Cloud SQL Unix socket. But it must be present —
-      // Prisma rejects an empty host (`@/db`) with P1013, while pg/psycopg ignore it
-      // in favour of the socket param. So this one word makes the same URL work for
-      // Prisma *and* node-postgres *and* psycopg.
-      const databaseUrl = `postgresql://${cfg.user}:${cfg.password}@localhost/${dbName}?host=/cloudsql/${cfg.connectionName}`;
-      return { databaseUrl, connectionName: cfg.connectionName };
+      // An ordinary host and port, because the app reaches Postgres through a
+      // Cloud SQL Auth Proxy running beside it — see dbContainerArgs.
+      //
+      // It used to be a Unix socket, expressed as `@localhost/db?host=/cloudsql/…`,
+      // and that shape only works for clients that understand the `host=`
+      // parameter. Any app that assembles its own connection URL from parts
+      // cannot express a socket at all: `PostgresDsn.build(host="/cloudsql/…")`
+      // is REJECTED outright (verified), so a socket left every such app unable
+      // to reach a database the platform had already created for it.
+      const databaseUrl = `postgresql://${cfg.user}:${cfg.password}@${DB_HOST}:${DB_PORT}/${dbName}`;
+      return { databaseUrl, connectionName: cfg.connectionName, user: cfg.user, password: cfg.password, dbName };
     });
+}
+
+/**
+ * Where an app finds its database: a normal host and port, on localhost.
+ *
+ * Provided by a Cloud SQL Auth Proxy container running alongside the app. The
+ * alternative — Cloud Run's built-in Unix socket at /cloudsql/<instance> — works
+ * only for clients that speak the `host=` connection parameter, and is
+ * impossible for the large class of apps that build a connection URL out of
+ * separate host/user/password/database settings. A filesystem path is not a
+ * valid URL host and pydantic, among others, rejects it outright.
+ *
+ * One address means every convention below works with no special cases.
+ */
+const DB_HOST = "127.0.0.1";
+const DB_PORT = "5432";
+const CLOUD_SQL_PROXY_IMAGE = process.env.CLOUD_SQL_PROXY_IMAGE
+  || "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1";
+
+/**
+ * The same connection, spelled every way apps expect to read it.
+ *
+ * There is no single convention, and guessing one leaves working apps unable to
+ * start. `DATABASE_URL` covers Rails, Prisma, most Node ORMs and Django with
+ * dj-database-url; the discrete `POSTGRES_*` names are what docker-compose-shaped
+ * projects use (the FastAPI template requires POSTGRES_SERVER and reads no URL at
+ * all); `PG*` are libpq's own variables, honoured by psql, psycopg and
+ * node-postgres with no code at all; `DB_*` is the Laravel and older-Django
+ * spelling. They all describe the identical endpoint, so setting all of them
+ * cannot make one app disagree with another.
+ */
+function databaseEnv(db: { databaseUrl: string; user: string; password: string; dbName: string }): string[] {
+  return [
+    `DATABASE_URL=${db.databaseUrl}`,
+    `POSTGRES_SERVER=${DB_HOST}`, `POSTGRES_HOST=${DB_HOST}`, `POSTGRES_PORT=${DB_PORT}`,
+    `POSTGRES_USER=${db.user}`, `POSTGRES_PASSWORD=${db.password}`, `POSTGRES_DB=${db.dbName}`,
+    `PGHOST=${DB_HOST}`, `PGPORT=${DB_PORT}`,
+    `PGUSER=${db.user}`, `PGPASSWORD=${db.password}`, `PGDATABASE=${db.dbName}`,
+    `DB_HOST=${DB_HOST}`, `DB_PORT=${DB_PORT}`,
+    `DB_USER=${db.user}`, `DB_PASSWORD=${db.password}`, `DB_NAME=${db.dbName}`,
+  ];
+}
+
+/**
+ * The proxy container, appended after the app's own container flags.
+ *
+ * `--depends-on` makes Cloud Run start it first, so the app is not racing a port
+ * that is not listening yet. The proxy authenticates as the service's own
+ * identity, which therefore needs roles/cloudsql.client.
+ */
+function dbContainerArgs(connectionName: string): string[] {
+  return [
+    "--container", "cloudsql-proxy",
+    "--image", CLOUD_SQL_PROXY_IMAGE,
+    "--args", `--port=${DB_PORT},--address=${DB_HOST},${connectionName}`,
+  ];
 }
 
 /** Create a per-app GCS bucket (idempotent) and return its name. */
@@ -1053,6 +1113,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // into the environment, so it can go to Secret Manager where the BUILD can
     // read it too — not only the running container.
     let databaseUrl = "";
+    // Every database variable an app might read. Empty when it has no database.
+    let dbEnv: string[] = [];
 
     // Provisioning does not depend on the build, so it is started here and
     // awaited only where its results are actually needed — the database and
@@ -1086,7 +1148,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // environment variable: DATABASE_URL" is precisely what this replaces.
           databaseUrl = r.pg.databaseUrl;
           cloudsql = r.pg.connectionName;
-          log("Provisioned the database — wiring Cloud SQL");
+          // Every spelling of the same endpoint. DATABASE_URL alone is not enough:
+          // plenty of apps never read it and require POSTGRES_SERVER or PGHOST.
+          dbEnv = databaseEnv(r.pg);
+          log("Provisioned the database — connecting through a Cloud SQL proxy");
         } else {
           log(`! ${r.error} — deploying without a database`);
         }
@@ -1113,7 +1178,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // Anything that cannot be stored falls back to a plain env var — the old
     // behaviour, and no worse than it was.
     const secretEnv: Record<string, string> = { ...secrets };
-    if (databaseUrl) secretEnv.DATABASE_URL = databaseUrl;
+    if (databaseUrl) {
+      secretEnv.DATABASE_URL = databaseUrl;
+      // The password is a credential wherever it appears, so it travels with the
+      // URL rather than sitting in the revision spec three more times.
+      for (const v of dbEnv) {
+        const [k, ...rest] = v.split("=");
+        if (/PASSWORD$/.test(k)) secretEnv[k] = rest.join("=");
+        else if (k !== "DATABASE_URL") extraEnv.push(v);
+      }
+    }
     let secretRefs: SecretRef[] = [];
     if (Object.keys(secretEnv).length) {
       const put = await putAppSecrets(slug, secretEnv, APP_RUNTIME_SA, log);
@@ -1170,7 +1244,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // Unset today so this is a no-op until the account exists — see the
     // rollout note in docs/CUTOVER.md.
     if (APP_RUNTIME_SA) deployFlags.push(`--service-account=${APP_RUNTIME_SA}`);
-    if (cloudsql) deployFlags.push(`--set-cloudsql-instances=${cloudsql}`);
+    // No --set-cloudsql-instances: that mounts the Unix socket, which is exactly
+    // the thing being replaced. The proxy container reaches the instance itself.
     // `--update-env-vars`, never `--set-env-vars`: the latter replaces the whole
     // environment, so every redeploy silently deleted whatever the user had put
     // there with `supersonic env set` — their API keys and config — and the app
@@ -1178,10 +1253,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // end-to-end run: RESEND_API_KEY was set, listed by `env`, and gone from the
     // next revision. Merging can leave a stale key behind after a deploy stops
     // needing it; losing a customer's secret is the worse of the two.
-    if (extraEnv.length) deployFlags.push(`--update-env-vars=^~~^${extraEnv.join("~~")}`);
+    // Environment and secrets belong to the APP container, not the service, now
+    // that a proxy container sits beside it — the proxy must not receive the
+    // app's credentials, and Cloud Run requires these after a --container flag.
+    const appFlags: string[] = [];
+    if (extraEnv.length) appFlags.push(`--update-env-vars=^~~^${extraEnv.join("~~")}`);
     // Mounted by reference. `--update-secrets` merges, for the same reason
     // `--update-env-vars` does: a redeploy must not drop a key the previous one set.
-    if (secretRefs.length) deployFlags.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
+    if (secretRefs.length) appFlags.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
     const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
     if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
     deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
@@ -1391,16 +1470,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         `SUPERSONIC_CODE_KEY=${key}`,
         `SUPERSONIC_RUN=${startCmd}`,
       ];
+      // Service-level flags first, then the app container, then the database
+      // proxy — the same shape as the primary, and required by gcloud once more
+      // than one container is involved.
       const flags = [
         "--region", REGION, SEAL_APPS ? "--no-allow-unauthenticated" : "--allow-unauthenticated",
         "--project", PROJECT, "--format=json",
-        "--image", image, "--memory", RUNNER_MEMORY, "--cpu", "1",
       ];
       if (APP_RUNTIME_SA) flags.push(`--service-account=${APP_RUNTIME_SA}`);
-      if (cloudsql) flags.push(`--set-cloudsql-instances=${cloudsql}`);
+      flags.push(`--update-labels=supersonic-name=${friendlyName},supersonic-parent=${slug}`);
+      flags.push("--container", "app", "--image", image, "--port", "8080",
+        "--memory", RUNNER_MEMORY, "--cpu", "1");
       if (secretRefs.length) flags.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
       flags.push(`--update-env-vars=^~~^${env.join("~~")}`);
-      flags.push(`--update-labels=supersonic-name=${friendlyName},supersonic-parent=${slug}`);
+      // A sibling shares the app's database, so it needs its own proxy beside it.
+      if (cloudsql) flags.push("--depends-on", "cloudsql-proxy", ...dbContainerArgs(cloudsql));
 
       log(`Deploying ${label} on the prebuilt ${lang} runner…`);
       try {
@@ -1463,7 +1547,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // Run default of 512 MiB OOM-kills them at startup (measured: 564 MiB used
         // before the app even binds $PORT), which shows up as a flaky "didn't start
         // on $PORT". Give runner apps real memory + a full CPU so startup is quick.
-        return attempt(["run", "deploy", slug, "--image", image, "--memory", RUNNER_MEMORY, "--cpu", "1", ...deployFlags]);
+        // Container-scoped now: with more than one container, --image/--port/
+        // --memory and the environment belong to a NAMED container, and only
+        // service-level flags may appear before the first --container.
+        return attempt([
+          "run", "deploy", slug, ...deployFlags,
+          "--container", "app", "--image", image, "--port", "8080",
+          "--memory", RUNNER_MEMORY, "--cpu", "1", ...appFlags,
+          ...(cloudsql ? ["--depends-on", "cloudsql-proxy", ...dbContainerArgs(cloudsql)] : []),
+        ]);
       }
       if (useDockerBuild) {
         log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
