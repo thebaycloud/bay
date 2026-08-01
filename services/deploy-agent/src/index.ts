@@ -14,6 +14,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+// The versions the platform actually has. Imported, not restated: this file said
+// `python:3.12` for as long as the runner shipped 3.14, and since `runtime` is
+// what pythonDockerfile() turns into `FROM python:…-slim`, every repo declaring
+// `requires-python = ">=3.14"` was built on the wrong interpreter and failed at
+// pip. The constant lives in apps/web because that is the only one of the two
+// directories the control-plane image carries that Next can also bundle; both are
+// in the same image (root Dockerfile), so this path resolves in production too.
+import { RUNTIME_VERSIONS } from "../../../apps/web/lib/plan-deps";
 
 export type DbEngine = "postgres" | "mysql" | "mongodb" | "redis" | "sqlite" | null;
 
@@ -215,7 +223,7 @@ function detectPython(dir: string, notes: string[]): Stack {
   if (m("stripe")) secretsNeeded.push("STRIPE_SECRET_KEY");
 
   return {
-    language: "Python", framework, packageManager: "pip", runtime: "python:3.12",
+    language: "Python", framework, packageManager: "pip", runtime: `python:${RUNTIME_VERSIONS.python}`,
     installCommand: "pip install --no-cache-dir -r requirements.txt", buildCommand: null,
     startCommand, port, database: { engine, via }, cache, secretsNeeded, serve: CONTAINER,
     confidence: framework === "Python" ? 0.6 : 0.9, notes,

@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { commandBinaries, requirementNames, checkPlanDeps, runtimeMismatch } from "../lib/plan-deps";
+import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  commandBinaries, requirementNames, checkPlanDeps, runtimeMismatch,
+  assertRuntimeSupported, RUNTIME_VERSIONS, RUNTIME_UNSUPPORTED,
+} from "../lib/plan-deps";
+import { detectStack } from "../../../services/deploy-agent/src/index";
+
+/** A file in the repo, read relative to this test rather than to the cwd. */
+function repoFile(path: string): string {
+  return readFileSync(new URL(`../../../${path}`, import.meta.url), "utf8");
+}
 
 test("the programs a run command invokes", () => {
   // The shapes the planner actually emits, one per stack it has produced.
@@ -133,4 +145,63 @@ test("an app asking for a runtime we do not have is told so plainly", () => {
   assert.equal(runtimeMismatch({ packageJson: { engines: { node: ">=20" } } }), null);
   // A range with no lower bound says nothing about what we must provide.
   assert.equal(runtimeMismatch({ packageJson: { engines: { node: "*" } } }), null);
+});
+
+test("the sentence names both versions and the file to change", () => {
+  // Whoever reads this has exactly two moves and only one of them is theirs. The
+  // old wording ("this is a platform limit, not your app") named neither, so the
+  // useful half — which line to edit — was left for the repair agent to guess at.
+  const py = runtimeMismatch({ pyproject: 'requires-python = ">=3.15,<4.0"\n' }) ?? "";
+  assert.match(py, />=3\.15/, "the version declared");
+  assert.match(py, /3\.14/, "the version we have");
+  assert.match(py, /requires-python in pyproject\.toml/, "the line to edit");
+
+  const node = runtimeMismatch({ packageJson: { engines: { node: ">=26" } } }) ?? "";
+  assert.match(node, />=26/);
+  assert.match(node, /24/);
+  assert.match(node, /engines\.node in package\.json/);
+});
+
+test("a runtime the platform does not have stops the deploy instead of logging at it", () => {
+  // The old path logged the mismatch, built anyway, failed at pip, and handed the
+  // result to the repair agent — which then rediscovered, from build output, a
+  // sentence we had already written before the build started. The marker is what
+  // keeps it out of the repair loop: deploy-pipeline.ts routes errors carrying one
+  // of these straight to the user, as it does for IAM and for an ambiguous stack.
+  assert.throws(
+    () => assertRuntimeSupported({ pyproject: 'requires-python = ">=3.15,<4.0"\n' }),
+    (e: Error) => e.message.startsWith(`${RUNTIME_UNSUPPORTED}:`) && /needs Python >=3\.15/.test(e.message),
+  );
+  assert.throws(
+    () => assertRuntimeSupported({ packageJson: { engines: { node: ">=26" } } }),
+    (e: Error) => e.message.startsWith(`${RUNTIME_UNSUPPORTED}:`),
+  );
+  // And an app the platform can actually serve is not stopped by the gate.
+  assertRuntimeSupported({ pyproject: 'requires-python = ">=3.10"\n', packageJson: { engines: { node: ">=20" } } });
+  assertRuntimeSupported({});
+});
+
+test("RUNTIME_VERSIONS is what the runner Dockerfiles say", () => {
+  // The four statements of these numbers had already drifted — the deploy-agent
+  // said python:3.12 while the runner shipped 3.14, which is how a repo declaring
+  // requires-python >=3.14 got built on the wrong interpreter. This is the pin:
+  // the Dockerfiles are the source of truth, and moving one without moving the
+  // constant fails here rather than in somebody's build log.
+  //
+  // Read here rather than at module load because services/runner is NOT in the
+  // deployed control-plane image (the root Dockerfile copies apps/web and
+  // services/deploy-agent, nothing else) — parsing at import would pass on every
+  // laptop and throw in production.
+  const from = (df: string) => repoFile(df).match(/^FROM\s+(\S+)/m)?.[1] ?? "";
+  assert.equal(from("services/runner/python/Dockerfile"), `python:${RUNTIME_VERSIONS.python}-slim`);
+  assert.equal(from("services/runner/node/Dockerfile"), `node:${RUNTIME_VERSIONS.node}-slim`);
+});
+
+test("the deploy-agent builds Python apps on the version the platform has", () => {
+  // The fourth statement of the same number, and the one that was wrong: `runtime`
+  // is what pythonDockerfile() emits as `FROM python:…-slim`, so `python:3.12`
+  // here meant a 3.14 app was installed under 3.12 and blamed for it.
+  const dir = mkdtempSync(join(tmpdir(), "runtime-agree-"));
+  writeFileSync(join(dir, "requirements.txt"), "flask\n");
+  assert.equal(detectStack(dir).runtime, `python:${RUNTIME_VERSIONS.python}`);
 });
