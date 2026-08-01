@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roleNameForSlug, DB_PASSWORD_SECRET } from "../lib/pg-role";
+import { roleNameForSlug, DB_PASSWORD_SECRET, grantStatements } from "../lib/pg-role";
 import { dbNameForSlug } from "../lib/db";
 
 /**
@@ -51,4 +51,27 @@ test("the password secret has a stable platform-owned name", () => {
   // Read back on every deploy: regenerating it would re-password the role out
   // from under the revision still serving traffic.
   assert.equal(DB_PASSWORD_SECRET, "SUPERSONIC_DB_PASSWORD");
+});
+
+test("the role can create extensions, not merely connect", () => {
+  // `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"` opens a great many Alembic
+  // migrations. Under the shared superuser it always worked; the first app to
+  // run one as its own role got "permission denied to create extension … Must
+  // have CREATE privilege on current database". CONNECT is not CREATE.
+  const sql = grantStatements("app_demo", "demo").join("\n");
+  assert.match(sql, /GRANT ALL ON DATABASE demo TO app_demo/);
+  assert.ok(!/GRANT CONNECT ON DATABASE/.test(sql), "CONNECT alone cannot create an extension");
+});
+
+test("PUBLIC loses everything on the database, which is the whole point", () => {
+  const sql = grantStatements("app_demo", "demo");
+  assert.ok(sql.some((s) => /REVOKE ALL ON DATABASE demo FROM PUBLIC/.test(s)));
+  // And the revoke comes before the grant, or the role could revoke its own.
+  assert.ok(sql.findIndex((s) => s.startsWith("REVOKE")) < sql.findIndex((s) => s.startsWith("GRANT")));
+});
+
+test("future tables are covered too, since a migration makes them after this runs", () => {
+  const sql = grantStatements("app_demo", "demo").join("\n");
+  assert.match(sql, /ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO app_demo/);
+  assert.match(sql, /ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO app_demo/);
 });

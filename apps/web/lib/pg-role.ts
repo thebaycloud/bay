@@ -67,6 +67,35 @@ export function roleNameForSlug(slug: string): string {
 }
 
 /**
+ * What the app's role is granted, as statements, so the grants can be read and
+ * tested without a Postgres.
+ *
+ * `GRANT ALL ON DATABASE` rather than `GRANT CONNECT`, and the difference is not
+ * cosmetic. CONNECT lets the app open the database; CREATE — which ALL includes
+ * and CONNECT does not — lets it create schemas and EXTENSIONS. Alembic
+ * migrations routinely open with `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`,
+ * and under the old shared superuser credential that always worked. The first
+ * app to run one as its own role got:
+ *
+ *   permission denied to create extension "uuid-ossp"
+ *   HINT: Must have CREATE privilege on current database
+ *
+ * which is Phase 5a's bill coming due: taking an app off the superuser account
+ * means granting back, explicitly, every power it was silently relying on.
+ */
+export function grantStatements(role: string, dbName: string): string[] {
+  return [
+    // The line that closes the hole. Everything else here is about the app still
+    // working once its neighbours can no longer connect.
+    `REVOKE ALL ON DATABASE ${dbName} FROM PUBLIC`,
+    `GRANT ALL ON DATABASE ${dbName} TO ${role}`,
+    `GRANT ALL ON SCHEMA public TO ${role}`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${role}`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${role}`,
+  ];
+}
+
+/**
  * Create (or repair) the app's role, take CONNECT away from everyone else, and
  * hand the app ownership of its own schema.
  *
@@ -126,17 +155,9 @@ export async function ensureAppRole(
     // because the rule belongs to the server, not to the SQL.
     await client.query(`GRANT ${role} TO CURRENT_USER`);
 
-    // The lines that close the hole. Everything below is about making the app
-    // work AFTER its neighbours stop being able to connect, and is allowed to
-    // fail without giving up the boundary.
-    await client.query(`REVOKE CONNECT ON DATABASE ${dbName} FROM PUBLIC`);
-    await client.query(`GRANT CONNECT ON DATABASE ${dbName} TO ${role}`);
-    // CREATE included, so the app can make its own tables and owns what it
-    // makes. For a database this platform just provisioned that is the whole
-    // story — there is nothing in it yet to inherit.
-    await client.query(`GRANT ALL ON SCHEMA public TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${role}`);
+    // The lines that close the hole, plus the ones that make the app able to
+    // use the database it is now alone in. Allowed to fail only as a whole.
+    for (const sql of grantStatements(role, dbName)) await client.query(sql);
 
     // Ownership of what already exists, best-effort and separately caught.
     //
@@ -146,6 +167,10 @@ export async function ensureAppRole(
     // migration problem, not a tenancy one — the CONNECT revocation above has
     // already happened — so it must not throw away an isolation that worked.
     try {
+      // The app's own database, owned by the app. Belt and braces over the
+      // GRANT above — an owner cannot be missing a privilege on its own object,
+      // so anything else Alembic reaches for is covered without enumerating it.
+      await client.query(`ALTER DATABASE ${dbName} OWNER TO ${role}`);
       await client.query(`ALTER SCHEMA public OWNER TO ${role}`);
       await client.query(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${role}`);
       await client.query(`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
