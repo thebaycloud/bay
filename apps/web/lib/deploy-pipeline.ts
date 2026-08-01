@@ -1307,6 +1307,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       secretEnv = merged.secretEnv;
       extraEnv.push(...merged.plainEnv);
     }
+    // The bundle key is minted here, before the secrets are stored, so it can go
+    // with them.
+    //
+    // It used to be pushed onto extraEnv and set with --update-env-vars: the
+    // plaintext AES key for the encrypted bundle, written verbatim into the
+    // revision spec, readable by anyone with `run services describe`, and
+    // retained in every past revision forever — in exactly the place
+    // app-secrets.ts exists to keep values out of. The per-app bundle encryption
+    // was defeated by the deploy that set it up: the encrypted bytes and the key
+    // to decrypt them sat behind the same permission.
+    let runnerCodeKey = "";
+    if (runnerLang) {
+      runnerCodeKey = randomBytes(32).toString("hex");
+      secretEnv.SUPERSONIC_CODE_KEY = runnerCodeKey;
+    }
+
     let secretRefs: SecretRef[] = [];
     if (Object.keys(secretEnv).length) {
       const put = await putAppSecrets(slug, secretEnv, APP_RUNTIME_SA, log);
@@ -1323,19 +1339,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // --set-env-vars below as DATABASE_URL, STORAGE_BUCKET and the secrets, so
     // a runner app comes up with its full environment wired.
     let runnerObject: string | null = null;
-    let runnerCodeKey = "";
     if (runnerLang) {
       // Points at the READY bundle the prepare step produces (deps baked in),
       // not the raw source — so a starting instance fetches-and-runs.
       runnerObject = `ready/${slug}/${releaseId()}.tgz`;
-      // Encrypted-bundle isolation: prepare encrypts the bundle with this random
+      // Encrypted-bundle isolation: prepare encrypts the bundle with a random
       // per-deploy key before it lands in the shared bucket. The runtime SA reads
       // the encrypted bytes, but only THIS app holds the key to decrypt them, so
       // one app can never read another's source — no per-app IAM, no expiring URL.
-      runnerCodeKey = randomBytes(32).toString("hex");
+      // The key itself is minted above and mounted from Secret Manager.
       extraEnv.push(`SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`);
       extraEnv.push(`SUPERSONIC_CODE_OBJECT=${runnerObject}`);
-      extraEnv.push(`SUPERSONIC_CODE_KEY=${runnerCodeKey}`);
       // How to run it, from the agent. Without this the runner falls back to a
       // Node-only default; Python can't start at all — so the agent must supply it.
       if (runCmd) { extraEnv.push(`SUPERSONIC_RUN=${runCmd}`); log(`Run command: ${runCmd}`); }
@@ -1601,7 +1615,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         ...extraEnv.filter((e) => !e.startsWith("SUPERSONIC_CODE_") && !e.startsWith("SUPERSONIC_RUN=")),
         `SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`,
         `SUPERSONIC_CODE_OBJECT=ready/${slug}/${release}.tgz`,
-        `SUPERSONIC_CODE_KEY=${key}`,
         `SUPERSONIC_RUN=${startCmd}`,
       ];
       // Service-level flags only; the argv builder scopes the rest to the app
@@ -1613,8 +1626,18 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       ];
       if (APP_RUNTIME_SA) siblingFlags.push(`--service-account=${APP_RUNTIME_SA}`);
       siblingFlags.push(`--update-labels=supersonic-name=${friendlyName},supersonic-parent=${slug}`);
+      // The sibling's bundle key goes to Secret Manager for the same reason the
+      // primary's does — it is the key to that sibling's source, and a revision
+      // spec is a place people read. Its own secret, because its own bundle:
+      // sharing the primary's would mean either key decrypts either bundle.
+      const siblingKeySecret = await putAppSecrets(name, { SUPERSONIC_CODE_KEY: key }, APP_RUNTIME_SA, log);
+      const siblingRefs = [...secretRefs.filter((r) => r.key !== "SUPERSONIC_CODE_KEY"), ...siblingKeySecret.stored];
+      // Anything Secret Manager refused falls back to a literal, which is the
+      // old behaviour and no worse — but it is said out loud rather than assumed.
+      if (siblingKeySecret.skipped.length) env.push(`SUPERSONIC_CODE_KEY=${key}`);
+
       const siblingApp: string[] = [];
-      if (secretRefs.length) siblingApp.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
+      if (siblingRefs.length) siblingApp.push(`--update-secrets=${setSecretsFlag(siblingRefs)}`);
       siblingApp.push(`--update-env-vars=^~~^${env.join("~~")}`);
 
       log(`Deploying ${label} on the prebuilt ${lang} runner…`);
