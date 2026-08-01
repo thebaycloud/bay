@@ -211,8 +211,8 @@ export default function Page() {
       {machine ? <MachineView /> : <main className="frame">
         {/* HERO */}
         <section className="sec hero">
-          <div className="eyebrow">Deploy in 60 seconds</div>
-          <h1>The fastest hosting<br />in the world.</h1>
+          <div className="eyebrow">Deploy in minutes</div>
+          <h1>Domain, database, server<br />from one prompt</h1>
           <div className="cta">
             <CopyPrompt accent switcher />
           </div>
