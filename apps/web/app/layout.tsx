@@ -3,6 +3,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Instrument_Serif } from "next/font/google";
 import { SessionWrapper } from "@/components/SessionWrapper";
+import { themeBootScript } from "@/lib/theme";
 import "./globals.css";
 
 const instrumentSerif = Instrument_Serif({
@@ -50,6 +51,10 @@ export default function RootLayout({
       lang="en"
       className={`${GeistSans.variable} ${GeistMono.variable} ${instrumentSerif.variable}`}
     >
+      {/* Restores the chosen theme before the first paint — see lib/theme.ts. */}
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+      </head>
       <body><SessionWrapper>{children}</SessionWrapper></body>
     </html>
   );
