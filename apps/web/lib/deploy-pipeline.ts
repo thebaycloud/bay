@@ -1305,7 +1305,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // Postgres instance nobody was told about: no proxy container, no
     // POSTGRES_SERVER, and an API that failed on a database it had been given.
     // That is the exact shape multi-service exists for.
-    const siblingNeedsDb = Boolean(appConfig && extraServices(appConfig).some((svc) => svc.needsDB));
+    // Through usesDatabase, not `svc.needsDB` — v2 spells this `uses:
+    // ["database"]`, and asking for one spelling here would strand a sibling API
+    // that declared the other behind a static frontend, with a database
+    // provisioned and no wiring to reach it. That is the bug usesDatabase was
+    // written for, at the one call site the fix missed.
+    const siblingNeedsDb = Boolean(appConfig && extraServices(appConfig).some(usesDatabase));
     if (!staticServe || siblingNeedsDb) {
       if (pgPromise) {
         log("Provisioning Postgres…");
