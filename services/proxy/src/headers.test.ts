@@ -52,6 +52,121 @@ test("hop-by-hop headers are not forwarded", () => {
   assert.equal(out.host, undefined);
 });
 
+// --- what the app is told about the request it is actually serving
+
+test("the app is told the host and scheme the browser used", () => {
+  // Without these it sees plain http from a Cloud Run hostname, and every
+  // absolute URL it builds — OAuth redirect_uri, password-reset links, canonical
+  // tags — points somewhere the visitor cannot reach.
+  const out = buildUpstreamHeaders({ host: "hello.supersonic.cv" }, visitor, COOKIE);
+  assert.equal(out["x-forwarded-host"], "hello.supersonic.cv");
+  assert.equal(out["x-forwarded-proto"], "https");
+  assert.equal(out.forwarded, "host=hello.supersonic.cv;proto=https");
+});
+
+test("a spoofed x-forwarded-proto from the client is overwritten, not honoured", () => {
+  // The visitor is on the far side of the trust boundary. Honouring this would
+  // let a browser downgrade an app's own password-reset links to http, or point
+  // its OAuth redirect_uri at evil.com.
+  const out = buildUpstreamHeaders(
+    {
+      host: "hello.supersonic.cv",
+      "x-forwarded-proto": "http",
+      "x-forwarded-host": "evil.com",
+      "x-forwarded-prefix": "/admin",
+      forwarded: "host=evil.com;proto=http",
+    },
+    visitor, COOKIE
+  );
+  assert.equal(out["x-forwarded-proto"], "https");
+  assert.equal(out["x-forwarded-host"], "hello.supersonic.cv");
+  assert.equal(out["x-forwarded-prefix"], undefined);
+  assert.equal(out.forwarded, "host=hello.supersonic.cv;proto=https");
+  // Overwritten, never appended to: an app reading the leftmost element must not
+  // find a value the visitor chose.
+  assert.ok(!JSON.stringify(out).includes("evil.com"));
+});
+
+test("the client IP the load balancer observed is passed on", () => {
+  // The one field we cannot observe ourselves — our socket peer is the LB — and
+  // the one an app cannot recover if we drop it: rate limiting, abuse blocking,
+  // geo and audit logs all need it.
+  const out = buildUpstreamHeaders(
+    { host: "hello.supersonic.cv", "x-forwarded-for": "203.0.113.7" }, visitor, COOKIE
+  );
+  assert.equal(out["x-forwarded-for"], "203.0.113.7");
+  assert.equal(out.forwarded, "for=203.0.113.7;host=hello.supersonic.cv;proto=https");
+});
+
+test("only the LB's own entry survives a chain a client tried to seed", () => {
+  // The LB rewrites the chain and APPENDS the address it saw, so the last element
+  // is the one Google wrote and the only one a client could not have. Anything
+  // the client prepended sits to its left and is dropped, rather than being
+  // handed to an app that reads the chain leftmost-first.
+  const out = buildUpstreamHeaders(
+    { host: "hello.supersonic.cv", "x-forwarded-for": "1.1.1.1, 9.9.9.9, 203.0.113.7" },
+    visitor, COOKIE
+  );
+  assert.equal(out["x-forwarded-for"], "203.0.113.7");
+  assert.ok(!String(out.forwarded).includes("1.1.1.1"));
+});
+
+test("an IPv6 client is bracketed and quoted in the forwarded header", () => {
+  // RFC 7239 §6 spells it for="[2001:db8::1]"; bare, it is a parse error.
+  const out = buildUpstreamHeaders(
+    { host: "hello.supersonic.cv", "x-forwarded-for": "2001:db8::1" }, visitor, COOKIE
+  );
+  assert.equal(out["x-forwarded-for"], "2001:db8::1");
+  assert.equal(out.forwarded, 'for="[2001:db8::1]";host=hello.supersonic.cv;proto=https');
+});
+
+test("a client IP that is not an address is dropped rather than relayed", () => {
+  for (const chain of ["1.1.1.1, unknown", "1.1.1.1, evil;proto=http", "1.1.1.1, "]) {
+    const out = buildUpstreamHeaders({ host: "hello.supersonic.cv", "x-forwarded-for": chain }, visitor, COOKIE);
+    assert.equal(out["x-forwarded-for"], undefined, `${chain} should not be relayed`);
+    assert.equal(out.forwarded, "host=hello.supersonic.cv;proto=https");
+  }
+});
+
+test("a spoofed forwarded header in any casing is dropped", () => {
+  const out = buildUpstreamHeaders(
+    { host: "hello.supersonic.cv", "X-Forwarded-Proto": "http", Forwarded: "proto=http" },
+    visitor, COOKIE
+  );
+  assert.equal(out["x-forwarded-proto"], "https");
+  assert.equal(out.forwarded, "host=hello.supersonic.cv;proto=https");
+});
+
+test("the prefix is set only for a service mounted under one", () => {
+  const at = (prefix?: string | null) =>
+    buildUpstreamHeaders({ host: "hello.supersonic.cv" }, visitor, COOKIE, "hello", prefix)["x-forwarded-prefix"];
+  assert.equal(at("/api"), "/api");
+  assert.equal(at("/api/"), "/api", "a trailing slash is the same mount point");
+  // A service that owns "/" must get nothing: told "/", Django's
+  // FORCE_SCRIPT_NAME emits "//about" and Next refuses to build a basePath.
+  assert.equal(at("/"), undefined);
+  assert.equal(at(null), undefined);
+  assert.equal(at(undefined), undefined);
+});
+
+test("a host that is not a host does not reach the upstream", () => {
+  // The host is spliced into `forwarded`, where a ";" would add parameters we
+  // never wrote. Dropped rather than repaired.
+  for (const host of ["evil.com;proto=http", "hello.supersonic.cv, evil.com", 'a"b'])  {
+    const out = buildUpstreamHeaders({ host }, visitor, COOKIE);
+    assert.equal(out["x-forwarded-host"], undefined, `${host} should not be forwarded`);
+    assert.equal(out.forwarded, "proto=https");
+  }
+});
+
+test("a host carrying a port is quoted in the forwarded header", () => {
+  // ":" is not a token character, so an unquoted host=app.local:8080 is a parse
+  // error rather than a value the app quietly ignores.
+  const out = buildUpstreamHeaders({ host: "app.local:8080" }, visitor, COOKIE);
+  assert.equal(out["x-forwarded-host"], "app.local:8080");
+  assert.equal(out.forwarded, 'host="app.local:8080";proto=https');
+});
+
 // A cookie whose own name is "domain" must survive — only attribute positions
 // carry Domain=, and stripping the name=value pair silently breaks the cookie.
 test("a cookie named domain is not mistaken for the Domain attribute", () => {

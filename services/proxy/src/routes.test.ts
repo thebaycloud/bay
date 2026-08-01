@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pickRoute, parseRoutes, type Route } from "./routes";
+import { pickRoute, pickPrefix, parseRoutes, type Route } from "./routes";
 
 const WEB = "https://web-xyz.a.run.app";
 const API = "https://api-xyz.a.run.app";
@@ -56,6 +56,33 @@ test("a request with nothing to serve it falls back rather than 500ing", () => {
   // still the honest answer, and dropping the request would be worse.
   assert.equal(pickRoute([{ path: "/api", url: API }], "/", WEB), WEB);
   assert.equal(pickRoute([{ path: "/api", url: API }], "/", null), null);
+});
+
+test("a service is told its prefix only when it is mounted under one", () => {
+  // This becomes x-forwarded-prefix. The service at "/" is at "/" and must be
+  // told nothing, or it starts emitting "//about".
+  assert.equal(pickPrefix(twoService, "/api/items"), "/api");
+  assert.equal(pickPrefix(twoService, "/api"), "/api");
+  assert.equal(pickPrefix(twoService, "/"), null);
+  assert.equal(pickPrefix(twoService, "/about"), null);
+  assert.equal(pickPrefix(twoService, "/apiary"), null, "a prefix only matches at a boundary");
+  // A one-service app has no prefix to report, exactly as before multi-service.
+  assert.equal(pickPrefix(null, "/api/items"), null);
+  assert.equal(pickPrefix([], "/api/items"), null);
+});
+
+test("the prefix reported is the one the request matched, normalized", () => {
+  assert.equal(pickPrefix([{ path: "/api/", url: API }, { path: "/", url: WEB }], "/api/items"), "/api");
+  const three: Route[] = [
+    { path: "/", url: WEB },
+    { path: "/api", url: API },
+    { path: "/api/admin", url: "https://admin-xyz.a.run.app" },
+  ];
+  assert.equal(pickPrefix(three, "/api/admin/users"), "/api/admin");
+  assert.equal(pickPrefix(three, "/api/users"), "/api");
+  // Nothing matched, so the fallback run_url serves it — and that service is the
+  // whole app, not a mount under /api.
+  assert.equal(pickPrefix([{ path: "/api", url: API }], "/"), null);
 });
 
 test("unusable route data cannot swallow an app's traffic", () => {

@@ -45,8 +45,8 @@ function usable(r: Route): boolean {
  * never `/apiary`. Getting that wrong routes a real URL to the wrong service and
  * is close to impossible to spot from the outside.
  */
-export function pickRoute(routes: Route[] | null | undefined, path: string, fallback: string | null): string | null {
-  if (!Array.isArray(routes) || routes.length === 0) return fallback;
+function bestRoute(routes: Route[] | null | undefined, path: string): Route | null {
+  if (!Array.isArray(routes) || routes.length === 0) return null;
   // Query strings and fragments are not part of the match.
   const p = (path || "/").split(/[?#]/)[0] || "/";
   let best: Route | null = null;
@@ -57,7 +57,26 @@ export function pickRoute(routes: Route[] | null | undefined, path: string, fall
     if (!matches) continue;
     if (!best || prefix.length > (best.path === "/" ? 0 : best.path.length)) best = { ...r, path: prefix };
   }
+  return best;
+}
+
+export function pickRoute(routes: Route[] | null | undefined, path: string, fallback: string | null): string | null {
+  const best = bestRoute(routes, path);
   return best ? best.url : fallback;
+}
+
+/**
+ * The prefix the serving service is mounted under, or null when it owns "/".
+ *
+ * The service behind `/api` receives `/api/items` verbatim — `forward.ts` does
+ * not strip the prefix — so it is the only party that can be wrong about where
+ * it lives, and it has no way to find out. This is what becomes
+ * `x-forwarded-prefix`, so the app can generate links under `/api` instead of
+ * emitting absolute paths that land on the frontend service.
+ */
+export function pickPrefix(routes: Route[] | null | undefined, path: string): string | null {
+  const best = bestRoute(routes, path);
+  return best && best.path !== "/" ? best.path : null;
 }
 
 /** Parse whatever the database returned into routes, tolerating null and junk. */

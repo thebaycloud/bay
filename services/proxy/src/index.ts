@@ -5,7 +5,7 @@ import { page403, page404, pageGate, pageBuilding, pageFailed, pageStalled } fro
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
-import { pickRoute } from "./routes";
+import { pickRoute, pickPrefix } from "./routes";
 import { forward } from "./forward";
 import { attachTunnel, hasTunnel, forwardToTunnel } from "./tunnel";
 
@@ -67,10 +67,14 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // frontend can call `/api/…` on its own origin with no CORS and nothing to bake
   // into its bundle at build time.
   const target = pickRoute(app.routes, req.url ?? "/", app.run_url);
+  // And where that service thinks it lives. The path is forwarded unstripped, so
+  // the sibling at /api has to build its links under /api and cannot know that
+  // from the request alone.
+  const prefix = pickPrefix(app.routes, req.url ?? "/");
   const serve = (visitorCtx: { userId: string; email: string; name: string }, wd: string, owner: boolean) =>
     action.serve === "tunnel"
       ? Promise.resolve(forwardToTunnel(req, res, slug))
-      : forward(req, res, target as string, visitorCtx, wd, { slug, owner });
+      : forward(req, res, target as string, visitorCtx, wd, { slug, owner }, prefix);
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
   if (app.visibility === "public") {
