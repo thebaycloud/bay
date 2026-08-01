@@ -265,6 +265,18 @@ export async function resolve(dir: string, detect?: Detect): Promise<ResolvedApp
     );
   }
 
+  return resolveFrom(config, source);
+}
+
+/**
+ * The same resolution, for a config already in memory.
+ *
+ * Split out because the pipeline has read and parsed the config by the time it
+ * needs this, and re-reading it from disk would make the deploy able to resolve
+ * something other than what it validated — two answers to one question, which is
+ * the failure this module is named after.
+ */
+export function resolveFrom(config: AppConfig, source: ResolvedApp["source"]): ResolvedApp {
   // Primary first. The order is part of the resolved shape: the primary is the
   // service deployed as the app itself, siblings are deployed beside it.
   const primary = primaryService(config);

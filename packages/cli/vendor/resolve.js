@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp c4e134b1efcb48a5
+// supersonic-vendor-stamp 8f1eb85c8b742804
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -638,6 +638,9 @@ async function resolve(dir, detect) {
   Run \`supersonic init\` to write a ${CONFIG_FILENAME} draft, then check it.`
     );
   }
+  return resolveFrom(config, source);
+}
+function resolveFrom(config, source) {
   const primary = primaryService(config);
   const ordered = [primary, ...config.services.filter((s) => s !== primary)];
   return {

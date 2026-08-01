@@ -38,7 +38,8 @@ import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan } 
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
-import type { DeploymentFacts } from "@/lib/resolve";
+import { resolveFrom, type DeploymentFacts } from "@/lib/resolve";
+import { buildEnvelope, assertReached } from "@/lib/envelope";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -1505,7 +1506,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const builds = buildWatcher(slug);
     const buildLine = (l: string) => { builds.note(l); const out = buildLogLine(l); if (out) log(out); };
 
+    // The argv actually sent, kept so the deploy can be checked against what the
+    // author asked for rather than against what the code intended.
+    let lastArgv: string[] = [];
     const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
+      lastArgv = args;
       const hb = setInterval(() => log("deploying…"), 6000);
       builds.reset();
       try {
@@ -1919,6 +1924,32 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const firstAttempt = stages.start("deploy");
     let result = await runDeploy();
     await stages.end(firstAttempt, result.ok ? "ok" : "failed");
+
+    // Did the revision come out carrying what the author asked for?
+    //
+    // Every bug that cost a deploy today was a field the platform accepted,
+    // validated, printed back, and then did not apply: `env` set on nothing,
+    // `release` never run on the container lane, `uses: ["database"]`
+    // provisioning no database. All three had passing unit tests over them,
+    // because those tests asked what the CODE contained rather than what the
+    // deploy came out holding.
+    //
+    // Checked only on success. A failed deploy has a cause worth reporting, and
+    // burying it under "the platform did not apply your config" would be trading
+    // a real error for a derived one. Thrown rather than returned, so it reaches
+    // the outer handler instead of the repair agent — there is nothing in the
+    // user's repository to fix.
+    if (result.ok && appConfig) {
+      const resolvedApp = resolveFrom(appConfig, configWasWritten ? "config" : "inferred");
+      const primaryEnvelope = buildEnvelope(resolvedApp.services[0], resolvedApp);
+      assertReached(primaryEnvelope, {
+        envPairs: extraEnv,
+        secretNames: secretRefs.map((r) => r.key),
+        releaseCommand: releaseCmd,
+        argv: lastArgv,
+        hasDatabase: Boolean(databaseUrl),
+      });
+    }
     if (!result.ok) {
       log(`✕ ${result.error}`);
       // The container started and then crashed: our error is only the symptom
