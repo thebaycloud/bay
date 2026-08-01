@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps, runtimeMismatch } from "@/lib/plan-deps";
+import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
@@ -372,6 +373,16 @@ const PROXY_SA = process.env.PROXY_SERVICE_ACCOUNT
 
 /** Marks a failure the repair agent has no way to fix — permissions, not code. */
 const IAM_FAILURE = "IAM binding failed";
+
+/**
+ * Marks a deploy we refused rather than guessed at.
+ *
+ * Also nothing the repair agent can fix: there is no bug in the repository, only
+ * a question the platform could not answer. Handing it over would produce
+ * exactly what it produced on 1 Aug — an agent editing correct code to fit a
+ * lane that was chosen wrongly in the first place.
+ */
+const AMBIGUOUS_STACK = "Cannot tell what this app is";
 
 /** IAM member string for the identity this control plane runs as. */
 async function callerMember(): Promise<string> {
@@ -951,6 +962,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     let installFromPlan = false;
     // Kept so the repair agent can be told what the platform decided.
     let activePlan: DeployPlan | null = null;
+    // The planner was asked and did not answer. Distinct from "the planner never
+    // ran": with PLANNER off the detector is the intended authority, and
+    // refusing there would break every deploy that works today.
+    let plannerFailed = false;
 
     // A repo that already says how to deploy itself does not need a model to
     // guess. `supersonic.json` is read first and, when present, replaces the
@@ -1052,6 +1067,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (routable && !plan.static) ensureRunDeps(dir, plan, log);
       } catch (e) {
         if (configured) throw e;   // a config error is the user's to fix, not ours to route around
+        plannerFailed = true;
         // Said out loud AND recorded on the deploy row, because it changes what
         // deployed this app. A planner that gave up quietly left someone reading a
         // failure from the fallback detector with no way to know that the plan
@@ -1065,6 +1081,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // A project that ships its own Dockerfile always takes a container lane,
     // whatever the detector concluded. The author was explicit.
     const hasDockerfile = existsSync(join(dir, "Dockerfile"));
+
+    // When the planner gave up, the fallback is the detector — which is the
+    // opinion the planner was called in to improve on. That is fine when there is
+    // only one plausible answer and indefensible when there is more than one: on
+    // 1 Aug a repository declaring BOTH Python and Node had Node picked for it,
+    // silently, and the Python half was never mentioned again.
+    //
+    // So refuse instead of guessing. Deliberately NOT gated on the detector's
+    // confidence: it reports 60% on a correct reading of a three-file Node app,
+    // so a threshold would refuse healthy deploys while catching nothing.
+    // A root Dockerfile is exempt — the author already said how to build this.
+    if (plannerFailed && !hasDockerfile) {
+      const why = refusalReason(readRepoFacts(dir), String(s.runtime || ""), CONFIG_FILENAME);
+      if (why) throw new Error(`${AMBIGUOUS_STACK}: ${why}`);
+    }
     const staticServe = !hasDockerfile && s.serve?.mode === "static"
       ? { outputDir: String(s.serve.outputDir || ".") }
       : null;
@@ -1619,8 +1650,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         }
       }
       // A permissions failure is ours, not the repo's — the repair agent would
-      // burn redeploys on it and then bury the real cause in its summary.
-      if ((result.error ?? "").includes(IAM_FAILURE)) {
+      // burn redeploys on it and then bury the real cause in its summary. A
+      // refusal to guess is the same shape: the repo is fine, the question was
+      // ours, and there is nothing in the code for an agent to fix.
+      if ((result.error ?? "").includes(IAM_FAILURE) || (result.error ?? "").includes(AMBIGUOUS_STACK)) {
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: result.error });

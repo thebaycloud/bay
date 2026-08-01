@@ -163,6 +163,37 @@ export function contradictions(facts: RepoFacts, guess: string): Declaration[] {
 }
 
 /**
+ * Should the pipeline refuse to route this repository, rather than guess?
+ *
+ * Returns the sentence to tell the user, or null when guessing is defensible.
+ *
+ * Call this ONLY when the planner was asked and did not answer. With the planner
+ * off, the detector is the intended authority and refusing would break every
+ * deploy that works today.
+ *
+ * Deliberately not gated on the detector's confidence. It reports 60% on a
+ * correct reading of a three-file Node app, so any threshold refuses healthy
+ * deploys while catching none of the real ambiguity.
+ */
+export function refusalReason(facts: RepoFacts, guess: string, configFilename: string): string | null {
+  const conflicting = contradictions(facts, guess);
+  const languages = declaredLanguages(facts);
+  // One declared language and no conflict: there is only one plausible answer,
+  // and taking it is not a guess in any meaningful sense.
+  if (!conflicting.length && languages.length <= 1) return null;
+  const said = languages.join(" and ");
+  const where = facts.declarations.slice(0, 4).map((d) => d.from).join(", ");
+  // Every branch names the next action. A refusal that only says "I could not
+  // tell" costs the user the same time as a wrong guess, minus the chance of
+  // getting lucky.
+  const hint = facts.dockerfiles.length
+    ? `This repo ships ${facts.dockerfiles.join(" and ")} — the surest fix is to point ${configFilename} at it.`
+    : `Add ${configFilename} saying how to install, build and start it, or pass --run "<your start command>".`;
+  return `it declares ${said} (${where}), and planning it did not succeed. ` +
+    `Rather than guess and deploy the wrong half, we stopped. ${hint}`;
+}
+
+/**
  * Map a detector runtime string ("nodejs20", "python3.12") onto a declared
  * language. Returns null for anything unrecognised, so an unknown runtime is
  * treated as "no opinion" rather than as a contradiction with everything.

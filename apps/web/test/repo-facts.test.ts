@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readRepoFacts, declaredLanguages, contradictions, normalizeLanguage } from "../lib/repo-facts";
+import { readRepoFacts, declaredLanguages, contradictions, normalizeLanguage, refusalReason } from "../lib/repo-facts";
 
 /** Build a throwaway repo from a {path: contents} map. Directories are implied. */
 function repo(files: Record<string, string>): string {
@@ -138,4 +138,69 @@ test("an unreadable directory contributes nothing instead of failing the deploy"
     declarations: [],
     dockerfiles: [],
   });
+});
+
+test("a repo declaring two languages is refused rather than half-deployed", () => {
+  // y7ux3, 1 Aug: root package.json (frontend tooling) + root pyproject.toml
+  // (uv workspace) + backend/Dockerfile. Node was picked, npm start was invented,
+  // and the deploy died 27 minutes later at 503.
+  const dir = repo({
+    "package.json": "{}",
+    "pyproject.toml": "",
+    "backend/Dockerfile": "FROM python:3.12\n",
+  });
+  try {
+    const why = refusalReason(readRepoFacts(dir), "nodejs20", "supersonic.json");
+    assert.ok(why, "must refuse");
+    assert.match(why!, /node and python|python and node/);
+    // The refusal has to name the next action, and the best one available here is
+    // the Dockerfile the author already wrote.
+    assert.match(why!, /backend\/Dockerfile/);
+    assert.match(why!, /supersonic\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an ordinary single-language app is not refused", () => {
+  // The common case must stay untouched: one manifest, one plausible answer,
+  // and taking it is not a guess in any meaningful sense.
+  const dir = repo({ "package.json": "{}", "index.js": "" });
+  try {
+    assert.equal(refusalReason(readRepoFacts(dir), "nodejs20", "supersonic.json"), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a bare folder of HTML is not refused", () => {
+  const dir = repo({ "index.html": "<h1>hi</h1>" });
+  try {
+    assert.equal(refusalReason(readRepoFacts(dir), "nodejs20", "supersonic.json"), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a guess the repo flatly contradicts is refused even with one language", () => {
+  const dir = repo({ "go.mod": "module x\n" });
+  try {
+    const why = refusalReason(readRepoFacts(dir), "nodejs20", "supersonic.json");
+    assert.ok(why);
+    assert.match(why!, /--run|supersonic\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the refusal names a Dockerfile when there is one, and a config when there is not", () => {
+  const withDocker = repo({ "go.mod": "module x\n", "Dockerfile": "FROM golang\n" });
+  const without = repo({ "go.mod": "module x\n" });
+  try {
+    assert.match(refusalReason(readRepoFacts(withDocker), "nodejs20", "supersonic.json")!, /Dockerfile/);
+    assert.match(refusalReason(readRepoFacts(without), "nodejs20", "supersonic.json")!, /--run/);
+  } finally {
+    rmSync(withDocker, { recursive: true, force: true });
+    rmSync(without, { recursive: true, force: true });
+  }
 });
