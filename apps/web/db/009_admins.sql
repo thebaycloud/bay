@@ -26,15 +26,6 @@ CREATE TABLE IF NOT EXISTS platform_admins (
   CONSTRAINT platform_admins_one_of CHECK (num_nonnulls(email, domain) = 1)
 );
 
--- Indexes the analytics queries lean on. Every one is additive and idempotent;
--- none of them changes a row.
---
--- `users` is scanned by created_at for the signups chart and the activation
--- cohorts. `apps` is scanned by owner and by created_at for apps-per-user and
--- the acquisition funnel. `deploy_stages` already has (slug, started_at) and
--- (stage, started_at) from 004; what it lacks is a way to ask "every stage in
--- this window, in order" without reading the whole table, which is what every
--- reliability and speed panel does.
-CREATE INDEX IF NOT EXISTS users_created_at_idx        ON users (created_at);
-CREATE INDEX IF NOT EXISTS apps_created_at_idx         ON apps (created_at);
-CREATE INDEX IF NOT EXISTS deploy_stages_started_at_idx ON deploy_stages (started_at);
+-- The index this feature needs lives in 010, on its own, because building it
+-- must NOT hold a lock against a table live deploys are writing to. See that
+-- file. Nothing in this one touches an existing table at all.

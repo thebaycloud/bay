@@ -1,0 +1,54 @@
+-- migrate: no-transaction
+--
+-- The one index the analytics page needs, built without blocking writes.
+--
+-- WHY THIS FILE IS SEPARATE
+--
+-- A plain CREATE INDEX takes a SHARE lock on the table and holds it for the
+-- whole build. That blocks every INSERT and UPDATE against the table until it
+-- finishes. `deploy_stages` is written by every deploy in flight, so building an
+-- index on it the ordinary way stalls live deploys — to make an internal page
+-- load faster. Idempotent is not the same as safe, and the first version of this
+-- migration got that wrong.
+--
+-- CONCURRENTLY does not take that lock. The cost is that it cannot run inside a
+-- transaction block, and `db/migrate.ts` sends each file to pool.query() in a
+-- single call, which Postgres runs as one implicit transaction block — the very
+-- behaviour 000_base.sql depends on. Two CONCURRENTLY statements in a file of
+-- their own would still fail for the same reason.
+--
+-- Hence the `-- migrate: no-transaction` directive on line 1. The runner splits
+-- a file carrying it and sends each statement in its own call, outside any
+-- transaction. Every other migration keeps its all-or-nothing behaviour.
+--
+-- IF THIS FAILS PART WAY
+--
+-- A CONCURRENTLY build that fails leaves an INVALID index behind: it takes up
+-- space, is maintained on every write, and is never used to answer a query.
+-- Worse, `IF NOT EXISTS` then sees the name and skips it forever, so re-running
+-- this migration will NOT repair it. Find one with:
+--
+--   SELECT indexrelid::regclass AS index, indrelid::regclass AS table
+--     FROM pg_index WHERE NOT indisvalid;
+--
+-- and repair it with (also outside a transaction):
+--
+--   DROP INDEX CONCURRENTLY deploy_stages_started_at_idx;
+--
+-- then run this migration again.
+--
+-- WHY ONLY ONE INDEX
+--
+-- The first draft also indexed users(created_at) and apps(created_at). Neither
+-- earns its keep: the queries that read those tables have no WHERE clause and
+-- read every row regardless, so the index could only save a sort over a few
+-- hundred rows. That is not worth a build against a table on the signup path.
+--
+-- This one is different. Every reliability and speed panel asks deploy_stages
+-- for a time range, and the indexes from 004 lead with `slug` and `stage`, so
+-- neither can serve a range scan on started_at alone. The table also grows by
+-- roughly ten rows per deploy, so it is the only one here that will keep
+-- getting slower.
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS deploy_stages_started_at_idx
+  ON deploy_stages (started_at);
