@@ -834,6 +834,12 @@ planner.
 and typechecks; **nothing here has been exercised against a real deploy yet** —
 that is the next thing to do, and the first place these will be wrong.
 
+*Update, later the same day: the container lane has now been exercised, with
+umami — a Next.js app with a root Dockerfile, Prisma migrations and a seeded
+half-million-row Postgres. It found four things, all of them in the gap between
+"unit-tested" and "has met gcloud". See "What the first container-lane deploy
+found" below.*
+
 | Phase | State | Commit |
 |---|---|---|
 | 0 — lane parity | done | `Give every lane the environment only one of them had` |
@@ -876,6 +882,58 @@ that is the next thing to do, and the first place these will be wrong.
   resolved field carries a default, so "is it set?" answers yes for a service whose
   author wrote nothing — checking the resolved object would refuse correct configs,
   which is this plan's own bug pointed the other way.
+
+### What the first container-lane deploy found
+
+The app: umami, unmodified except for a `supersonic.json`, one `apk add
+postgresql-client` line, and a seed script. Root Dockerfile, so the container
+lane; `prisma migrate deploy` plus a half-million-row seed as the `release`
+command; a Next.js frontend; `uses: ["database"]`.
+
+Three of the four are the same bug wearing different clothes — **a field that
+was written, validated, printed back to the author, and then read by nobody**.
+That is the failure this plan is about, and Phase 3 is what ends it structurally.
+Until then, each new field costs a call site somewhere, and the ones that get
+missed are exactly the ones no lane that already worked would notice.
+
+1. **The container-scoped argv had never been accepted by gcloud.**
+   `Exactly one container must specify --port or --use-http2`. `deployArgs`
+   emitted `--port` only when a caller passed one, and only the runner lane did.
+   So the shape Phase 0 introduced for "container lane, with a database" was
+   rejected outright, every time, at the last command of the deploy — after a
+   nine-minute build. The parity suite could not have caught it: every assertion
+   in it asks what the argv *contains*, and none asked what gcloud would do with
+   the whole thing.
+
+2. **The release command was dropped for `language: "other"`.** `plan.preRun` was
+   read inside the branch for Node and Python, and tier 3's own spelling takes
+   the branch above it. The app deployed, `/api/heartbeat` returned 200 without
+   touching Postgres, and every page that read a table was an error — a deploy
+   reporting success over a broken app, which is the outcome Phase 8 exists to
+   make impossible.
+
+3. **Schema v2's `env` object reached no revision.** Parsed, validated against
+   the platform-owned names, listed by `supersonic check`, declared consumable by
+   every lane in `LANE_CONSUMES` — and read nowhere.
+
+4. **A failed deploy mints a fresh slug on the next attempt**, because
+   `slugForName` excludes `status = 'failed'`. Right when the failure is the
+   app's; wrong when it is ours. The first attempt left behind a database, a
+   bucket, a per-app role and five secrets that the retry did not reuse, and the
+   retry paid for a cold layer cache — a ten-minute build to rediscover the same
+   layers. Not fixed here.
+
+What held up, on the same deploy: the proxy sidecar's `/startup` probe passed on
+its second attempt and the app connected through it a second later; the per-app
+role owned every table 20 Prisma migrations had created, including enough to
+TRUNCATE them; the release job ran migrations and a 510,000-row fixture in 117s
+against the 1800s task timeout; env, secrets, memory and the deployment facts
+all landed on a container-lane revision, which was Phase 0's whole point.
+
+What is still ignored, confirmed live rather than by reading: **`scale`**. The
+config declared `cpu: 2`, `timeout: 600`, `maxInstances: 4`; the revision has 1,
+900 and 10. That is the Phase 3 item above, and it is the only schema v2 field
+left that a deploy accepts and does not act on.
 
 ### Known gaps in what landed
 
