@@ -149,6 +149,24 @@ test("a package that neither builds nor starts is not a service", async () => {
   assert.equal((await inferAppConfig(dir, detector)), null);
 });
 
+test("a Python service installs from the manifest it actually has", async () => {
+  // The detector answers `pip install -r requirements.txt` for every Python
+  // project, whether or not there is one. The FastAPI template's backend is
+  // pyproject.toml + uv.lock and has no requirements.txt at all, so that command
+  // cannot succeed — and because a plan-supplied install overrides the runner's
+  // own convention, inferring it REPLACES a correct default with a broken one.
+  const dir = repo({
+    "frontend/package.json": '{"dependencies":{"vite":"^5"},"scripts":{"build":"vite build"}}',
+    "backend/pyproject.toml": '[project]\nname = "app"\n',
+    "backend/app/main.py": "app = 1\n",
+  });
+
+  const api = (await inferAppConfig(dir, detector))!.services.find((s) => s.dir === "backend")!;
+
+  assert.doesNotMatch(api.install!, /requirements\.txt/);
+  assert.match(api.install!, /pip install .*\./);
+});
+
 test("a detector that fails on one part declines instead of failing the deploy", async () => {
   // Inference is an upgrade, never a prerequisite. A part we could not read is a
   // part we cannot deploy, and taking the whole deploy down over it would make

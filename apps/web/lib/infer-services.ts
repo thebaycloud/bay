@@ -170,6 +170,27 @@ function startFor(stack: DetectedStack, absoluteDir: string): string {
   return bound.replace(/\b(?:main|app)(?=:app\b)/, mod);
 }
 
+/**
+ * How to install a Python service's dependencies, from what it actually ships.
+ *
+ * The detector answers `pip install -r requirements.txt` for every Python
+ * project, whether or not there is one — right at the root of a single-app repo
+ * often enough, and wrong for the FastAPI template's backend, which is
+ * pyproject.toml + uv.lock with no requirements.txt anywhere. That matters more
+ * here than it looks: the runner has its own correct convention
+ * (`[ -f pyproject.toml ] && pip install .`), and a plan-supplied install
+ * OVERRIDES it. Inferring the detector's answer verbatim would replace a working
+ * default with a command that cannot run.
+ *
+ * Returning undefined hands the decision back to that convention, which is the
+ * right answer when neither manifest is present.
+ */
+export function pythonInstall(serviceDir: string, detected: string | null): string | undefined {
+  if (existsSync(join(serviceDir, "requirements.txt"))) return detected ?? "pip install --no-cache-dir -r requirements.txt";
+  if (existsSync(join(serviceDir, "pyproject.toml"))) return "pip install --no-cache-dir .";
+  return undefined;
+}
+
 function languageOf(stack: DetectedStack): ServiceConfig["language"] {
   if (stack.serve.mode === "static") return "static";
   if (/^python/i.test(stack.language)) return "python";
@@ -184,7 +205,9 @@ function serviceFor(relDir: string, stack: DetectedStack, absoluteDir: string): 
     name,
     dir: relDir,
     language,
-    install: stack.installCommand ?? undefined,
+    install: language === "python"
+      ? pythonInstall(absoluteDir, stack.installCommand)
+      : stack.installCommand ?? undefined,
     build: stack.buildCommand ?? undefined,
     needsDB: stack.database?.engine ? true : undefined,
   };
