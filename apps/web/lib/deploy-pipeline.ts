@@ -20,6 +20,7 @@ import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
+import { notifyDeployFinished } from "@/lib/deploy-notify";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
 import { listObjectNames, readObjectText, writeObject, describeServiceRest } from "@/lib/gcp-rest";
 import { take as takeClone } from "@/lib/clone-cache";
@@ -2084,6 +2085,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // stuck at status 'deploying' forever.
     if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
     send({ type: "error", message: msg });
+  } finally {
+    // ONE place, on every exit — including the three failures that `return`
+    // from inside the try above. Notifying at each ending instead would be the
+    // seventh implementation of "the deploy is over", and a later eighth would
+    // silently send nothing with no test failing.
+    //
+    // It reads the row rather than being handed a result, so the mail says
+    // exactly what the dashboard says. Awaited so a job that exits the moment
+    // this returns cannot cut the send off mid-flight; it can never throw.
+    await notifyDeployFinished(slug, ownerId);
   }
 }
 
