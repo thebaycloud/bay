@@ -13,12 +13,18 @@ const DB = "supersonic_platform";
  * fails in review rather than at a transaction boundary. The transaction is the
  * guarantee; the guard is there to make the mistake obvious.
  *
- * Two of the tables read here — `deploys` and `deploy_events` — are created
- * lazily by the code that writes them and appear in no migration, and
- * `platform_admins` arrives in one. Any of them can be missing. Every read
- * therefore degrades to an empty result rather than a failed page: an operators'
- * dashboard that 500s because nobody has deployed yet is worse than one that
- * says so.
+ * A READ THAT FAILS SAYS SO
+ *
+ * These reads used to return an empty array on any error. That made a broken
+ * query indistinguishable from a quiet week — on a page whose entire job is to
+ * be believed, and against tables whose column names were read off `lib/*.ts`
+ * rather than a migration, because `deploys` and `deploy_events` are created by
+ * the code that writes them and appear in no migration at all.
+ *
+ * So every read returns its rows AND the database's own words when it fails.
+ * The page keeps rendering — one broken panel must not take the others down
+ * with it — but the broken panel says what broke. "column deploys.finished_at
+ * does not exist" is worth more than a clean-looking empty box.
  */
 
 /** Statement keywords that have no business in this file. */
@@ -34,6 +40,13 @@ export function assertReadOnly(sql: string): void {
     .replace(/"(?:[^"]|"")*"/g, " ");
   const hit = bare.match(FORBIDDEN);
   if (hit) throw new Error(`analytics queries must be read-only; found "${hit[0]}"`);
+}
+
+/** Rows, and — when there are none because the read broke — why. */
+export interface Read<T> {
+  rows: T[];
+  /** The database's own message. Null when the read succeeded. */
+  error: string | null;
 }
 
 /**
@@ -59,15 +72,28 @@ async function read<T>(sql: string, params: unknown[] = []): Promise<T[]> {
   }
 }
 
-/** A read whose failure is a missing table, not a broken page. */
-async function safeRead<T>(sql: string, params: unknown[] = [], fallback: T[] = []): Promise<T[]> {
+/**
+ * The message an operator sees for a failed read.
+ *
+ * Postgres says things like `column "finished_at" does not exist`, which names
+ * the defect precisely, so it is passed through rather than replaced by
+ * something friendlier. First line only: a stack trace on the page helps nobody
+ * and the rest is in the log.
+ */
+export function readErrorMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  const first = raw.split("\n")[0].trim();
+  return first || "the read failed without saying why";
+}
+
+/** A read whose failure becomes a visible panel rather than an empty one. */
+async function attempt<T>(sql: string, params: unknown[] = []): Promise<Read<T>> {
   try {
-    return await read<T>(sql, params);
+    return { rows: await read<T>(sql, params), error: null };
   } catch (e) {
-    // A genuine mistake in this file must not hide behind the same catch that
-    // tolerates a table that does not exist yet.
-    if (e instanceof Error && /must be read-only/.test(e.message)) throw e;
-    return fallback;
+    // Logged as well as rendered: the page shows one line, the log keeps the rest.
+    console.error("analytics read failed", e);
+    return { rows: [], error: readErrorMessage(e) };
   }
 }
 
@@ -101,18 +127,28 @@ export interface UserRow {
   provider: string | null;
 }
 
-export async function users(): Promise<UserRow[]> {
-  // `plan` and `status` arrive in migrations 005 and 007; a database that has
-  // not had them applied still answers the rest, so they are read defensively.
-  const withPlans = await safeRead<{ id: string; email: string; created_at: Date; plan: string | null; status: string | null; provider: string | null }>(
+export async function users(): Promise<Read<UserRow>> {
+  // `plan` and `status` arrive in migrations 005 and 007. A database that has
+  // not had them applied still answers the rest, so a narrower read is tried
+  // second — and if BOTH fail, the second failure is the one reported, because
+  // that is the one meaning the users table itself cannot be read.
+  const full = await attempt<{ id: string; email: string; created_at: Date; plan: string | null; status: string | null; provider: string | null }>(
     `SELECT id, email, created_at, plan, status, provider FROM users ORDER BY created_at LIMIT ${ROW_CAP}`,
   );
-  if (withPlans.length) return withPlans.map((r) => ({ id: r.id, email: r.email, createdAt: r.created_at, plan: r.plan, status: r.status, provider: r.provider }));
+  if (!full.error) {
+    return {
+      rows: full.rows.map((r) => ({ id: r.id, email: r.email, createdAt: r.created_at, plan: r.plan, status: r.status, provider: r.provider })),
+      error: null,
+    };
+  }
 
-  const bare = await safeRead<{ id: string; email: string; created_at: Date; provider: string | null }>(
+  const bare = await attempt<{ id: string; email: string; created_at: Date; provider: string | null }>(
     `SELECT id, email, created_at, provider FROM users ORDER BY created_at LIMIT ${ROW_CAP}`,
   );
-  return bare.map((r) => ({ id: r.id, email: r.email, createdAt: r.created_at, plan: null, status: null, provider: r.provider }));
+  return {
+    rows: bare.rows.map((r) => ({ id: r.id, email: r.email, createdAt: r.created_at, plan: null, status: null, provider: r.provider })),
+    error: bare.error,
+  };
 }
 
 export interface AppRow {
@@ -123,11 +159,14 @@ export interface AppRow {
   createdAt: Date;
 }
 
-export async function apps(): Promise<AppRow[]> {
-  const rows = await safeRead<{ slug: string; owner_id: string; status: string; visibility: string; created_at: Date }>(
+export async function apps(): Promise<Read<AppRow>> {
+  const r = await attempt<{ slug: string; owner_id: string; status: string; visibility: string; created_at: Date }>(
     `SELECT slug, owner_id, status, visibility, created_at FROM apps ORDER BY created_at LIMIT ${ROW_CAP}`,
   );
-  return rows.map((r) => ({ slug: r.slug, ownerId: r.owner_id, status: r.status, visibility: r.visibility, createdAt: r.created_at }));
+  return {
+    rows: r.rows.map((x) => ({ slug: x.slug, ownerId: x.owner_id, status: x.status, visibility: x.visibility, createdAt: x.created_at })),
+    error: r.error,
+  };
 }
 
 /**
@@ -137,8 +176,8 @@ export async function apps(): Promise<AppRow[]> {
  * do, and so a truncated read loses whole apps from the end rather than half a
  * deploy from every app.
  */
-export async function stages(w: Window): Promise<{ rows: RawStage[]; truncated: boolean }> {
-  const rows = await safeRead<{ slug: string; lane: string; stage: string; started_at: Date; ended_at: Date | null; outcome: StageOutcome | null }>(
+export async function stages(w: Window): Promise<Read<RawStage> & { truncated: boolean }> {
+  const r = await attempt<{ slug: string; lane: string; stage: string; started_at: Date; ended_at: Date | null; outcome: StageOutcome | null }>(
     `SELECT slug, lane, stage, started_at, ended_at, outcome
        FROM deploy_stages
       WHERE started_at >= $1 AND started_at <= $2
@@ -146,17 +185,18 @@ export async function stages(w: Window): Promise<{ rows: RawStage[]; truncated: 
       LIMIT ${ROW_CAP + 1}`,
     [w.from, w.to],
   );
-  const truncated = rows.length > ROW_CAP;
+  const truncated = r.rows.length > ROW_CAP;
   return {
-    rows: rows.slice(0, ROW_CAP).map((r) => ({
-      slug: r.slug,
-      lane: r.lane,
-      stage: r.stage,
-      startedAt: r.started_at,
-      endedAt: r.ended_at,
-      outcome: r.outcome,
+    rows: r.rows.slice(0, ROW_CAP).map((x) => ({
+      slug: x.slug,
+      lane: x.lane,
+      stage: x.stage,
+      startedAt: x.started_at,
+      endedAt: x.ended_at,
+      outcome: x.outcome,
     })),
     truncated,
+    error: r.error,
   };
 }
 
@@ -172,8 +212,8 @@ export interface FirstDeployRow {
   firstSuccessAt: Date | null;
 }
 
-export async function firstDeploys(): Promise<FirstDeployRow[]> {
-  const rows = await safeRead<{ slug: string; first_stage_at: Date; first_success_at: Date | null }>(
+export async function firstDeploys(): Promise<Read<FirstDeployRow>> {
+  const r = await attempt<{ slug: string; first_stage_at: Date; first_success_at: Date | null }>(
     `SELECT slug,
             min(started_at) AS first_stage_at,
             min(ended_at) FILTER (WHERE stage = 'deploy' AND outcome = 'ok') AS first_success_at
@@ -181,7 +221,10 @@ export async function firstDeploys(): Promise<FirstDeployRow[]> {
       GROUP BY slug
       LIMIT ${ROW_CAP}`,
   );
-  return rows.map((r) => ({ slug: r.slug, firstStageAt: r.first_stage_at, firstSuccessAt: r.first_success_at }));
+  return {
+    rows: r.rows.map((x) => ({ slug: x.slug, firstStageAt: x.first_stage_at, firstSuccessAt: x.first_success_at })),
+    error: r.error,
+  };
 }
 
 /**
@@ -200,18 +243,21 @@ export interface DeployStateRow {
   finishedAt: Date | null;
 }
 
-export async function deployStates(): Promise<DeployStateRow[]> {
-  const rows = await safeRead<{ slug: string; owner_id: string | null; status: string; error: string | null; updated_at: Date | null; finished_at: Date | null }>(
+export async function deployStates(): Promise<Read<DeployStateRow>> {
+  const r = await attempt<{ slug: string; owner_id: string | null; status: string; error: string | null; updated_at: Date | null; finished_at: Date | null }>(
     `SELECT slug, owner_id, status, error, updated_at, finished_at FROM deploys LIMIT ${ROW_CAP}`,
   );
-  return rows.map((r) => ({
-    slug: r.slug,
-    ownerId: r.owner_id,
-    status: r.status,
+  return {
+    rows: r.rows.map((x) => ({
+      slug: x.slug,
+      ownerId: x.owner_id,
+      status: x.status,
+      error: x.error,
+      updatedAt: x.updated_at,
+      finishedAt: x.finished_at,
+    })),
     error: r.error,
-    updatedAt: r.updated_at,
-    finishedAt: r.finished_at,
-  }));
+  };
 }
 
 /**
@@ -230,8 +276,8 @@ export interface ErrorEventRow {
   at: Date;
 }
 
-export async function errorEvents(w: Window): Promise<ErrorEventRow[]> {
-  const rows = await safeRead<{ slug: string; message: string | null; at: Date }>(
+export async function errorEvents(w: Window): Promise<Read<ErrorEventRow>> {
+  const r = await attempt<{ slug: string; message: string | null; at: Date }>(
     `SELECT slug, event->>'message' AS message, at
        FROM deploy_events
       WHERE at >= $1 AND at <= $2 AND event->>'type' = 'error'
@@ -239,7 +285,10 @@ export async function errorEvents(w: Window): Promise<ErrorEventRow[]> {
       LIMIT ${ROW_CAP}`,
     [w.from, w.to],
   );
-  return rows.filter((r) => r.message).map((r) => ({ slug: r.slug, message: r.message as string, at: r.at }));
+  return {
+    rows: r.rows.filter((x) => x.message).map((x) => ({ slug: x.slug, message: x.message as string, at: x.at })),
+    error: r.error,
+  };
 }
 
 /**
@@ -250,16 +299,7 @@ export async function errorEvents(w: Window): Promise<ErrorEventRow[]> {
  * a busy one it holds exactly seven. Either way the page should state the real
  * horizon rather than the intended one.
  */
-export async function oldestEventAt(): Promise<Date | null> {
-  const rows = await safeRead<{ at: Date | null }>(`SELECT min(at) AS at FROM deploy_events`);
-  return rows[0]?.at ?? null;
-}
-
-/** Slug to owner, from `apps` first and `deploys` for apps whose row is gone. */
-export async function slugOwners(): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  for (const d of await deployStates()) if (d.ownerId) out.set(d.slug, d.ownerId);
-  // `apps` wins: it is the table ownership is decided from everywhere else.
-  for (const a of await apps()) out.set(a.slug, a.ownerId);
-  return out;
+export async function oldestEventAt(): Promise<{ at: Date | null; error: string | null }> {
+  const r = await attempt<{ at: Date | null }>(`SELECT min(at) AS at FROM deploy_events`);
+  return { at: r.rows[0]?.at ?? null, error: r.error };
 }

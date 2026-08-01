@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { assertReadOnly, windowOf, ROW_CAP } from "../lib/analytics/queries";
+import { assertReadOnly, windowOf, ROW_CAP, readErrorMessage } from "../lib/analytics/queries";
 
 // Postgres is shared production. The transaction (`BEGIN READ ONLY`) is what
 // actually stops a write; this guard is what makes the mistake visible before
@@ -74,4 +74,37 @@ test("a window runs back from now by the number of days asked for", () => {
 
 test("the row cap is a number the page can report", () => {
   assert.ok(Number.isInteger(ROW_CAP) && ROW_CAP > 0);
+});
+
+// A failed read has to say what failed. Postgres already names the defect
+// precisely, so the message is passed through rather than replaced with
+// something friendlier and useless.
+test("the database's own words survive to the page", () => {
+  assert.equal(
+    readErrorMessage(new Error('column "finished_at" does not exist')),
+    'column "finished_at" does not exist',
+  );
+  assert.equal(
+    readErrorMessage(new Error('relation "deploy_events" does not exist')),
+    'relation "deploy_events" does not exist',
+  );
+});
+
+test("only the first line reaches the page; the stack stays in the log", () => {
+  const e = new Error('column "x" does not exist\n    at Parser.parseErrorMessage\n    at Socket.emit');
+  assert.equal(readErrorMessage(e), 'column "x" does not exist');
+});
+
+test("a failure that is not an Error still produces a sentence", () => {
+  assert.equal(readErrorMessage("connection terminated"), "connection terminated");
+  assert.equal(readErrorMessage(new Error("")), "the read failed without saying why");
+  assert.equal(readErrorMessage(null), "null");
+});
+
+// The read-only guard firing is a defect in our own SQL. It must reach the page
+// as a visible, named failure rather than being swallowed like a missing table.
+test("a read-only violation is reported in words an operator can act on", () => {
+  let caught: unknown;
+  try { assertReadOnly("DELETE FROM users"); } catch (e) { caught = e; }
+  assert.match(readErrorMessage(caught), /must be read-only; found "DELETE"/i);
 });
