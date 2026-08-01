@@ -29,6 +29,7 @@ import { StageRecorder } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
+import { deployArgs, databaseEnv, DB_HOST, DB_PORT, DEFAULT_SCALE, type Scale } from "@/lib/lanes";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -78,8 +79,6 @@ const RUNNER_ENABLED = process.env.RUNNER === "1";
 // deterministic detector stays as the fallback so a deploy never dies because
 // planning hiccuped. Needs RUNNER=1 to actually route server apps to the runner.
 const PLANNER_ENABLED = process.env.PLANNER === "1";
-/** Memory for runner apps. 512 MiB (the Cloud Run default) OOMs a real Node app. */
-const RUNNER_MEMORY = process.env.RUNNER_MEMORY || "2Gi";
 const RUNNER_NODE_IMAGE = process.env.RUNNER_NODE_IMAGE
   ?? `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/runner-node:latest`;
 const RUNNER_PYTHON_IMAGE = process.env.RUNNER_PYTHON_IMAGE
@@ -304,55 +303,12 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
  * valid URL host and pydantic, among others, rejects it outright.
  *
  * One address means every convention below works with no special cases.
- */
-const DB_HOST = "127.0.0.1";
-const DB_PORT = "5432";
-const CLOUD_SQL_PROXY_IMAGE = process.env.CLOUD_SQL_PROXY_IMAGE
-  || "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1";
-
-/**
- * The same connection, spelled every way apps expect to read it.
  *
- * There is no single convention, and guessing one leaves working apps unable to
- * start. `DATABASE_URL` covers Rails, Prisma, most Node ORMs and Django with
- * dj-database-url; the discrete `POSTGRES_*` names are what docker-compose-shaped
- * projects use (the FastAPI template requires POSTGRES_SERVER and reads no URL at
- * all); `PG*` are libpq's own variables, honoured by psql, psycopg and
- * node-postgres with no code at all; `DB_*` is the Laravel and older-Django
- * spelling. They all describe the identical endpoint, so setting all of them
- * cannot make one app disagree with another.
+ * DB_HOST/DB_PORT, `databaseEnv` and `dbContainerArgs` now live in lib/lanes.ts,
+ * beside the argv builder that is their only consumer — and beside the
+ * protected-name set that is derived from `databaseEnv` rather than typed out
+ * again.
  */
-function databaseEnv(db: { databaseUrl: string; user: string; password: string; dbName: string }): string[] {
-  return [
-    `DATABASE_URL=${db.databaseUrl}`,
-    `POSTGRES_SERVER=${DB_HOST}`, `POSTGRES_HOST=${DB_HOST}`, `POSTGRES_PORT=${DB_PORT}`,
-    `POSTGRES_USER=${db.user}`, `POSTGRES_PASSWORD=${db.password}`, `POSTGRES_DB=${db.dbName}`,
-    `PGHOST=${DB_HOST}`, `PGPORT=${DB_PORT}`,
-    `PGUSER=${db.user}`, `PGPASSWORD=${db.password}`, `PGDATABASE=${db.dbName}`,
-    `DB_HOST=${DB_HOST}`, `DB_PORT=${DB_PORT}`,
-    `DB_USER=${db.user}`, `DB_PASSWORD=${db.password}`, `DB_NAME=${db.dbName}`,
-  ];
-}
-
-/**
- * The proxy container, appended after the app's own container flags.
- *
- * `--depends-on` makes Cloud Run start it first, so the app is not racing a port
- * that is not listening yet. The proxy authenticates as the service's own
- * identity, which therefore needs roles/cloudsql.client.
- */
-function dbContainerArgs(connectionName: string): string[] {
-  return [
-    "--container", "cloudsql-proxy",
-    "--image", CLOUD_SQL_PROXY_IMAGE,
-    // `--args=…` as ONE token. Passed as two, gcloud reads the value's leading
-    // `--port=` as a flag of its own and refuses with "expected one argument".
-    // Identical to the mistake already fixed in startDeployJob — the value
-    // beginning with a dash is what makes it look like a flag, and the fix is
-    // never to let it be a separate argv entry.
-    `--args=--port=${DB_PORT},--address=${DB_HOST},${connectionName}`,
-  ];
-}
 
 /** Create a per-app GCS bucket (idempotent) and return its name. */
 async function provisionStorage(slug: string, log: (l: string) => void): Promise<string> {
@@ -1410,6 +1366,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
     if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
     deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
+    // The resource envelope, identical on every lane. `scale` becomes an
+    // authored field in schema v2; until then every app gets the defaults,
+    // which is still four lanes' worth more than the one that had them.
+    const scale: Scale = DEFAULT_SCALE;
 
     // With a Dockerfile, build it ourselves with a registry layer cache and
     // deploy the image — so an unchanged `npm install` is reused and redeploys
@@ -1616,25 +1576,26 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         `SUPERSONIC_CODE_KEY=${key}`,
         `SUPERSONIC_RUN=${startCmd}`,
       ];
-      // Service-level flags first, then the app container, then the database
-      // proxy — the same shape as the primary, and required by gcloud once more
-      // than one container is involved.
-      const flags = [
+      // Service-level flags only; the argv builder scopes the rest to the app
+      // container and appends the proxy. A sibling shares the app's database,
+      // so it needs its own proxy beside it.
+      const siblingFlags = [
         "--region", REGION, SEAL_APPS ? "--no-allow-unauthenticated" : "--allow-unauthenticated",
         "--project", PROJECT, "--format=json",
       ];
-      if (APP_RUNTIME_SA) flags.push(`--service-account=${APP_RUNTIME_SA}`);
-      flags.push(`--update-labels=supersonic-name=${friendlyName},supersonic-parent=${slug}`);
-      flags.push("--container", "app", "--image", image, "--port", "8080",
-        "--memory", RUNNER_MEMORY, "--cpu", "1");
-      if (secretRefs.length) flags.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
-      flags.push(`--update-env-vars=^~~^${env.join("~~")}`);
-      // A sibling shares the app's database, so it needs its own proxy beside it.
-      if (cloudsql) flags.push("--depends-on", "cloudsql-proxy", ...dbContainerArgs(cloudsql));
+      if (APP_RUNTIME_SA) siblingFlags.push(`--service-account=${APP_RUNTIME_SA}`);
+      siblingFlags.push(`--update-labels=supersonic-name=${friendlyName},supersonic-parent=${slug}`);
+      const siblingApp: string[] = [];
+      if (secretRefs.length) siblingApp.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
+      siblingApp.push(`--update-env-vars=^~~^${env.join("~~")}`);
 
       log(`Deploying ${label} on the prebuilt ${lang} runner…`);
       try {
-        const out = await gcloudDeploy(["run", "deploy", name, ...flags], log, (l) => builds.note(l));
+        const args = deployArgs({
+          lane: "runner", service: name, serviceFlags: siblingFlags, appFlags: siblingApp,
+          image, port: 8080, scale, cloudsql,
+        });
+        const out = await gcloudDeploy(args, log, (l) => builds.note(l));
         const url = JSON.parse(out.slice(out.indexOf("{")))?.status?.url ?? "";
         if (!url) return { ok: false, name, error: `${label} deployed but reported no URL` };
         // Sealed apps refuse the control plane's own probe until the binding
@@ -1692,16 +1653,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // Real Node apps ship a full node_modules and run `next start`; the Cloud
         // Run default of 512 MiB OOM-kills them at startup (measured: 564 MiB used
         // before the app even binds $PORT), which shows up as a flaky "didn't start
-        // on $PORT". Give runner apps real memory + a full CPU so startup is quick.
-        // Container-scoped now: with more than one container, --image/--port/
-        // --memory and the environment belong to a NAMED container, and only
-        // service-level flags may appear before the first --container.
-        return attempt([
-          "run", "deploy", slug, ...deployFlags,
-          "--container", "app", "--image", image, "--port", "8080",
-          "--memory", RUNNER_MEMORY, "--cpu", "1", ...appFlags,
-          ...(cloudsql ? ["--depends-on", "cloudsql-proxy", ...dbContainerArgs(cloudsql)] : []),
-        ]);
+        // on $PORT". That measurement is why DEFAULT_SCALE is what it is — and now
+        // every lane gets it, not only this one.
+        return attempt(deployArgs({
+          lane: "runner", service: slug, serviceFlags: deployFlags, appFlags,
+          image, port: 8080, scale, cloudsql,
+        }));
       }
       if (useDockerBuild) {
         log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
@@ -1720,12 +1677,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
         }
         clearInterval(hb);
-        return attempt(["run", "deploy", slug, "--image", `${IMAGE}:latest`, ...deployFlags]);
+        return attempt(deployArgs({
+          lane: "container", service: slug, serviceFlags: deployFlags, appFlags,
+          image: `${IMAGE}:latest`, scale, cloudsql,
+        }));
       }
-      let res = await attempt(["run", "deploy", slug, "--source", dir, ...deployFlags]);
+      const buildpack = (containerFlags?: string[]) => deployArgs({
+        lane: "buildpack", service: slug, serviceFlags: deployFlags, appFlags,
+        source: dir, scale, cloudsql, containerFlags,
+      });
+      let res = await attempt(buildpack());
       if (!res.ok && /clear-base-image/i.test(res.error ?? "")) {
         log("switching build type — clearing base image and retrying…");
-        res = await attempt(["run", "deploy", slug, "--source", dir, ...deployFlags, "--clear-base-image"]);
+        res = await attempt(buildpack(["--clear-base-image"]));
       }
       return res;
     };

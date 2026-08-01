@@ -64,6 +64,25 @@ steps:
       - --cpu=2
       - --concurrency=4
       - --min-instances=1
+      # The lane flags. These select WHICH PIPELINE RUNS — whether server apps go
+      # to the prebuilt runner, whether the model planner is consulted, whether
+      # apps are sealed behind the proxy, which engine repairs a failed deploy,
+      # and whether execution moves to the Cloud Run Job. Until now they existed
+      # nowhere in the repo: they were typed by hand at the live service, so the
+      # code path a deploy actually took could not be read from the commit that
+      # was running. That is the same failure the resource flags above already
+      # have a paragraph about, applied to something strictly worse — the
+      # resource flags decide how well the pipeline runs, these decide which
+      # pipeline it is. A cutover you cannot reason about is a cutover you
+      # cannot roll back, and Phase 3 of docs/DEPLOY-PLAN.md runs two pipelines
+      # side by side.
+      #
+      # --update-env-vars, never --set-env-vars, for exactly the reason the note
+      # above gives: the live service also carries AUTH_SECRET, PG_PASSWORD and
+      # the Stripe keys, and --set would wipe every one of them. These values
+      # were read back off the running revision, so this commit records what
+      # production already does rather than changing it.
+      - --update-env-vars=RUNNER=1,PLANNER=1,SEAL_APPS=1,DEPLOY_ENGINE=opencode,DEPLOY_JOB=1
       - --quiet
 
   # The deploy job runs the SAME image with a different command, so it has to move
