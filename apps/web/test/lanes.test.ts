@@ -160,3 +160,19 @@ test("the proxy args stay one token, because a value starting with a dash reads 
   assert.ok(arg!.includes("--port=5432"), "passed as two tokens gcloud refuses with 'expected one argument'");
   assert.ok(arg!.endsWith("proj:region:inst"));
 });
+
+test("the proxy carries a startup probe, without which Cloud Run refuses the revision", () => {
+  // "Dependent container 'cloudsql-proxy' must have startup probe specified" —
+  // so every --depends-on that lacked one was a revision that never existed.
+  const args = dbContainerArgs("proj:region:inst");
+  const probe = args.find((a) => a.startsWith("--startup-probe="));
+  assert.ok(probe, "a --depends-on target without a startup probe is rejected outright");
+  assert.match(probe!, /tcpSocket\.port=5432/);
+});
+
+for (const lane of SERVICE_LANES) {
+  test(`${lane} lane's proxy is probed, so --depends-on is a promise it can keep`, () => {
+    const argv = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
+    assert.ok(argv.some((a) => a.startsWith("--startup-probe=")), `${lane} would be rejected by Cloud Run`);
+  });
+}

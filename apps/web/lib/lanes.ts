@@ -81,6 +81,24 @@ export function dbContainerArgs(connectionName: string): string[] {
     // beginning with a dash is what makes it look like a flag, and the fix is
     // never to let it be a separate argv entry.
     `--args=--port=${DB_PORT},--address=${DB_HOST},${connectionName}`,
+    // Required, not optional. Cloud Run refuses any revision whose `--depends-on`
+    // names a container without one:
+    //
+    //   spec.template.spec.containers[0].depends_on: Dependent container
+    //   'cloudsql-proxy' must have startup probe specified
+    //
+    // Which means no app with a database has ever deployed on a lane that
+    // attaches this sidecar — the flag pair was written, the revision was
+    // rejected, and the failure went to a repair agent that correctly reported
+    // it could not fix the platform from inside the repository.
+    //
+    // A TCP probe on the port the app will use, rather than the proxy's HTTP
+    // health server: it needs no extra flags on the proxy, and it tests the one
+    // thing `--depends-on` is being asked to guarantee — that something is
+    // listening on 5432 before the app starts. That also closes the readiness
+    // half of the gap, since --depends-on alone orders container START, not the
+    // port being open.
+    `--startup-probe=tcpSocket.port=${DB_PORT},periodSeconds=1,failureThreshold=30,timeoutSeconds=1`,
   ];
 }
 

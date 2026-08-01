@@ -60,6 +60,15 @@ const PLATFORM: Array<{ re: RegExp; reason: string }> = [
     reason: "A service the deploy depends on did not answer. That is infrastructure, not your app.",
   },
   {
+    // gcloud rejecting a command is gcloud rejecting OUR argv. The user's
+    // repository does not write it and cannot change it, so a rejection is
+    // always the platform's — the `--depends-on without a startup probe`
+    // revision refusal reached a repair agent, which read the repo, found
+    // nothing to fix, and said so after 76k tokens. It was right.
+    re: /ERROR: \(gcloud\.|invalid build:|spec\.template\.spec/i,
+    reason: "The deploy command the platform built was rejected. That is ours to fix — nothing in your repository produces it.",
+  },
+  {
     re: /gcloud (exited|crashed)|internal error|backend error|please try again|\b500 internal\b/i,
     reason: "Google Cloud returned an internal error. Nothing in your repository caused it and nothing there can fix it.",
   },
