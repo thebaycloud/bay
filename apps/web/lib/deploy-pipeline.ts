@@ -1142,8 +1142,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
 
     // The static lane needs neither, and waiting on them would hand back the
-    // seconds this lane exists to save.
-    if (!staticServe) {
+    // seconds this lane exists to save — UNLESS a sibling service does. The
+    // database was created either way, but its connection details were only ever
+    // wired up here, so a static frontend on "/" with an API on "/api" got a
+    // Postgres instance nobody was told about: no proxy container, no
+    // POSTGRES_SERVER, and an API that failed on a database it had been given.
+    // That is the exact shape multi-service exists for.
+    const siblingNeedsDb = Boolean(appConfig && extraServices(appConfig).some((svc) => svc.needsDB));
+    if (!staticServe || siblingNeedsDb) {
       if (pgPromise) {
         log("Provisioning Postgres…");
         const r = await pgPromise;
