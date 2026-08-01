@@ -12,7 +12,7 @@ import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
-import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
+import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv } from "@/lib/env-merge";
 import { pgConfig } from "@/lib/pg-config";
@@ -983,7 +983,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // sibling declares needsDB got no database at all. That is the normal
         // shape of the thing this feature exists for: a static frontend on "/"
         // and an API on "/api" that is the only part touching Postgres.
-        if (cfg.services.some((svc) => svc.needsDB)) configured.needsDB = true;
+        if (cfg.services.some(usesDatabase)) configured.needsDB = true;
         log(`Using ${CONFIG_FILENAME} — no planning needed`);
       }
     } catch (e) {
@@ -1010,7 +1010,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         appConfig = inferred;
         planSource = "inferred from the repo";
         configured = planFromConfig(inferred, undefined, planSource);
-        if (inferred.services.some((svc) => svc.needsDB)) configured.needsDB = true;
+        if (inferred.services.some(usesDatabase)) configured.needsDB = true;
         log(`This repository is ${inferred.services.length} apps, not one:`);
         for (const svc of inferred.services) {
           const how = svc.start ? svc.start : `${svc.outputDir ?? "."}/ as static files`;

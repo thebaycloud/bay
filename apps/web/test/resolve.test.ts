@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolve, validate, deriveLane, assertConsumed, missingSecrets, ResolveError, type ResolvedService } from "../lib/resolve";
-import { parseAppConfig, ConfigError, platformOwned } from "../lib/app-config";
+import { parseAppConfig, ConfigError, platformOwned, usesDatabase, planFromConfig } from "../lib/app-config";
 
 /** A repo on disk. The resolver checks the filesystem, so the tests need one. */
 function repo(files: Record<string, string>): string {
@@ -400,4 +400,31 @@ test("the primary service comes first, whatever order it was declared in", async
   });
   const app = await resolve(dir);
   assert.equal(app.services[0].name, "web");
+});
+
+test("uses: [database] provisions a database on the path the pipeline actually reads", () => {
+  // It did not, for one deploy. The parser read `uses`, validate accepted it and
+  // `supersonic check` printed "uses database" — then the pipeline asked
+  // svc.needsDB, got undefined, and provisioned nothing. The app deployed with a
+  // config saying it needed Postgres and an environment that had none, and the
+  // first thing to notice was a pydantic error inside the release job.
+  const cfg = parseAppConfig(config({
+    version: 1,
+    services: [{ language: "python", start: "x", uses: ["database"] }],
+  }));
+  assert.equal(usesDatabase(cfg.services[0]), true);
+  // The v1 field the pipeline reads has to agree with the v2 field the user wrote.
+  assert.equal(planFromConfig(cfg).needsDB, true);
+});
+
+test("the v1 spelling still answers the same question", () => {
+  const cfg = parseAppConfig(config({ version: 1, services: [{ language: "python", start: "x", needsDB: true }] }));
+  assert.equal(usesDatabase(cfg.services[0]), true);
+  assert.equal(planFromConfig(cfg).needsDB, true);
+});
+
+test("a service wanting no database still says so", () => {
+  const cfg = parseAppConfig(config({ version: 1, services: [{ language: "python", start: "x" }] }));
+  assert.equal(usesDatabase(cfg.services[0]), false);
+  assert.equal(planFromConfig(cfg).needsDB, undefined);
 });

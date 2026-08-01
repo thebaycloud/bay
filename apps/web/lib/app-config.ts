@@ -407,7 +407,7 @@ export function parseAppConfig(text: string): AppConfig {
  * database — there is only one to share.
  */
 export function appResources(declared: ResourcesConfig | undefined, services: ServiceConfig[]): ResourcesConfig | undefined {
-  const wantsDb = services.some((s) => s.needsDB || (s.uses ?? []).includes("database"));
+  const wantsDb = services.some(usesDatabase);
   const wantsBucket = services.some((s) => (s.uses ?? []).includes("bucket"));
   const database = declared?.database ?? (wantsDb ? { engine: "postgres" as const } : undefined);
   const bucket = declared?.bucket ?? (wantsBucket ? true : undefined);
@@ -490,7 +490,7 @@ export function planFromConfig(config: AppConfig, service?: ServiceConfig, sourc
     run: inDir(s.start, dir) ?? "",
     static: isStatic,
     outputDir: isStatic ? (dir === "." ? (s.outputDir ?? ".") : `${dir}/${s.outputDir ?? "."}`.replace(/\/\.$/, "")) : undefined,
-    needsDB: s.needsDB,
+    needsDB: usesDatabase(s) || undefined,
     envNeeded: s.envNeeded,
     // `source` because this same shape is now produced two ways: read out of the
     // user's file, and inferred from the repository by infer-services. Printing
@@ -499,6 +499,26 @@ export function planFromConfig(config: AppConfig, service?: ServiceConfig, sourc
     // nothing reads.
     reason: `${source}${s.name ? ` (${s.name})` : ""}`,
   };
+}
+
+/**
+ * Whether a service wants the app's database, under either spelling.
+ *
+ * `uses: ["database"]` is schema v2's word for what `needsDB: true` said in v1,
+ * and for one deploy it meant nothing at all: the parser read it, `validate`
+ * accepted it, `supersonic check` printed "uses database" — and the pipeline
+ * asked `svc.needsDB`, got undefined, and provisioned no database. The app was
+ * deployed with a config that said it needed Postgres and an environment that
+ * had none, and the first thing to notice was a pydantic error about
+ * POSTGRES_SERVER inside the release job.
+ *
+ * That is precisely the asymmetry this schema was written to end — a field is
+ * only as real as the number of readers that happen to know about it — so the
+ * two spellings answer through one function rather than being tested for
+ * separately at each call site.
+ */
+export function usesDatabase(s: ServiceConfig): boolean {
+  return Boolean(s.needsDB) || (s.uses ?? []).includes("database");
 }
 
 /** The one-shot pre-traffic command, under whichever name the file used. */

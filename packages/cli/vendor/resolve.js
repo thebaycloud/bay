@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 973830f61a125162
+// supersonic-vendor-stamp 74a44af20cb8d43b
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -277,7 +277,7 @@ function parseAppConfig(text) {
   };
 }
 function appResources(declared, services) {
-  const wantsDb = services.some((s) => s.needsDB || (s.uses ?? []).includes("database"));
+  const wantsDb = services.some(usesDatabase);
   const wantsBucket = services.some((s) => (s.uses ?? []).includes("bucket"));
   const database = declared?.database ?? (wantsDb ? { engine: "postgres" } : void 0);
   const bucket = declared?.bucket ?? (wantsBucket ? true : void 0);
@@ -296,6 +296,9 @@ function inDir(cmd, dir) {
   if (cmd === void 0) return void 0;
   if (!cmd.trim()) return "";
   return dir === "." ? cmd : `(cd ${dir} && ${cmd})`;
+}
+function usesDatabase(s) {
+  return Boolean(s.needsDB) || (s.uses ?? []).includes("database");
 }
 function releaseCommand(s) {
   return s.release ?? s.preDeploy;
