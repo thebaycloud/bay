@@ -500,6 +500,10 @@ export interface Report {
   /** Which reads failed, and what the database said about each. */
   sources: SourceErrors;
   issues: Array<{ source: SourceName; message: string }>;
+  /** Every user, worst-off first — the answer to "which nine". */
+  people: Person[];
+  /** Every app, broken ones first. */
+  appDetails: AppDetail[];
 }
 
 export function buildReport(input: ReportInput): Report {
@@ -519,8 +523,197 @@ export function buildReport(input: ReportInput): Report {
     noStageData: input.stages.length === 0 && !input.sources?.stages,
     sources: input.sources ?? {},
     issues: allIssues(input.sources),
+    people: people(input, attempts),
+    appDetails: appDetails(input, attempts),
   };
 }
 
 /** Percentile helper re-exported so the page never reaches past this module. */
 export { percentile };
+
+// ─── who, not how many ────────────────────────────────────────────────────────
+
+/**
+ * How far a person got. Ordered worst-first, and that order is the sort.
+ *
+ * `stuck` is deliberately the top of the list rather than `never-signed-in`.
+ * Someone who deployed and could not get it live used the product exactly as
+ * intended and it did not work for them; someone who never made an app may
+ * simply have been looking. The funnel counts both as drop-off, which is why the
+ * funnel alone cannot tell an operator where to spend an afternoon.
+ */
+export type Stall = "stuck" | "never-deployed" | "never-built" | "activated";
+
+export const STALL_ORDER: Stall[] = ["stuck", "never-deployed", "never-built", "activated"];
+
+export const STALL_LABEL: Record<Stall, string> = {
+  stuck: "deployed, never succeeded",
+  "never-deployed": "made an app, never deployed",
+  "never-built": "never created an app",
+  activated: "reached a working deploy",
+};
+
+export interface PersonApp {
+  slug: string;
+  status: string;
+  /** From the most recent attempt that got far enough to choose one. */
+  lane: string | null;
+  succeeded: boolean;
+  /** What is wrong with it right now, per `deploys`. Not a history. */
+  lastError: string | null;
+}
+
+export interface Person {
+  userId: string;
+  email: string;
+  createdAt: Date;
+  plan: string | null;
+  status: string | null;
+  apps: PersonApp[];
+  /** Deploys inside the selected window — NOT all time, unlike firstSuccessAt. */
+  deploysInWindow: number;
+  firstSuccessAt: Date | null;
+  timeToFirstSuccessMs: number | null;
+  lastActivityAt: Date | null;
+  stall: Stall;
+}
+
+/**
+ * Every user, worst-off first.
+ *
+ * This is the answer to the question the funnel raises and cannot settle: the
+ * funnel says nine people never created an app, and an operator's next question
+ * is always "which nine". Aggregates are the wrong shape for that, and at
+ * seventeen users a table is not a scaling problem.
+ */
+export function people(input: ReportInput, attempts: Attempt[]): Person[] {
+  const { users, apps, firstDeploys, deployStates, slugOwners } = input;
+
+  const firstBySlug = new Map(firstDeploys.map((f) => [f.slug, f]));
+  const stateBySlug = new Map(deployStates.map((d) => [d.slug, d]));
+  const attemptsBySlug = groupBy(attempts, (a) => a.slug);
+  const appsByOwner = groupBy(apps, (a) => a.ownerId);
+
+  // Deploys are attributed through the same slug→owner map the funnel uses, so
+  // an app whose owner is gone from both tables is counted nowhere rather than
+  // being guessed onto somebody.
+  const deploysByOwner = new Map<string, number>();
+  for (const a of attempts) {
+    const owner = slugOwners.get(a.slug);
+    if (owner) deploysByOwner.set(owner, (deploysByOwner.get(owner) ?? 0) + 1);
+  }
+
+  const out = users.map((u): Person => {
+    const owned = appsByOwner.get(u.id) ?? [];
+
+    const personApps = owned.map((a): PersonApp => {
+      const rounds = attemptsBySlug.get(a.slug) ?? [];
+      const withLane = rounds.filter((r) => r.lane);
+      return {
+        slug: a.slug,
+        status: a.status,
+        lane: withLane.length ? (withLane[withLane.length - 1].lane as string) : null,
+        succeeded: !!firstBySlug.get(a.slug)?.firstSuccessAt,
+        lastError: stateBySlug.get(a.slug)?.error ?? null,
+      };
+    });
+
+    // All-time, from the stage table, so it does not disappear when the window
+    // moves off the deploy that first worked.
+    let firstSuccessAt: Date | null = null;
+    for (const a of owned) {
+      const at = firstBySlug.get(a.slug)?.firstSuccessAt;
+      if (at && (!firstSuccessAt || at < firstSuccessAt)) firstSuccessAt = at;
+    }
+
+    const activity: Date[] = [];
+    for (const a of owned) {
+      activity.push(a.createdAt);
+      const st = stateBySlug.get(a.slug);
+      const at = st?.finishedAt ?? st?.updatedAt;
+      if (at) activity.push(at);
+    }
+    const lastActivityAt = activity.length ? new Date(Math.max(...activity.map((d) => d.getTime()))) : null;
+
+    const anyDeploy = owned.some((a) => firstBySlug.has(a.slug));
+    const stall: Stall = firstSuccessAt
+      ? "activated"
+      : !owned.length
+        ? "never-built"
+        : anyDeploy
+          ? "stuck"
+          : "never-deployed";
+
+    const lag = firstSuccessAt ? firstSuccessAt.getTime() - u.createdAt.getTime() : null;
+
+    return {
+      userId: u.id,
+      email: u.email,
+      createdAt: u.createdAt,
+      plan: u.plan,
+      status: u.status,
+      apps: personApps,
+      deploysInWindow: deploysByOwner.get(u.id) ?? 0,
+      firstSuccessAt,
+      // A success stamped before the account existed means the tables disagree;
+      // reported as unknown rather than as a negative duration.
+      timeToFirstSuccessMs: lag !== null && lag >= 0 ? lag : null,
+      lastActivityAt,
+      stall,
+    };
+  });
+
+  return out.sort((a, b) => {
+    const rank = STALL_ORDER.indexOf(a.stall) - STALL_ORDER.indexOf(b.stall);
+    if (rank !== 0) return rank;
+    // Within a group, most recent signup first: a person who stalled yesterday
+    // is more actionable than one who stalled in June.
+    return b.createdAt.getTime() - a.createdAt.getTime();
+  });
+}
+
+export interface AppDetail {
+  slug: string;
+  ownerEmail: string | null;
+  status: string;
+  visibility: string;
+  createdAt: Date;
+  lane: string | null;
+  deploysInWindow: number;
+  succeeded: boolean;
+  lastError: string | null;
+  lastActivityAt: Date | null;
+}
+
+/** Every app, broken ones first. */
+export function appDetails(input: ReportInput, attempts: Attempt[]): AppDetail[] {
+  const { apps, users, firstDeploys, deployStates } = input;
+  const emailById = new Map(users.map((u) => [u.id, u.email]));
+  const firstBySlug = new Map(firstDeploys.map((f) => [f.slug, f]));
+  const stateBySlug = new Map(deployStates.map((d) => [d.slug, d]));
+  const attemptsBySlug = groupBy(attempts, (a) => a.slug);
+
+  const rank = (a: AppDetail) => (a.status === "failed" ? 0 : a.lastError ? 1 : !a.succeeded ? 2 : 3);
+
+  return apps
+    .map((a): AppDetail => {
+      const rounds = attemptsBySlug.get(a.slug) ?? [];
+      const withLane = rounds.filter((r) => r.lane);
+      const st = stateBySlug.get(a.slug);
+      return {
+        slug: a.slug,
+        // Null rather than a guess when the owner is not in the users read —
+        // which is what a broken `users` read looks like from here.
+        ownerEmail: emailById.get(a.ownerId) ?? null,
+        status: a.status,
+        visibility: a.visibility,
+        createdAt: a.createdAt,
+        lane: withLane.length ? (withLane[withLane.length - 1].lane as string) : null,
+        deploysInWindow: rounds.length,
+        succeeded: !!firstBySlug.get(a.slug)?.firstSuccessAt,
+        lastError: st?.error ?? null,
+        lastActivityAt: st?.finishedAt ?? st?.updatedAt ?? null,
+      };
+    })
+    .sort((x, y) => rank(x) - rank(y) || y.createdAt.getTime() - x.createdAt.getTime());
+}

@@ -488,3 +488,166 @@ test("no source information at all means no issues, not unknown ones", () => {
   assert.equal(panelError(undefined, ["users"]), null);
   assert.deepEqual(buildReport(empty()).sources, {});
 });
+
+// ─── who, not how many ────────────────────────────────────────────────────────
+
+/** A user, an app they own, and one deploy of it. */
+function person(id: string, signup: string, opts: { slug?: string; deployed?: boolean; succeeded?: boolean; plan?: string } = {}) {
+  const input = empty();
+  input.users = [user(id, signup, opts.plan ?? "basic")];
+  if (opts.slug) {
+    input.apps = [app(opts.slug, id, signup)];
+    input.slugOwners = new Map([[opts.slug, id]]);
+    if (opts.deployed) {
+      input.firstDeploys = [{
+        slug: opts.slug,
+        firstStageAt: new Date(signup),
+        firstSuccessAt: opts.succeeded ? new Date(new Date(signup).getTime() + 3600_000) : null,
+      }];
+    }
+  }
+  return input;
+}
+
+test("a user who never created an app is named, not just counted", () => {
+  const r = buildReport(person("u1", "2026-07-10T00:00:00Z"));
+  assert.equal(r.people.length, 1);
+  assert.equal(r.people[0].email, "u1@example.com");
+  assert.equal(r.people[0].stall, "never-built");
+  assert.deepEqual(r.people[0].apps, []);
+});
+
+test("a user who made an app but never deployed is told apart from one who never made one", () => {
+  const r = buildReport(person("u1", "2026-07-10T00:00:00Z", { slug: "aaa11" }));
+  assert.equal(r.people[0].stall, "never-deployed");
+  assert.equal(r.people[0].apps.length, 1);
+  assert.equal(r.people[0].apps[0].slug, "aaa11");
+});
+
+test("a user who deployed and never succeeded is the worst case, and says so", () => {
+  const r = buildReport(person("u1", "2026-07-10T00:00:00Z", { slug: "aaa11", deployed: true }));
+  assert.equal(r.people[0].stall, "stuck");
+  assert.equal(r.people[0].firstSuccessAt, null);
+  assert.equal(r.people[0].apps[0].succeeded, false);
+});
+
+test("a user who got there is activated and timed from signup", () => {
+  const r = buildReport(person("u1", "2026-07-10T00:00:00Z", { slug: "aaa11", deployed: true, succeeded: true }));
+  assert.equal(r.people[0].stall, "activated");
+  assert.equal(r.people[0].timeToFirstSuccessMs, 3600_000);
+  assert.equal(r.people[0].apps[0].succeeded, true);
+});
+
+// "Stalled and failing before healthy" — and among the stalled, the person who
+// tried hardest first. Someone who deployed and could not get it live used the
+// product as intended; someone who never made an app may have been looking.
+test("the table is sorted worst-off first", () => {
+  const input = empty();
+  input.users = [
+    user("healthy", "2026-07-01T00:00:00Z"),
+    user("noapp", "2026-07-02T00:00:00Z"),
+    user("nodeploy", "2026-07-03T00:00:00Z"),
+    user("stuck", "2026-07-04T00:00:00Z"),
+  ];
+  input.apps = [
+    app("h1", "healthy", "2026-07-01T01:00:00Z"),
+    app("n1", "nodeploy", "2026-07-03T01:00:00Z"),
+    app("s1", "stuck", "2026-07-04T01:00:00Z"),
+  ];
+  input.slugOwners = new Map([["h1", "healthy"], ["n1", "nodeploy"], ["s1", "stuck"]]);
+  input.firstDeploys = [
+    { slug: "h1", firstStageAt: new Date("2026-07-01T01:00:00Z"), firstSuccessAt: new Date("2026-07-01T02:00:00Z") },
+    { slug: "s1", firstStageAt: new Date("2026-07-04T01:00:00Z"), firstSuccessAt: null },
+  ];
+
+  const r = buildReport(input);
+  assert.deepEqual(r.people.map((p) => p.stall), ["stuck", "never-deployed", "never-built", "activated"]);
+});
+
+test("within a group the most recent signup is first", () => {
+  const input = empty();
+  input.users = [user("older", "2026-06-01T00:00:00Z"), user("newer", "2026-07-20T00:00:00Z")];
+  const r = buildReport(input);
+  assert.deepEqual(r.people.map((p) => p.email), ["newer@example.com", "older@example.com"]);
+});
+
+// The counts on the page and the rows in the table have to agree, or an
+// operator checking one against the other loses faith in both.
+test("the stall counts match the funnel's drop-offs exactly", () => {
+  const input = empty();
+  input.users = [user("a", "2026-07-01T00:00:00Z"), user("b", "2026-07-02T00:00:00Z"), user("c", "2026-07-03T00:00:00Z"), user("d", "2026-07-04T00:00:00Z")];
+  input.apps = [app("b1", "b", "2026-07-02T01:00:00Z"), app("c1", "c", "2026-07-03T01:00:00Z"), app("d1", "d", "2026-07-04T01:00:00Z")];
+  input.slugOwners = new Map([["b1", "b"], ["c1", "c"], ["d1", "d"]]);
+  input.firstDeploys = [
+    { slug: "c1", firstStageAt: new Date("2026-07-03T01:00:00Z"), firstSuccessAt: null },
+    { slug: "d1", firstStageAt: new Date("2026-07-04T01:00:00Z"), firstSuccessAt: new Date("2026-07-04T02:00:00Z") },
+  ];
+
+  const r = buildReport(input);
+  const count = (s: string) => r.people.filter((p) => p.stall === s).length;
+  assert.equal(count("never-built"), r.acquisition.stalledBeforeApp);
+  assert.equal(count("never-deployed"), r.acquisition.stalledBeforeDeploy);
+  assert.equal(count("stuck"), r.acquisition.stalledBeforeSuccess);
+  assert.equal(count("activated"), r.activation.activated);
+});
+
+test("a user's apps travel with them rather than needing a second table", () => {
+  const input = empty();
+  input.users = [user("u1", "2026-07-01T00:00:00Z")];
+  input.apps = [app("aaa11", "u1", "2026-07-02T00:00:00Z"), app("bbb22", "u1", "2026-07-03T00:00:00Z", "failed")];
+  input.slugOwners = new Map([["aaa11", "u1"], ["bbb22", "u1"]]);
+  input.deployStates = [
+    { slug: "bbb22", ownerId: "u1", status: "failed", error: "sh: 1: fastapi: not found", updatedAt: new Date("2026-07-20T00:00:00Z"), finishedAt: new Date("2026-07-20T00:00:00Z") },
+  ];
+
+  const r = buildReport(input);
+  assert.deepEqual(r.people[0].apps.map((a) => a.slug).sort(), ["aaa11", "bbb22"]);
+  assert.equal(r.people[0].apps.find((a) => a.slug === "bbb22")!.lastError, "sh: 1: fastapi: not found");
+  assert.equal(r.people[0].lastActivityAt!.toISOString(), "2026-07-20T00:00:00.000Z");
+});
+
+test("an app's lane comes from its most recent attempt that chose one", () => {
+  const input = empty();
+  input.users = [user("u1", "2026-07-01T00:00:00Z")];
+  input.apps = [app("aaa11", "u1", "2026-07-02T00:00:00Z")];
+  input.slugOwners = new Map([["aaa11", "u1"]]);
+  input.stages = [
+    ...deployRows("aaa11", "2026-07-20T10:00:00Z", "static", "failed"),
+    ...deployRows("aaa11", "2026-07-21T10:00:00Z", "runner", "ok"),
+  ];
+
+  const r = buildReport(input);
+  assert.equal(r.people[0].apps[0].lane, "runner");
+  assert.equal(r.people[0].deploysInWindow, 2);
+  assert.equal(r.appDetails[0].lane, "runner");
+  assert.equal(r.appDetails[0].deploysInWindow, 2);
+});
+
+test("apps are listed broken first and carry their owner's address", () => {
+  const input = empty();
+  input.users = [user("u1", "2026-07-01T00:00:00Z")];
+  input.apps = [
+    app("good1", "u1", "2026-07-05T00:00:00Z", "live"),
+    app("bad1", "u1", "2026-07-02T00:00:00Z", "failed"),
+  ];
+  input.slugOwners = new Map([["good1", "u1"], ["bad1", "u1"]]);
+  input.firstDeploys = [{ slug: "good1", firstStageAt: new Date("2026-07-05T00:00:00Z"), firstSuccessAt: new Date("2026-07-05T01:00:00Z") }];
+
+  const r = buildReport(input);
+  assert.deepEqual(r.appDetails.map((a) => a.slug), ["bad1", "good1"]);
+  assert.equal(r.appDetails[0].ownerEmail, "u1@example.com");
+});
+
+// A broken `users` read must not turn into a wrong owner on the apps table.
+test("an app whose owner is not in the users read has no owner, not a guessed one", () => {
+  const input = empty();
+  input.apps = [app("orphan", "ghost", "2026-07-02T00:00:00Z")];
+  const r = buildReport(input);
+  assert.equal(r.appDetails[0].ownerEmail, null);
+});
+
+test("no users means an empty table, not a crash", () => {
+  const r = buildReport(empty());
+  assert.deepEqual(r.people, []);
+  assert.deepEqual(r.appDetails, []);
+});
