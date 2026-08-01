@@ -18,8 +18,10 @@
   ],
   "scripts": {
     "bundle-detector": "node scripts/bundle-detector.mjs",
+    "bundle-resolver": "node scripts/bundle-resolver.mjs",
+    "bundle": "npm run bundle-detector && npm run bundle-resolver",
     "test": "node --test 'test/**/*.test.js'",
-    "prepublishOnly": "npm run bundle-detector && npm test"
+    "prepublishOnly": "npm run bundle && npm test"
   },
   "keywords": [
     "deploy",

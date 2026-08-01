@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+**`supersonic init` and `supersonic check` — the deploy loop, on your machine, in
+two seconds.**
+
+The loop for getting a `supersonic.json` right ran through a real deploy: upload,
+provision, build, fail, read a log, guess. Eleven minutes an attempt, and eleven
+attempts is two hours and a Cloud Build bill for every one of them. Both new
+commands are local — no cloud, no build, no model.
+
+`init` writes a **draft**, and says so. It reads what the files actually state: the
+monorepo split, the install command from the lockfile, the build command and output
+directory, the start command bound to `$PORT`, the runtime version from
+`engines.node` / `.nvmrc` / `requires-python` / `.python-version`, the database from
+a dependency scan, the framework, and every env var name a `process.env` /
+`os.environ` grep can see. Then it prints what no static analysis can answer —
+which service owns `/` when both are servers, whether `alembic upgrade head` should
+run before traffic or is merely installed, whether a committed `dist/` is the
+deliverable or stale, SPA-fallback intent, and which of those env var names are
+secrets.
+
+The detector doing the reading is the same one that read a `frontend/` + `backend/`
+root as "Static site, 80% confidence" — its own highest-confidence answer, and
+wrong. Nothing here makes it better. What changes is that its answer now lands in a
+file, in front of the agent that wrote the app, instead of silently selecting a lane
+on a server 200 seconds later. Never ask an agent to author JSON from nothing; ask
+it to correct a draft.
+
+`check` is that file resolved and validated exactly as a deploy would, printing per
+service the command each phase runs — install, build, release, start, health, scale
+— and exiting non-zero on any problem. It catches a static service that declared a
+migration, a build with nowhere to publish from, two services claiming one path, a
+directory that is not there, and a `requires-python` the runner does not have.
+
+Both go through the control plane's own resolver, compiled into `vendor/resolve.js`
+rather than ported. A second implementation would agree the day it was written and
+diverge the first time a lane changed, and "check passes, the deploy resolves
+differently" is indistinguishable from the platform being broken. `npm run bundle`
+rebuilds it and a test fails a stale one — which caught the vendored detector still
+answering `python:3.12` two days after the runner moved to 3.14, a number that
+decided the `FROM python:…-slim` of every containerised Python build.
+
 **git decides what gets uploaded, and the CLI says what it left behind.**
 
 Packaging was nineteen `tar --exclude=` patterns plus `--exclude-from=.gitignore`.

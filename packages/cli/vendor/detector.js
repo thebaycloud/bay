@@ -1,3 +1,4 @@
+// supersonic-vendor-stamp 69126180bd3ec75a
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -32,6 +33,11 @@ var import_node_path = require("node:path");
 var import_node_os = require("node:os");
 var import_node_child_process = require("node:child_process");
 var import_node_url = require("node:url");
+
+// ../../apps/web/lib/plan-deps.ts
+var RUNTIME_VERSIONS = { python: "3.14", node: "24" };
+
+// src/index.ts
 var import_meta = {};
 var CONTAINER = { mode: "container" };
 function installFor(pm, hasNpmLock) {
@@ -250,7 +256,7 @@ function detectPython(dir, notes) {
     language: "Python",
     framework,
     packageManager: "pip",
-    runtime: "python:3.12",
+    runtime: `python:${RUNTIME_VERSIONS.python}`,
     installCommand: "pip install --no-cache-dir -r requirements.txt",
     buildCommand: null,
     startCommand,

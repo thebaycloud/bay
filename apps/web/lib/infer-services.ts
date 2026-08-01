@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
-import { readRepoFacts } from "./repo-facts";
+import { readRepoFacts, type RepoFacts } from "./repo-facts";
 import type { AppConfig, ServiceConfig } from "./app-config";
 
 /**
@@ -198,7 +198,14 @@ function languageOf(stack: DetectedStack): ServiceConfig["language"] {
   return "other";
 }
 
-function serviceFor(relDir: string, stack: DetectedStack, absoluteDir: string): ServiceConfig {
+/**
+ * Exported for `supersonic init`, which has to answer for a ONE-part repository
+ * as well — and there is no version of that answer worth writing twice. Every
+ * mapping below is a correction of the detector that took a real deploy to find
+ * (`$PORT`, `app.main:app`, uv without requirements.txt); a second copy in the
+ * CLI would keep exactly one of them up to date.
+ */
+export function serviceFor(relDir: string, stack: DetectedStack, absoluteDir: string): ServiceConfig {
   const language = languageOf(stack);
   const name = relDir === "." ? "app" : posix.basename(relDir);
   const base: ServiceConfig = {
@@ -215,6 +222,36 @@ function serviceFor(relDir: string, stack: DetectedStack, absoluteDir: string): 
     return { ...base, outputDir: stack.serve.mode === "static" ? stack.serve.outputDir : "dist" };
   }
   return { ...base, start: startFor(stack, absoluteDir) };
+}
+
+/**
+ * The directories of this repository that are apps, in discovery order.
+ *
+ * Extracted from inferAppConfig rather than copied for it, because `supersonic
+ * init` asks the same question and acts on a different answer: inference declines
+ * below two parts, and init still has to write a file for the one part it found.
+ * A repo whose only app is `backend/` returned null here and had nothing to hand
+ * the CLI — which would have made "just re-derive the list in packages/cli" the
+ * obvious move, and a second copy of this rule is the drift this whole module
+ * exists to end.
+ */
+export function deployableParts(repoDir: string, facts: RepoFacts): string[] {
+  // One entry per directory that declares anything AND has something to run,
+  // discovery order preserved.
+  const dirs: string[] = [];
+  for (const d of facts.declarations) {
+    const dir = dirOf(d.from);
+    if (dirs.includes(dir)) continue;
+    if (!isDeployablePart(dir === "." ? repoDir : join(repoDir, dir), dir)) continue;
+    dirs.push(dir);
+  }
+
+  // A repository whose apps live in subdirectories does not also run from its
+  // root: that root is a workspace, a tooling manifest, or a uv workspace like
+  // the FastAPI template's. With only one subdirectory app the root may well be
+  // the other half — a root Express API beside a `frontend/` — so it stays.
+  const nested = dirs.filter((d) => d !== ".");
+  return nested.length >= 2 || (dirs.includes(".") && isWorkspaceRoot(repoDir)) ? nested : dirs;
 }
 
 /**
@@ -235,22 +272,7 @@ export async function inferAppConfig(repoDir: string, detect: Detect): Promise<A
   // exists to stop. A Dockerfile deeper in the tree says nothing about the whole.
   if (facts.dockerfiles.includes("Dockerfile")) return null;
 
-  // One entry per directory that declares anything AND has something to run,
-  // discovery order preserved.
-  const dirs: string[] = [];
-  for (const d of facts.declarations) {
-    const dir = dirOf(d.from);
-    if (dirs.includes(dir)) continue;
-    if (!isDeployablePart(dir === "." ? repoDir : join(repoDir, dir), dir)) continue;
-    dirs.push(dir);
-  }
-
-  // A repository whose apps live in subdirectories does not also run from its
-  // root: that root is a workspace, a tooling manifest, or a uv workspace like
-  // the FastAPI template's. With only one subdirectory app the root may well be
-  // the other half — a root Express API beside a `frontend/` — so it stays.
-  const nested = dirs.filter((d) => d !== ".");
-  const parts = nested.length >= 2 || (dirs.includes(".") && isWorkspaceRoot(repoDir)) ? nested : dirs;
+  const parts = deployableParts(repoDir, facts);
   if (parts.length < 2) return null;
 
   // A part we could not read is a part we cannot deploy, so the whole split is

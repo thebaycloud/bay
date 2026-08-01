@@ -20,6 +20,13 @@ const CFG = path.join(CFG_DIR, "config.json");
 const DEFAULT_URL = "https://app.supersonic.cv";
 
 // ---------- output ----------
+// A reader that stops reading — `supersonic check | head -5`, an agent piping into
+// grep — closes the pipe under us, and Node turns that into an unhandled EPIPE:
+// twenty lines of stack trace printed over the output that was actually asked for,
+// and a non-zero exit that reads as the command having failed. It did not; the
+// reader got what it wanted and left.
+for (const s of [process.stdout, process.stderr]) s.on("error", (e) => { if (e.code === "EPIPE") process.exit(0); });
+
 const COLOR = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (n) => (s) => (COLOR ? `\x1b[${n}m${s}\x1b[0m` : String(s));
 const dim = c("2"), bold = c("1"), green = c("32"), red = c("31"), cyan = c("36"), yellow = c("33");
@@ -348,6 +355,86 @@ async function open(args) {
   const url = `https://${app}.supersonic.cv`;
   info(`opening ${url}`);
   openBrowser(url);
+}
+
+/**
+ * Write a DRAFT supersonic.json from this repository. No model, no network, ~2s.
+ *
+ * Deliberately not "generate a config": the file it writes is a first draft for an
+ * agent to correct, and the two are different products. Never ask a state-1 agent
+ * to produce JSON from nothing — ask it to correct a draft, because review is the
+ * thing agents are good at and authoring from an empty file is the thing they are
+ * not.
+ */
+async function init(args) {
+  const { resolver, detector } = require("./lib/resolver");
+  const { buildDraft, renderDraft, unknownsFor } = require("./lib/draft");
+  const r = resolver();
+  const dir = path.resolve(args._[0] || process.cwd());
+  const target = path.join(dir, r.CONFIG_FILENAME);
+
+  // Refusing to overwrite is the whole point of the file existing. A hand-written
+  // config is the ONE input the platform is required to obey, and replacing it
+  // with a detector's guess would be this command undoing its own reason to exist.
+  if (fs.existsSync(target) && !args.force) {
+    return die(`${r.CONFIG_FILENAME} already exists — read it, or \`supersonic init --force\` to overwrite it with a fresh draft`);
+  }
+
+  const { config, candidates } = await buildDraft(dir, { resolver: r, detect: detector() });
+  const unknowns = unknownsFor(dir, config, candidates);
+  fs.writeFileSync(target, JSON.stringify(config, null, 2) + "\n");
+
+  if (args.json) {
+    return json({
+      wrote: r.CONFIG_FILENAME,
+      draft: true,
+      config,
+      undetermined: unknowns.map(([question, field]) => ({ question, field })),
+    });
+  }
+  for (const line of renderDraft(r.CONFIG_FILENAME, config, unknowns)) print(line);
+
+  // The draft is written whatever happens next — a config that needs a correction
+  // is exactly what this command produces — but a draft the resolver would already
+  // refuse is worth saying now rather than on the next command.
+  const { checkApp } = require("./lib/check");
+  const { problems } = await checkApp(dir, { resolver: r, detect: detector() });
+  if (problems.length) {
+    print("");
+    print(yellow("! ") + "and `supersonic check` would already fail on it:");
+    for (const p of problems) print("  " + p);
+  }
+}
+
+/**
+ * The local dry run. resolve() + validate(), nothing else, no cloud.
+ *
+ * Non-zero on any error, because the caller is an agent in a loop and an exit code
+ * is the only part of this output it is guaranteed to read.
+ */
+async function check(args) {
+  const { resolver, detector } = require("./lib/resolver");
+  const { checkApp, renderCheck, secretWarnings } = require("./lib/check");
+  const r = resolver();
+  const dir = path.resolve(args._[0] || process.cwd());
+
+  const { app, problems, warnings } = await checkApp(dir, { resolver: r, detect: detector() });
+  if (app) {
+    // The local .env is not the deployed environment, so this can only warn — but
+    // it is the same file `deploy` carries up, which makes it the best available
+    // answer to "will this secret have a value when it lands".
+    const available = [...Object.keys(readEnvFiles(dir)), ...Object.keys(process.env)];
+    warnings.push(...secretWarnings(r, app, available));
+  }
+
+  if (args.json) {
+    json({ ok: problems.length === 0, source: app ? app.source : null, services: app ? app.services : [], resources: app ? app.resources : null, problems, warnings });
+  } else {
+    for (const line of renderCheck(r.CONFIG_FILENAME, app, problems, warnings)) {
+      print(problems.length && line.startsWith("✕") ? red(line) : line.startsWith("! ") ? yellow(line) : line);
+    }
+  }
+  if (problems.length) process.exit(1);
 }
 
 async function deploy(args) {
@@ -857,6 +944,10 @@ ${bold("just run this in your project folder:")}
   ${green("supersonic deploy")}          publish this folder and print the live URL
                              (opens a browser to sign in the first time)
 
+${bold("before you deploy")} ${dim("(local, ~2s, no cloud)")}
+  supersonic init            write a draft supersonic.json from this repo
+  supersonic check           what each phase would run, and what would fail
+
 ${bold("when something's wrong")}
   supersonic logs <app>      recent logs
   supersonic diagnose <app>  AI fix-prompt for your coding agent
@@ -874,6 +965,10 @@ ${bold("setup")}
   supersonic login [--url <u>] [--token <t>]   authenticate (browser, one time)
   supersonic logout
   supersonic whoami
+
+${bold("author")} ${dim("(local: no cloud, no build, no model — about two seconds)")}
+  supersonic init [dir] [--force]               write a DRAFT supersonic.json for an agent to correct
+  supersonic check [dir]                        resolve + validate it, and print what each phase would run
 
 ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the background)")}
   supersonic deploy                             deploy this folder — live URL now, build behind it
@@ -924,7 +1019,7 @@ function parse(argv) {
   return args;
 }
 
-const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, deploy, redeploy, "__deploy-worker": deployWorker };
+const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, init, check, deploy, redeploy, "__deploy-worker": deployWorker };
 
 (async () => {
   const [, , cmd, ...rest] = process.argv;
