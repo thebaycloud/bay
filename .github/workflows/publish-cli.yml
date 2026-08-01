@@ -1,0 +1,82 @@
+# Push to main → the CLI on npm catches up with the repository.
+#
+# The control plane has deployed itself on every push since the OIDC cutover. The
+# CLI never had anything: it was published by hand, whenever someone remembered.
+#
+# That gap is not theoretical. `5bbd4c1` (31 Jul) replaced the deploy command's
+# "✓ your app is live at" — printed one second in, before anything was built —
+# with an honest "⧗ deploying — your app will be live at". npm's 0.9.1 was
+# published on 30 Jul. So on 1 Aug a fresh `npm i -g supersonic-cli` still
+# announced apps as live that had not been built yet, with the fix sitting in
+# main the whole time. Every CLI-side fix has the same shape: invisible until
+# somebody remembers to publish, and the client half is where the deploy
+# experience actually lives.
+#
+# Driven by the version field, not by tags: bumping packages/cli/package.json is
+# already how a release is declared here, and a second ritual is a second thing
+# to forget. Publishing an unchanged version is a no-op, so an ordinary push
+# costs one npm query and stops.
+name: Publish CLI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/cli/**"
+  workflow_dispatch:
+
+# Never two publishes at once, and never cancel one mid-flight: npm has no undo.
+concurrency:
+  group: publish-cli
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # The tests that gate a release are the CLI's own; the web suite has its own
+      # workflow and its own reasons to fail.
+      - name: Test
+        working-directory: packages/cli
+        run: node --test 'test/**/*.test.js'
+
+      # Asking npm what it already has is the whole guard. A version that is
+      # published is left alone — so this workflow is safe to run on every push
+      # to packages/cli, including README-only ones.
+      - name: Publish if the version is new
+        working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view "$name" versions --json 2>/dev/null || echo '[]')
+          if node -e "process.exit(JSON.parse(process.argv[1]).includes(process.argv[2]) ? 0 : 1)" "$published" "$version"; then
+            echo "$name@$version is already on npm — nothing to do"
+            exit 0
+          fi
+          echo "publishing $name@$version"
+          npm publish --access public
+
+      - name: Check npm serves it
+        run: |
+          name=$(node -p "require('./packages/cli/package.json').name")
+          version=$(node -p "require('./packages/cli/package.json').version")
+          for i in $(seq 1 10); do
+            latest=$(npm view "$name@$version" version 2>/dev/null || true)
+            [ "$latest" = "$version" ] && { echo "npm serves $name@$version"; exit 0; }
+            sleep 6
+          done
+          echo "npm did not serve $name@$version within a minute" >&2
+          exit 1
