@@ -63,3 +63,35 @@ export function mergeDatabaseEnv(appSecrets: Record<string, string>, databaseEnv
 
   return { secretEnv, plainEnv };
 }
+
+/**
+ * The literals a service declared in `supersonic.json`, as plain `KEY=value`.
+ *
+ * Schema v2 introduced `env` as an object of committed, non-secret, deploy-shaping
+ * values — NODE_ENV, LOG_LEVEL, SKIP_DB_MIGRATION — and for several deploys it
+ * was parsed, validated, listed by `supersonic check` under "env", declared
+ * consumable by every lane in LANE_CONSUMES, and then read by nothing. The
+ * revision came up without a single one of them. That is the exact
+ * ignored-but-present asymmetry the schema was written to end, pointed at the
+ * field the schema added.
+ *
+ * A name the deploy is already carrying as a secret is dropped rather than set,
+ * because Cloud Run refuses a variable that arrives as both types in one revision
+ * — the same rule mergeDatabaseEnv exists for. The `.env` wins that tie for the
+ * same reason the platform's database settings do: it describes the environment
+ * this deploy is actually going into, while the committed file describes every
+ * environment at once. The caller is expected to say which names it dropped.
+ */
+export function configEnv(
+  declared: Record<string, string> | undefined,
+  secretNames: Iterable<string>,
+): { env: string[]; shadowed: string[] } {
+  const isSecret = new Set(secretNames);
+  const env: string[] = [];
+  const shadowed: string[] = [];
+  for (const [key, value] of Object.entries(declared ?? {})) {
+    if (isSecret.has(key)) shadowed.push(key);
+    else env.push(`${key}=${value}`);
+  }
+  return { env, shadowed };
+}

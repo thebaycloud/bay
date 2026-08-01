@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mergeDatabaseEnv } from "../lib/env-merge";
+import { mergeDatabaseEnv, configEnv } from "../lib/env-merge";
 
 test("a name the platform sets is not also stored as a secret", () => {
   // Cloud Run refuses a variable that is both: "Cannot update environment
@@ -46,4 +46,28 @@ test("an app variable the platform says nothing about is untouched", () => {
 
   assert.equal(merged.secretEnv.SECRET_KEY, "hunter2");
   assert.equal(merged.secretEnv.SMTP_PORT, "587");
+});
+
+/**
+ * `env` in supersonic.json was parsed, validated, printed back by
+ * `supersonic check`, declared consumable by every lane — and read by nothing.
+ * The revision came up without one of them.
+ */
+test("a literal declared in supersonic.json reaches the revision", () => {
+  const { env, shadowed } = configEnv({ SKIP_DB_MIGRATION: "1", LOG_LEVEL: "info" }, []);
+  assert.deepEqual(env, ["SKIP_DB_MIGRATION=1", "LOG_LEVEL=info"]);
+  assert.deepEqual(shadowed, []);
+});
+
+test("a name already travelling as a secret is dropped, not set twice", () => {
+  // Setting it both ways is the POSTGRES_DB failure again: "Cannot update
+  // environment variable [X] to the given type because it has already been set
+  // with a different type" — a dead deploy, not a warning.
+  const { env, shadowed } = configEnv({ API_KEY: "committed", LOG_LEVEL: "info" }, ["API_KEY"]);
+  assert.deepEqual(env, ["LOG_LEVEL=info"]);
+  assert.deepEqual(shadowed, ["API_KEY"], "the caller has to be able to say which value lost");
+});
+
+test("a service that declared no env contributes nothing", () => {
+  assert.deepEqual(configEnv(undefined, ["API_KEY"]), { env: [], shadowed: [] });
 });

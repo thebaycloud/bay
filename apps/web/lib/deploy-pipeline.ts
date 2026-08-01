@@ -14,7 +14,7 @@ import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from 
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
-import { mergeDatabaseEnv } from "@/lib/env-merge";
+import { mergeDatabaseEnv, configEnv } from "@/lib/env-merge";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -1242,7 +1242,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       log("Next.js detected — running the build, then serving on $PORT");
     }
 
+    const primaryConfigService = appConfig ? primaryService(appConfig) : undefined;
+
     const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
+    // The literals the author committed, FIRST — so the platform's own values
+    // below win a name they share. A user cannot declare a database variable
+    // (parseAppConfig refuses every name databaseEnv writes), but they can
+    // declare ALLOWED_HOSTS, and the platform is the only party that knows the
+    // hostname this app is about to answer on.
+    const declaredEnv = configEnv(primaryConfigService?.env, Object.keys(secrets));
+    extraEnv.push(...declaredEnv.env);
+    if (declaredEnv.env.length) log(`Setting from ${CONFIG_FILENAME}: ${declaredEnv.env.map((e) => e.slice(0, e.indexOf("="))).join(", ")}`);
+    // Said out loud rather than silently resolved: a name in both places is a
+    // user who believes one of the two values is live, and the one that is not
+    // is the one they committed.
+    if (declaredEnv.shadowed.length) log(`! ${declaredEnv.shadowed.join(", ")} is set both in ${CONFIG_FILENAME} and in your .env — the .env value is the one that lands`);
     // Where this app will live, known before it is built because the address is
     // derived from the slug rather than discovered from Cloud Run. An app was
     // previously told its port, its database and its bucket, and never its own
@@ -1464,7 +1478,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // back 302 is a broken deploy and the field exists to say so, while an
     // undeclared default cannot be that strict — plenty of correct apps redirect
     // their root to /login.
-    const primaryConfigService = appConfig ? primaryService(appConfig) : undefined;
     const primaryHealth = {
       health: primaryConfigService?.health ?? { path: "/", expect: 200 },
       strict: Boolean(primaryConfigService?.health),
@@ -1735,7 +1748,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // The primary's facts must not leak into the sibling: they name a
           // different prefix, and a stale SUPERSONIC_PATH_PREFIX is worse than
           // none because the app would trust it.
-          .filter((e) => !Object.keys(siblingDeployment).some((k) => e.startsWith(`${k}=`))),
+          .filter((e) => !Object.keys(siblingDeployment).some((k) => e.startsWith(`${k}=`)))
+          // Nor the primary's declared literals, for the same reason: `env` is
+          // per SERVICE in the schema, so the frontend's NODE_ENV has no
+          // business on the API.
+          .filter((e) => !declaredEnv.env.some((d) => e.slice(0, e.indexOf("=")) === d.slice(0, d.indexOf("=")))),
+        // …and its own.
+        ...configEnv(svc.env, Object.keys(secrets)).env,
         ...Object.entries(siblingDeployment).map(([k, v]) => `${k}=${v}`),
         `SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`,
         `SUPERSONIC_CODE_OBJECT=ready/${slug}/${release}.tgz`,
