@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   deployArgs, dbContainerArgs, databaseEnv, databaseEnvNames,
-  DEFAULT_SCALE, withScale, SERVICE_LANES, type Lane, type LaneDeploy,
+  DEFAULT_SCALE, DEFAULT_PORT, withScale, SERVICE_LANES, type Lane, type LaneDeploy,
 } from "../lib/lanes";
 
 /**
@@ -181,6 +181,37 @@ for (const lane of SERVICE_LANES) {
   test(`${lane} lane's proxy is probed, so --depends-on is a promise it can keep`, () => {
     const argv = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
     assert.ok(argv.some((a) => a.startsWith("--startup-probe=")), `${lane} would be rejected by Cloud Run`);
+  });
+
+  /**
+   * The other thing Cloud Run refuses a multi-container revision for, and the one
+   * that went unnoticed because the assertions asked what the argv CONTAINED and
+   * never what gcloud would do with it:
+   *
+   *   ERROR: (gcloud.run.deploy) Invalid value for [--container]:
+   *   Exactly one container must specify --port or --use-http2
+   *
+   * A service has no other way to say which container answers requests. The
+   * runner lane passed --port from the start and so never saw it; the container
+   * and buildpack lanes reached the scoped shape for the first time the day they
+   * gained a sidecar, and every app that took them was undeployable.
+   */
+  test(`${lane} lane names exactly one ingress port once a sidecar is beside it`, () => {
+    const argv = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
+    assert.equal(argv.filter((a) => a === "--port").length, 1, `${lane} would be rejected: exactly one container must specify --port`);
+    // On the app's container, not the proxy's — the port marks which one serves.
+    assert.ok(argv.indexOf("--port") > argv.indexOf("--container"));
+    assert.ok(argv.indexOf("--port") < argv.lastIndexOf("--container"));
+  });
+
+  test(`${lane} lane's port does not move when the sidecar arrives`, () => {
+    // The sidecar is a database connection, not a change of address. An app that
+    // came up on Cloud Run's default 8080 without a database has to come up on
+    // 8080 with one.
+    const withDb = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
+    const flat = deployArgs(request(lane));
+    const portOf = (argv: string[]) => (argv.includes("--port") ? argv[argv.indexOf("--port") + 1] : String(DEFAULT_PORT));
+    assert.equal(portOf(withDb), portOf(flat), `${lane} moves the app's port when it gains a database`);
   });
 }
 

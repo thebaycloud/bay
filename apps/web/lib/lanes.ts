@@ -23,6 +23,13 @@ export type Lane = "static" | "runner" | "container" | "buildpack";
 /** The lanes that produce a Cloud Run service. `static` publishes to GCS instead. */
 export const SERVICE_LANES: Lane[] = ["runner", "container", "buildpack"];
 
+/**
+ * Cloud Run's own default container port, and therefore the one an app already
+ * gets when nothing says otherwise. Named here because the scoped argv has to
+ * state it explicitly and must not state anything else.
+ */
+export const DEFAULT_PORT = 8080;
+
 export const DB_HOST = "127.0.0.1";
 export const DB_PORT = "5432";
 /**
@@ -182,7 +189,10 @@ export interface LaneDeploy {
   image?: string;
   /** buildpack lane: the directory Cloud Run builds from. */
   source?: string;
-  /** The runner images listen on 8080; an app's own image declares its own port. */
+  /**
+   * The port the ingress container listens on. Defaults to Cloud Run's own 8080,
+   * which is what a service with no `--port` gets anyway.
+   */
   port?: number;
   scale: Scale;
   /** Cloud SQL connection name, or null when the app has no database. */
@@ -222,7 +232,25 @@ export function deployArgs(d: LaneDeploy): string[] {
   const scoped = d.lane === "runner" || Boolean(d.cloudsql);
 
   const buildSource = d.image ? ["--image", d.image] : ["--source", d.source!];
-  const port = d.port ? ["--port", String(d.port)] : [];
+  // A multi-container service has no other way to say which container answers
+  // requests, so Cloud Run makes the port the marker and gcloud refuses the
+  // whole revision without one:
+  //
+  //   ERROR: (gcloud.run.deploy) Invalid value for [--container]:
+  //   Exactly one container must specify --port or --use-http2
+  //
+  // Which is what a container-lane app WITH a database got, every time, from the
+  // moment Phase 0 gave that combination the sidecar it had been missing. The
+  // parity fix moved it from "deploys with an empty environment" to "does not
+  // deploy at all", and nothing caught it because the assertions asked what the
+  // argv contained and never what gcloud would do with it.
+  //
+  // 8080 rather than anything discovered from the image: it is Cloud Run's own
+  // default, so this is the port the same app already gets on the flat shape.
+  // The invariant that matters is that attaching a sidecar does not move the
+  // app's port — a container that only ever bound $PORT is told 8080 either way.
+  const ingressPort = d.port ?? (scoped ? DEFAULT_PORT : null);
+  const port = ingressPort === null ? [] : ["--port", String(ingressPort)];
   const container = [
     ...buildSource,
     ...port,
