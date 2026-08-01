@@ -22,7 +22,7 @@ const DEFAULT_URL = "https://app.supersonic.cv";
 // ---------- output ----------
 const COLOR = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (n) => (s) => (COLOR ? `\x1b[${n}m${s}\x1b[0m` : String(s));
-const dim = c("2"), bold = c("1"), green = c("32"), red = c("31"), cyan = c("36");
+const dim = c("2"), bold = c("1"), green = c("32"), red = c("31"), cyan = c("36"), yellow = c("33");
 // Set once a deploy knows its slug: every progress line is also appended to
 // ~/.supersonic/deploys/<slug>.log, so a build survives the terminal it was
 // started in. Best-effort — a log that cannot be written must never stop a deploy.
@@ -198,8 +198,12 @@ async function status(args) {
   const app = needApp(args);
   const d = await api(`/api/apps/${app}`);
   if (args.json) return json(d);
-  const dot = d.ready ? green("● live") : red("○ down");
-  print(`${bold(app)}  ${dot}`);
+  // Three states, because there are three. Reporting a deploy in progress as
+  // "down" is how `status` came to say `○ down · revision — · env none` about an
+  // app that was building normally and whose URL was answering 200 — a confident
+  // answer to a question it could not yet answer.
+  const dot = d.ready ? green("● live") : d.deploying ? yellow("◐ deploying") : red("○ down");
+  print(`${bold(app)}  ${dot}${d.deploying && d.stage ? dim(` · ${d.stage}`) : ""}`);
   print(dim("  url      ") + `${app}.supersonic.cv`);
   print(dim("  revision ") + (d.revision || "—"));
   print(dim("  image    ") + (d.image ? d.image.split("/").pop() : "—"));
