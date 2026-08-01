@@ -73,27 +73,102 @@ async function read<T>(sql: string, params: unknown[] = []): Promise<T[]> {
 }
 
 /**
- * The message an operator sees for a failed read.
+ * Anything that must never reach a rendered page, however it got into an error.
  *
- * Postgres says things like `column "finished_at" does not exist`, which names
- * the defect precisely, so it is passed through rather than replaced by
- * something friendlier. First line only: a stack trace on the page helps nobody
- * and the rest is in the log.
+ * Belt and braces on top of `readErrorDetail`, which already refuses to render
+ * connection-level errors verbatim. A message is data from outside this file, so
+ * it is scrubbed rather than trusted.
  */
-export function readErrorMessage(e: unknown): string {
-  const raw = e instanceof Error ? e.message : String(e);
-  const first = raw.split("\n")[0].trim();
-  return first || "the read failed without saying why";
+const REDACTIONS: ReadonlyArray<[RegExp, string]> = [
+  [/\b(?:postgres(?:ql)?|pg):\/\/\S+/gi, "[connection string redacted]"],
+  // No \b before "password": the thing to catch is PGPASSWORD=…, where the
+  // word is glued to a prefix and a word boundary never matches.
+  [/\w*password\w*\s*[=:]\s*\S+/gi, "password=[redacted]"],
+  [/\/cloudsql\/\S+/g, "[socket path redacted]"],
+  [/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, "[address redacted]"],
+];
+
+export function redact(message: string): string {
+  return REDACTIONS.reduce((m, [pattern, with_]) => m.replace(pattern, with_), message);
 }
 
-/** A read whose failure becomes a visible panel rather than an empty one. */
-async function attempt<T>(sql: string, params: unknown[] = []): Promise<Read<T>> {
+/**
+ * What actually went wrong, in words that are safe to render.
+ *
+ * Two very different kinds of failure end up here, and only one of them is safe
+ * to quote:
+ *
+ * - A **Postgres server error** carries a five-character SQLSTATE. Its message
+ *   is a diagnostic about the SQL — `column "finished_at" does not exist` — and
+ *   is exactly what an operator needs. Quoted verbatim.
+ * - A **connection or driver error** has a Node code (`ECONNREFUSED`,
+ *   `ETIMEDOUT`, `ENOTFOUND`) and its message routinely carries the host, the
+ *   port, the socket path or the user. None of that helps diagnose a dashboard
+ *   panel, and a page is the wrong place for it, so only the class of failure is
+ *   reported.
+ *
+ * First line only either way: a stack trace on the page helps nobody, and
+ * `console.error` still has the whole thing.
+ */
+export function readErrorDetail(e: unknown): string {
+  const err = e as { code?: unknown; severity?: unknown } | null;
+  const codeStr = typeof err?.code === "string" ? err.code : "";
+  const raw = e instanceof Error ? e.message : String(e);
+  const first = raw.split("\n")[0].trim();
+
+  // `severity` is what tells the two apart, NOT the shape of the code. node-pg
+  // sets it ("ERROR", "FATAL") on every error the server sent, and never on one
+  // the driver raised. Matching SQLSTATE by shape looked equivalent and was not:
+  // it is five alphanumerics, and so are the Node codes EPIPE and EPERM, so a
+  // broken pipe was being quoted verbatim — address, port and all — down the
+  // path meant for safe server diagnostics.
+  const fromServer = typeof err?.severity === "string" && err.severity.length > 0;
+  if (fromServer) return redact(first || `the database refused the query (${codeStr || "no code"})`);
+
+  if (codeStr) return `could not reach the database (${codeStr})`;
+  return redact(first || "the read failed without saying why");
+}
+
+/**
+ * The sentence a panel shows, naming the read that produced it.
+ *
+ * The driver's message alone is not actionable — `column "finished_at" does not
+ * exist` is only useful once you know which read and which table it came from,
+ * and the panel it lands in is not enough to tell you when several panels share
+ * a source. So the name travels with the message from the point of failure,
+ * rather than being attached by whoever renders it.
+ */
+export function readErrorMessage(e: unknown, source: string, relation: string): string {
+  return `${source} (reading ${relation}): ${readErrorDetail(e)}`;
+}
+
+/**
+ * A read whose failure becomes a visible panel rather than an empty one.
+ *
+ * HANDLED VERSUS UNHANDLED
+ *
+ * This is the unhandled case: the caller has no second attempt, so it is
+ * asserting the query must work, and a failure means nothing recovers. Those
+ * failures must reach the page.
+ *
+ * A caller that genuinely probes — `users()` asks for the rich shape and falls
+ * back to the bare one when `plan`/`status` have not been migrated yet — calls
+ * this twice and reports `error: null` when the fallback succeeds. That is a
+ * recovery, and there is nothing to tell an operator about. Only a failure that
+ * nothing recovers from is worth a red panel.
+ */
+async function attempt<T>(
+  where: { source: string; relation: string },
+  sql: string,
+  params: unknown[] = [],
+): Promise<Read<T>> {
   try {
     return { rows: await read<T>(sql, params), error: null };
   } catch (e) {
-    // Logged as well as rendered: the page shows one line, the log keeps the rest.
-    console.error("analytics read failed", e);
-    return { rows: [], error: readErrorMessage(e) };
+    // Logged as well as rendered: the page shows one scrubbed line, the log
+    // keeps the original, where host and port are useful and safe.
+    console.error(`analytics read failed: ${where.source} (${where.relation})`, e);
+    return { rows: [], error: readErrorMessage(e, where.source, where.relation) };
   }
 }
 
@@ -133,6 +208,7 @@ export async function users(): Promise<Read<UserRow>> {
   // second — and if BOTH fail, the second failure is the one reported, because
   // that is the one meaning the users table itself cannot be read.
   const full = await attempt<{ id: string; email: string; created_at: Date; plan: string | null; status: string | null; provider: string | null }>(
+    { source: "users", relation: "users" },
     `SELECT id, email, created_at, plan, status, provider FROM users ORDER BY created_at LIMIT ${ROW_CAP}`,
   );
   if (!full.error) {
@@ -143,6 +219,7 @@ export async function users(): Promise<Read<UserRow>> {
   }
 
   const bare = await attempt<{ id: string; email: string; created_at: Date; provider: string | null }>(
+    { source: "users", relation: "users" },
     `SELECT id, email, created_at, provider FROM users ORDER BY created_at LIMIT ${ROW_CAP}`,
   );
   return {
@@ -161,6 +238,7 @@ export interface AppRow {
 
 export async function apps(): Promise<Read<AppRow>> {
   const r = await attempt<{ slug: string; owner_id: string; status: string; visibility: string; created_at: Date }>(
+    { source: "apps", relation: "apps" },
     `SELECT slug, owner_id, status, visibility, created_at FROM apps ORDER BY created_at LIMIT ${ROW_CAP}`,
   );
   return {
@@ -178,6 +256,7 @@ export async function apps(): Promise<Read<AppRow>> {
  */
 export async function stages(w: Window): Promise<Read<RawStage> & { truncated: boolean }> {
   const r = await attempt<{ slug: string; lane: string; stage: string; started_at: Date; ended_at: Date | null; outcome: StageOutcome | null }>(
+    { source: "stages", relation: "deploy_stages" },
     `SELECT slug, lane, stage, started_at, ended_at, outcome
        FROM deploy_stages
       WHERE started_at >= $1 AND started_at <= $2
@@ -214,6 +293,7 @@ export interface FirstDeployRow {
 
 export async function firstDeploys(): Promise<Read<FirstDeployRow>> {
   const r = await attempt<{ slug: string; first_stage_at: Date; first_success_at: Date | null }>(
+    { source: "firstDeploys", relation: "deploy_stages" },
     `SELECT slug,
             min(started_at) AS first_stage_at,
             min(ended_at) FILTER (WHERE stage = 'deploy' AND outcome = 'ok') AS first_success_at
@@ -245,6 +325,7 @@ export interface DeployStateRow {
 
 export async function deployStates(): Promise<Read<DeployStateRow>> {
   const r = await attempt<{ slug: string; owner_id: string | null; status: string; error: string | null; updated_at: Date | null; finished_at: Date | null }>(
+    { source: "deployStates", relation: "deploys" },
     `SELECT slug, owner_id, status, error, updated_at, finished_at FROM deploys LIMIT ${ROW_CAP}`,
   );
   return {
@@ -278,6 +359,7 @@ export interface ErrorEventRow {
 
 export async function errorEvents(w: Window): Promise<Read<ErrorEventRow>> {
   const r = await attempt<{ slug: string; message: string | null; at: Date }>(
+    { source: "errorEvents", relation: "deploy_events" },
     `SELECT slug, event->>'message' AS message, at
        FROM deploy_events
       WHERE at >= $1 AND at <= $2 AND event->>'type' = 'error'
@@ -300,6 +382,6 @@ export async function errorEvents(w: Window): Promise<Read<ErrorEventRow>> {
  * horizon rather than the intended one.
  */
 export async function oldestEventAt(): Promise<{ at: Date | null; error: string | null }> {
-  const r = await attempt<{ at: Date | null }>(`SELECT min(at) AS at FROM deploy_events`);
+  const r = await attempt<{ at: Date | null }>({ source: "oldestEventAt", relation: "deploy_events" }, `SELECT min(at) AS at FROM deploy_events`);
   return { at: r.rows[0]?.at ?? null, error: r.error };
 }
