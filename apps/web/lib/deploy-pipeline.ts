@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
-import { checkPlanDeps, runtimeMismatch } from "@/lib/plan-deps";
+import { checkPlanDeps, assertRuntimeSupported, RUNTIME_UNSUPPORTED } from "@/lib/plan-deps";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
@@ -530,13 +530,6 @@ function ensureRunDeps(dir: string, plan: DeployPlan, log: (l: string) => void) 
   let packageJson: unknown = null;
   try { const raw = readOr(pkgPath); if (raw) packageJson = JSON.parse(raw); } catch { /* unparseable — treated as absent */ }
 
-  // Said before anything is built. Without it the mismatch surfaces as a pip line
-  // deep in a build log — "Package 'app' requires a different Python: 3.12.13 not
-  // in '<4.0,>=3.14'" — which reads as the app being broken rather than the
-  // platform being behind, and which no amount of editing the repo can fix.
-  const mismatch = runtimeMismatch({ pyproject: readOr(join(dir, "pyproject.toml")), packageJson });
-  if (mismatch) log(`Heads up: ${mismatch}. The build will probably fail on it — this is a platform limit, not your app.`);
-
   const { install, unknown } = checkPlanDeps(plan, { language: plan.language, requirements, packageJson });
 
   if (install.length && requirements !== null) {
@@ -1013,6 +1006,27 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         log(`Deploying them together behind one address. Write ${CONFIG_FILENAME} to pin or change this.`);
       }
     }
+
+    // Before the planner, the detector, and anything that costs money.
+    //
+    // This used to be a log line inside ensureRunDeps — "the build will probably
+    // fail on it — this is a platform limit, not your app" — and then the build
+    // went ahead anyway, failed on exactly that, and handed the pip error to a
+    // repair agent to rediscover from scratch. Knowing the answer and building
+    // anyway is the expensive way to be right.
+    //
+    // Deliberately not left in ensureRunDeps: that runs inside a try whose catch
+    // downgrades anything that is not `configWasWritten` to "Planner produced no
+    // plan — deploying with the built-in detector instead", which would turn a
+    // refusal into a fallback that builds the same app on the same runner. It
+    // also only runs when a config or the planner is in play, so the pure
+    // detector path was never gated at all.
+    assertRuntimeSupported({
+      pyproject: existsSync(join(dir, "pyproject.toml")) ? readFileSync(join(dir, "pyproject.toml"), "utf8") : null,
+      packageJson: (() => {
+        try { return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")); } catch { return null; }
+      })(),
+    });
 
     if (configured || PLANNER_ENABLED) {
       try {
@@ -1715,7 +1729,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // burn redeploys on it and then bury the real cause in its summary. A
       // refusal to guess is the same shape: the repo is fine, the question was
       // ours, and there is nothing in the code for an agent to fix.
-      if ((result.error ?? "").includes(IAM_FAILURE) || (result.error ?? "").includes(AMBIGUOUS_STACK)) {
+      if ((result.error ?? "").includes(IAM_FAILURE) || (result.error ?? "").includes(AMBIGUOUS_STACK)
+        || (result.error ?? "").includes(RUNTIME_UNSUPPORTED)) {
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: result.error });
