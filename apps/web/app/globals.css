@@ -657,3 +657,118 @@ a.btn { text-decoration: none; }
 .cmd-box code { flex: 1; font-family: var(--mono); font-size: 12.5px; background: var(--paper); border: 1px solid var(--line); padding: 9px 12px; }
 
 @media (max-width: 900px) { .section-page { padding: 20px 16px 40px; } .env-add { flex-wrap: wrap; } }
+
+/* ── Product analytics (/admin/analytics) ─────────────────────────────────────
+   Scoped entirely under .an-page so nothing here can change a page an ordinary
+   user sees. The two status colours are declared locally rather than as :root
+   --down, which is currently only ever used with a literal fallback — defining
+   it globally would repaint a dozen unrelated things.
+
+   Green and red sit at ΔE 5.8 under deuteranopia, so they never carry meaning
+   alone: failure fills are hatched as well as coloured, and every segment has a
+   text label beside it. */
+.an-page {
+  --an-good: var(--live);
+  --an-bad: #C33A2C;
+  --an-bar: var(--ink);
+  padding: 24px 28px 60px; max-width: 1080px; margin: 0 auto;
+}
+:root[data-theme="dark"] .an-page { --an-bad: #E8705F; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .an-page { --an-bad: #E8705F; } }
+
+.an-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; flex-wrap: wrap; }
+.an-head h2 { margin: 0 0 6px; font-family: var(--mono); font-size: 20px; font-weight: 500; letter-spacing: -.02em; }
+.an-head p { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.6; max-width: 62ch; }
+
+.an-range { display: flex; gap: 0; border: 1px solid var(--line); flex: none; }
+.an-range-btn { padding: 6px 13px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); text-decoration: none; border-right: 1px solid var(--line); }
+.an-range-btn:last-child { border-right: none; }
+.an-range-btn:hover { color: var(--ink); background: var(--card); }
+.an-range-btn.active { background: var(--fill); color: var(--fill-fg); }
+
+.an-warn { border: 1px solid var(--line-2); background: var(--card); padding: 12px 16px; margin-bottom: 18px; font-size: 12.5px; line-height: 1.6; color: var(--ink-2); }
+.an-warn b { color: var(--ink); }
+
+.an-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 22px; }
+.an-tiles.inner { margin: 0 0 4px; border: none; }
+.an-tile { background: var(--card); padding: 13px 15px 15px; }
+.an-tile-label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.an-tile-value { font-family: var(--mono); font-size: 25px; letter-spacing: -.02em; margin-top: 7px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.an-tile-sub { font-size: 11.5px; color: var(--ink-2); margin-top: 5px; line-height: 1.5; }
+
+.an-section { margin-bottom: 34px; }
+.an-section-head { border-bottom: 1px solid var(--line-2); padding-bottom: 8px; margin-bottom: 14px; }
+.an-section-head h3 { margin: 0; font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.an-section-head p { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-2); }
+
+.an-panel { border: 1px solid var(--line); background: var(--card); padding: 15px 17px 16px; margin-bottom: 12px; }
+.an-panel-title { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 13px; }
+
+.an-caveat { margin: 11px 0 0; font-size: 12px; line-height: 1.65; color: var(--ink-2); border-left: 2px solid var(--line-2); padding-left: 11px; max-width: 78ch; }
+.an-caveat b { color: var(--ink); font-weight: 600; }
+.an-caveat .mono { font-size: 11.5px; }
+
+.an-empty { font-size: 12.5px; color: var(--faint); padding: 14px 2px; font-style: italic; }
+
+/* Vertical bars. An empty bucket is a 1px baseline tick, never a zero-height
+   bar — the two look the same and mean opposite things. */
+.an-chart { display: flex; flex-direction: column; gap: 7px; }
+.an-bars { display: flex; align-items: flex-end; gap: 2px; height: 92px; border-bottom: 1px solid var(--line-2); }
+.an-bar-slot { flex: 1; min-width: 2px; height: 100%; display: flex; align-items: flex-end; }
+.an-bar { width: 100%; background: var(--an-bar); border-radius: 2px 2px 0 0; opacity: .82; }
+.an-bar.good { background: var(--an-good); opacity: 1; }
+.an-bar.zero, .an-bar.none { background: var(--line-2); border-radius: 0; opacity: 1; }
+.an-axis { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.an-axis-max { color: var(--faint); text-align: center; }
+
+/* Ranked horizontal bars: short lists, so every row is directly labelled and
+   there is no axis to read against. */
+.an-ranked { display: flex; flex-direction: column; gap: 7px; }
+.an-ranked-row { display: grid; grid-template-columns: minmax(120px, 210px) 1fr auto; align-items: center; gap: 12px; }
+.an-ranked-label { font-family: var(--mono); font-size: 11.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.an-ranked-note { display: block; font-size: 10px; color: var(--faint); margin-top: 2px; }
+.an-ranked-track { height: 13px; background: var(--paper); border: 1px solid var(--line); }
+.an-ranked-fill { height: 100%; background: var(--an-bar); opacity: .78; border-radius: 0 2px 2px 0; }
+.an-ranked-value { font-family: var(--mono); font-size: 11.5px; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+
+.an-funnel { display: flex; flex-direction: column; gap: 13px; }
+.an-funnel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 5px; }
+.an-funnel-label { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.an-funnel-count { font-family: var(--mono); font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.an-funnel-track { height: 15px; background: var(--paper); border: 1px solid var(--line); }
+.an-funnel-fill { height: 100%; background: var(--an-bar); opacity: .78; border-radius: 0 2px 2px 0; }
+.an-funnel-foot { display: flex; gap: 14px; margin-top: 4px; font-size: 11px; color: var(--faint); }
+.an-lost { color: var(--an-bad); }
+
+/* The outcome split. Hatching is the secondary encoding that keeps this
+   readable without colour vision; the labels below carry the counts. */
+.an-stack { display: flex; height: 17px; gap: 2px; }
+.an-stack-seg { height: 100%; }
+.an-stack-seg.good { background: var(--an-good); }
+.an-stack-seg.bad { background: var(--an-bad); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.42) 0 2px, transparent 2px 5px); }
+.an-stack-seg.none { background: var(--line-2); }
+.an-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 9px; font-size: 11.5px; color: var(--ink-2); }
+.an-key { display: inline-flex; align-items: center; gap: 6px; }
+.an-key b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
+.an-sw { width: 10px; height: 10px; flex: none; }
+.an-sw.good { background: var(--an-good); }
+.an-sw.bad { background: var(--an-bad); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.42) 0 2px, transparent 2px 5px); }
+.an-sw.none { background: var(--line-2); }
+
+.an-table-wrap { overflow-x: auto; }
+.an-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.an-table th { text-align: left; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 500; padding: 0 12px 7px 0; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.an-table td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--line); color: var(--ink); font-variant-numeric: tabular-nums; }
+.an-table td:first-child { font-family: var(--mono); font-size: 11.5px; }
+.an-table tr:last-child td { border-bottom: none; }
+
+.an-two { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+
+.an-foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); }
+.an-foot p { margin: 0 0 6px; font-size: 11.5px; color: var(--faint); line-height: 1.6; }
+
+@media (max-width: 760px) {
+  .an-page { padding: 18px 14px 50px; }
+  .an-two { grid-template-columns: 1fr; gap: 18px; }
+  .an-ranked-row { grid-template-columns: minmax(90px, 130px) 1fr auto; gap: 8px; }
+}
