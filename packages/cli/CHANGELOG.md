@@ -20,8 +20,8 @@ the exact command before running it, and `--no-preview` declines it entirely.
 
 Chiefly: `deploy` no longer prints "✓ your app is live at" one second in, before
 anything has been built. That was fixed in the repository on 31 July and never
-reached anyone, because publishing was something a person had to remember. It is
-a workflow now.
+reached anyone, because publishing is something a person has to remember — which
+is the actual bug behind this whole section.
 
 ## 0.9.0
 
