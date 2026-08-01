@@ -33,6 +33,18 @@ function capture(args: string[], timeoutMs = 20_000): Promise<string> {
   });
 }
 
+/**
+ * Cloud Build statuses that mean the build is over and did not work.
+ *
+ * Listed positively rather than as "not SUCCESS", because the set of statuses
+ * that are neither is the interesting one: QUEUED and WORKING are a build that
+ * is still going, and PENDING is one that has not started. None of them is a
+ * reason to paint the output red.
+ */
+export function buildFailed(status: string): boolean {
+  return ["FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"].includes(String(status || "").toUpperCase());
+}
+
 /** The tail of this app's most recent Cloud Build, by the tag every deploy sets. */
 async function lastBuildLog(slug: string, limit: number): Promise<LogLine[]> {
   const list = await capture([
@@ -54,7 +66,13 @@ async function lastBuildLog(slug: string, limit: number): Promise<LogLine[]> {
       time: createTime ?? "",
       // A failed build's output is the explanation; marking it ERROR is what puts
       // it in front of someone filtering for the problem.
-      severity: status === "SUCCESS" ? "INFO" : "ERROR",
+      //
+      // But a build that has not finished has not failed, and treating "not
+      // SUCCESS" as "bad" labelled every line of a healthy in-flight build as an
+      // error: watching y7ux3 build on 1 Aug showed `Pulling fs layer` and `Pull
+      // complete` in red, forty lines of them, while the build was WORKING and
+      // fine. Someone filtering for the problem then finds the whole log.
+      severity: buildFailed(status) ? "ERROR" : "INFO",
     })),
   ];
 }
