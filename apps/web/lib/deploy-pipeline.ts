@@ -960,6 +960,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       if (cfg) {
         appConfig = cfg;
         configured = planFromConfig(cfg);
+        // A database is provisioned once for the whole app, and provisioning is
+        // driven by the plan of the PRIMARY service — so a config where only a
+        // sibling declares needsDB got no database at all. That is the normal
+        // shape of the thing this feature exists for: a static frontend on "/"
+        // and an API on "/api" that is the only part touching Postgres.
+        if (cfg.services.some((svc) => svc.needsDB)) configured.needsDB = true;
         log(`Using ${CONFIG_FILENAME} — no planning needed`);
       }
     } catch (e) {
