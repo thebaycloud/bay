@@ -35,7 +35,17 @@ const DROP = new Set([
   // by Google before the container is ever reached. x-forwarded-host below
   // carries the client-facing name that the app has to put in its own URLs.
   "host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-  "te", "trailer", "transfer-encoding", "upgrade", "authorization",
+  "te", "trailer", "transfer-encoding", "upgrade",
+  // `authorization` is deliberately NOT dropped. It used to be, because the
+  // invoker token for Cloud Run was written into that same slot — so the app's
+  // own credentials were destroyed to make room for ours, and any app
+  // authenticating with a bearer token appeared to log its users out the instant
+  // they signed in. The invoker token moved to x-serverless-authorization
+  // (see forward.ts) and this header now belongs to the visitor again.
+  //
+  // Ours must still never leak the other way: a token minted for one app's
+  // audience is stripped on the way back, not passed to another upstream.
+  "x-serverless-authorization",
   // RFC 7239's header, dropped for the same reason as the x-forwarded-* family.
   "forwarded",
   // Dropped so upstream HTML comes back uncompressed and we can inject the

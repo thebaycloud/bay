@@ -210,3 +210,26 @@ test("stripping leaves an ordinary response untouched", () => {
   const headers = { "content-type": "application/json", etag: "W/\"abc\"", "cache-control": "no-cache" };
   assert.deepEqual(stripHopByHop({ ...headers }), headers);
 });
+
+test("the visitor's own Authorization reaches the app", () => {
+  // It did not, and that is what "it keeps logging me out" was: the invoker
+  // token for Cloud Run was written into the same header, so an app using
+  // OAuth2PasswordBearer got a token minted for Google instead of its user's.
+  const out = buildUpstreamHeaders(
+    { authorization: "Bearer app-users-own-jwt", cookie: "x=1" },
+    { userId: "u1", email: "a@b.c", name: "A" },
+    "__Secure-authjs.session-token",
+  );
+  assert.equal(out.authorization, "Bearer app-users-own-jwt");
+});
+
+test("an inbound x-serverless-authorization is never trusted through", () => {
+  // The slot the invoker token now lives in. A visitor who could set it would be
+  // choosing what we present to Cloud Run.
+  const out = buildUpstreamHeaders(
+    { "x-serverless-authorization": "Bearer forged" },
+    { userId: "u1", email: "a@b.c", name: "A" },
+    "__Secure-authjs.session-token",
+  );
+  assert.equal(out["x-serverless-authorization"], undefined);
+});

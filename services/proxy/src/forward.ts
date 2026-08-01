@@ -20,8 +20,20 @@ export async function forward(
   headers["x-supersonic-workspace"] = workspaceDomain;
 
   // Cloud Run rejects unauthenticated calls; we are the only allowed invoker.
+  //
+  // In X-Serverless-Authorization, NOT Authorization. There is one Authorization
+  // header, and putting our invoker token in it means the visitor's own token
+  // never reaches their app. That is not a corner case: FastAPI's
+  // OAuth2PasswordBearer, and practically every SPA that holds a JWT, sends
+  // credentials exactly there. The observed shape is an app that looks like it
+  // logs you out at random — POST /login/access-token succeeds, because logging
+  // in needs no token, and then every single authenticated request 403s and the
+  // frontend bounces back to the sign-in page.
+  //
+  // Cloud Run reads this header first when it is present and leaves Authorization
+  // untouched for the container, which is the entire reason it exists.
   if (!process.env.SKIP_ID_TOKEN) {
-    headers.authorization = `Bearer ${await idTokenFor(new URL(targetBase).origin)}`;
+    headers["x-serverless-authorization"] = `Bearer ${await idTokenFor(new URL(targetBase).origin)}`;
   }
 
   const doRequest = target.protocol === "https:" ? httpsRequest : httpRequest;
