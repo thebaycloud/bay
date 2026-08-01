@@ -230,6 +230,25 @@ export interface DeployPlan {
   reason?: string;       // one line: how the agent read the stack (for logs)
 }
 
+/**
+ * Thrown when the planner answered, but not completely.
+ *
+ * The old code threw a bare Error here, and everything the planner had learned
+ * went with it — the caller fell back to a detector that had never read the
+ * repo. On 1 Aug that fallback routed a Python app into the Node runner while
+ * the planner's own reading of `pyproject.toml` sat discarded.
+ *
+ * A language without a run command is not a deployable plan, but it is still the
+ * answer to the question that actually went wrong: which lane. Carrying it lets
+ * the caller keep the part that was known and refuse only the part that was not.
+ */
+export class PartialPlan extends Error {
+  constructor(readonly plan: Partial<DeployPlan>, message: string) {
+    super(message);
+    this.name = "PartialPlan";
+  }
+}
+
 const PLAN_AGENT_MD = `---
 description: Reads a repo and outputs a deploy plan as JSON
 mode: primary
@@ -466,7 +485,9 @@ export async function planDeploy(opts: {
   // entrypoint, so demanding a run command here threw away every correct plan
   // for those languages and silently fell back to the detector.
   if (!plan.static && !plan.run && plan.language !== "other") {
-    throw new Error("planner returned no run command for a server app");
+    // Partial, not worthless: the language it did settle is the lane decision,
+    // and losing that is what sent a FastAPI repo to the Node runner.
+    throw new PartialPlan({ language: plan.language }, "planner returned no run command for a server app");
   }
   // `plan.run` is optional now that `other` (Go, Rust, Java) is a legal plan with
   // no run command — those are built as containers and carry their own entrypoint.

@@ -5,7 +5,7 @@ import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync, unli
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
-import { opencodeRepair, planDeploy, type DeployPlan } from "@/lib/opencode-deploy";
+import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps, runtimeMismatch } from "@/lib/plan-deps";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
@@ -1068,6 +1068,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       } catch (e) {
         if (configured) throw e;   // a config error is the user's to fix, not ours to route around
         plannerFailed = true;
+        // Keep whatever the planner did settle. A language without a run command
+        // is not a deployable plan, but it IS the lane decision — and throwing it
+        // away is how a repo the planner had read as Python ended up in the Node
+        // runner, on the word of a detector that had read nothing.
+        if (e instanceof PartialPlan && e.plan.language) {
+          if (e.plan.language === "node" || e.plan.language === "python") {
+            s.runtime = e.plan.language;
+            log(`Planner settled the language (${e.plan.language}) but not how to start it — keeping the language.`);
+          }
+        }
         // Said out loud AND recorded on the deploy row, because it changes what
         // deployed this app. A planner that gave up quietly left someone reading a
         // failure from the fallback detector with no way to know that the plan
