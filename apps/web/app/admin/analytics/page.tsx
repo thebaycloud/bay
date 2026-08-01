@@ -3,13 +3,14 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { currentAdminEmail } from "@/lib/admin";
-import { buildReport } from "@/lib/analytics/report";
+import { buildReport, panelError, type SourceName } from "@/lib/analytics/report";
 import { formatRate, formatDuration } from "@/lib/analytics/metrics";
 import * as q from "@/lib/analytics/queries";
 import {
   Caveat,
   CountBars,
   Funnel,
+  Panel,
   OutcomeBar,
   RankedBars,
   RateBars,
@@ -52,7 +53,9 @@ export default async function AnalyticsPage({
   const now = new Date();
   const window = q.windowOf(days, now);
 
-  const [users, apps, stages, firstDeploys, deployStates, errorEvents, oldestEventAt] = await Promise.all([
+  // Every read is attempted, whatever the others do: one broken query must cost
+  // its own panel and nothing else.
+  const [users, apps, stages, firstDeploys, deployStates, errorEvents, oldest] = await Promise.all([
     q.users(),
     q.apps(),
     q.stages(window),
@@ -63,22 +66,34 @@ export default async function AnalyticsPage({
   ]);
 
   const slugOwners = new Map<string, string>();
-  for (const d of deployStates) if (d.ownerId) slugOwners.set(d.slug, d.ownerId);
-  for (const a of apps) slugOwners.set(a.slug, a.ownerId);
+  for (const d of deployStates.rows) if (d.ownerId) slugOwners.set(d.slug, d.ownerId);
+  for (const a of apps.rows) slugOwners.set(a.slug, a.ownerId);
 
   const r = buildReport({
-    users,
-    apps,
+    users: users.rows,
+    apps: apps.rows,
     stages: stages.rows,
     stagesTruncated: stages.truncated,
-    firstDeploys,
-    deployStates,
-    errorEvents,
-    oldestEventAt,
+    firstDeploys: firstDeploys.rows,
+    deployStates: deployStates.rows,
+    errorEvents: errorEvents.rows,
+    oldestEventAt: oldest.at,
     slugOwners,
     window,
     now,
+    sources: {
+      users: users.error,
+      apps: apps.error,
+      stages: stages.error,
+      firstDeploys: firstDeploys.error,
+      deployStates: deployStates.error,
+      errorEvents: errorEvents.error,
+      oldestEventAt: oldest.error,
+    },
   });
+
+  /** The message for a panel whose data did not load, or null if it did. */
+  const broken = (...names: SourceName[]) => panelError(r.sources, names);
 
   const { acquisition: acq, activation: act, reliability: rel, speed: spd, depth: dep } = r;
 
@@ -103,6 +118,22 @@ export default async function AnalyticsPage({
                 ))}
               </nav>
             </header>
+
+            {r.issues.length > 0 && (
+              <div className="an-warn fatal">
+                <b>
+                  {r.issues.length} of the 7 reads behind this page failed. Those panels are marked;
+                  do not read them as measurements.
+                </b>
+                <ul className="an-warn-list">
+                  {r.issues.map((i) => (
+                    <li key={i.source}>
+                      {i.source} — {i.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {r.truncated && (
               <div className="an-warn">
@@ -147,15 +178,11 @@ export default async function AnalyticsPage({
 
             {/* ── Acquisition ─────────────────────────────────────────────── */}
             <Section title="Acquisition" blurb="Who arrives, and where they stop.">
-              <div className="an-panel">
-                <div className="an-panel-title">
-                  Signups, by {acq.granularity} · {acq.newInWindow} in this window
-                </div>
+              <Panel title={<>Signups, by {acq.granularity} · {acq.newInWindow} in this window</>} error={broken("users")}>
                 <CountBars series={acq.signups} unit="signups" />
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">From signing up to something that works</div>
+              <Panel title="From signing up to something that works" error={broken("users", "apps", "firstDeploys")}>
                 <Funnel steps={acq.steps} />
                 <Caveat>
                   All time, not this window — a funnel over 30 days counts people who signed up
@@ -163,10 +190,9 @@ export default async function AnalyticsPage({
                   row in <span className="mono">deploy_stages</span>; apps deployed before that table
                   existed are invisible here and drag this step down.
                 </Caveat>
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">Where accounts stall</div>
+              <Panel title="Where accounts stall" error={broken("users", "apps", "firstDeploys")}>
                 <Table
                   columns={["stalled at", "users", "what it means"]}
                   rows={[
@@ -180,12 +206,12 @@ export default async function AnalyticsPage({
                   The third row is the one to act on: those are people who used the product as
                   intended and it did not work for them.
                 </Caveat>
-              </div>
+              </Panel>
             </Section>
 
             {/* ── Activation ──────────────────────────────────────────────── */}
             <Section title="Activation" blurb="How many get to a first working deploy, and how long it takes.">
-              <div className="an-panel">
+              <Panel title="First working deploy" error={broken("users", "firstDeploys")}>
                 <div className="an-tiles inner">
                   <StatTile label="activated" value={`${act.activated}`} sub={`of ${act.eligible} accounts · ${formatRate(act.rate)}`} />
                   <StatTile
@@ -210,13 +236,12 @@ export default async function AnalyticsPage({
                     before the account existed and {act.untimeable === 1 ? "is" : "are"} counted as activated but left out of the timings.</>
                   )}
                 </Caveat>
-              </div>
+              </Panel>
             </Section>
 
             {/* ── Reliability ─────────────────────────────────────────────── */}
             <Section title="Reliability" blurb={`Do deploys work? Last ${days} days.`}>
-              <div className="an-panel">
-                <div className="an-panel-title">{rel.attempts} deploys in this window</div>
+              <Panel title={<>{rel.attempts} deploys in this window</>} error={broken("stages")}>
                 <OutcomeBar ok={rel.ok} failed={rel.failed} unknown={rel.unknown} />
                 <Caveat>
                   A deploy here is one thing a person started, not one push to Cloud Run: the repair
@@ -225,15 +250,13 @@ export default async function AnalyticsPage({
                   deploy still running, or one whose process died without writing an outcome — they
                   are excluded from the rate rather than counted as failures.
                 </Caveat>
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">Success rate over time</div>
+              <Panel title="Success rate over time" error={broken("stages")}>
                 <RateBars series={rel.overTime} />
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">By lane</div>
+              <Panel title="By lane" error={broken("stages")}>
                 <Table
                   columns={["lane", "deploys", "succeeded", "failed", "rate"]}
                   rows={rel.byLane.map((l) => [l.lane, l.total, l.ok, l.failed, formatRate(l.rate)])}
@@ -252,10 +275,9 @@ export default async function AnalyticsPage({
                   is not known yet, so a lane read off an early row would file every static deploy
                   under generic.
                 </Caveat>
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">The repair agent</div>
+              <Panel title="The repair agent" error={broken("stages")}>
                 <div className="an-tiles inner">
                   <StatTile label="ran on" value={`${rel.repairRuns}`} sub={`of ${rel.attempts} deploys`} />
                   <StatTile label="rescued the deploy" value={formatRate(rel.repairRate)} sub={`${rel.repairHelped} of ${rel.repairRuns}`} />
@@ -265,10 +287,9 @@ export default async function AnalyticsPage({
                   runs, so it gets the last word. This panel is how to tell how much of the success
                   rate is being bought by it.
                 </Caveat>
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">Why deploys failed — from the per-deploy event log</div>
+              <Panel title="Why deploys failed — from the per-deploy event log" error={broken("errorEvents")}>
                 <RankedBars
                   rows={rel.reasonsFromEvents.map((f) => ({ label: f.reason, value: f.count, display: String(f.count) }))}
                   emptyText="No failure events in this window."
@@ -277,17 +298,16 @@ export default async function AnalyticsPage({
                   One row per failed deploy, which makes this the only source that can say how <i>often</i>{" "}
                   something goes wrong. It is also the shortest-lived: <span className="mono">pruneEvents</span>{" "}
                   drops anything older than {q.EVENT_RETENTION_DAYS} days, so
-                  {oldestEventAt ? (
-                    <> the log currently reaches back only to {oldestEventAt.toISOString().slice(0, 10)}</>
+                  {oldest.at ? (
+                    <> the log currently reaches back only to {oldest.at.toISOString().slice(0, 10)}</>
                   ) : (
                     <> the log is empty</>
                   )}
                   {days > q.EVENT_RETENTION_DAYS && <>, well short of the {days}-day range selected above</>}.
                 </Caveat>
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">Why apps are currently broken — from the latest state per app</div>
+              <Panel title="Why apps are currently broken — from the latest state per app" error={broken("deployStates")}>
                 <RankedBars
                   rows={rel.reasonsFromAppState.map((f) => ({ label: f.reason, value: f.count, display: String(f.count) }))}
                   emptyText="No apps are in a failed state."
@@ -298,13 +318,12 @@ export default async function AnalyticsPage({
                   often that happens. An app that failed forty times and then worked contributes
                   nothing here. Do not add these to the numbers above.
                 </Caveat>
-              </div>
+              </Panel>
             </Section>
 
             {/* ── Speed ───────────────────────────────────────────────────── */}
             <Section title="Speed" blurb="Where a deploy's time goes. Nobody had looked at this table before.">
-              <div className="an-panel">
-                <div className="an-panel-title">Stages, slowest median first</div>
+              <Panel title="Stages, slowest median first" error={broken("stages")}>
                 <RankedBars
                   rows={spd.stages.map((s) => ({
                     label: s.stage,
@@ -335,10 +354,9 @@ export default async function AnalyticsPage({
                     because adding them would count the same seconds twice.
                   </Caveat>
                 )}
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">Whole deploys, by lane</div>
+              <Panel title="Whole deploys, by lane" error={broken("stages")}>
                 <Table
                   columns={["lane", "deploys", "median", "p90", "slowest"]}
                   rows={spd.byLane.map((l) => [l.lane, l.n, formatDuration(l.p50), formatDuration(l.p90), formatDuration(l.max)])}
@@ -348,13 +366,12 @@ export default async function AnalyticsPage({
                   First stage to last stage, which is server-side time. It is not what a user waits:
                   the CLI returns in about a second and the build continues without them.
                 </Caveat>
-              </div>
+              </Panel>
             </Section>
 
             {/* ── Retention and depth ─────────────────────────────────────── */}
             <Section title="Retention and depth" blurb="Do people come back, and how much do they build?">
-              <div className="an-panel">
-                <div className="an-panel-title">Still active after week one</div>
+              <Panel title="Still active after week one" error={broken("users", "apps", "deployStates")}>
                 <div className="an-tiles inner">
                   <StatTile label="came back" value={formatRate(dep.retention.rate)} sub={`${dep.retention.returned} of ${dep.retention.returned + dep.retention.didNotReturn}`} />
                   <StatTile label="did not" value={String(dep.retention.didNotReturn)} />
@@ -368,10 +385,9 @@ export default async function AnalyticsPage({
                   <span className="mono">deploys</span> keeps only the latest timestamp per app, a user
                   who deployed six times in week three shows up as having returned, but the six does not.
                 </Caveat>
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">Apps per user</div>
+              <Panel title="Apps per user" error={broken("apps")}>
                 <Table
                   columns={["apps owned", "users"]}
                   rows={dep.appsPerUserHistogram.map((h) => [h.apps, h.users])}
@@ -386,10 +402,9 @@ export default async function AnalyticsPage({
                     in Acquisition.
                   </Caveat>
                 )}
-              </div>
+              </Panel>
 
-              <div className="an-panel">
-                <div className="an-panel-title">Plans and subscription status</div>
+              <Panel title="Plans and subscription status" error={broken("users")}>
                 <div className="an-two">
                   <Table columns={["plan", "users"]} rows={dep.plans.map((p) => [p.plan, p.count])} emptyText="No users." />
                   <Table columns={["status", "users"]} rows={dep.statuses.map((s) => [s.status, s.count])} emptyText="No users." />
@@ -399,7 +414,7 @@ export default async function AnalyticsPage({
                   <span className="mono">GATING_ENABLED</span> off, everyone is treated as Pro whatever
                   this says; at least one row here was set by hand for testing.
                 </Caveat>
-              </div>
+              </Panel>
             </Section>
 
             <footer className="an-foot">
