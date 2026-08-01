@@ -327,7 +327,12 @@ function dbContainerArgs(connectionName: string): string[] {
   return [
     "--container", "cloudsql-proxy",
     "--image", CLOUD_SQL_PROXY_IMAGE,
-    "--args", `--port=${DB_PORT},--address=${DB_HOST},${connectionName}`,
+    // `--args=…` as ONE token. Passed as two, gcloud reads the value's leading
+    // `--port=` as a flag of its own and refuses with "expected one argument".
+    // Identical to the mistake already fixed in startDeployJob — the value
+    // beginning with a dash is what makes it look like a flag, and the fix is
+    // never to let it be a separate argv entry.
+    `--args=--port=${DB_PORT},--address=${DB_HOST},${connectionName}`,
   ];
 }
 
