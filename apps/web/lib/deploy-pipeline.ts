@@ -13,6 +13,7 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
+import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -136,6 +137,19 @@ function capture(cmd: string, args: string[]) {
     p.on("error", reject);
     p.on("close", (c) => (c === 0 ? resolve(out) : reject(new Error(err.trim() || `${cmd} exited ${c}`))));
   });
+}
+
+/**
+ * The detector, pointed at one directory.
+ *
+ * Identical to the detect stage's own invocation — deliberately the same
+ * subprocess and the same `--api` envelope, so a service inferred from a
+ * subdirectory is read by exactly the code that reads a single-app repo, and the
+ * two cannot drift into disagreeing about what a Vite project is.
+ */
+async function detectStackIn(absoluteDir: string): Promise<DetectedStack> {
+  const raw = await capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", absoluteDir, "--api"]);
+  return JSON.parse(raw.slice(raw.indexOf("{"))).stack as DetectedStack;
 }
 /**
  * The container's ACTUAL startup crash, from Cloud Run's logs.
@@ -983,10 +997,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     let configured: DeployPlan | null = null;
     // Kept for the sibling services declared alongside the primary.
     let appConfig: AppConfig | null = null;
+    // True only for a config the USER wrote. An inferred one is our own reading
+    // of the repo, and when our reading turns out to be unusable the planner is
+    // the right next step — whereas a hand-written config that fails is the
+    // user's to fix and must not be routed around. Same distinction the catch
+    // below already draws for ConfigError, one level up.
+    let configWasWritten = false;
     try {
       const cfg = readAppConfig(dir);
       if (cfg) {
         appConfig = cfg;
+        configWasWritten = true;
         configured = planFromConfig(cfg);
         // A database is provisioned once for the whole app, and provisioning is
         // driven by the plan of the PRIMARY service — so a config where only a
@@ -1001,6 +1022,35 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // make a typo look like the platform ignoring what the user asked for, and
       // they would have no way to tell the difference.
       throw e instanceof ConfigError ? new Error(e.message) : e;
+    }
+
+    // No config — but the repository may still be more than one app, and if it
+    // is, no single-service plan can be right no matter who produced it. The
+    // planner's own output type has one language, one run command and one port;
+    // asked about a `frontend/` beside a `backend/` it can only answer with half
+    // the repository, and on 1 Aug that is exactly what shipped: the detector
+    // read the ROOT of such a repo as "Static site, 80%" — its highest-confidence
+    // answer, and wrong — while pointing the same detector at each subdirectory
+    // returns 95% and 90%, both right.
+    //
+    // So look before planning. This declines on every single-app repository, in
+    // which case nothing below changes.
+    if (!appConfig) {
+      const inferred = await stages.around("infer-services", () => inferAppConfig(dir, detectStackIn));
+      if (inferred) {
+        appConfig = inferred;
+        configured = planFromConfig(inferred);
+        if (inferred.services.some((svc) => svc.needsDB)) configured.needsDB = true;
+        log(`This repository is ${inferred.services.length} apps, not one:`);
+        for (const svc of inferred.services) {
+          const how = svc.start ? svc.start : `${svc.outputDir ?? "."}/ as static files`;
+          log(`  ${servicePath(svc).padEnd(6)} ${svc.dir}  ·  ${svc.language}  ·  ${how}`);
+        }
+        // Named because inference is the platform's opinion, not the author's,
+        // and the author must be able to overrule it without arguing with a log
+        // line. `supersonic patch` already exists to deliver a file back.
+        log(`Deploying them together behind one address. Write ${CONFIG_FILENAME} to pin or change this.`);
+      }
     }
 
     if (configured || PLANNER_ENABLED) {
@@ -1090,7 +1140,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // deploy of the same bytes a plan this one had already refused.
         if (worthCaching && cacheKey) await putCachedPlan(cacheKey, plan);
       } catch (e) {
-        if (configured) throw e;   // a config error is the user's to fix, not ours to route around
+        if (configWasWritten) throw e;   // a config error is the user's to fix, not ours to route around
+        // An INFERRED config is our own reading, not the author's instruction,
+        // so a failure here is not theirs to fix. Drop it: deploying siblings
+        // off a split whose primary never applied would put half an app behind
+        // an address that serves the other half from a different plan.
+        if (appConfig) {
+          appConfig = null;
+          log("The inferred split did not hold up — falling back to a single service.");
+        }
         plannerFailed = true;
         // Keep whatever the planner did settle. A language without a run command
         // is not a deployable plan, but it IS the lane decision — and throwing it

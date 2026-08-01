@@ -39,7 +39,12 @@ export interface DetectedStack {
   database?: { engine: string | null; via?: string | null };
 }
 
-export type Detect = (absoluteDir: string) => DetectedStack;
+/**
+ * Async because the real one spawns the deploy-agent as a subprocess, the same
+ * way the pipeline's own detect stage does. A synchronous version would block
+ * the control plane's event loop once per service.
+ */
+export type Detect = (absoluteDir: string) => Promise<DetectedStack>;
 
 /**
  * Frameworks whose job is to answer a browser. One of these owns `/`, because
@@ -196,9 +201,16 @@ function serviceFor(relDir: string, stack: DetectedStack, absoluteDir: string): 
  * out of `services/deploy-agent`, and a module that spawns one is a module that
  * cannot be tested without spawning four.
  */
-export function inferAppConfig(repoDir: string, detect: Detect): AppConfig | null {
+export async function inferAppConfig(repoDir: string, detect: Detect): Promise<AppConfig | null> {
   const facts = readRepoFacts(repoDir);
   if (!facts.declarations.length) return null;
+
+  // The pipeline already holds this rule one level down: "A project that ships
+  // its own Dockerfile always takes a container lane, whatever the detector
+  // concluded. The author was explicit." Splitting such a repo would put an
+  // inference above an instruction, which is the exact inversion this module
+  // exists to stop. A Dockerfile deeper in the tree says nothing about the whole.
+  if (facts.dockerfiles.includes("Dockerfile")) return null;
 
   // One entry per directory that declares anything AND has something to run,
   // discovery order preserved.
@@ -218,10 +230,19 @@ export function inferAppConfig(repoDir: string, detect: Detect): AppConfig | nul
   const parts = nested.length >= 2 || (dirs.includes(".") && isWorkspaceRoot(repoDir)) ? nested : dirs;
   if (parts.length < 2) return null;
 
-  const detected = parts.map((rel) => {
-    const abs = rel === "." ? repoDir : join(repoDir, rel);
-    return { rel, abs, stack: detect(abs) };
-  });
+  // A part we could not read is a part we cannot deploy, so the whole split is
+  // off — but the DEPLOY is not. Inference is an upgrade, never a prerequisite:
+  // declining hands the repo back to the path it takes today, while throwing
+  // would make having this module worse than not having it.
+  let detected;
+  try {
+    detected = await Promise.all(parts.map(async (rel) => {
+      const abs = rel === "." ? repoDir : join(repoDir, rel);
+      return { rel, abs, stack: await detect(abs) };
+    }));
+  } catch {
+    return null;
+  }
 
   // Whatever answers a browser owns the app's own address. With no such part —
   // two APIs, say — the first declared one does, so the app still has something

@@ -25,7 +25,7 @@ function repo(files: Record<string, string>): string {
  * fact is what this module is built on, so the fake reproduces it rather than
  * asserting something more convenient.
  */
-function detector(dir: string): DetectedStack {
+async function detector(dir: string): Promise<DetectedStack> {
   const vite: DetectedStack = {
     language: "JavaScript", framework: "Vite (SPA)",
     installCommand: "npm install", buildCommand: "npm run build", startCommand: "(static)",
@@ -53,33 +53,33 @@ function detector(dir: string): DetectedStack {
   return bare;
 }
 
-test("a repo with a frontend beside a backend infers one service for each", () => {
+test("a repo with a frontend beside a backend infers one service for each", async () => {
   const dir = repo({
     "frontend/package.json": '{"dependencies":{"vite":"^5"},"scripts":{"build":"vite build"}}',
     "backend/requirements.txt": "fastapi\nuvicorn\n",
     "backend/app/main.py": "app = 1\n",
   });
 
-  const cfg = inferAppConfig(dir, detector);
+  const cfg = (await inferAppConfig(dir, detector));
 
   assert.ok(cfg, "a two-part repo must infer a config");
   assert.deepEqual(cfg.services.map((s) => s.dir), ["frontend", "backend"]);
 });
 
-test("the part that serves a browser owns / and the API is routed under /api", () => {
+test("the part that serves a browser owns / and the API is routed under /api", async () => {
   const dir = repo({
     "frontend/package.json": '{"dependencies":{"vite":"^5"},"scripts":{"build":"vite build"}}',
     "backend/requirements.txt": "fastapi\n",
     "backend/app/main.py": "app = 1\n",
   });
 
-  const cfg = inferAppConfig(dir, detector)!;
+  const cfg = (await inferAppConfig(dir, detector))!;
 
   assert.equal(cfg.services.find((s) => s.dir === "frontend")?.path, "/");
   assert.equal(cfg.services.find((s) => s.dir === "backend")?.path, "/api");
 });
 
-test("an inferred Python service starts on $PORT, never on a hardcoded one", () => {
+test("an inferred Python service starts on $PORT, never on a hardcoded one", async () => {
   // The runner refuses to guess a Python start command (entrypoint.sh: "FATAL: no
   // run command"), so inference has to supply one — and the detector's is
   // hardcoded to :8000 while Cloud Run only ever routes to $PORT.
@@ -89,13 +89,13 @@ test("an inferred Python service starts on $PORT, never on a hardcoded one", () 
     "backend/app/main.py": "app = 1\n",
   });
 
-  const start = inferAppConfig(dir, detector)!.services.find((s) => s.dir === "backend")!.start!;
+  const start = (await inferAppConfig(dir, detector))!.services.find((s) => s.dir === "backend")!.start!;
 
   assert.match(start, /\$PORT/);
   assert.doesNotMatch(start, /8000/);
 });
 
-test("the ASGI module path follows where main.py actually is", () => {
+test("the ASGI module path follows where main.py actually is", async () => {
   // `uvicorn main:app` is right for backend/main.py and wrong for
   // backend/app/main.py — the detector says the first for both.
   const nested = repo({
@@ -109,11 +109,11 @@ test("the ASGI module path follows where main.py actually is", () => {
     "backend/main.py": "app = 1\n",
   });
 
-  assert.match(inferAppConfig(nested, detector)!.services.find((s) => s.dir === "backend")!.start!, /app\.main:app/);
-  assert.match(inferAppConfig(flat, detector)!.services.find((s) => s.dir === "backend")!.start!, /(?<!\.)main:app/);
+  assert.match((await inferAppConfig(nested, detector))!.services.find((s) => s.dir === "backend")!.start!, /app\.main:app/);
+  assert.match((await inferAppConfig(flat, detector))!.services.find((s) => s.dir === "backend")!.start!, /(?<!\.)main:app/);
 });
 
-test("a single-part repo infers nothing, so today's path is untouched", () => {
+test("a single-part repo infers nothing, so today's path is untouched", async () => {
   // The no-regression guarantee: everything that deploys today must keep taking
   // exactly the route it takes today, which means inference has to decline.
   const dir = repo({
@@ -121,10 +121,10 @@ test("a single-part repo infers nothing, so today's path is untouched", () => {
     "prisma/schema.prisma": 'datasource db { provider = "postgresql" }',
   });
 
-  assert.equal(inferAppConfig(dir, detector), null);
+  assert.equal((await inferAppConfig(dir, detector)), null);
 });
 
-test("a test harness beside the app is not a second service", () => {
+test("a test harness beside the app is not a second service", async () => {
   // The false positive that matters most: almost every serious repo has an
   // `e2e/` or `tests/` with a package.json of its own. Reading one as a service
   // would take a single-app repo that deploys today and route half its traffic
@@ -134,10 +134,10 @@ test("a test harness beside the app is not a second service", () => {
     "e2e/package.json": '{"devDependencies":{"@playwright/test":"^1"},"scripts":{"test":"playwright test"}}',
   });
 
-  assert.equal(inferAppConfig(dir, detector), null);
+  assert.equal((await inferAppConfig(dir, detector)), null);
 });
 
-test("a package that neither builds nor starts is not a service", () => {
+test("a package that neither builds nor starts is not a service", async () => {
   // Name lists only catch the conventions people happen to follow. A package
   // with no build and no start script has nothing to deploy whatever it is
   // called.
@@ -146,10 +146,44 @@ test("a package that neither builds nor starts is not a service", () => {
     "fixtures/package.json": '{"scripts":{"lint":"eslint ."}}',
   });
 
-  assert.equal(inferAppConfig(dir, detector), null);
+  assert.equal((await inferAppConfig(dir, detector)), null);
 });
 
-test("a workspace root is not a service of its own", () => {
+test("a detector that fails on one part declines instead of failing the deploy", async () => {
+  // Inference is an upgrade, never a prerequisite. A part we could not read is a
+  // part we cannot deploy, and taking the whole deploy down over it would make
+  // this strictly worse than not having it — the same rule build-config.ts
+  // already states about the layer cache.
+  const dir = repo({
+    "frontend/package.json": '{"dependencies":{"vite":"^5"},"scripts":{"build":"vite build"}}',
+    "backend/requirements.txt": "fastapi\n",
+    "backend/app/main.py": "app = 1\n",
+  });
+
+  const broken = async (d: string): Promise<DetectedStack> => {
+    if (/backend/.test(d)) throw new Error("detect exited 1");
+    return detector(d);
+  };
+
+  assert.equal(await inferAppConfig(dir, broken), null);
+});
+
+test("a root Dockerfile is the author's own build, not ours to split", async () => {
+  // The pipeline already holds this rule for the single-service path: "A project
+  // that ships its own Dockerfile always takes a container lane, whatever the
+  // detector concluded. The author was explicit." Splitting such a repo would
+  // override an explicit instruction with an inference.
+  const dir = repo({
+    "Dockerfile": "FROM node:22\nCOPY . .\n",
+    "frontend/package.json": '{"dependencies":{"vite":"^5"},"scripts":{"build":"vite build"}}',
+    "backend/requirements.txt": "fastapi\n",
+    "backend/app/main.py": "app = 1\n",
+  });
+
+  assert.equal(await inferAppConfig(dir, detector), null);
+});
+
+test("a workspace root is not a service of its own", async () => {
   // A root package.json declaring `workspaces` describes the repo, not an app.
   // Treating it as a third service deploys the monorepo root as an app.
   const dir = repo({
@@ -159,7 +193,7 @@ test("a workspace root is not a service of its own", () => {
     "apps/api/main.py": "app = 1\n",
   });
 
-  const cfg = inferAppConfig(dir, detector)!;
+  const cfg = (await inferAppConfig(dir, detector))!;
 
   assert.deepEqual(cfg.services.map((s) => s.dir), ["apps/web", "apps/api"]);
 });
