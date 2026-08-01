@@ -32,6 +32,10 @@ import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, run
 import { deployArgs, databaseEnv, DB_HOST, DB_PORT, DEFAULT_SCALE, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
+// frameworkBuildEnv is deliberately not wired here yet: build-time variables
+// have to reach the Cloud Build config, not the revision, and that is Phase 7d.
+import { deploymentEnv } from "@/lib/framework-env";
+import type { DeploymentFacts } from "@/lib/resolve";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -1225,6 +1229,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
 
     const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
+    // Where this app will live, known before it is built because the address is
+    // derived from the slug rather than discovered from Cloud Run. An app was
+    // previously told its port, its database and its bucket, and never its own
+    // hostname — so every absolute URL it generated was the Cloud Run one.
+    const facts: DeploymentFacts = {
+      hostname: `${slug}.supersonic.cv`,
+      scheme: "https",
+      pathPrefix: appConfig ? servicePath(primaryService(appConfig)) : "/",
+      siblingUrls: {},
+    };
+    for (const [k, v] of Object.entries(deploymentEnv(s.framework, facts))) extraEnv.push(`${k}=${v}`);
     let cloudsql: string | null = null;
     // The provisioned connection string. Held here rather than pushed straight
     // into the environment, so it can go to Secret Manager where the BUILD can
@@ -1627,8 +1642,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
       // Its own environment: the shared app env, plus the pointers to ITS bundle.
       // Not the primary's — those name a different tarball and a different key.
+      //
+      // And its own deployment facts, which is where the prefix finally matters:
+      // a sibling is the service that IS mounted under one. Django on /api
+      // building its URLs as though it were at the root is the whole reason
+      // FORCE_SCRIPT_NAME exists, and the primary's facts say nothing about it.
+      const siblingFacts: DeploymentFacts = { ...facts, pathPrefix: servicePath(svc) };
+      const siblingDeployment = deploymentEnv(svc.framework, siblingFacts);
       const env = [
-        ...extraEnv.filter((e) => !e.startsWith("SUPERSONIC_CODE_") && !e.startsWith("SUPERSONIC_RUN=")),
+        ...extraEnv
+          .filter((e) => !e.startsWith("SUPERSONIC_CODE_") && !e.startsWith("SUPERSONIC_RUN="))
+          // The primary's facts must not leak into the sibling: they name a
+          // different prefix, and a stale SUPERSONIC_PATH_PREFIX is worse than
+          // none because the app would trust it.
+          .filter((e) => !Object.keys(siblingDeployment).some((k) => e.startsWith(`${k}=`))),
+        ...Object.entries(siblingDeployment).map(([k, v]) => `${k}=${v}`),
         `SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`,
         `SUPERSONIC_CODE_OBJECT=ready/${slug}/${release}.tgz`,
         `SUPERSONIC_RUN=${startCmd}`,
