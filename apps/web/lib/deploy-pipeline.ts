@@ -14,6 +14,7 @@ import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from 
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
+import { mergeDatabaseEnv } from "@/lib/env-merge";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -1321,16 +1322,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     //
     // Anything that cannot be stored falls back to a plain env var — the old
     // behaviour, and no worse than it was.
-    const secretEnv: Record<string, string> = { ...secrets };
+    // The split is delegated so that the one rule Cloud Run enforces — a name is
+    // a secret or a plain variable, never both — lives somewhere it can be
+    // tested. It was violated by an ordinary repo: the FastAPI template's `.env`
+    // names POSTGRES_DB, which lands in Secret Manager, while the platform
+    // publishes its own POSTGRES_DB for the database it just provisioned, and
+    // gcloud refuses the revision outright. See lib/env-merge.ts.
+    let secretEnv: Record<string, string> = { ...secrets };
     if (databaseUrl) {
-      secretEnv.DATABASE_URL = databaseUrl;
-      // The password is a credential wherever it appears, so it travels with the
-      // URL rather than sitting in the revision spec three more times.
-      for (const v of dbEnv) {
-        const [k, ...rest] = v.split("=");
-        if (/PASSWORD$/.test(k)) secretEnv[k] = rest.join("=");
-        else if (k !== "DATABASE_URL") extraEnv.push(v);
-      }
+      const merged = mergeDatabaseEnv(secrets, dbEnv);
+      secretEnv = merged.secretEnv;
+      extraEnv.push(...merged.plainEnv);
     }
     let secretRefs: SecretRef[] = [];
     if (Object.keys(secretEnv).length) {
