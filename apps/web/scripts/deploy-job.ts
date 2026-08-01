@@ -20,8 +20,18 @@ import { runDeploy, type DeployInput } from "@/lib/deploy-pipeline";
 import { eventSink } from "@/lib/deploy-events";
 import { claimRun, finishRun, type DeployRunRequest } from "@/lib/deploy-runs";
 import { setDeploy } from "@/lib/deploys";
+import { StageRecorder } from "@/lib/stages";
 
 const runId = (process.argv[2] || process.env.SUPERSONIC_RUN_ID || "").trim();
+
+/**
+ * When this process started running its own code.
+ *
+ * Taken at module load, before anything is awaited, so that the difference
+ * between it and the run row's created_at is everything that happened outside
+ * this process: scheduling, image pull, container start.
+ */
+const enteredAt = new Date();
 
 async function main() {
   if (!runId) {
@@ -37,9 +47,27 @@ async function main() {
     return;
   }
 
-  const { request, archive } = claimed;
+  const { request, archive, createdAt } = claimed;
   const sink = eventSink(runId, request.slug);
   console.error(`deploy-job: run ${runId} for ${request.slug}`);
+
+  // The dark half of the handoff, finally on a clock.
+  //
+  // 227 seconds passed on 1 Aug between the CLI's upload finishing and the
+  // pipeline's first line, for a repository of a few megabytes. The API records
+  // its two stages; everything after that — Cloud Run scheduling the execution,
+  // pulling the image, starting the container, and this process fetching and
+  // decrypting the source — happened inside one unattributed lump. Recorded as
+  // two stages here, it becomes four in total, and the next person to look at
+  // this number will know which part to attack.
+  if (createdAt) {
+    const cold = new StageRecorder(request.slug, "generic");
+    // From the row being written to this process reaching this line: scheduling,
+    // image pull, container start, and the archive round-trip inside claimRun.
+    await cold.end({ stage: "job-cold-start", startedAt: createdAt }, "ok");
+    // The part of that which was ours: fetching and decrypting the bundle.
+    await cold.end({ stage: "run-fetch", startedAt: enteredAt }, "ok");
+  }
 
   const input: DeployInput = {
     ownerId: request.ownerId,

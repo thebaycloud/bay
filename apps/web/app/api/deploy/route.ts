@@ -11,6 +11,7 @@ import { runDeploy } from "@/lib/deploy-pipeline";
 import { createRun, startDeployJob, finishRun, pruneRuns } from "@/lib/deploy-runs";
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
 import { getDeploy } from "@/lib/deploys";
+import { StageRecorder } from "@/lib/stages";
 
 const REGION = "us-central1";
 // Dark until set, and the in-request path below stays exactly as it was. This
@@ -218,9 +219,24 @@ export async function POST(req: Request) {
   // connection survives no longer decides whether the app gets deployed.
   if (DEPLOY_JOB) {
     let runId: string | null = null;
+    // The largest single item in the deploy budget, and the only one nothing
+    // measures. On 1 Aug, 79 seconds passed between the CLI finishing its upload
+    // and the pipeline logging its first line; on the same fixture on 1 Aug it
+    // was 227. Job scheduling, container cold start, image pull and the archive
+    // round-trip are all plausible causes and, recorded as one lump, entirely
+    // indistinguishable — so any fix would be a guess.
+    //
+    // Split at the two boundaries this process can actually see. The third,
+    // "job accepted → job running", belongs to the job and is recorded there.
+    const handoff = new StageRecorder(slug, "generic");
     try {
+      const recording = handoff.start("run-record");
       runId = await createRun(input, archive);
+      await handoff.end(recording, "ok");
+
+      const dispatch = handoff.start("job-dispatch");
       await startDeployJob(runId, REGION, DEPLOY_JOB_NAME);
+      await handoff.end(dispatch, "ok");
     } catch (e) {
       // The record holds the app's secrets and exists only so a job can pick it
       // up. If no job ever will, it is deleted now rather than left for the

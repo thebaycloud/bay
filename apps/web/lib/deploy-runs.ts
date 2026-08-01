@@ -135,10 +135,13 @@ export async function createRun(request: DeployRunRequest, archive: Buffer | nul
 }
 
 /** Pick up a recorded run: its request and, if it had one, its source bytes. */
-export async function claimRun(runId: string): Promise<{ request: DeployRunRequest; archive: Buffer | null } | null> {
+export async function claimRun(runId: string): Promise<{ request: DeployRunRequest; archive: Buffer | null; createdAt: Date | null } | null> {
   await ensure();
+  // created_at comes back so the job can measure what it cost to get here. The
+  // wait between a job being accepted and a job running is the darkest part of
+  // the deploy budget and the only clock that spans it is this column.
   const r = await getPool(DB).query(
-    `SELECT request, source_object, source_key FROM deploy_runs WHERE run_id = $1`, [runId],
+    `SELECT request, source_object, source_key, created_at FROM deploy_runs WHERE run_id = $1`, [runId],
   );
   const row = r.rows[0];
   if (!row) return null;
@@ -154,7 +157,11 @@ export async function claimRun(runId: string): Promise<{ request: DeployRunReque
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  return { request: row.request as DeployRunRequest, archive };
+  return {
+    request: row.request as DeployRunRequest,
+    archive,
+    createdAt: row.created_at ? new Date(row.created_at) : null,
+  };
 }
 
 /**
