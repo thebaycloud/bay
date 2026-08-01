@@ -2,15 +2,18 @@ export const dynamic = "force-dynamic";
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { currentAdminEmail } from "@/lib/admin";
-import { buildReport, panelError, type SourceName } from "@/lib/analytics/report";
+import { buildReport, panelError, STALL_LABEL, type SourceName, type Stall } from "@/lib/analytics/report";
 import { formatRate, formatDuration } from "@/lib/analytics/metrics";
 import * as q from "@/lib/analytics/queries";
 import {
   Caveat,
   CountBars,
+  AppsTable,
   Funnel,
   Panel,
+  PeopleTable,
   OutcomeBar,
   RankedBars,
   RateBars,
@@ -205,6 +208,45 @@ export default async function AnalyticsPage({
                 <Caveat>
                   The third row is the one to act on: those are people who used the product as
                   intended and it did not work for them.
+                </Caveat>
+              </Panel>
+            </Section>
+
+            {/* ── Who ─────────────────────────────────────────────────────── */}
+            <Section
+              title="Who"
+              blurb="The same people the funnel counts, by name. Everything above says how many; this says which."
+            >
+              <Panel
+                title={<>Users, worst-off first · {r.people.length} total</>}
+                error={broken("users", "apps", "firstDeploys", "deployStates")}
+              >
+                <PeopleTable
+                  people={r.people}
+                  stallLabel={(s) => STALL_LABEL[s as Stall] ?? s}
+                  emptyText="No users yet."
+                />
+                <Caveat>
+                  Sorted worst-off first: someone who deployed and could not get it live used the
+                  product exactly as intended and it did not work for them, which is more actionable
+                  than someone who signed in and never made an app. The four outcome counts here are
+                  the same numbers as the funnel&rsquo;s drop-offs above — if they ever disagree, one of
+                  them is wrong.{" "}
+                  <b>deploys</b> counts this window only ({days} days); <b>outcome</b> and its timing
+                  are all time, so a user can show a first success with no deploys in the window.
+                </Caveat>
+              </Panel>
+
+              <Panel
+                title={<>Apps, broken first · {r.appDetails.length} total</>}
+                error={broken("apps", "users", "deployStates")}
+              >
+                <AppsTable apps={r.appDetails} emptyText="No apps yet." />
+                <Caveat>
+                  &ldquo;What is wrong with it now&rdquo; is the latest state per app from{" "}
+                  <span className="mono">deploys</span>, which is overwritten on every deploy — it is
+                  the current reason, never a count of how often. An app with no lane never got as far
+                  as choosing one.
                 </Caveat>
               </Panel>
             </Section>
@@ -435,6 +477,9 @@ export default async function AnalyticsPage({
           </div>
         </div>
       </div>
+      {/* Same control the rest of the product uses. The page is light by
+          default; this is how an operator who wants dark asks for it. */}
+      <ThemeToggle />
     </div>
   );
 }
