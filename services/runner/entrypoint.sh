@@ -86,6 +86,45 @@ cd "$APP"
 # app's local bin on PATH so they resolve, matching how `npm run` invokes scripts.
 [ -d "$APP/node_modules/.bin" ] && export PATH="$APP/node_modules/.bin:$PATH"
 
+# Wait for the Cloud SQL proxy to accept a connection before anything runs.
+#
+# The proxy is a SIDECAR container, and `--depends-on cloudsql-proxy` orders
+# container START, not port readiness: Cloud Run starts the proxy first and then
+# starts this one, while the proxy is still authenticating and binding. An app
+# that connects at import time — every Django settings module that checks the
+# database, every SQLAlchemy engine created at module scope, and every migration
+# in the release job, which runs through this same entrypoint — can lose that
+# race and die on "connection refused" against a proxy that was listening 200ms
+# later. On the runner lane that surfaces as "didn't start on $PORT", which sends
+# whoever reads it looking at the app's port handling instead.
+#
+# Only when the platform gave this app a database: PGHOST is written by
+# databaseEnv() for exactly those apps and by nothing else. Bounded, and it gives
+# up quietly — the app's own connection error names the host and port, and a wait
+# that turned a slow proxy into a startup-probe timeout would replace a
+# diagnosable failure with an undiagnosable one.
+wait_for_db() {
+  host="${PGHOST:-127.0.0.1}"; port="${PGPORT:-5432}"
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if python3 -c "import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(s.connect_ex(('$host',$port)))" >/dev/null 2>&1; then
+      [ "$i" -gt 0 ] && log "database reachable after ${i}s"
+      return 0
+    fi
+    # Both runner images carry node as well as python3 (each installs the other
+    # for prepare-time monorepo builds), so a missing interpreter is not a reason
+    # to skip the wait.
+    if node -e "const s=require('net').connect($port,'$host');s.on('connect',()=>process.exit(0));s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1000)" >/dev/null 2>&1; then
+      [ "$i" -gt 0 ] && log "database reachable after ${i}s"
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  log "the database at $host:$port did not answer in ${i}s — starting anyway, the app's own error will say more"
+}
+if [ -n "${PGHOST:-}" ]; then wait_for_db; fi
+
 # If dependencies are already present, this is a prepared bundle: install and
 # build ran ONCE at deploy, so a starting instance does neither — this is the
 # whole point (install once, run many). If they're absent, fall back to

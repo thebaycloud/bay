@@ -32,6 +32,8 @@ import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, run
 import { deployArgs, databaseEnv, DB_HOST, DB_PORT, DEFAULT_SCALE, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
+import { classify } from "@/lib/deploy-errors";
+import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs } from "@/lib/release-job";
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
@@ -853,6 +855,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
   // Rebound because the pipeline reassigns them as it learns more: the run
   // command can come from the plan, and `url` becomes the live URL.
   let runCmd = input.runCmd;
+  /** The one-shot pre-traffic command, held out of `start`. See lib/release-job.ts. */
+  let releaseCmd = "";
   const url = input.repoUrl;
   const send = emit;
   let stages = new StageRecorder(slug, "generic");
@@ -1109,11 +1113,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         } else {
           s.serve = { mode: "container" };
           if (plan.run && !runCmd) runCmd = plan.run;               // agent supplies the run cmd
-          if (Array.isArray(plan.preRun) && plan.preRun.length && runCmd) {
-            // One-shot pre-serve steps (migrations). Folded ahead of the run cmd;
-            // `prisma migrate deploy` and friends are idempotent, so re-running on
-            // each instance start is safe.
-            runCmd = plan.preRun.filter(Boolean).join(" && ") + " && " + runCmd;
+          // Held, not folded.
+          //
+          // "`prisma migrate deploy` and friends are idempotent, so re-running
+          // on each instance start is safe" was true of Prisma and of nothing
+          // else. Folded into the start command a migration re-runs on every
+          // cold start and every scale-out instance, CONCURRENTLY: Prisma takes
+          // an advisory lock and survives that, Alembic does not. It also pays
+          // migration time on every cold start and lets Cloud Run's startup
+          // probe kill the container mid-migration. app-config.ts documented
+          // exactly this, and then three call sites did it anyway.
+          //
+          // It runs once now, in its own Cloud Run job, before the pointer
+          // moves. See lib/release-job.ts.
+          if (Array.isArray(plan.preRun) && plan.preRun.length) {
+            releaseCmd = plan.preRun.filter(Boolean).join(" && ");
           }
         }
         // needsDB is language-independent: a Go app with migrations needs its
@@ -1488,6 +1502,58 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       }
     };
     /**
+     * Run the one-shot release, ONCE, before anything moves.
+     *
+     * Not in Cloud Build: app-secrets.ts gets DATABASE_URL into the build, but
+     * the Cloud SQL proxy is a Cloud Run SIDECAR, and Cloud Build has nothing
+     * listening on 127.0.0.1:5432. The build holds a connection string pointing
+     * at a closed port. Prisma passes only because `prisma generate` never
+     * connects; `manage.py migrate` hangs to the 1200s timeout.
+     *
+     * A failure returns here and the caller never reaches `gcloud run deploy` —
+     * no revision, no traffic move, and the previous revision keeps serving the
+     * schema it was written for.
+     */
+    const runRelease = async (spec: {
+      lane: "runner" | "container" | "buildpack";
+      service: string; image?: string; source?: string; env: string[]; release: string;
+    }): Promise<{ ok: boolean; error?: string }> => {
+      if (!spec.release.trim()) return { ok: true };
+      const job = {
+        lane: spec.lane, service: spec.service, region: REGION, project: PROJECT,
+        serviceAccount: APP_RUNTIME_SA || null,
+        labels: [`supersonic-name=${friendlyName}`],
+        image: spec.image, source: spec.source,
+        release: spec.release, env: spec.env,
+        secrets: secretRefs.length ? setSecretsFlag(secretRefs) : null,
+        scale, cloudsql,
+      };
+      try {
+        await stages.around("release", async () => {
+          log(`Release: ${spec.release}`);
+          try {
+            await capture("gcloud", releaseJobArgs(job));
+          } catch (e) {
+            // Configuring the job is ours to get right — a role, a flag, a
+            // region. There is nothing in the repository for an agent to fix,
+            // so it short-circuits on the rule IAM_FAILURE already carries.
+            throw new Error(`${IAM_FAILURE}: could not configure the release job — ${e instanceof Error ? e.message : String(e)}`);
+          }
+          await run("gcloud", releaseExecuteArgs(job), log);
+        });
+        return { ok: true };
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        if (why.includes(IAM_FAILURE)) return { ok: false, error: why };
+        // `--wait` reports THAT it failed and not one line of why. The traceback
+        // is in the job's own logs — the same gap fetchContainerError closed for
+        // a crash-looping revision.
+        const detail = await capture("gcloud", releaseLogsArgs(job)).catch(() => "");
+        return { ok: false, error: `Release failed — the previous revision is still serving.\n${why}${detail ? `\n--- release log ---\n${detail}` : ""}` };
+      }
+    };
+
+    /**
      * Static lane: build the assets, copy them to GCS, then move the pointer.
      * No image is assembled, nothing is pushed to Artifact Registry, no Cloud
      * Run service is created and no revision has to roll out — which is the
@@ -1617,9 +1683,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const image = lang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE;
       const release = `${label}-${releaseId()}`;
       const key = randomBytes(32).toString("hex");
-      // preRun folds ahead of the start command exactly as it does for the
-      // primary — see the note there about migrations and cold starts.
-      const startCmd = plan.preRun?.length ? `${plan.preRun.filter(Boolean).join(" && ")} && ${plan.run}` : plan.run;
+      // A sibling gets its own release job, for the same reason and by the same
+      // route as the primary — its own image, its own bundle, its own command.
+      const startCmd = plan.run;
+      const siblingRelease = plan.preRun?.filter(Boolean).join(" && ") ?? "";
 
       try {
         await stages.around("prepare", async () => {
@@ -1684,6 +1751,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       if (siblingRefs.length) siblingApp.push(`--update-secrets=${setSecretsFlag(siblingRefs)}`);
       siblingApp.push(`--update-env-vars=^~~^${env.join("~~")}`);
 
+      const relS = await runRelease({ lane: "runner", service: name, image, env, release: siblingRelease });
+      if (!relS.ok) return { ok: false, name, error: relS.error };
       log(`Deploying ${label} on the prebuilt ${lang} runner…`);
       try {
         const args = deployArgs({
@@ -1751,6 +1820,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           const buildLog = await builds.error();
           return { ok: false, error: `Prepare failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
         }
+        const rel = await runRelease({ lane: "runner", service: slug, image, env: extraEnv, release: releaseCmd });
+        if (!rel.ok) return { ok: false, error: rel.error };
         log(`Deploying on the prebuilt ${runnerLang} runner…`);
         // Real Node apps ship a full node_modules and run `next start`; the Cloud
         // Run default of 512 MiB OOM-kills them at startup (measured: 564 MiB used
@@ -1779,6 +1850,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
         }
         clearInterval(hb);
+        const relC = await runRelease({ lane: "container", service: slug, image: `${IMAGE}:latest`, env: extraEnv, release: releaseCmd });
+        if (!relC.ok) return { ok: false, error: relC.error };
         return attempt(deployArgs({
           lane: "container", service: slug, serviceFlags: deployFlags, appFlags,
           image: `${IMAGE}:latest`, scale, cloudsql,
@@ -1788,6 +1861,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         lane: "buildpack", service: slug, serviceFlags: deployFlags, appFlags,
         source: dir, scale, cloudsql, containerFlags,
       });
+      // This lane pays for its build twice: `run jobs deploy --source` runs
+      // buildpacks again, because there is no image to reuse — the service's
+      // image only exists after `run deploy`, which is after the pointer moves.
+      // The alternative is folding the migration back into `start`, which is the
+      // bug this replaced.
+      if (releaseCmd.trim()) log("Buildpack lane: the release step builds the source a second time — this one is slower.");
+      const relB = await runRelease({ lane: "buildpack", service: slug, source: dir, env: extraEnv, release: releaseCmd });
+      if (!relB.ok) return { ok: false, error: relB.error };
       let res = await attempt(buildpack());
       if (!res.ok && /clear-base-image/i.test(res.error ?? "")) {
         log("switching build type — clearing base image and retrying…");
@@ -1817,8 +1898,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // burn redeploys on it and then bury the real cause in its summary. A
       // refusal to guess is the same shape: the repo is fine, the question was
       // ours, and there is nothing in the code for an agent to fix.
-      if ((result.error ?? "").includes(IAM_FAILURE) || (result.error ?? "").includes(AMBIGUOUS_STACK)
-        || (result.error ?? "").includes(RUNTIME_UNSUPPORTED)) {
+      // Classified in code, not by a model. Before this, only IAM_FAILURE and
+      // AMBIGUOUS_STACK short-circuited: a gcloud crash, a quota, a connection
+      // refused, a database-name collision were all handed to a repair agent
+      // with edit access to the customer's repository and asked to fix them.
+      // There is nothing there to fix in any of those cases, so the agent
+      // invents work — it once invented an app, wrote a fake .env, deleted a
+      // migrate script, and spent 428k tokens reaching `gcloud exited 1`.
+      const blame = classify(result.error);
+      if (blame.blame === "platform") {
+        if (blame.reason && blame.reason !== result.error) log(blame.reason);
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: result.error });
