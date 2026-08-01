@@ -4,6 +4,8 @@ import {
   sessionizeAttempts,
   stageDurationMs,
   LANE_BLIND_STAGES,
+  NESTED_STAGES,
+  coveredMs,
   type RawStage,
   type StageOutcome,
 } from "../lib/analytics/attempts";
@@ -237,4 +239,45 @@ test("no rows means no deploys, not a crash", () => {
 test("a stage's duration is null while it is still running", () => {
   assert.equal(stageDurationMs(s("deploy", 10, 30)), 30_000);
   assert.equal(stageDurationMs(s("deploy", 10, null, null)), null);
+});
+
+// Stages overlap in at least three ways: run-fetch and job-dispatch sit inside
+// job-cold-start, and run-record only partly overlaps it because the run row's
+// created_at is written midway through. Enumerating the overlaps can only ever
+// describe the ones somebody remembered, so the intervals are merged instead.
+test("covered time counts overlapping stages once", () => {
+  assert.equal(coveredMs([s("a", 0, 10), s("b", 0, 10)]), 10_000);
+  assert.equal(coveredMs([s("outer", 0, 100), s("inner", 20, 30)]), 100_000);
+  // Partial overlap: 0–10 and 5–20 cover 0–20.
+  assert.equal(coveredMs([s("a", 0, 10), s("b", 5, 15)]), 20_000);
+});
+
+test("covered time adds up disjoint stages and the gaps between them are not covered", () => {
+  assert.equal(coveredMs([s("a", 0, 10), s("b", 100, 10)]), 20_000);
+});
+
+test("covered time ignores stages that never finished or took no time", () => {
+  assert.equal(coveredMs([s("a", 0, 10), s("b", 50, null, null)]), 10_000);
+  assert.equal(coveredMs([s("a", 0, 0)]), 0);
+  assert.equal(coveredMs([]), 0);
+});
+
+test("covered time does not depend on the order rows arrive in", () => {
+  const rows = [s("c", 50, 20), s("a", 0, 10), s("b", 5, 15)];
+  assert.equal(coveredMs(rows), coveredMs([...rows].reverse()));
+});
+
+// The property that makes the number safe to put beside a deploy duration.
+test("covered time can never exceed the span of the deploy it describes", () => {
+  const rows = [...handoff(0), s("deploy", 210, 60, "ok", { lane: "runner" })];
+  const a = sessionizeAttempts(rows)[0];
+  assert.ok(coveredMs(a.stages) <= a.durationMs!, `${coveredMs(a.stages)} > ${a.durationMs}`);
+});
+
+test("job-dispatch is recorded as nested, because the job cannot start before it is dispatched", () => {
+  const nested = new Map(NESTED_STAGES.map(([inner, outer]) => [inner, outer]));
+  assert.equal(nested.get("job-dispatch"), "job-cold-start");
+  assert.equal(nested.get("run-fetch"), "job-cold-start");
+  // run-record only partially overlaps, so claiming containment would be wrong.
+  assert.equal(nested.has("run-record"), false);
 });

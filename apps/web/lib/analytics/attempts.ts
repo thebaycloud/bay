@@ -65,12 +65,56 @@ export const LANE_BLIND_STAGES: ReadonlySet<string> = new Set([
 export const ATTEMPT_START_STAGE = "run-record";
 
 /**
- * `run-fetch` is measured from this process starting; `job-cold-start` from the
- * run row being written. They end at the same instant, so the second contains
- * the first. Stage durations therefore do NOT sum to a deploy's duration, and
- * any panel that adds them up is lying.
+ * Stages that happen *inside* another stage, so their time is already counted.
+ *
+ * `job-cold-start` is measured from the run row being written to the job process
+ * reaching its first line. Two other stages fall entirely within that span:
+ * `run-fetch`, measured from this process starting, and `job-dispatch`, which
+ * ends when Cloud Run accepts the execution — necessarily before the execution
+ * starts running.
+ *
+ * `run-record` is NOT listed, because it only *partially* overlaps: the run row's
+ * created_at is written during it, so `job-cold-start` begins somewhere inside
+ * `run-record` rather than after it. Partial overlap is why `coveredMs` unions
+ * intervals rather than subtracting a list of known-nested stages — a list can
+ * only ever describe the overlaps somebody remembered.
  */
-export const NESTED_STAGES: ReadonlyArray<[inner: string, outer: string]> = [["run-fetch", "job-cold-start"]];
+export const NESTED_STAGES: ReadonlyArray<[inner: string, outer: string]> = [
+  ["run-fetch", "job-cold-start"],
+  ["job-dispatch", "job-cold-start"],
+];
+
+/**
+ * Wall-clock time covered by at least one recorded stage.
+ *
+ * The union of the intervals, not their sum. Stages overlap in at least three
+ * ways here and it is not safe to enumerate them, so the intervals are merged:
+ * the result is by construction never greater than the span it is measured
+ * over, and what it leaves is genuinely unattributed time rather than an
+ * artefact of double counting.
+ */
+export function coveredMs(stages: RawStage[]): number {
+  const spans = stages
+    .filter((s) => s.endedAt)
+    .map((s) => [s.startedAt.getTime(), s.endedAt!.getTime()] as [number, number])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+
+  let total = 0;
+  let openFrom = -Infinity;
+  let openTo = -Infinity;
+  for (const [from, to] of spans) {
+    if (from > openTo) {
+      if (openTo > openFrom) total += openTo - openFrom;
+      openFrom = from;
+      openTo = to;
+    } else if (to > openTo) {
+      openTo = to;
+    }
+  }
+  if (openTo > openFrom) total += openTo - openFrom;
+  return total;
+}
 
 export type AttemptOutcome = "ok" | "failed" | "unknown";
 export type RepairVerdict = "none" | "helped" | "did-not-help";
