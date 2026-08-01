@@ -668,13 +668,46 @@ a.btn { text-decoration: none; }
    alone: failure fills are hatched as well as coloured, and every segment has a
    text label beside it. */
 .an-page {
-  --an-good: var(--live);
+  /* Light by default, whatever the operating system prefers.
+     The values are the app's own :root light palette, not a second set — this
+     page pins them rather than redefining them, so a change to the product's
+     light theme still reaches here. Dark returns only when somebody asks for it
+     explicitly with the toggle, which sets :root[data-theme="dark"] and beats
+     this on specificity below.
+     The reason for pinning at all: the operator wants to read this in daylight,
+     and the app has no theme persistence — ThemeToggle sets an attribute that a
+     reload discards — so inheriting the OS preference meant a dark page with no
+     durable way to change it. */
+  --paper: #F5F4EF; --card: #FBFAF6; --ink: #15140F; --ink-2: #54524A;
+  --line: #DAD8CE; --line-2: #C6C4B8;
+
+  --an-good: #158043;
   --an-bad: #C33A2C;
   --an-bar: var(--ink);
+  /* Small text. The app's --faint (#8B897E) is 3.36:1 on --card — fine for a
+     hint beside something legible, short of the 4.5:1 that label-only text
+     needs, and this page is mostly labels. Scoped here rather than changed
+     globally: --faint is load-bearing across the product. */
+  --an-dim: #6B675E;
+  /* A neutral mark that MEANS something — an empty bucket, a no-verdict
+     segment. --line-2 is 1.68:1 and vanishes; a mark carrying meaning needs
+     3:1, and this is 3.36:1. */
+  --an-mark: #8B897E;
+
   padding: 24px 28px 60px; max-width: 1080px; margin: 0 auto;
 }
-:root[data-theme="dark"] .an-page { --an-bad: #E8705F; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .an-page { --an-bad: #E8705F; } }
+
+/* Dark, only when explicitly chosen. Same reasoning applied to the dark
+   surface: --faint is 3.19:1 there and --line-2 is 1.51:1, so both were failing
+   before this page was ever light. */
+:root[data-theme="dark"] .an-page {
+  --paper: #0C0C0B; --card: #111110; --ink: #EAE8DF; --ink-2: #9C9A8F;
+  --line: #262521; --line-2: #35342E;
+  --an-good: #2FB56F;
+  --an-bad: #E8705F;
+  --an-dim: #8F8C82;
+  --an-mark: #6F6C63;
+}
 
 .an-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; flex-wrap: wrap; }
 .an-head h2 { margin: 0 0 6px; font-family: var(--mono); font-size: 20px; font-weight: 500; letter-spacing: -.02em; }
@@ -692,7 +725,7 @@ a.btn { text-decoration: none; }
 .an-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 22px; }
 .an-tiles.inner { margin: 0 0 4px; border: none; }
 .an-tile { background: var(--card); padding: 13px 15px 15px; }
-.an-tile-label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.an-tile-label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--an-dim); }
 .an-tile-value { font-family: var(--mono); font-size: 25px; letter-spacing: -.02em; margin-top: 7px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .an-tile-sub { font-size: 11.5px; color: var(--ink-2); margin-top: 5px; line-height: 1.5; }
 
@@ -708,7 +741,7 @@ a.btn { text-decoration: none; }
 .an-caveat b { color: var(--ink); font-weight: 600; }
 .an-caveat .mono { font-size: 11.5px; }
 
-.an-empty { font-size: 12.5px; color: var(--faint); padding: 14px 2px; font-style: italic; }
+.an-empty { font-size: 12.5px; color: var(--an-dim); padding: 14px 2px; font-style: italic; }
 
 /* Vertical bars. An empty bucket is a 1px baseline tick, never a zero-height
    bar — the two look the same and mean opposite things. */
@@ -717,16 +750,16 @@ a.btn { text-decoration: none; }
 .an-bar-slot { flex: 1; min-width: 2px; height: 100%; display: flex; align-items: flex-end; }
 .an-bar { width: 100%; background: var(--an-bar); border-radius: 2px 2px 0 0; opacity: .82; }
 .an-bar.good { background: var(--an-good); opacity: 1; }
-.an-bar.zero, .an-bar.none { background: var(--line-2); border-radius: 0; opacity: 1; }
-.an-axis { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
-.an-axis-max { color: var(--faint); text-align: center; }
+.an-bar.zero, .an-bar.none { background: var(--an-mark); border-radius: 0; opacity: 1; }
+.an-axis { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 10px; color: var(--an-dim); }
+.an-axis-max { color: var(--an-dim); text-align: center; }
 
 /* Ranked horizontal bars: short lists, so every row is directly labelled and
    there is no axis to read against. */
 .an-ranked { display: flex; flex-direction: column; gap: 7px; }
 .an-ranked-row { display: grid; grid-template-columns: minmax(120px, 210px) 1fr auto; align-items: center; gap: 12px; }
 .an-ranked-label { font-family: var(--mono); font-size: 11.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
-.an-ranked-note { display: block; font-size: 10px; color: var(--faint); margin-top: 2px; }
+.an-ranked-note { display: block; font-size: 10px; color: var(--an-dim); margin-top: 2px; }
 .an-ranked-track { height: 13px; background: var(--paper); border: 1px solid var(--line); }
 .an-ranked-fill { height: 100%; background: var(--an-bar); opacity: .78; border-radius: 0 2px 2px 0; }
 .an-ranked-value { font-family: var(--mono); font-size: 11.5px; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
@@ -737,7 +770,7 @@ a.btn { text-decoration: none; }
 .an-funnel-count { font-family: var(--mono); font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .an-funnel-track { height: 15px; background: var(--paper); border: 1px solid var(--line); }
 .an-funnel-fill { height: 100%; background: var(--an-bar); opacity: .78; border-radius: 0 2px 2px 0; }
-.an-funnel-foot { display: flex; gap: 14px; margin-top: 4px; font-size: 11px; color: var(--faint); }
+.an-funnel-foot { display: flex; gap: 14px; margin-top: 4px; font-size: 11px; color: var(--an-dim); }
 .an-lost { color: var(--an-bad); }
 
 /* The outcome split. Hatching is the secondary encoding that keeps this
@@ -746,18 +779,18 @@ a.btn { text-decoration: none; }
 .an-stack-seg { height: 100%; }
 .an-stack-seg.good { background: var(--an-good); }
 .an-stack-seg.bad { background: var(--an-bad); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.42) 0 2px, transparent 2px 5px); }
-.an-stack-seg.none { background: var(--line-2); }
+.an-stack-seg.none { background: var(--an-mark); }
 .an-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 9px; font-size: 11.5px; color: var(--ink-2); }
 .an-key { display: inline-flex; align-items: center; gap: 6px; }
 .an-key b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
 .an-sw { width: 10px; height: 10px; flex: none; }
 .an-sw.good { background: var(--an-good); }
 .an-sw.bad { background: var(--an-bad); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.42) 0 2px, transparent 2px 5px); }
-.an-sw.none { background: var(--line-2); }
+.an-sw.none { background: var(--an-mark); }
 
 .an-table-wrap { overflow-x: auto; }
 .an-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.an-table th { text-align: left; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 500; padding: 0 12px 7px 0; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.an-table th { text-align: left; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--an-dim); font-weight: 500; padding: 0 12px 7px 0; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
 .an-table td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--line); color: var(--ink); font-variant-numeric: tabular-nums; }
 .an-table td:first-child { font-family: var(--mono); font-size: 11.5px; }
 .an-table tr:last-child td { border-bottom: none; }
@@ -765,7 +798,7 @@ a.btn { text-decoration: none; }
 .an-two { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
 
 .an-foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); }
-.an-foot p { margin: 0 0 6px; font-size: 11.5px; color: var(--faint); line-height: 1.6; }
+.an-foot p { margin: 0 0 6px; font-size: 11.5px; color: var(--an-dim); line-height: 1.6; }
 
 @media (max-width: 760px) {
   .an-page { padding: 18px 14px 50px; }
@@ -783,3 +816,43 @@ a.btn { text-decoration: none; }
 .an-panel-error-head { font-family: var(--mono); font-size: 12px; color: var(--an-bad); font-weight: 600; }
 .an-panel-error-msg { font-size: 11.5px; color: var(--ink); margin-top: 6px; word-break: break-word; }
 .an-panel-error-note { font-size: 11.5px; color: var(--ink-2); margin-top: 6px; line-height: 1.55; }
+
+/* People and apps tables. Emails are the point of these, so they are plain,
+   selectable text at full size rather than a truncated hint. */
+.an-people td, .an-apps td { vertical-align: top; padding: 9px 12px 9px 0; }
+.an-email { font-family: var(--mono); font-size: 11.5px; color: var(--ink); word-break: break-all; }
+.an-table th.num, .an-table td.num { text-align: right; padding-right: 18px; }
+.an-nowrap { white-space: nowrap; }
+.an-none { color: var(--an-dim); font-style: italic; }
+.an-substatus { display: block; font-size: 10.5px; color: var(--an-dim); margin-top: 2px; }
+.an-lag { display: block; font-size: 10.5px; color: var(--an-dim); margin-top: 3px; }
+
+/* An app beside its owner. The state is a word inside the chip, not a colour on
+   it — the colour is the second signal, never the only one. */
+.an-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.an-chip { display: inline-flex; align-items: baseline; gap: 5px; border: 1px solid var(--line-2); padding: 2px 7px; font-family: var(--mono); font-size: 11px; background: var(--paper); }
+.an-chip-state { font-style: normal; font-size: 9.5px; color: var(--an-dim); text-transform: uppercase; letter-spacing: .04em; }
+.an-chip.good { border-color: color-mix(in srgb, var(--an-good) 55%, var(--line-2)); }
+.an-chip.good .an-chip-state { color: var(--an-good); }
+.an-chip.bad { border-color: color-mix(in srgb, var(--an-bad) 55%, var(--line-2)); }
+.an-chip.bad .an-chip-state { color: var(--an-bad); }
+
+/* Outcome, as a word first. The left rule repeats what the word already says. */
+.an-stall { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-left: 3px solid var(--an-mark); background: var(--paper); white-space: nowrap; }
+.an-stall-stuck { border-left-color: var(--an-bad); color: var(--an-bad); }
+.an-stall-never-deployed { border-left-color: var(--an-mark); }
+.an-stall-never-built { border-left-color: var(--line-2); color: var(--an-dim); }
+.an-stall-activated { border-left-color: var(--an-good); color: var(--an-good); }
+
+.an-state { font-family: var(--mono); font-size: 11px; }
+.an-state-failed { color: var(--an-bad); }
+.an-state-live { color: var(--an-good); }
+.an-state-deploying { color: var(--an-dim); }
+
+/* The error text is why the apps table exists; it wraps rather than truncating.
+   No colour here on purpose: `.an-table td` outranks a single class, so a colour
+   declared here would never apply, and full-strength ink is the right answer for
+   the one cell an operator came to read. */
+.an-err { font-family: var(--mono); font-size: 10.5px; max-width: 34ch; word-break: break-word; line-height: 1.45; }
+
+@media (max-width: 900px) { .an-people, .an-apps { font-size: 11px; } }
