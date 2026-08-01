@@ -80,7 +80,11 @@ export function panelError(sources: SourceErrors | undefined, names: SourceName[
   if (!sources) return null;
   for (const n of names) {
     const e = sources[n];
-    if (e) return `${n}: ${e}`;
+    // Returned as-is: the message already names the read and the table it came
+    // from, attached where the failure happened rather than by whoever renders
+    // it. Prefixing again here produced "deployStates: deployStates (reading
+    // deploys): …".
+    if (e) return e;
   }
   return null;
 }

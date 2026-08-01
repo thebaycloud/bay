@@ -443,7 +443,7 @@ test("a failed read is reported, not rendered as an empty result", () => {
 
   const r = buildReport(input);
   assert.deepEqual(r.issues, [{ source: "deployStates", message: 'column "finished_at" does not exist' }]);
-  assert.equal(panelError(r.sources, ["deployStates"]), 'deployStates: column "finished_at" does not exist');
+  assert.equal(panelError(r.sources, ["deployStates"]), 'column "finished_at" does not exist');
 });
 
 test("a panel whose sources all loaded reports no error", () => {
