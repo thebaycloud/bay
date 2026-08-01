@@ -115,35 +115,55 @@ export async function ensureAppRole(
     `);
     await client.query(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${password}'`);
 
-    // The line that closes the hole. Everything else here is about making the
-    // app work AFTER its neighbours stop being able to connect.
+    // Membership in the role we just made.
+    //
+    // Cloud SQL's `postgres` is NOT a real superuser — it is cloudsqlsuperuser —
+    // and Postgres will not let you hand an object to a role you are not a
+    // member of. Without this, the first ALTER … OWNER TO fails with
+    // `must be able to SET ROLE "app_<slug>"` and takes the whole isolation
+    // down with it. Observed on the first real deploy, which is the only place
+    // it could have been observed: nothing about it is visible from a unit test,
+    // because the rule belongs to the server, not to the SQL.
+    await client.query(`GRANT ${role} TO CURRENT_USER`);
+
+    // The lines that close the hole. Everything below is about making the app
+    // work AFTER its neighbours stop being able to connect, and is allowed to
+    // fail without giving up the boundary.
     await client.query(`REVOKE CONNECT ON DATABASE ${dbName} FROM PUBLIC`);
     await client.query(`GRANT CONNECT ON DATABASE ${dbName} TO ${role}`);
-
-    // Ownership, not just privileges: an app runs its own migrations, and a
-    // migration ALTERs and DROPs tables. GRANT ALL lets it write rows; only the
-    // owner can change the shape of what it wrote. Tables created before this
-    // existed belong to `postgres`, so they are reassigned — without this, an
-    // existing app's first migration under its new role fails with "must be
-    // owner of table".
-    await client.query(`ALTER SCHEMA public OWNER TO ${role}`);
+    // CREATE included, so the app can make its own tables and owns what it
+    // makes. For a database this platform just provisioned that is the whole
+    // story — there is nothing in it yet to inherit.
     await client.query(`GRANT ALL ON SCHEMA public TO ${role}`);
-    await client.query(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${role}`);
-    await client.query(`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
     await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${role}`);
     await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${role}`);
-    await client.query(`
-      DO $$
-      DECLARE t record;
-      BEGIN
-        FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-          EXECUTE format('ALTER TABLE public.%I OWNER TO ${role}', t.tablename);
-        END LOOP;
-        FOR t IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
-          EXECUTE format('ALTER SEQUENCE public.%I OWNER TO ${role}', t.sequencename);
-        END LOOP;
-      END $$;
-    `);
+
+    // Ownership of what already exists, best-effort and separately caught.
+    //
+    // Only matters for a database that has tables from before this existed,
+    // where they belong to `postgres` and the app's first migration under its
+    // new role would fail with "must be owner of table". A failure here is a
+    // migration problem, not a tenancy one — the CONNECT revocation above has
+    // already happened — so it must not throw away an isolation that worked.
+    try {
+      await client.query(`ALTER SCHEMA public OWNER TO ${role}`);
+      await client.query(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${role}`);
+      await client.query(`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+      await client.query(`
+        DO $$
+        DECLARE t record;
+        BEGIN
+          FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+            EXECUTE format('ALTER TABLE public.%I OWNER TO ${role}', t.tablename);
+          END LOOP;
+          FOR t IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
+            EXECUTE format('ALTER SEQUENCE public.%I OWNER TO ${role}', t.sequencename);
+          END LOOP;
+        END $$;
+      `);
+    } catch (e) {
+      log(`! this app's database is isolated, but existing tables still belong to the platform role (${e instanceof Error ? e.message.split("\n")[0] : String(e)}) — a migration that ALTERs them may fail`);
+    }
 
     log(`Database isolated — this app connects as ${role} and no other app can reach it`);
     return { user: role, password, isolated: true };

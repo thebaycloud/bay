@@ -1368,6 +1368,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       secretEnv.SUPERSONIC_CODE_KEY = runnerCodeKey;
     }
 
+    /**
+     * The secrets the BUILD may mount, which is not the same set the RUNTIME gets.
+     *
+     * SUPERSONIC_CODE_KEY is the exception, and it has to be one: the prepare
+     * step needs the literal key in order to encrypt the bundle, so
+     * runnerPrepareConfig already writes it as a plain build variable. Passing it
+     * as a secret as well means one name arrives twice, and Cloud Build refuses
+     * the whole build — "step 0 has secret and non-secret env
+     * SUPERSONIC_CODE_KEY". That is the same rule that POSTGRES_DB fell foul of
+     * on the Cloud Run side: a name is a secret or it is plain, never both.
+     */
+    const buildSecrets = (refs: SecretRef[]) => refs.filter((r) => r.key !== "SUPERSONIC_CODE_KEY");
+
     let secretRefs: SecretRef[] = [];
     if (Object.keys(secretEnv).length) {
       const put = await putAppSecrets(slug, secretEnv, APP_RUNTIME_SA, log);
@@ -1694,7 +1707,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           if (secretRefs.length) await grantBuildAccess(secretRefs, BUILD_SA, log);
           writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({
             image, bucket: ASSETS_BUCKET, slug, release, codeKey: key,
-            build: plan.build, install: plan.install, language: lang, secretEnv: secretRefs,
+            build: plan.build, install: plan.install, language: lang, secretEnv: buildSecrets(secretRefs),
           }));
           const hb = setInterval(() => log(`preparing ${label}…`), 8000);
           builds.reset();
@@ -1809,7 +1822,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             // Cloud Build runs as its own service account, so it needs its own
             // grant — the runtime account's access does not carry over.
             if (secretRefs.length) await grantBuildAccess(secretRefs, BUILD_SA, log);
-            writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild, install: runnerInstall, language: runnerLang, secretEnv: secretRefs }));
+            writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({ image, bucket: ASSETS_BUCKET, slug, release, codeKey: runnerCodeKey, build: runnerBuild, install: runnerInstall, language: runnerLang, secretEnv: buildSecrets(secretRefs) }));
             const hb = setInterval(() => log("preparing…"), 8000);
             builds.reset();
             try {
