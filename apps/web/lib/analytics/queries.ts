@@ -80,11 +80,20 @@ async function read<T>(sql: string, params: unknown[] = []): Promise<T[]> {
  * it is scrubbed rather than trusted.
  */
 const REDACTIONS: ReadonlyArray<[RegExp, string]> = [
+  // Ordered: the connection-string rule runs first so that user:pass@host is
+  // taken whole, rather than the address rule carving the host out of it and
+  // leaving the credentials behind.
   [/\b(?:postgres(?:ql)?|pg):\/\/\S+/gi, "[connection string redacted]"],
   // No \b before "password": the thing to catch is PGPASSWORD=…, where the
   // word is glued to a prefix and a word boundary never matches.
   [/\w*password\w*\s*[=:]\s*\S+/gi, "password=[redacted]"],
   [/\/cloudsql\/\S+/g, "[socket path redacted]"],
+  // The page now renders user emails, so an error is a way for one to escape
+  // into a log or a message. A SELECT rarely quotes a row value, but "rarely"
+  // is not a property to rest an identity leak on: Postgres does quote values
+  // in constraint and type-coercion errors, and this page's whole job is to
+  // read tables whose contents are people.
+  [/\b[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+\b/g, "[email redacted]"],
   [/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, "[address redacted]"],
 ];
 
@@ -165,9 +174,16 @@ async function attempt<T>(
   try {
     return { rows: await read<T>(sql, params), error: null };
   } catch (e) {
-    // Logged as well as rendered: the page shows one scrubbed line, the log
-    // keeps the original, where host and port are useful and safe.
-    console.error(`analytics read failed: ${where.source} (${where.relation})`, e);
+    // Logged scrubbed, not raw.
+    //
+    // This used to log the error object itself, on the reasoning that a log is
+    // a safer place than a page. That stopped being true when this page started
+    // rendering user emails: logs are shipped, searched and retained, and an
+    // identity in one is harder to retract than an identity on a screen. The
+    // stack is kept because it names code paths rather than data, and it is
+    // scrubbed too rather than trusted to contain none.
+    const stack = e instanceof Error && e.stack ? `\n${redact(e.stack)}` : "";
+    console.error(`analytics read failed: ${where.source} (${where.relation}): ${readErrorDetail(e)}${stack}`);
     return { rows: [], error: readErrorMessage(e, where.source, where.relation) };
   }
 }

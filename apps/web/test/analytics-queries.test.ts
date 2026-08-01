@@ -193,3 +193,45 @@ test("what separates the two paths is severity, not the shape of the code", () =
   assert.ok(!readErrorDetail(fromServer).includes("10.0.0.5"));
   assert.ok(!readErrorDetail(fromDriver).includes("10.0.0.5"));
 });
+
+// ─── identities must not escape ───────────────────────────────────────────────
+
+// The page now renders user emails. An error message and a log line are both
+// ways for one to leave the page it was gated behind.
+test("an email is redacted wherever it appears in an error", () => {
+  assert.equal(redact('duplicate key value: (email)=(ada@example.com)'), "duplicate key value: (email)=([email redacted])");
+  assert.equal(redact("invalid input for ilmak1704@gmail.com"), "invalid input for [email redacted]");
+  // Plus-addressing, subdomains and the odder legal local parts.
+  assert.equal(redact("a.b+tag@mail.co.uk failed"), "[email redacted] failed");
+  assert.equal(redact("weird!name@sub.domain.example failed"), "[email redacted] failed");
+});
+
+test("several emails in one message are all redacted", () => {
+  assert.equal(
+    redact("a@x.com and b@y.com conflict"),
+    "[email redacted] and [email redacted] conflict",
+  );
+});
+
+test("an email survives neither path out of a failed read", () => {
+  const e = Object.assign(new Error('key (email)=(ada@example.com) already exists'), { code: "23505", severity: "ERROR" });
+  const rendered = readErrorMessage(e, "users", "users");
+  assert.ok(!rendered.includes("ada@example.com"), "the rendered panel must not carry it");
+  assert.ok(!rendered.includes("@example.com"), "nor the domain");
+  assert.match(rendered, /\[email redacted\]/);
+});
+
+// The column is called "email"; talking about it is not leaking one.
+test("redaction does not mangle a message that merely mentions the column", () => {
+  assert.equal(redact('column "email" does not exist'), 'column "email" does not exist');
+  assert.equal(redact("null value in column email violates not-null constraint"), "null value in column email violates not-null constraint");
+});
+
+// A connection string carries a credential AND an @; the whole thing has to go,
+// not just the part after the @.
+test("a connection string is taken whole rather than half-redacted", () => {
+  const out = redact("postgres://admin:hunter2@db.internal:5432/app");
+  assert.equal(out, "[connection string redacted]");
+  assert.ok(!out.includes("hunter2"));
+  assert.ok(!out.includes("admin"));
+});
