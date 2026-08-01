@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+**git decides what gets uploaded, and the CLI says what it left behind.**
+
+Packaging was nineteen `tar --exclude=` patterns plus `--exclude-from=.gitignore`.
+tar matches those on basename at any depth, so a module named `src/build/`, a
+Composer or `go mod vendor` `app/vendor/`, and a committed `dist/` that *was* the
+deliverable were stripped out of the upload — silently, so the first sign of it was
+"module not found" three stages later. And tar does not speak gitignore: `!keep.js`
+was a literal filename, an anchored `/dist` matched nothing, `**/` meant something
+else. `deploy` now runs `git ls-files --cached --others --exclude-standard` and packs
+exactly that, so negations, anchors, nested .gitignore files and your global excludes
+all work the way `git status` says they do. A folder that is not a repository still
+gets the old denylist.
+
+It also prints what it skipped and why — the ignored count with the directories
+responsible, and the `.env` files held back to be sent as env vars instead.
+
+**Four things that used to ship broken:**
+
+- files git records as executable but whose working copy lost the bit are named
+  before upload, instead of arriving 0644 and exiting "permission denied"
+- `.git` goes up when the build reads the version out of it (setuptools-scm,
+  hatch-vcs, versioneer), which otherwise publishes `0.0.0` without complaining
+- paths that differ only by case are one file on your Mac and two on Linux; you now
+  hear about them here rather than from a failing import
+- git-lfs pointers are fetched, or the deploy stops and names the files. They are
+  130-byte text stubs with `.mp4` names, and every stage after this one reports
+  success over them.
+
 ## 0.10.0
 
 **`status` can say an app is still coming.**

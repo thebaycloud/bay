@@ -729,30 +729,16 @@ async function redeploy(args) {
   return consumeDeploy(res, args, app);
 }
 
-// Zip the current folder into a temp .tgz, skipping deps/build junk + .gitignore.
+/**
+ * Zip the current folder into a temp .tgz. `lib/bundle.js` decides what goes in it
+ * — and, unlike the denylist this replaced, says what it left out and why.
+ */
 function packageFolder() {
-  return new Promise((resolve, reject) => {
-    const cwd = process.cwd();
-    const out = path.join(os.tmpdir(), "ss-deploy-" + process.pid + ".tgz");
-    // `.env` and EVERY variant of it. The old list named `.env`, `.env.local` and
-    // `.env.*.local` one by one, which quietly let `.env.production` — the file
-    // most likely to hold real credentials — ride into the build bundle, where a
-    // baked value cannot be rotated. The values are not lost by excluding them:
-    // readEnvFiles carries them up separately and they land as env vars on the
-    // service, which is the whole point of sending them out of band.
-    const excludes = ["node_modules", ".git", "dist", "build", ".next", ".nuxt", ".svelte-kit",
-      "target", ".venv", "venv", "__pycache__", "vendor", ".DS_Store", "._*", ".env", ".env.*",
-      "*.pyc", ".turbo", ".cache", "out"];
-    const targs = ["-czf", out, "-C", cwd];
-    for (const e of excludes) targs.push("--exclude=" + e);
-    if (fs.existsSync(path.join(cwd, ".gitignore"))) targs.push("--exclude-from=" + path.join(cwd, ".gitignore"));
-    targs.push(".");
-    // COPYFILE_DISABLE=1: stop macOS `tar` from adding AppleDouble `._*` files,
-    // which otherwise extract on the Linux build side and break framework builds.
-    const p = spawn("tar", targs, { env: { ...process.env, COPYFILE_DISABLE: "1" }, stdio: ["ignore", "ignore", "pipe"] });
-    let err = ""; p.stderr.on("data", (d) => (err += d));
-    p.on("error", () => reject(new Error("could not run `tar` — is it installed?")));
-    p.on("close", () => (fs.existsSync(out) ? resolve(out) : reject(new Error("packaging failed: " + err.trim()))));
+  const { packageFolder: pack } = require("./lib/bundle.js");
+  return pack(process.cwd(), (line) => {
+    if (line.level === "warn") info(yellow("! ") + line.text);
+    else if (line.level === "detail") info(dim("  " + line.text));
+    else info(dim("  " + line.text));
   });
 }
 
