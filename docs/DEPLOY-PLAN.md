@@ -848,7 +848,8 @@ found" below.*
 | 1c — media / cold start | **not started** | — |
 | 2 — schema v2 + resolver | done | `Resolve an app once, and name the field when it cannot` |
 | 2 — runtime version drift | done | `Refuse a runtime the platform does not have` |
-| 3 — single consumer | **not started** | — |
+| 3 — assert-reached | done | `Fail a deploy that did not apply what it was told` |
+| 3 — single-consumer executor | **not started** | lanes still read three objects for the same facts |
 | 4 — init + check | in progress | — |
 | 5a — per-app DB role | done | `Give each app a Postgres login of its own` |
 | 5b — control plane off the shared instance | **not started** | — |
@@ -937,12 +938,19 @@ left that a deploy accepts and does not act on.
 
 ### Known gaps in what landed
 
-- `ResolvedApp` exists and validates, but **nothing downstream consumes it**. The
-  pipeline still runs its own path. Until Phase 3, the resolver is the authority
-  for `supersonic check` and for nothing else — which means schema v2 fields that
-  Phase 3 will read (`scale`, `uses`, `health` on siblings) are parsed and not yet
-  acted on. That is exactly the ignored-but-present asymmetry this plan exists to
-  end, and it is temporary by construction.
+- `ResolvedApp` is now read at the END of a deploy, not the start: every field the
+  author declared must be visible in the revision that came out, or the deploy
+  fails naming it. That closes the ignored-but-present asymmetry as a CLASS —
+  three of the four bugs the first container-lane deploy found were instances of
+  it, and all three had passing unit tests. What is still open is the executor:
+  the lanes continue to reach into the plan, the detector's stack and the config
+  for the same facts, so the fields can still disagree on the way in. They can no
+  longer disagree on the way out without stopping the deploy.
+- The plan's own prescription for this — assert-consumed against a per-lane
+  capability list — was implemented and was NOT sufficient. `LANE_CONSUMES` named
+  `env` for every lane while no code read it. A capability list is a second
+  declaration by the same author as the first, so it agrees with the config and
+  both are wrong together. Only the outcome is independent evidence.
 - The **release job needs IAM** the control plane may not have:
   `run.jobs.create/update/run` (`roles/run.developer`) plus `actAs` on the app
   runtime service account. Unverified against the live project.
