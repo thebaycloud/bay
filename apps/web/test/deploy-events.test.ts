@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eventSink } from "../lib/deploy-events";
+import { eventSink, eventLine } from "../lib/deploy-events";
 
 /** Collect the batches a sink writes, in the order they are written. */
 function recorder(delays: number[] = []) {
@@ -73,4 +73,22 @@ test("draining an idle sink is a no-op, not a write", async () => {
   const sink = eventSink("run-5", "abc12", { append: rec.append });
   await sink.drain();
   assert.deepEqual(rec.batches, [], "an empty batch must never be written");
+});
+
+test("the narration a user never saw is readable back as lines", () => {
+  // These are the exact events y7ux3 emitted on 1 Aug and nobody ever saw: the
+  // stream they went to ended when `deploy` returned, a second after it started.
+  assert.equal(eventLine({ type: "log", line: "Repair agent taking over — reading the repo, fixing, retrying…" }),
+    "Repair agent taking over — reading the repo, fixing, retrying…");
+  assert.equal(eventLine({ type: "error", message: "the container didn't start on $PORT" }),
+    "✕ the container didn't start on $PORT");
+});
+
+test("events that are structure rather than prose stay out of the log", () => {
+  // A terminal cannot use these, and printing them raw is how a log becomes
+  // something people stop reading.
+  assert.equal(eventLine({ type: "detected", stack: { language: "node" } }), null);
+  assert.equal(eventLine({ type: "done", url: "https://x.supersonic.cv" }), null);
+  assert.equal(eventLine({ type: "log" }), null);
+  assert.equal(eventLine({}), null);
 });

@@ -75,6 +75,57 @@ export async function readEvents(runId: string, afterId = 0, limit = 500): Promi
 }
 
 /**
+ * One stored event as a line of log, or null for the ones that are not prose.
+ *
+ * `detected`, `done` and the rest carry structure a terminal cannot use; only
+ * the narration and the failure are worth reading back. The failure is marked
+ * with the same ✕ the live stream uses, so a log read after the fact looks like
+ * the one that was printed live.
+ */
+export function eventLine(event: Record<string, unknown>): string | null {
+  if (event.type === "log" && typeof event.line === "string") return event.line;
+  if (event.type === "error" && typeof event.message === "string") return `✕ ${event.message}`;
+  return null;
+}
+
+/**
+ * The tail of an app's most recent deploy, as text lines.
+ *
+ * This table was built so the SSE stream could stop being the deploy and become
+ * a view of it — but `supersonic logs` never read it, and with the job
+ * indirection that left the deploy's narration effectively unreachable: `deploy`
+ * returns in about a second, its stream ends with it, and the only channel a
+ * user has afterwards showed Cloud Run's container output and a single stage
+ * line. Watching y7ux3 fail for 27 minutes on 1 Aug, neither "✕ <error>" nor
+ * "Repair agent taking over" ever reached the terminal. Both were emitted.
+ *
+ * Scoped to the latest run for the slug, because an app redeploys and the
+ * previous run's log is not what "why is it doing that right now" means.
+ */
+export async function readLatestRunLines(slug: string, limit = 200): Promise<Array<{ line: string; at: string }>> {
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      `SELECT at, event FROM deploy_events
+        WHERE run_id = (SELECT run_id FROM deploy_events WHERE slug = $1 ORDER BY id DESC LIMIT 1)
+        ORDER BY id DESC LIMIT $2`,
+      [slug, limit],
+    );
+    const out: Array<{ line: string; at: string }> = [];
+    // Newest-first from the database so the LIMIT takes the tail rather than the
+    // head; flipped back here because a log is read downwards.
+    for (const row of r.rows.reverse() as Array<{ at: string | Date; event: Record<string, unknown> }>) {
+      const at = row.at instanceof Date ? row.at.toISOString() : String(row.at ?? "");
+      const line = eventLine(row.event ?? {});
+      if (line !== null) out.push({ line, at });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Drop events older than the retention window.
  *
  * Called opportunistically when a run starts rather than on a schedule: this

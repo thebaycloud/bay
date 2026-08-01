@@ -1,5 +1,6 @@
 import { getLogs, type LogLine } from "./gcloud";
 import { getDeploy } from "./deploys";
+import { readLatestRunLines } from "./deploy-events";
 import { appBuildTag } from "./build-config";
 import { spawn } from "node:child_process";
 
@@ -90,9 +91,18 @@ export async function appLogs(
 ): Promise<LogLine[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
   const running = await getLogs(slug, opts).catch(() => [] as LogLine[]);
-  if (running.length) return running;
-
   const deploy = await getDeploy(slug);
+
+  // "The running app is always preferred" was right for an app that is simply
+  // running, and wrong for one in the middle of a deploy — which is the only
+  // time anyone is watching. A crashlooping container produces plenty of logs,
+  // so this returned early and the deploy's own account was never reached:
+  // 27 minutes of watching y7ux3 showed `npm error Missing script: "start"` over
+  // and over, and never once said which lane had been chosen, that the planner
+  // had failed, or that the repair agent had taken over.
+  const midDeploy = deploy?.status === "building" || deploy?.status === "failed";
+  if (running.length && !midDeploy) return running;
+
   const out: LogLine[] = [];
   if (deploy?.status === "failed" && deploy.error) {
     out.push({
@@ -111,9 +121,32 @@ export async function appLogs(
     });
   }
 
+  // What the deploy actually said about itself.
+  //
+  // The stage line above is one field of one row: the last thing that happened,
+  // with no account of how it got there. Everything else the pipeline narrates —
+  // the plan it settled on, the error it hit, "Repair agent taking over" — goes
+  // to deploy_events and used to stop there. Before the job indirection that was
+  // survivable, since `deploy` held the stream open and printed it live; now the
+  // command returns in a second and this is the only way any of it is ever seen.
+  if (deploy?.status === "building" || deploy?.status === "failed") {
+    const narration = await readLatestRunLines(slug, Math.max(limit - out.length, 20)).catch(() => []);
+    for (const { line, at } of narration) {
+      out.push({ message: line.slice(0, 600), time: at, severity: line.startsWith("✕") ? "ERROR" : "INFO" });
+    }
+  }
+
   // The build log, whether or not the deploy row explained itself: a build that
   // failed says far more than the one-line reason distilled from it, and a build
   // that succeeded is still the only trace of an app that has never been visited.
   const build = await lastBuildLog(slug, Math.max(limit - out.length, 10)).catch(() => [] as LogLine[]);
-  return [...out, ...build];
+
+  // The container's own output comes last, under a heading. It is the loudest
+  // source and the least self-explanatory — a hundred identical `npm error`
+  // lines say what happened and never why — so it stops being the only thing on
+  // screen without stopping being available.
+  const tail = running.length
+    ? [{ message: `— what the app itself printed —`, time: "", severity: "NOTICE" as const }, ...running]
+    : [];
+  return [...out, ...build, ...tail];
 }
