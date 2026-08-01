@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.10.0
+
+**`status` can say an app is still coming.**
+
+`ready ? live : down` had no third state, so an app mid-build was reported as
+`○ down · revision — · env none` while its build was running normally and its URL
+was serving 200. Now `◐ deploying`, with the stage it has reached.
+
+**The live preview stops writing in your folder unannounced.**
+
+It runs your project's dev command in your checkout, and on a fresh one it
+installs first — which meant `npm install` in repositories that use bun, pnpm or
+yarn, dropping a foreign lockfile into a clean tree two minutes after the command
+had already returned. It now uses the package manager your lockfile names, prints
+the exact command before running it, and `--no-preview` declines it entirely.
+
+**Everything fixed since 0.9.1 that had never been published.**
+
+Chiefly: `deploy` no longer prints "✓ your app is live at" one second in, before
+anything has been built. That was fixed in the repository on 31 July and never
+reached anyone, because publishing was something a person had to remember. It is
+a workflow now.
+
 ## 0.9.0
 
 **Your `.env` goes up with the deploy.**
