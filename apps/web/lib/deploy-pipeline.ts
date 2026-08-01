@@ -1834,6 +1834,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         const built: { path: string; url: string }[] = [
           { path: servicePath(primaryService(appConfig)), url: result.url ?? "" },
         ];
+        const refused: string[] = [];
         for (const svc of extras) {
           const r = await deploySibling(svc);
           if (r.ok && r.url) {
@@ -1841,8 +1842,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             log(`${servicePath(svc)} → ${r.name}`);
           } else {
             log(`! ${r.error} — ${servicePath(svc)} will not be served`);
+            refused.push(`${servicePath(svc)}: ${r.error ?? "no reason given"}`);
           }
         }
+        // Recorded on the deploy row, not only logged.
+        //
+        // A sibling that does not come up leaves an app that looks completely
+        // healthy — the frontend is live on its own address, and every request
+        // to /api quietly falls through to it, which for an SPA means the
+        // index.html of the very page that is asking. The one line saying why
+        // is a log line, and the log is a window: on the FastAPI template the
+        // build output shares a single timestamp and pushes it out entirely, so
+        // the deploy that was hardest to debug is exactly the one whose reason
+        // is gone by the time anybody looks.
+        // Awaited: the very next writes set status live, and a fire-and-forget
+        // stage that lands after them is a reason nobody sees.
+        if (refused.length) await setDeploy(slug, { stage: `${refused.length} service(s) not served — ${refused.join(" · ")}` });
         if (built.length > 1) routes = built;
       }
     }
