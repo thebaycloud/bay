@@ -126,6 +126,30 @@ export async function readLatestRunLines(slug: string, limit = 200): Promise<Arr
 }
 
 /**
+ * The patch the repair agent produced on this app's most recent deploy.
+ *
+ * Kept out of the line-oriented log on purpose. `supersonic logs` prefixes every
+ * line with a time and a severity, so a patch printed there cannot be piped into
+ * `git apply` — it would be advice that fails the moment somebody types it,
+ * which is the same class of bug as the fix never arriving at all.
+ */
+export async function readLatestPatch(slug: string): Promise<string | null> {
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      `SELECT event FROM deploy_events
+        WHERE slug = $1 AND event->>'type' = 'patch'
+        ORDER BY id DESC LIMIT 1`,
+      [slug],
+    );
+    const patch = r.rows[0]?.event?.patch;
+    return typeof patch === "string" && patch.trim() ? patch : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Drop events older than the retention window.
  *
  * Called opportunistically when a run starts rather than on a schedule: this

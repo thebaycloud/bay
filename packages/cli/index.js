@@ -299,6 +299,24 @@ async function env(args) {
   die(`unknown env subcommand: ${sub}`);
 }
 
+/**
+ * The repair agent's fix, as a patch, on stdout and nothing else.
+ *
+ * The agent's edits happen in the copy of the repo the server unpacked, which is
+ * deleted when the deploy ends — so a rescued app left this folder still broken
+ * and the next deploy shipped the same code again. Straight to stdout so it can
+ * be piped: `supersonic patch <app> | git apply`. Every other word this command
+ * says goes to stderr, so the pipe carries the patch alone.
+ */
+async function patch(args) {
+  const app = needApp(args);
+  const res = await api(`/api/apps/${app}/patch`, { stream: true });
+  const body = await res.text();
+  if (res.status === 404) { info(dim(body.trim())); process.exit(1); }
+  if (!res.ok) die(body.trim() || `could not fetch the patch (${res.status})`);
+  process.stdout.write(body);
+}
+
 async function rollback(args) {
   const app = needApp(args);
   const d = await api(`/api/apps/${app}/rollback`, { method: "POST" });
@@ -873,6 +891,7 @@ ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the bac
   supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead
   supersonic deploy --prebuilt                  old path: build here, upload the result
   supersonic redeploy <app>                     rebuild from the app's source
+  supersonic patch <app>                        the repair agent's fix, to pipe into git apply
   supersonic rollback <app>                     roll back to the previous revision
 
 ${bold("inspect")}
@@ -908,7 +927,7 @@ function parse(argv) {
   return args;
 }
 
-const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, rollback, exec, open, deploy, redeploy, "__deploy-worker": deployWorker };
+const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, deploy, redeploy, "__deploy-worker": deployWorker };
 
 (async () => {
   const [, , cmd, ...rest] = process.argv;

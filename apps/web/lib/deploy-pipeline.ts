@@ -9,6 +9,7 @@ import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/
 import { checkPlanDeps, runtimeMismatch } from "@/lib/plan-deps";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
+import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
@@ -1712,12 +1713,35 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // the two hides how often we are paying for it.
       const useOpencode = process.env.DEPLOY_ENGINE === "opencode";
       if (useOpencode) log("Repair engine: opencode");
+      // Snapshot first, so whatever the agent changes can be handed back. Its
+      // edits live in a scratch copy that is deleted when the deploy ends, so
+      // until now a rescued app left the user's own folder still broken — and
+      // their next deploy shipped the same code again.
+      const snapshotted = await snapshotSources(dir);
       const repair = stages.start("repair-agent");
       const fixed = useOpencode
         ? await opencodeRepair({ dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy: runDeploy, log })
         : await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
       await stages.end(repair, fixed.ok ? "ok" : "failed");
-      if (fixed.ok) { result = { ok: true, url: fixed.url }; log(`Agent fixed it (${fixed.changes.join(", ")})`); }
+      if (fixed.ok) {
+        result = { ok: true, url: fixed.url };
+        log(`Agent fixed it (${fixed.changes.join(", ")})`);
+        // The fix, in a form that can leave this machine. Printed into the log
+        // rather than kept in a summary, because a description of a change is not
+        // a change: "Fixed: package.json" tells nobody what to type. Now that
+        // `logs` reads the event log back, this is reachable after the fact.
+        const patch = snapshotted ? await repairPatch(dir) : null;
+        if (patch) {
+          // Sent as its own event, not as log lines: `supersonic logs` prefixes
+          // every line with a time and a severity, so a patch printed there
+          // cannot be piped into `git apply`.
+          send({ type: "patch", patch });
+          log("This fix is only on the server — your folder still has the old code. To apply it:");
+          log(`  supersonic patch ${slug} | git apply`);
+        } else {
+          log("Heads up: this fix was made on the server, not in your folder — your next deploy will send the old code again.");
+        }
+      }
       else {
         setDeploy(slug, { status: "failed", error: fixed.summary });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
