@@ -183,3 +183,13 @@ for (const lane of SERVICE_LANES) {
     assert.ok(argv.some((a) => a.startsWith("--startup-probe=")), `${lane} would be rejected by Cloud Run`);
   });
 }
+
+test("the probe's timeout is shorter than its period, which Cloud Run enforces", () => {
+  // `startup_probe.timeout_seconds: must be less than period_seconds` — rejected
+  // outright, not clamped, so the arithmetic is part of the contract.
+  const probe = dbContainerArgs("proj:region:inst").find((a) => a.startsWith("--startup-probe="))!;
+  const n = (k: string) => Number(probe.match(new RegExp(`${k}=(\\d+)`))![1]);
+  assert.ok(n("timeoutSeconds") < n("periodSeconds"), `${probe} would be refused`);
+  // And enough total time for the proxy to authorise against Cloud SQL.
+  assert.ok(n("periodSeconds") * n("failureThreshold") >= 60);
+});

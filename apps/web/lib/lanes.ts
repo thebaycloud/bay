@@ -113,7 +113,13 @@ export function dbContainerArgs(connectionName: string): string[] {
     // for the database — the wrong half to move. The proxy's own health server
     // is the right one: it answers /startup only once the instance is genuinely
     // ready, and it is the only thing exposed beyond loopback.
-    `--startup-probe=httpGet.path=/startup,httpGet.port=${DB_HEALTH_PORT},periodSeconds=1,failureThreshold=30,timeoutSeconds=2`,
+    //
+    // periodSeconds > timeoutSeconds is enforced by Cloud Run, which rejects the
+    // revision outright rather than clamping:
+    //   startup_probe.timeout_seconds: must be less than period_seconds
+    // 3s apart, 20 attempts, so the proxy has a full minute to authorise against
+    // Cloud SQL before the instance is called dead.
+    `--startup-probe=httpGet.path=/startup,httpGet.port=${DB_HEALTH_PORT},periodSeconds=3,timeoutSeconds=2,failureThreshold=20`,
   ];
 }
 
