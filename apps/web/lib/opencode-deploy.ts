@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { AddressInfo } from "node:net";
 import { accessToken as restAccessToken } from "./gcp-rest";
+import { isSameFailure } from "./deploy-errors";
 
 const PROJECT = process.env.OPENCODE_VERTEX_PROJECT || "supersonic-deploy-prod";
 /**
@@ -510,6 +511,10 @@ export async function opencodeRepair(opts: {
   const tokens: TokenUsage = { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
   const changes = new Set<string>();
   let steps = 0, redeploys = 0;
+  // The attempt counter could say the agent had run out of tries; it could never
+  // say it had run out of ideas. These say the second thing.
+  let repeatedFailures = 0;
+  let lastFailure: string | undefined;
 
   // Bridge: opencode's redeploy.sh POSTs here; we run the real pipeline. Capped so
   // a wandering agent can't burn unbounded cloud builds.
@@ -528,12 +533,28 @@ export async function opencodeRepair(opts: {
     };
     if (inFlight) { inFlight.then(reply).catch((e) => reply({ ok: false, error: String(e) })); return; }
     if (redeploys >= MAX_REDEPLOYS) { reply({ ok: false, error: "redeploy limit reached — stop and report what is blocking" }); return; }
+    if (repeatedFailures >= 2) {
+      // The counter could say the agent had run out of tries; it could never say
+      // it had run out of ideas. Two deploys that fail the same way are not
+      // evidence that a third will differ — they are evidence the edits in
+      // between are not touching the cause.
+      reply({ ok: false, error: `the last two deploys failed for the same reason — stop editing and report what is blocking:\n${lastFailure}` });
+      return;
+    }
     redeploys++;
     log(`agent · redeploying (attempt ${redeploys})…`);
     inFlight = redeploy();
     inFlight.then((r) => {
       inFlight = null;
-      if (r.ok) { lastUrl = r.url; log(`agent · redeploy succeeded`); } else { log(`agent · still failing, iterating`); }
+      if (r.ok) {
+        lastUrl = r.url;
+        repeatedFailures = 0;
+        log(`agent · redeploy succeeded`);
+      } else {
+        repeatedFailures = isSameFailure(lastFailure, r.error) ? repeatedFailures + 1 : 0;
+        lastFailure = r.error;
+        log(repeatedFailures ? "agent · same failure as last time" : "agent · still failing, iterating");
+      }
       reply(r);
     }).catch((e) => {
       inFlight = null;
