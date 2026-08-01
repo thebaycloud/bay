@@ -453,7 +453,12 @@ async function urlFirstDeploy(args) {
     const hasDevCmd = !!(args["dev-cmd"] || args["dev-port"]);
     let hasDevScript = false;
     try { hasDevScript = !!((JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")).scripts) || {}).dev; } catch { /* not a node app */ }
-    if (hasDevCmd || hasDevScript) {
+    if (args["no-preview"]) {
+      // Said, rather than left to be inferred from silence — and said instead of
+      // "starting a live preview", which this branch used to print even when the
+      // flag had just turned the preview off.
+      print(dim("  no live preview (--no-preview) — nothing will run in this folder"));
+    } else if (hasDevCmd || hasDevScript) {
       print(dim("  starting a live preview at that URL now; the real build swaps in when ready"));
       // Name the command that is about to run in THIS folder. The preview is a
       // process in the user's checkout, and on a fresh one it installs first —
