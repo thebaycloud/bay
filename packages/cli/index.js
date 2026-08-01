@@ -418,6 +418,7 @@ async function urlFirstDeploy(args) {
         SS_BG_FOLDER: folderName,
         SS_BG_DEVCMD: args["dev-cmd"] || "", SS_BG_DEVPORT: args["dev-port"] || "",
         SS_BG_NOENV: args["no-env"] ? "1" : "",
+        SS_BG_NOPREVIEW: args["no-preview"] ? "1" : "",
         SS_BG_RUN: args["run"] || "",
       },
     });
@@ -430,6 +431,19 @@ async function urlFirstDeploy(args) {
     try { hasDevScript = !!((JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")).scripts) || {}).dev; } catch { /* not a node app */ }
     if (hasDevCmd || hasDevScript) {
       print(dim("  starting a live preview at that URL now; the real build swaps in when ready"));
+      // Name the command that is about to run in THIS folder. The preview is a
+      // process in the user's checkout, and on a fresh one it installs first —
+      // which on 1 Aug wrote a package-lock.json into a bun project and rewrote a
+      // tracked generated file, two minutes after the command had returned, with
+      // nothing on screen to connect the two.
+      if (!hasDevCmd && !args["no-preview"]) {
+        try {
+          const { packageManager } = require("./lib/tunnel");
+          const pm = packageManager(process.cwd());
+          const fresh = !fs.existsSync(path.join(process.cwd(), "node_modules"));
+          print(dim("  it runs ") + bold(fresh ? `${pm.install} && ${pm.dev}` : pm.dev) + dim(" here — ") + bold("--no-preview") + dim(" to skip"));
+        } catch { /* not a node project after all */ }
+      }
     } else {
       print("  " + bold("no live preview") + dim(" — the link shows a “building…” page until the build finishes (~1–2 min)."));
       print(dim("  for an instant preview, redeploy with ") + bold('--dev-cmd "<how to run your app>"'));
@@ -488,7 +502,12 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
   // Announced only once there is something to announce. Said up front, it was
   // immediately contradicted by the very next line on every project without a dev
   // server — the CLI promising a preview and retracting it one line later.
-  const { proc, port } = await startDevServer(process.cwd(), { devCmd: args["dev-cmd"], devPort: args["dev-port"] });
+  // --no-preview: do not run anything in the user's folder. The preview is a
+  // convenience; a process writing to someone's checkout is not one they should
+  // be unable to decline.
+  const { proc, port } = args["no-preview"]
+    ? { proc: null, port: null }
+    : await startDevServer(process.cwd(), { devCmd: args["dev-cmd"], devPort: args["dev-port"] });
   if (port) info(dim("  bringing up a live preview at that URL…"));
   const tunnelWs = process.env.SUPERSONIC_TUNNEL_WS || `wss://${slug}.supersonic.cv/_tunnel`;
   let ws = null;
@@ -558,6 +577,7 @@ async function deployWorker() {
       "dev-cmd": process.env.SS_BG_DEVCMD || undefined,
       "dev-port": process.env.SS_BG_DEVPORT || undefined,
       "no-env": process.env.SS_BG_NOENV === "1" || undefined,
+      "no-preview": process.env.SS_BG_NOPREVIEW === "1" || undefined,
       _: [],
     },
   });
@@ -843,6 +863,7 @@ ${bold("setup")}
 ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the background)")}
   supersonic deploy                             deploy this folder — live URL now, build behind it
   supersonic deploy --dev-cmd "<run in dev>"    tunnel the URL to your app live while it builds
+  supersonic deploy --no-preview                never run anything in this folder
                                                   e.g. --dev-cmd "uvicorn main:app --port 8000"
   supersonic deploy --dev-port <n>              tunnel to a dev server you already started
   supersonic deploy --run "<prod start cmd>"    how to run it in PROD — you know the stack

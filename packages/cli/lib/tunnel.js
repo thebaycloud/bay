@@ -56,6 +56,26 @@ async function listeningPorts(ports) {
 }
 
 /**
+ * Which package manager this project uses, by the lockfile it committed.
+ *
+ * The live preview used to run `npm install` unconditionally. Deploying the
+ * FastAPI template on 1 Aug, that dropped a `package-lock.json` into a
+ * repository that uses `bun.lock` — a lockfile the project does not use, in a
+ * checkout the user had not asked us to touch, two minutes after the command had
+ * already returned. `git status` went from clean to dirty with no output saying
+ * so.
+ *
+ * The lockfile is the project stating its answer. Reading it costs nothing.
+ */
+function packageManager(cwd) {
+  const has = (f) => { try { return fs.existsSync(path.join(cwd, f)); } catch { return false; } };
+  if (has("bun.lock") || has("bun.lockb")) return { name: "bun", install: "bun install", dev: "bun run dev" };
+  if (has("pnpm-lock.yaml")) return { name: "pnpm", install: "pnpm install", dev: "pnpm run dev" };
+  if (has("yarn.lock")) return { name: "yarn", install: "yarn install", dev: "yarn run dev" };
+  return { name: "npm", install: "npm install --no-audit --no-fund", dev: "npm run dev" };
+}
+
+/**
  * Get a running dev server to tunnel. The command is the caller's intelligence,
  * not ours — a coding agent knows its own stack (FastAPI → uvicorn, Flask → flask
  * run, Rails → bin/rails s, Go → go run, Node → npm run dev). Resolution order:
@@ -81,7 +101,8 @@ function startDevServer(cwd, opts = {}) {
         // next/etc. Install first so the live preview actually comes up. The URL is
         // already live (deploying page) meanwhile, so this only delays the preview.
         needInstall = !fs.existsSync(path.join(cwd, "node_modules"));
-        cmd = needInstall ? "npm install --no-audit --no-fund && npm run dev" : "npm run dev";
+        const pm = packageManager(cwd);
+        cmd = needInstall ? `${pm.install} && ${pm.dev}` : pm.dev;
       }
     } catch { /* not a node project */ }
   }
@@ -167,4 +188,4 @@ function openTunnel({ wsUrl, slug, token, devHost, devPort, onOpen, onClose }) {
   return ws;
 }
 
-module.exports = { startDevServer, openTunnel, portFromOutput, isListening, listeningPorts, DEV_PORTS };
+module.exports = { startDevServer, openTunnel, portFromOutput, isListening, listeningPorts, packageManager, DEV_PORTS };

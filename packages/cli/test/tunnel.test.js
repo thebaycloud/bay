@@ -2,7 +2,10 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const net = require("node:net");
-const { portFromOutput, isListening, listeningPorts } = require("../lib/tunnel.js");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { portFromOutput, isListening, listeningPorts, packageManager } = require("../lib/tunnel.js");
 
 // --- reading the port out of a dev server's banner
 
@@ -55,4 +58,31 @@ test("snapshotting tells busy ports from free ones", async () => {
     assert.equal(busy.has(s.port), true);
     assert.equal(busy.size >= 1, true);
   } finally { await s.close(); }
+});
+
+test("the live preview uses the package manager the project committed", () => {
+  // Deploying the FastAPI template on 1 Aug ran `npm install` in a repo whose
+  // lockfile is bun.lock, dropping a package-lock.json into a clean checkout two
+  // minutes after the command had already returned.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pm-"));
+  try {
+    fs.writeFileSync(path.join(dir, "bun.lock"), "");
+    assert.equal(packageManager(dir).name, "bun");
+    assert.equal(packageManager(dir).install, "bun install");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("each lockfile names its own manager, and npm is the fallback", () => {
+  const cases = [["pnpm-lock.yaml", "pnpm"], ["yarn.lock", "yarn"], ["bun.lockb", "bun"]];
+  for (const [file, name] of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pm-"));
+    try {
+      fs.writeFileSync(path.join(dir, file), "");
+      assert.equal(packageManager(dir).name, name);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), "pm-"));
+  try {
+    assert.equal(packageManager(bare).name, "npm");
+  } finally { fs.rmSync(bare, { recursive: true, force: true }); }
 });
