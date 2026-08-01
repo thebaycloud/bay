@@ -124,6 +124,31 @@ test("a single-part repo infers nothing, so today's path is untouched", () => {
   assert.equal(inferAppConfig(dir, detector), null);
 });
 
+test("a test harness beside the app is not a second service", () => {
+  // The false positive that matters most: almost every serious repo has an
+  // `e2e/` or `tests/` with a package.json of its own. Reading one as a service
+  // would take a single-app repo that deploys today and route half its traffic
+  // to Playwright.
+  const dir = repo({
+    "package.json": '{"dependencies":{"next":"^15"},"scripts":{"build":"next build","start":"next start"}}',
+    "e2e/package.json": '{"devDependencies":{"@playwright/test":"^1"},"scripts":{"test":"playwright test"}}',
+  });
+
+  assert.equal(inferAppConfig(dir, detector), null);
+});
+
+test("a package that neither builds nor starts is not a service", () => {
+  // Name lists only catch the conventions people happen to follow. A package
+  // with no build and no start script has nothing to deploy whatever it is
+  // called.
+  const dir = repo({
+    "package.json": '{"dependencies":{"next":"^15"},"scripts":{"build":"next build","start":"next start"}}',
+    "fixtures/package.json": '{"scripts":{"lint":"eslint ."}}',
+  });
+
+  assert.equal(inferAppConfig(dir, detector), null);
+});
+
 test("a workspace root is not a service of its own", () => {
   // A root package.json declaring `workspaces` describes the repo, not an app.
   // Treating it as a third service deploys the monorepo root as an app.

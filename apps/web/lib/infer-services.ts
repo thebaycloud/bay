@@ -50,6 +50,27 @@ const BROWSER_FACING = /next\.?js|nuxt|remix|sveltekit|astro|vite|create react a
 /** Where a Python ASGI/WSGI app's module usually sits, relative to its service dir. */
 const PYTHON_ENTRIES = ["main.py", "app/main.py", "src/main.py", "app.py", "api/main.py", "src/app.py"];
 
+/**
+ * Directory names that hold a manifest but never an app.
+ *
+ * This is the false positive that would do real damage. Almost every serious
+ * repository has an `e2e/` or `tests/` with a package.json of its own, and
+ * reading one as a service takes a single-app repo that deploys today and
+ * routes half its traffic to Playwright. Matched on any path segment, so
+ * `apps/e2e` is caught as well as `e2e`.
+ */
+const NOT_AN_APP = new Set([
+  "e2e", "test", "tests", "spec", "specs", "docs", "doc", "examples", "example",
+  "fixtures", "scripts", "tools", "infra", "terraform", "deploy", "deployment",
+  "ci", "benchmark", "benchmarks", "bench", "migrations", "seeds",
+]);
+
+/** Node frameworks that are an app even when the scripts are unconventional. */
+const NODE_FRAMEWORK = /^(next|nuxt|astro|vite|@remix-run\/|@sveltejs\/kit|@nestjs\/core|express|fastify|koa|hono)/;
+
+/** Python entry points that mean something can be started here. */
+const PYTHON_RUNNABLE = [...PYTHON_ENTRIES, "manage.py", "wsgi.py", "asgi.py"];
+
 /** The directory a manifest sits in, repo-relative. `"."` for the root. */
 function dirOf(manifestPath: string): string {
   const i = manifestPath.lastIndexOf("/");
@@ -71,6 +92,34 @@ function isWorkspaceRoot(repoDir: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Is there an app in this directory at all?
+ *
+ * Name lists only catch the conventions people happen to follow, so the second
+ * half is the one doing the work: a package with neither a build nor a start
+ * script, and no framework, has nothing to deploy whatever it is called. For
+ * Python the test is an entry point — without one there is no module name to
+ * pass uvicorn, so a service inferred here could only ever crash on boot.
+ */
+export function isDeployablePart(absoluteDir: string, relDir: string): boolean {
+  if (relDir.split("/").some((seg) => NOT_AN_APP.has(seg.toLowerCase()))) return false;
+
+  const pkgPath = join(absoluteDir, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+      const scripts = pkg.scripts ?? {};
+      if (scripts.build || scripts.start) return true;
+      const deps = Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) });
+      return deps.some((d) => NODE_FRAMEWORK.test(d));
+    } catch {
+      return false; // unparseable manifest: not something to deploy on a guess
+    }
+  }
+
+  return PYTHON_RUNNABLE.some((entry) => existsSync(join(absoluteDir, entry)));
 }
 
 /**
@@ -151,11 +200,14 @@ export function inferAppConfig(repoDir: string, detect: Detect): AppConfig | nul
   const facts = readRepoFacts(repoDir);
   if (!facts.declarations.length) return null;
 
-  // One entry per directory that declares anything, discovery order preserved.
+  // One entry per directory that declares anything AND has something to run,
+  // discovery order preserved.
   const dirs: string[] = [];
   for (const d of facts.declarations) {
     const dir = dirOf(d.from);
-    if (!dirs.includes(dir)) dirs.push(dir);
+    if (dirs.includes(dir)) continue;
+    if (!isDeployablePart(dir === "." ? repoDir : join(repoDir, dir), dir)) continue;
+    dirs.push(dir);
   }
 
   // A repository whose apps live in subdirectories does not also run from its
