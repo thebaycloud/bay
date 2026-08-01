@@ -8,6 +8,7 @@ import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps, runtimeMismatch } from "@/lib/plan-deps";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
+import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
@@ -966,6 +967,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // ran": with PLANNER off the detector is the intended authority, and
     // refusing there would break every deploy that works today.
     let plannerFailed = false;
+    // The content key these files hash to, kept so a plan can be remembered
+    // against it once it has proved itself.
+    let cacheKey: string | null = null;
+    // Set only for a plan the planner actually produced this run. A configured
+    // plan needs no cache and a cached one is already there.
+    let worthCaching = false;
 
     // A repo that already says how to deploy itself does not need a model to
     // guess. `supersonic.json` is read first and, when present, replaces the
@@ -1001,8 +1008,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (configured) {
           plan = configured;
         } else {
-          log("Planning the deploy — the agent reads the repo…");
-          plan = await planDeploy({ dir, log });
+          // Ask the cache before asking the model. The planner re-derived the same
+          // answer from the same bytes on every deploy — 87 seconds on 1 Aug to
+          // conclude `node index.js` for a project that had not changed since the
+          // last time it concluded `node index.js`.
+          cacheKey = planKey(dir);
+          const cached = cacheKey ? await getCachedPlan(cacheKey) : null;
+          if (cached) {
+            plan = cached;
+            log("Plan unchanged since the last deploy of these files — skipping the planner");
+          } else {
+            log("Planning the deploy — the agent reads the repo…");
+            plan = await planDeploy({ dir, log });
+            worthCaching = true;
+          }
         }
         activePlan = plan;
         if (typeof plan.build === "string") runnerBuild = plan.build;
@@ -1065,6 +1084,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (plan.envNeeded?.length) log(`App reads env: ${plan.envNeeded.join(", ")}`);
         log(`Plan ready: ${plan.reason || `${plan.language}${plan.static ? " static" : ""}`}`);
         if (routable && !plan.static) ensureRunDeps(dir, plan, log);
+        // Remembered only here, at the far end of everything that can reject a
+        // plan. Caching it the moment the planner returned would serve the next
+        // deploy of the same bytes a plan this one had already refused.
+        if (worthCaching && cacheKey) await putCachedPlan(cacheKey, plan);
       } catch (e) {
         if (configured) throw e;   // a config error is the user's to fix, not ours to route around
         plannerFailed = true;
