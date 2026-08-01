@@ -12,7 +12,7 @@ import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
-import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig } from "@/lib/app-config";
+import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv } from "@/lib/env-merge";
 import { pgConfig } from "@/lib/pg-config";
@@ -30,6 +30,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { deployArgs, databaseEnv, DB_HOST, DB_PORT, DEFAULT_SCALE, type Scale } from "@/lib/lanes";
+import { verifyApp } from "@/lib/verify-app";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -404,8 +405,16 @@ async function idTokenFor(audience: string): Promise<string> {
 // server can "listen" yet still reject the real request (e.g. Vite preview host
 // allowlisting), which we must catch and repair. The app is sealed, so this
 // request carries an ID token exactly as the proxy's would.
-async function probeApp(url: string, log: (l: string) => void, sealed: boolean): Promise<{ ok: boolean; reason?: string }> {
-  // A sealed app cannot be reached without a token, so mint it outside the catch
+//
+// The judgement about what counts as working lives in lib/verify-app.ts; this
+// is only the part that needs the deployer's credentials.
+async function probeApp(
+  url: string,
+  log: (l: string) => void,
+  sealed: boolean,
+  health?: { health: HealthConfig; strict: boolean; spaFallback?: boolean },
+): Promise<{ ok: boolean; reason?: string }> {
+  // A sealed app cannot be reached without a token, so mint it outside the check
   // below: a token failure means the check did not happen, and saying so beats
   // returning a pass we never verified. A public app needs no token at all.
   let auth: Record<string, string> = {};
@@ -417,20 +426,14 @@ async function probeApp(url: string, log: (l: string) => void, sealed: boolean):
       return { ok: true };
     }
   }
-  try {
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 20000);
-    const r = await fetch(url, { signal: ctrl.signal, headers: auth });
-    clearTimeout(to);
-    const body = (await r.text()).slice(0, 3000);
-    if (r.status === 403) return { ok: false, reason: "App is sealed but the deployer identity cannot invoke it — check the run.invoker binding." };
-    if (r.status >= 500) return { ok: false, reason: `App is up but returns HTTP ${r.status}: ${body.replace(/\s+/g, " ").slice(0, 240)}` };
-    if (/blocked request|allowedhosts|is not allowed|cannot get \/|application error|internal server error/i.test(body))
-      return { ok: false, reason: `App started but rejected the request: "${body.replace(/\s+/g, " ").slice(0, 240)}"` };
-    return { ok: true };
-  } catch {
-    return { ok: true }; // network/timeout (likely cold start) — don't false-fail
-  }
+  return verifyApp({
+    url,
+    health: health?.health ?? { path: "/", expect: 200 },
+    strict: health?.strict ?? false,
+    spaFallback: health?.spaFallback,
+    headers: auth,
+    log: (l) => log(l),
+  });
 }
 
 /**
@@ -1384,6 +1387,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // authored field in schema v2; until then every app gets the defaults,
     // which is still four lanes' worth more than the one that had them.
     const scale: Scale = DEFAULT_SCALE;
+    // What "it works" means for THIS app. `strict` records whether the author
+    // said so or the platform defaulted it: a declared `expect: 200` that comes
+    // back 302 is a broken deploy and the field exists to say so, while an
+    // undeclared default cannot be that strict — plenty of correct apps redirect
+    // their root to /login.
+    const primaryConfigService = appConfig ? primaryService(appConfig) : undefined;
+    const primaryHealth = {
+      health: primaryConfigService?.health ?? { path: "/", expect: 200 },
+      strict: Boolean(primaryConfigService?.health),
+      spaFallback: primaryConfigService?.spaFallback,
+    };
 
     // With a Dockerfile, build it ourselves with a registry layer cache and
     // deploy the image — so an unchanged `npm install` is reused and redeploys
@@ -1413,7 +1427,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // probe until the binding exists.
           if (SEAL_APPS) await grantInvokers(slug, log);
           log("verifying the app responds…");
-          const probe = await probeApp(liveUrl, log, SEAL_APPS);
+          const probe = await probeApp(liveUrl, log, SEAL_APPS, primaryHealth);
           if (!probe.ok) return { ok: false, error: probe.reason };
         }
         return { ok: true, url: liveUrl };
@@ -1624,7 +1638,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // two-service deploy, and gone ~30s later on its own. The primary never
         // showed this because it is probed before go-live; the sibling was not.
         for (let attempt = 0; ; attempt++) {
-          const probe = await probeApp(url, log, SEAL_APPS);
+          // A sibling is checked against its OWN declared health path. `/api`
+          // answering 404 at its root is normal for a service mounted under a
+          // prefix, and the primary's expectations say nothing about it.
+          const probe = await probeApp(url, log, SEAL_APPS, {
+            health: svc.health ?? { path: "/", expect: 200 },
+            strict: Boolean(svc.health),
+            spaFallback: svc.spaFallback,
+          });
           if (probe.ok) break;
           if (attempt >= 5 || !/cannot invoke it/i.test(probe.reason ?? "")) {
             return { ok: false, name, error: `${label} is not answering: ${probe.reason ?? "no response"}` };
