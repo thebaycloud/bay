@@ -113,6 +113,22 @@ export async function putAppSecrets(
   return { stored, skipped };
 }
 
+/**
+ * Read a secret this platform stored, or null when there is none.
+ *
+ * Needed because some platform-owned values must survive a redeploy rather than
+ * be minted fresh each time: an app's database password is the same password its
+ * Postgres role already has, and regenerating it every deploy would lock out the
+ * revision still serving traffic.
+ */
+export async function readAppSecret(slug: string, key: string): Promise<string | null> {
+  try {
+    return (await gcloud(["secrets", "versions", "access", "latest", "--secret", secretName(slug, key), "--project", PROJECT])).trim();
+  } catch {
+    return null;
+  }
+}
+
 /** `--set-secrets` value: `KEY=secret-name:latest,…` */
 export function setSecretsFlag(refs: SecretRef[]): string {
   return refs.map((r) => `${r.key}=${r.name}:latest`).join(",");

@@ -31,6 +31,7 @@ import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { deployArgs, databaseEnv, DB_HOST, DB_PORT, DEFAULT_SCALE, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
+import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -269,7 +270,7 @@ function gcloudDeploy(args: string[], onLine: (l: string) => void, onRaw?: (l: s
 }
 
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
-function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string }> {
+function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
   try { cfg = pgConfig(); } catch (e) { return Promise.reject(e); }
   // Same helper the delete path uses, so an app's database can always be found
@@ -277,8 +278,12 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
   const dbName = dbNameForSlug(slug);
   return capture("gcloud", ["sql", "databases", "create", dbName, "--instance=supersonic-shared-pg", "--project", PROJECT])
     .catch((e: Error) => { if (/already exists/i.test(e.message)) return ""; throw e; })
-    .then(() => {
+    .then(async () => {
       log(`Provisioned Postgres database ${dbName}`);
+      // Its own login, and CONNECT taken away from PUBLIC. Until this existed
+      // every app received the cloudsqlsuperuser credential, and reaching another
+      // app's database took a one-line change to a connection string.
+      const role = await ensureAppRole(slug, dbName, { user: cfg.user, password: cfg.password }, log);
       // An ordinary host and port, because the app reaches Postgres through a
       // Cloud SQL Auth Proxy running beside it — see dbContainerArgs.
       //
@@ -288,8 +293,8 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
       // cannot express a socket at all: `PostgresDsn.build(host="/cloudsql/…")`
       // is REJECTED outright (verified), so a socket left every such app unable
       // to reach a database the platform had already created for it.
-      const databaseUrl = `postgresql://${cfg.user}:${cfg.password}@${DB_HOST}:${DB_PORT}/${dbName}`;
-      return { databaseUrl, connectionName: cfg.connectionName, user: cfg.user, password: cfg.password, dbName };
+      const databaseUrl = `postgresql://${role.user}:${role.password}@${DB_HOST}:${DB_PORT}/${dbName}`;
+      return { databaseUrl, connectionName: cfg.connectionName, user: role.user, password: role.password, dbName, isolated: role.isolated };
     });
 }
 
@@ -1227,6 +1232,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     let databaseUrl = "";
     // Every database variable an app might read. Empty when it has no database.
     let dbEnv: string[] = [];
+    // The app's own Postgres role, when it got one.
+    let dbIsolated = false;
+    let dbPassword = "";
 
     // Provisioning does not depend on the build, so it is started here and
     // awaited only where its results are actually needed — the database and
@@ -1269,6 +1277,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // Every spelling of the same endpoint. DATABASE_URL alone is not enough:
           // plenty of apps never read it and require POSTGRES_SERVER or PGHOST.
           dbEnv = databaseEnv(r.pg);
+          dbIsolated = r.pg.isolated;
+          dbPassword = r.pg.password;
           log("Provisioned the database — connecting through a Cloud SQL proxy");
         } else {
           log(`! ${r.error} — deploying without a database`);
@@ -1306,6 +1316,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const merged = mergeDatabaseEnv(secrets, dbEnv);
       secretEnv = merged.secretEnv;
       extraEnv.push(...merged.plainEnv);
+      // After the merge, not inside it. The app-facing names are whatever the
+      // app happens to read and are the merge's business; this one is the
+      // platform's own handle on the role's password, read back on the next
+      // deploy so the role is not re-passworded out from under the revision
+      // still serving traffic. It is ours, so no repo .env can collide with it.
+      if (dbIsolated) secretEnv[DB_PASSWORD_SECRET] = dbPassword;
     }
     // The bundle key is minted here, before the secrets are stored, so it can go
     // with them.

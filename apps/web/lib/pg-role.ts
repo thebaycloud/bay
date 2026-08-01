@@ -1,0 +1,156 @@
+import { randomBytes } from "node:crypto";
+import { getPool } from "./db";
+import { readAppSecret } from "./app-secrets";
+
+/**
+ * A Postgres login of an app's own.
+ *
+ * Every app used to receive the same credential. `pgConfig()` defaults the user
+ * to `postgres` — the cloudsqlsuperuser role — and `databaseEnv()` wrote that one
+ * username and password into every app's environment seventeen ways. Postgres
+ * grants CONNECT to PUBLIC on a new database by default and nothing revoked it,
+ * so any app could reach any other app's database by changing a connection
+ * string. Not an exploit: a one-line config change. The Cloud SQL proxy does not
+ * help, because roles/cloudsql.client is scoped to the instance, not a database.
+ *
+ * Worse, `supersonic_platform` is on that same instance through the same
+ * pgConfig(), so every customer container could read `users`, `apps`,
+ * `deploy_runs` (which holds other customers' .env secrets for the duration of
+ * their builds), `deploy_events` and `cli_tokens` — and write to all of them.
+ * Nothing stopped `UPDATE apps SET run_url = …`.
+ *
+ * The codebase reaches the opposite conclusion three times elsewhere, each with a
+ * comment saying why: per-bucket grants ("a project-level grant would hand every
+ * app the keys to every other app's storage"), a dedicated runtime service
+ * account ("arbitrary code we agreed to run"), and per-app AES bundle
+ * encryption. Postgres got none of them. This is Postgres getting them.
+ *
+ * Note what this does NOT fix: a superuser password still exists, and the
+ * control plane still shares the instance. Phase 5b of docs/DEPLOY-PLAN.md moves
+ * it off. A per-app role is the boundary between tenants; it is not a boundary
+ * between a tenant and the platform.
+ */
+
+/** The env var the role's password is stored and mounted under. */
+export const DB_PASSWORD_SECRET = "SUPERSONIC_DB_PASSWORD";
+
+export interface AppRole {
+  user: string;
+  password: string;
+  /** False when the role could not be created and the caller must fall back. */
+  isolated: boolean;
+}
+
+/**
+ * Identifiers are interpolated, not bound — Postgres has no parameter slot for a
+ * role name — so they are constrained to a shape that cannot carry an injection
+ * rather than escaped and hoped over. `dbNameForSlug` already limits the
+ * database name to the same alphabet.
+ */
+const SAFE_IDENT = /^[a-z_][a-z0-9_]*$/;
+/** Hex from randomBytes: [0-9a-f] only, which is safe as a SQL literal by construction. */
+const SAFE_PASSWORD = /^[0-9a-f]+$/;
+
+/**
+ * Lowercased, because Postgres folds an unquoted identifier to lower case and
+ * this name is compared as a STRING against pg_roles.rolname. `CREATE ROLE
+ * app_MyApp` stores `app_myapp`, so the existence check would never match its
+ * own role: every deploy would try to create it again, and the isolation would
+ * quietly degrade to the shared credential it exists to replace.
+ *
+ * 60 rather than 63 leaves room for the `app_` prefix inside Postgres's
+ * identifier limit; a name truncated by Postgres could collide two apps onto one
+ * role, which is precisely the failure this module ends.
+ */
+export function roleNameForSlug(slug: string): string {
+  return `app_${slug.toLowerCase().replace(/-/g, "_")}`.slice(0, 60);
+}
+
+/**
+ * Create (or repair) the app's role, take CONNECT away from everyone else, and
+ * hand the app ownership of its own schema.
+ *
+ * Idempotent, because it runs on every deploy. The password is read back from
+ * Secret Manager rather than regenerated: rotating it on each deploy would lock
+ * out the revision that is still serving traffic while the new one rolls out.
+ *
+ * Best-effort by design. A role that cannot be created must not take down a
+ * deploy that would otherwise work — it falls back to the shared credential,
+ * which is exactly today's behaviour and no worse — but it says so loudly,
+ * because "your database is shared" is not something to discover later.
+ */
+export async function ensureAppRole(
+  slug: string,
+  dbName: string,
+  fallback: { user: string; password: string },
+  log: (l: string) => void,
+): Promise<AppRole> {
+  const role = roleNameForSlug(slug);
+  if (!SAFE_IDENT.test(role) || !SAFE_IDENT.test(dbName)) {
+    log(`! could not isolate the database: "${role}"/"${dbName}" is not a usable identifier — using the shared credential`);
+    return { ...fallback, isolated: false };
+  }
+
+  const existing = await readAppSecret(slug, DB_PASSWORD_SECRET);
+  const password = existing && SAFE_PASSWORD.test(existing) ? existing : randomBytes(24).toString("hex");
+
+  const pool = getPool(dbName);
+  const client = await pool.connect().catch(() => null);
+  if (!client) {
+    log("! could not reach Postgres to isolate this app's database — using the shared credential");
+    return { ...fallback, isolated: false };
+  }
+
+  try {
+    // CREATE ROLE races with itself when two deploys of the same app overlap, and
+    // the loser gets "role already exists" rather than a serializable failure —
+    // so the password is set unconditionally afterwards and the create is allowed
+    // to lose.
+    await client.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN
+          CREATE ROLE ${role} LOGIN PASSWORD '${password}';
+        END IF;
+      END $$;
+    `);
+    await client.query(`ALTER ROLE ${role} WITH LOGIN PASSWORD '${password}'`);
+
+    // The line that closes the hole. Everything else here is about making the
+    // app work AFTER its neighbours stop being able to connect.
+    await client.query(`REVOKE CONNECT ON DATABASE ${dbName} FROM PUBLIC`);
+    await client.query(`GRANT CONNECT ON DATABASE ${dbName} TO ${role}`);
+
+    // Ownership, not just privileges: an app runs its own migrations, and a
+    // migration ALTERs and DROPs tables. GRANT ALL lets it write rows; only the
+    // owner can change the shape of what it wrote. Tables created before this
+    // existed belong to `postgres`, so they are reassigned — without this, an
+    // existing app's first migration under its new role fails with "must be
+    // owner of table".
+    await client.query(`ALTER SCHEMA public OWNER TO ${role}`);
+    await client.query(`GRANT ALL ON SCHEMA public TO ${role}`);
+    await client.query(`GRANT ALL ON ALL TABLES IN SCHEMA public TO ${role}`);
+    await client.query(`GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${role}`);
+    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${role}`);
+    await client.query(`
+      DO $$
+      DECLARE t record;
+      BEGIN
+        FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+          EXECUTE format('ALTER TABLE public.%I OWNER TO ${role}', t.tablename);
+        END LOOP;
+        FOR t IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
+          EXECUTE format('ALTER SEQUENCE public.%I OWNER TO ${role}', t.sequencename);
+        END LOOP;
+      END $$;
+    `);
+
+    log(`Database isolated — this app connects as ${role} and no other app can reach it`);
+    return { user: role, password, isolated: true };
+  } catch (e) {
+    log(`! could not isolate this app's database (${e instanceof Error ? e.message.split("\n")[0] : String(e)}) — using the shared credential`);
+    return { ...fallback, isolated: false };
+  } finally {
+    client.release();
+  }
+}
