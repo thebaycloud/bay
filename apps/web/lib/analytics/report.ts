@@ -1,6 +1,7 @@
 import {
   sessionizeAttempts,
   stageDurationMs,
+  coveredMs,
   NESTED_STAGES,
   type Attempt,
   type RawStage,
@@ -297,8 +298,17 @@ export interface Speed {
   byLane: Array<{ lane: string; n: number; p50: number; p90: number; max: number }>;
   /** Whole deploys, all lanes. */
   overall: Summary | null;
-  /** Medians of the stages that do not nest, added up. */
-  medianAccountedMs: number;
+  /**
+   * How much of a deploy the recorded stages actually explain.
+   *
+   * The union of each deploy's own stage intervals, taken across deploys — not
+   * the sum of the per-stage medians, which is a number that belongs to no
+   * deploy at all and can exceed the median deploy it is compared against. It
+   * did, on the first fixture this page was rendered against: 12m 26s of
+   * "stages" beside a 5m 43s median deploy, because `repair-agent` runs on a
+   * minority of deploys and its median was being added to every other stage's.
+   */
+  accounted: Summary | null;
 }
 
 const NESTED_IN = new Map(NESTED_STAGES.map(([inner, outer]) => [inner, outer]));
@@ -328,14 +338,15 @@ export function speed(attempts: Attempt[]): Speed {
     })
     .sort((a, b) => b.p50 - a.p50);
 
+  // Per deploy, the wall-clock its stages cover — the union of their intervals,
+  // so overlapping stages are counted once however they overlap.
+  const accountedPerAttempt = attempts.filter((a) => a.durationMs !== null).map((a) => coveredMs(a.stages));
+
   return {
     stages,
     byLane,
     overall: summarize(attempts.map((a) => a.durationMs).filter((d): d is number => d !== null)),
-    // Nested stages are excluded: run-fetch is measured inside job-cold-start, so
-    // adding both counts the same seconds twice and produces a total longer than
-    // the deploys it describes.
-    medianAccountedMs: stages.filter((s) => !s.nestedIn).reduce((sum, s) => sum + s.p50, 0),
+    accounted: summarize(accountedPerAttempt),
   };
 }
 

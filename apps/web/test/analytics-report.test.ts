@@ -296,10 +296,41 @@ test("a stage measured inside another is marked and left out of the total", () =
   const coldStart = r.speed.stages.find((s) => s.stage === "job-cold-start")!;
   assert.equal(coldStart.nestedIn, null);
 
-  const naiveTotal = r.speed.stages.reduce((n, s) => n + s.p50, 0);
-  assert.equal(r.speed.medianAccountedMs, naiveTotal - runFetch.p50);
-  // And the honest total does not exceed the deploy it is describing.
-  assert.ok(r.speed.medianAccountedMs <= r.speed.overall!.p50);
+  // Accounted time is the union of the deploy's stage intervals. In this fixture
+  // detect ends at 206s and deploy starts at 210s, so 4 seconds of the 270-second
+  // deploy are covered by no stage at all — which is the number this metric
+  // exists to expose.
+  assert.equal(r.speed.overall!.p50, 270_000);
+  assert.equal(r.speed.accounted!.p50, 266_000);
+
+  // Summing the durations instead would claim more time than the deploy took,
+  // because job-cold-start contains both run-fetch and job-dispatch.
+  const naiveSum = r.attempts[0].stages.reduce((n, s) => n + (s.endedAt!.getTime() - s.startedAt.getTime()), 0);
+  assert.ok(naiveSum > r.speed.overall!.p50, "summing durations should overcount, which is the point");
+});
+
+// The first fixture this page was rendered against produced "12m 26s of stages"
+// against a "5m 43s median deploy", because repair-agent runs on a minority of
+// deploys and its median was added to every other stage's. Summing within each
+// deploy is what makes the comparison mean anything.
+test("accounted time never exceeds the deploy, even when a stage runs on a minority", () => {
+  const input = empty();
+  input.stages = [
+    ...deployRows("aaa11", "2026-07-20T10:00:00Z", "runner", "ok", 30),
+    ...deployRows("bbb22", "2026-07-20T11:00:00Z", "runner", "ok", 30),
+    ...deployRows("ccc33", "2026-07-20T12:00:00Z", "runner", "ok", 30),
+  ];
+  // One deploy in three also ran the repair agent, for far longer than anything else.
+  input.stages.push(stage("ccc33", "repair-agent", "2026-07-20T12:01:40Z", 900, "ok", "runner"));
+
+  const r = buildReport(input);
+  assert.ok(
+    r.speed.accounted!.p50 <= r.speed.overall!.p50,
+    `accounted ${r.speed.accounted!.p50} exceeds deploy ${r.speed.overall!.p50}`,
+  );
+  // Whereas adding the per-stage medians up would claim more than a deploy takes.
+  const naive = r.speed.stages.filter((s) => !s.nestedIn).reduce((n, s) => n + s.p50, 0);
+  assert.ok(naive > r.speed.overall!.p50, "the fixture should reproduce the misleading sum");
 });
 
 test("deploy duration is reported per lane", () => {
