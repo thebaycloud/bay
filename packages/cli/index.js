@@ -189,8 +189,14 @@ async function apps(args) {
   if (args.json) return json(list);
   if (!list.length) { info("no apps yet — deploy one with: supersonic deploy"); return; }
   for (const a of list) {
-    const dot = a.ready ? green("●") : red("○");
-    print(`${dot} ${bold(a.slug.padEnd(22))} ${dim(a.url || `${a.slug}.supersonic.cv`)}`);
+    // The list endpoint has always sent `status: "building"` for a deploy in
+    // flight and the CLI has always thrown it away, so an app that was building
+    // normally appeared here as a dead one — the same "ready or down" flattening
+    // that `status` had.
+    const building = a.status === "building";
+    const dot = a.ready ? green("●") : building ? yellow("◐") : red("○");
+    const note = building ? dim(`  ${a.stage || "deploying…"}`) : "";
+    print(`${dot} ${bold(a.slug.padEnd(22))} ${dim(a.url || `${a.slug}.supersonic.cv`)}${note}`);
   }
 }
 
