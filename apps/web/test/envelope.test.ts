@@ -119,7 +119,7 @@ test("several ignored fields are reported together, not one deploy at a time", (
 /* ── the outcome check: did the value actually reach the revision ────────── */
 
 const outcome = (over: Partial<import("../lib/envelope").DeployOutcome> = {}) => ({
-  envPairs: [], secretNames: [], releaseCommand: "", argv: [], hasDatabase: false, ...over,
+  revisionEnv: [], hasRevision: true, releaseCommand: "", argv: [], hasDatabase: false, ...over,
 });
 
 test("env declared but set on nothing fails the deploy", () => {
@@ -128,7 +128,7 @@ test("env declared but set on nothing fails the deploy", () => {
   // revision. Every static assertion passed.
   const e = buildEnvelope(service({ env: { LOG_LEVEL: "info" }, declared: ["env"] }), app);
   assert.throws(() => assertReached(e, outcome()), /did not apply: env/);
-  assert.doesNotThrow(() => assertReached(e, outcome({ envPairs: ["LOG_LEVEL=info"] })));
+  assert.doesNotThrow(() => assertReached(e, outcome({ revisionEnv: [{ name: "LOG_LEVEL", fromSecret: false }] })));
 });
 
 test("a release command that no lane would run fails the deploy", () => {
@@ -148,7 +148,7 @@ test("uses: [database] with no database provisioned fails the deploy", () => {
 test("a declared secret that never got mounted fails the deploy", () => {
   const e = buildEnvelope(service({ secrets: ["STRIPE_KEY"], declared: ["secrets"] }), app);
   assert.throws(() => assertReached(e, outcome()), /did not apply: secrets/);
-  assert.doesNotThrow(() => assertReached(e, outcome({ secretNames: ["STRIPE_KEY"] })));
+  assert.doesNotThrow(() => assertReached(e, outcome({ revisionEnv: [{ name: "STRIPE_KEY", fromSecret: true }] })));
 });
 
 test("a declared scale that never reached the argv fails the deploy", () => {
@@ -169,4 +169,32 @@ test("a new schema field with no known effect fails loudly rather than passing",
 test("what nobody declared is never demanded", () => {
   const e = buildEnvelope(service({ env: { A: "1" }, declared: [] }), app);
   assert.doesNotThrow(() => assertReached(e, outcome()));
+});
+
+test("a secret inherited from an earlier deploy is not a failure", () => {
+  // The first run of this check failed a working app for exactly this. Both
+  // --update-secrets and --update-env-vars MERGE, deliberately, so a redeploy
+  // cannot drop a key an earlier one set — and the app's SECRET_KEY had one
+  // Secret Manager version, from a deploy an hour earlier. It was live, correct,
+  // and never re-sent. What matters is what the revision carries.
+  const e = buildEnvelope(service({ secrets: ["SECRET_KEY"], declared: ["secrets"] }), app);
+  assert.doesNotThrow(() => assertReached(e, outcome({
+    revisionEnv: [{ name: "SECRET_KEY", fromSecret: true }],
+  })));
+});
+
+test("a secret that arrived as a plain value still fails", () => {
+  // Reaching the app is not enough for this field: a secret in the revision spec
+  // as a literal is readable by anyone with `run services describe` and is the
+  // thing declaring it a secret was supposed to prevent.
+  const e = buildEnvelope(service({ secrets: ["SECRET_KEY"], declared: ["secrets"] }), app);
+  assert.throws(() => assertReached(e, outcome({
+    revisionEnv: [{ name: "SECRET_KEY", fromSecret: false }],
+  })), /did not apply: secrets/);
+});
+
+test("a lane with no revision to read cannot fail on the environment", () => {
+  // The static lane deploys no Cloud Run service. Unverifiable is not failed.
+  const e = buildEnvelope(service({ lane: "static", env: { A: "1" }, declared: ["env"] }), app);
+  assert.doesNotThrow(() => assertReached(e, outcome({ hasRevision: false })));
 });

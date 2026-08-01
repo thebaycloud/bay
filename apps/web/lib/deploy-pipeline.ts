@@ -1509,6 +1509,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // The argv actually sent, kept so the deploy can be checked against what the
     // author asked for rather than against what the code intended.
     let lastArgv: string[] = [];
+    // The environment of the revision Cloud Run just created, read back out of
+    // the response it already returns. What the app HAS, which is not the same
+    // as what this deploy sent — both env and secret flags merge, so a value set
+    // by an earlier deploy is still live and still correct.
+    let revisionEnv: { name: string; fromSecret: boolean }[] = [];
+    let hasRevision = false;
     const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
       lastArgv = args;
       const hb = setInterval(() => log("deploying…"), 6000);
@@ -1517,6 +1523,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         const o = await gcloudDeploy(args, log, (l) => builds.note(l));
         clearInterval(hb);
         const svc = JSON.parse(o.slice(o.indexOf("{")));
+        // Read back from the response that already exists rather than by
+        // describing the service again: an extra round trip could disagree with
+        // the revision this deploy just made, and then the check would be
+        // reporting on something else.
+        try {
+          const containers = svc?.spec?.template?.spec?.containers ?? [];
+          const appContainer = containers.find((c: { name?: string }) => c.name === "app") ?? containers[0];
+          revisionEnv = (appContainer?.env ?? []).map((e: { name: string; valueFrom?: unknown }) => ({
+            name: e.name,
+            fromSecret: Boolean(e.valueFrom),
+          }));
+          hasRevision = true;
+        } catch { /* an unreadable spec leaves the environment unverifiable, not failed */ }
         const liveUrl = svc?.status?.url ?? "";
         if (liveUrl) {
           // Grant before probing: a sealed app 403s the control plane's own
@@ -1943,8 +1962,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const resolvedApp = resolveFrom(appConfig, configWasWritten ? "config" : "inferred");
       const primaryEnvelope = buildEnvelope(resolvedApp.services[0], resolvedApp);
       assertReached(primaryEnvelope, {
-        envPairs: extraEnv,
-        secretNames: secretRefs.map((r) => r.key),
+        revisionEnv,
+        hasRevision,
         releaseCommand: releaseCmd,
         argv: lastArgv,
         hasDatabase: Boolean(databaseUrl),

@@ -155,10 +155,23 @@ export class UnconsumedField extends Error {}
  * revision.
  */
 export interface DeployOutcome {
-  /** `NAME=value` pairs that will be set on the container. */
-  envPairs: string[];
-  /** Secret NAMES that will be mounted. */
-  secretNames: string[];
+  /**
+   * The environment of the revision Cloud Run just returned — what the app
+   * actually has, not what this deploy sent.
+   *
+   * Those differ, legitimately. `--update-secrets` and `--update-env-vars` MERGE,
+   * deliberately, so that a redeploy cannot drop a key an earlier one set; a
+   * value the user put there with `supersonic env set` survives too. Checking
+   * this deploy's own inputs therefore fails a perfectly correct app whose
+   * secrets were stored on a previous deploy and inherited — which is exactly
+   * what the first run of this check did, on an app that was working.
+   *
+   * Empty when there is no revision to read, as on the static lane, in which
+   * case the environment fields cannot be verified and are not asserted.
+   */
+  revisionEnv: { name: string; fromSecret: boolean }[];
+  /** Whether a revision was returned at all. */
+  hasRevision: boolean;
   /** The one-shot command the release phase will run, if any. */
   releaseCommand: string;
   /** The full argv handed to gcloud, so scale and probes can be checked. */
@@ -167,7 +180,8 @@ export interface DeployOutcome {
   hasDatabase: boolean;
 }
 
-const name = (pair: string) => pair.slice(0, pair.indexOf("="));
+const carries = (o: DeployOutcome, n: string, fromSecret: boolean) =>
+  o.revisionEnv.some((e) => e.name === n && e.fromSecret === fromSecret);
 
 /**
  * Each declarable field, and how to tell from the OUTCOME that it took effect.
@@ -178,8 +192,13 @@ const name = (pair: string) => pair.slice(0, pair.indexOf("="));
  * looks like fails the deploy that first declares it.
  */
 const REACHED: Partial<Record<keyof ServiceEnvelope, (e: ServiceEnvelope, o: DeployOutcome) => boolean>> = {
-  env: (e, o) => Object.keys(e.env).every((k) => o.envPairs.some((p) => name(p) === k)),
-  secrets: (e, o) => e.secrets.every((s) => o.secretNames.includes(s)),
+  // Unverifiable without a revision to read, and an unverifiable field must not
+  // be reported as a failure — the static lane deploys no service at all.
+  env: (e, o) => !o.hasRevision || Object.keys(e.env).every((k) => carries(o, k, false)),
+  // As a reference, not a literal. A secret that arrives as a plain value in the
+  // revision spec has reached the app and defeated the reason for declaring it
+  // one, so `secrets` is the field where HOW it arrived is the whole point.
+  secrets: (e, o) => !o.hasRevision || e.secrets.every((s) => carries(o, s, true)),
   release: (e, o) => o.releaseCommand.trim() !== "",
   uses: (e, o) => !e.uses.includes("database") || o.hasDatabase,
   scale: (e, o) => o.argv.includes(e.scale.memory) && o.argv.includes(`--timeout=${e.scale.timeout}`),
