@@ -227,7 +227,13 @@ export function formatDuration(ms: number | null | undefined): string {
   const rem = Math.round(s - m * 60);
   if (m < 60) return rem ? `${m}m ${rem}s` : `${m}m`;
   const h = Math.floor(m / 60);
-  return `${h}h ${m - h * 60}m`;
+  // Days past two of them. Time-to-first-success is measured from signup and is
+  // routinely a fortnight, which this rendered as "350h 30m" — a number nobody
+  // can read without dividing. Two days rather than one, so "36h 20m" still
+  // reads as the long afternoon it describes.
+  if (h < 48) return `${h}h ${m - h * 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h - d * 24}h`;
 }
 
 /**

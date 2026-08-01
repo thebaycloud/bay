@@ -205,6 +205,11 @@ test("durations read as durations, and nothing reads as an em dash", () => {
   assert.equal(formatDuration(227_000), "3m 47s");
   assert.equal(formatDuration(120_000), "2m");
   assert.equal(formatDuration(5_400_000), "1h 30m");
+  assert.equal(formatDuration(36 * 3600_000 + 20 * 60_000), "36h 20m");
+  // Past two days it switches to days: time-to-first-success is measured from
+  // signup and is routinely a fortnight, which "350h 30m" states unreadably.
+  assert.equal(formatDuration(48 * 3600_000), "2d 0h");
+  assert.equal(formatDuration(350.5 * 3600_000), "14d 14h");
 });
 
 test("grouping keeps the order keys first appeared in", () => {
