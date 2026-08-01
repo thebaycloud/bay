@@ -1,8 +1,9 @@
 export const dynamic = "force-dynamic";
 
 import Link from "next/link";
-import { Search, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
+import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sidebar } from "@/components/Sidebar";
 import { TrialBanner } from "@/components/TrialBanner";
@@ -56,7 +57,7 @@ export default async function Home() {
       <div className="main">
         <TrialBanner />
         <header className="topbar">
-          <button className="kbar"><Search size={13} />Search<span className="kbd">⌘K</span></button>
+          <CommandPalette apps={apps} />
           <div className="spacer" />
           <Bracket>
             <Link href="/new" className="btn primary"><Plus size={13} />New app</Link>
