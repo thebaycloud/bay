@@ -116,8 +116,13 @@ export function redact(message: string): string {
  *   panel, and a page is the wrong place for it, so only the class of failure is
  *   reported.
  *
- * First line only either way: a stack trace on the page helps nobody, and
- * `console.error` still has the whole thing.
+ * First line only either way: a stack trace on the page helps nobody, and the
+ * log keeps the stack. It does NOT keep the raw error — both branches that can
+ * carry data return `redact(...)`, and the stack is redacted at the call site.
+ * That changed when this page began rendering user emails, and the comment said
+ * otherwise for one commit. A note claiming a weaker privacy property than the
+ * code provides is the kind that gets acted on: the next reader restores raw
+ * logging on its authority.
  */
 export function readErrorDetail(e: unknown): string {
   const err = e as { code?: unknown; severity?: unknown } | null;
