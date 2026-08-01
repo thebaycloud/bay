@@ -296,3 +296,168 @@ export function Table({
 
 /** Durations, formatted once so every panel says "3m 47s" the same way. */
 export const dur = formatDuration;
+
+/**
+ * A short date for a table cell. Absent reads as an em dash, never as a zero
+ * date, and never as "now".
+ */
+export function shortDate(d: Date | null | undefined): string {
+  if (!d) return "—";
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * How a person is doing, as a word.
+ *
+ * A tag rather than a coloured row: the colour is a second signal on top of the
+ * text, never the only one, and the same word appears in the funnel above so the
+ * two can be checked against each other.
+ */
+export function StallTag({ stall, label }: { stall: string; label: string }) {
+  return <span className={`an-stall an-stall-${stall}`}>{label}</span>;
+}
+
+/**
+ * Every user, worst-off first, with their apps beside them.
+ *
+ * Their apps are in the row rather than in a second table, because the question
+ * this exists to answer — "who are the nine, and what happened to them" — is one
+ * an operator should not have to join by eye.
+ *
+ * Emails are rendered plainly. That is the point of the table; the page is
+ * admin-gated and server-rendered, and nothing here reaches a log.
+ */
+export function PeopleTable({
+  people,
+  stallLabel,
+  emptyText,
+}: {
+  people: Array<{
+    email: string;
+    createdAt: Date;
+    plan: string | null;
+    status: string | null;
+    apps: Array<{ slug: string; status: string; lane: string | null; succeeded: boolean; lastError: string | null }>;
+    deploysInWindow: number;
+    timeToFirstSuccessMs: number | null;
+    lastActivityAt: Date | null;
+    stall: string;
+  }>;
+  stallLabel: (s: string) => string;
+  emptyText: string;
+}) {
+  if (!people.length) return <Empty>{emptyText}</Empty>;
+  return (
+    <div className="an-table-wrap">
+      <table className="an-table an-people">
+        <thead>
+          <tr>
+            <th>person</th>
+            <th>signed up</th>
+            <th>plan</th>
+            <th>apps</th>
+            <th className="num">deploys</th>
+            <th>outcome</th>
+            <th>last activity</th>
+          </tr>
+        </thead>
+        <tbody>
+          {people.map((p) => (
+            <tr key={p.email}>
+              <td className="an-email">{p.email}</td>
+              <td className="an-nowrap">{shortDate(p.createdAt)}</td>
+              <td>
+                {p.plan ?? "—"}
+                {p.status && p.status !== "active" && <span className="an-substatus">{p.status}</span>}
+              </td>
+              <td>
+                {p.apps.length === 0 ? (
+                  <span className="an-none">none</span>
+                ) : (
+                  <span className="an-chips">
+                    {p.apps.map((a) => (
+                      <span
+                        key={a.slug}
+                        className={"an-chip" + (a.status === "failed" ? " bad" : a.succeeded ? " good" : "")}
+                        title={
+                          `${a.slug} · ${a.status}` +
+                          (a.lane ? ` · ${a.lane} lane` : " · no lane chosen") +
+                          (a.lastError ? ` · ${a.lastError}` : "")
+                        }
+                      >
+                        {a.slug}
+                        <i className="an-chip-state">{a.status === "failed" ? "failed" : a.succeeded ? "live" : "no success"}</i>
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </td>
+              <td className="num">{p.deploysInWindow || "—"}</td>
+              <td>
+                <StallTag stall={p.stall} label={stallLabel(p.stall)} />
+                {p.timeToFirstSuccessMs !== null && (
+                  <span className="an-lag">in {formatDuration(p.timeToFirstSuccessMs)}</span>
+                )}
+              </td>
+              <td className="an-nowrap">{shortDate(p.lastActivityAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Every app, broken ones first. The error is shown in full — it is the point. */
+export function AppsTable({
+  apps,
+  emptyText,
+}: {
+  apps: Array<{
+    slug: string;
+    ownerEmail: string | null;
+    status: string;
+    createdAt: Date;
+    lane: string | null;
+    deploysInWindow: number;
+    succeeded: boolean;
+    lastError: string | null;
+    lastActivityAt: Date | null;
+  }>;
+  emptyText: string;
+}) {
+  if (!apps.length) return <Empty>{emptyText}</Empty>;
+  return (
+    <div className="an-table-wrap">
+      <table className="an-table an-apps">
+        <thead>
+          <tr>
+            <th>app</th>
+            <th>owner</th>
+            <th>status</th>
+            <th>lane</th>
+            <th className="num">deploys</th>
+            <th>last activity</th>
+            <th>what is wrong with it now</th>
+          </tr>
+        </thead>
+        <tbody>
+          {apps.map((a) => (
+            <tr key={a.slug}>
+              <td>{a.slug}</td>
+              <td className="an-email">{a.ownerEmail ?? <span className="an-none">unknown</span>}</td>
+              <td>
+                <span className={"an-state an-state-" + a.status}>{a.status}</span>
+                {!a.succeeded && a.status !== "failed" && <span className="an-substatus">never succeeded</span>}
+              </td>
+              <td>{a.lane ?? <span className="an-none">none chosen</span>}</td>
+              <td className="num">{a.deploysInWindow || "—"}</td>
+              <td className="an-nowrap">{shortDate(a.lastActivityAt)}</td>
+              <td className="an-err">{a.lastError ?? <span className="an-none">—</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
