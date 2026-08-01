@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildReport, granularityFor, type ReportInput } from "../lib/analytics/report";
+import { buildReport, granularityFor, panelError, allIssues, type ReportInput } from "../lib/analytics/report";
 import type { RawStage, StageOutcome } from "../lib/analytics/attempts";
 import type { AppRow, DeployStateRow, FirstDeployRow, UserRow } from "../lib/analytics/queries";
 
@@ -429,4 +429,62 @@ test("a truncated read is carried through to the page rather than hidden", () =>
   const r = buildReport(input);
   assert.equal(r.truncated, true);
   assert.equal(r.reliability.truncated, true);
+});
+
+// ─── a read that failed is not a quiet week ───────────────────────────────────
+
+// The whole point: these tables' column names were read off lib/*.ts rather than
+// a migration, because `deploys` and `deploy_events` appear in no migration at
+// all. A wrong name must not render as "no data" on a page whose job is to be
+// believed.
+test("a failed read is reported, not rendered as an empty result", () => {
+  const input = empty();
+  input.sources = { deployStates: 'column "finished_at" does not exist' };
+
+  const r = buildReport(input);
+  assert.deepEqual(r.issues, [{ source: "deployStates", message: 'column "finished_at" does not exist' }]);
+  assert.equal(panelError(r.sources, ["deployStates"]), 'deployStates: column "finished_at" does not exist');
+});
+
+test("a panel whose sources all loaded reports no error", () => {
+  const r = buildReport(empty());
+  assert.deepEqual(r.issues, []);
+  assert.equal(panelError(r.sources, ["users", "apps", "stages"]), null);
+});
+
+test("a panel is broken if any one of its sources is", () => {
+  const input = empty();
+  input.sources = { apps: "relation \"apps\" does not exist" };
+
+  const r = buildReport(input);
+  // The funnel needs all three; one failure is enough to make its numbers wrong.
+  assert.match(panelError(r.sources, ["users", "apps", "firstDeploys"])!, /relation "apps" does not exist/);
+  // A panel that does not read apps is unaffected.
+  assert.equal(panelError(r.sources, ["stages"]), null);
+});
+
+// "deploy_stages held nothing" and "we could not read deploy_stages" are
+// opposite claims. Saying the first when the second happened is exactly the
+// confusion this page must not create.
+test("a broken stages read is never reported as 'no stage data'", () => {
+  const working = buildReport(empty());
+  assert.equal(working.noStageData, true, "an empty read really is no data");
+
+  const input = empty();
+  input.sources = { stages: 'column "outcome" does not exist' };
+  const failed = buildReport(input);
+  assert.equal(failed.noStageData, false, "a failed read must not claim there is no data");
+  assert.equal(failed.issues.length, 1);
+});
+
+test("only the reads that actually failed are listed", () => {
+  const input = empty();
+  input.sources = { users: null, apps: "boom", stages: null, errorEvents: "bang" };
+  assert.deepEqual(allIssues(input.sources).map((i) => i.source).sort(), ["apps", "errorEvents"]);
+});
+
+test("no source information at all means no issues, not unknown ones", () => {
+  assert.deepEqual(allIssues(undefined), []);
+  assert.equal(panelError(undefined, ["users"]), null);
+  assert.deepEqual(buildReport(empty()).sources, {});
 });

@@ -33,6 +33,25 @@ import type { AppRow, DeployStateRow, ErrorEventRow, FirstDeployRow, UserRow, Wi
  * ever looked at it. The page then only has to render.
  */
 
+/**
+ * The reads the page is built from.
+ *
+ * Named so a panel can say which one failed. A panel whose source did not load
+ * must not render as empty — empty means "nothing happened", and the two have to
+ * be told apart on a page whose whole job is to be believed.
+ */
+export type SourceName =
+  | "users"
+  | "apps"
+  | "stages"
+  | "firstDeploys"
+  | "deployStates"
+  | "errorEvents"
+  | "oldestEventAt";
+
+/** The database's own message per source, or null where the read worked. */
+export type SourceErrors = Partial<Record<SourceName, string | null>>;
+
 export interface ReportInput {
   users: UserRow[];
   apps: AppRow[];
@@ -45,6 +64,33 @@ export interface ReportInput {
   slugOwners: Map<string, string>;
   window: Window;
   now: Date;
+  /** Which reads failed, and what the database said. Absent means all of them worked. */
+  sources?: SourceErrors;
+}
+
+/**
+ * The first source in `names` that failed, as a sentence for the page.
+ *
+ * Takes a list because most panels are built from more than one read, and one
+ * broken read is enough to make that panel's numbers wrong. Reporting the first
+ * rather than all of them keeps the panel readable; the banner at the top of the
+ * page lists every failure.
+ */
+export function panelError(sources: SourceErrors | undefined, names: SourceName[]): string | null {
+  if (!sources) return null;
+  for (const n of names) {
+    const e = sources[n];
+    if (e) return `${n}: ${e}`;
+  }
+  return null;
+}
+
+/** Every read that failed, for the banner. */
+export function allIssues(sources: SourceErrors | undefined): Array<{ source: SourceName; message: string }> {
+  if (!sources) return [];
+  return (Object.entries(sources) as Array<[SourceName, string | null | undefined]>)
+    .filter((entry): entry is [SourceName, string] => !!entry[1])
+    .map(([source, message]) => ({ source, message }));
 }
 
 // ─── acquisition ──────────────────────────────────────────────────────────────
@@ -439,8 +485,17 @@ export interface Report {
   oldestEventAt: Date | null;
   /** True when the stage read hit its cap and the numbers cover part of the window. */
   truncated: boolean;
-  /** Set when the stage table held nothing for the window. */
+  /**
+   * Set when the stage table held nothing for the window AND the read worked.
+   *
+   * A failed read is not "no data" — saying so is the exact confusion this page
+   * must not create — so a broken `stages` read leaves this false and surfaces
+   * as an error instead.
+   */
   noStageData: boolean;
+  /** Which reads failed, and what the database said about each. */
+  sources: SourceErrors;
+  issues: Array<{ source: SourceName; message: string }>;
 }
 
 export function buildReport(input: ReportInput): Report {
@@ -456,7 +511,10 @@ export function buildReport(input: ReportInput): Report {
     depth: depth(input),
     oldestEventAt: input.oldestEventAt,
     truncated: input.stagesTruncated,
-    noStageData: input.stages.length === 0,
+    // Only "no data" when the read actually succeeded and came back empty.
+    noStageData: input.stages.length === 0 && !input.sources?.stages,
+    sources: input.sources ?? {},
+    issues: allIssues(input.sources),
   };
 }
 
