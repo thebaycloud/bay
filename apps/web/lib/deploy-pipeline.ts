@@ -1003,6 +1003,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // user's to fix and must not be routed around. Same distinction the catch
     // below already draws for ConfigError, one level up.
     let configWasWritten = false;
+    // What to call the plan's origin in the log. Never `supersonic.json` unless
+    // there is one.
+    let planSource = CONFIG_FILENAME;
     try {
       const cfg = readAppConfig(dir);
       if (cfg) {
@@ -1039,7 +1042,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const inferred = await stages.around("infer-services", () => inferAppConfig(dir, detectStackIn));
       if (inferred) {
         appConfig = inferred;
-        configured = planFromConfig(inferred);
+        planSource = "inferred from the repo";
+        configured = planFromConfig(inferred, undefined, planSource);
         if (inferred.services.some((svc) => svc.needsDB)) configured.needsDB = true;
         log(`This repository is ${inferred.services.length} apps, not one:`);
         for (const svc of inferred.services) {
@@ -1567,7 +1571,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const deploySibling = async (svc: ServiceConfig): Promise<{ ok: boolean; url?: string; error?: string; name: string }> => {
       const label = (svc.name || servicePath(svc).replace(/[^a-z0-9]+/gi, "") || "svc").toLowerCase();
       const name = cloudRunName(`${slug}-${label}`);
-      const plan = planFromConfig({ services: [svc] }, svc);
+      const plan = planFromConfig({ services: [svc] }, svc, planSource);
       const lang: "node" | "python" | null =
         plan.language === "node" ? "node" : plan.language === "python" ? "python" : null;
       if (!lang) {

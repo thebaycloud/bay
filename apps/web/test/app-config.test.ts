@@ -2,6 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseAppConfig, planFromConfig, inDir, ConfigError, primaryService, extraServices, servicePath } from "../lib/app-config";
 
+test("a plan says where it came from, and does not name a file that does not exist", () => {
+  // `Plan ready: supersonic.json (frontend)` was printed on a deploy of a repo
+  // that has no supersonic.json — the config had been inferred. Naming a file
+  // the user could then go and look for, and not find, is the same class of
+  // defect as a confidence number nothing reads.
+  const cfg = parseAppConfig(JSON.stringify({ services: [{ name: "frontend", dir: "frontend", language: "static" }] }));
+
+  assert.match(planFromConfig(cfg).reason!, /^supersonic\.json/);
+  assert.equal(planFromConfig(cfg, undefined, "inferred from the repo").reason, "inferred from the repo (frontend)");
+});
+
 const polyglot = JSON.stringify({
   services: [{
     name: "api",

@@ -203,7 +203,7 @@ export function inDir(cmd: string | undefined, dir: string): string | undefined 
  * takes exactly the same path as a planned deploy and cannot drift into a second,
  * differently-behaved code path.
  */
-export function planFromConfig(config: AppConfig, service?: ServiceConfig): DeployPlan {
+export function planFromConfig(config: AppConfig, service?: ServiceConfig, source: string = CONFIG_FILENAME): DeployPlan {
   const s = service ?? primaryService(config);
   const dir = s.dir ?? ".";
   const isStatic = s.language === "static";
@@ -221,7 +221,12 @@ export function planFromConfig(config: AppConfig, service?: ServiceConfig): Depl
     outputDir: isStatic ? (dir === "." ? (s.outputDir ?? ".") : `${dir}/${s.outputDir ?? "."}`.replace(/\/\.$/, "")) : undefined,
     needsDB: s.needsDB,
     envNeeded: s.env,
-    reason: `${CONFIG_FILENAME}${s.name ? ` (${s.name})` : ""}`,
+    // `source` because this same shape is now produced two ways: read out of the
+    // user's file, and inferred from the repository by infer-services. Printing
+    // `Plan ready: supersonic.json` for the second sends someone looking for a
+    // file that is not there — the same class of defect as a confidence number
+    // nothing reads.
+    reason: `${source}${s.name ? ` (${s.name})` : ""}`,
   };
 }
 
