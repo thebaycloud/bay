@@ -220,7 +220,13 @@ test("failures are classified by patterns the pipeline actually writes", () => {
   );
   assert.equal(classifyFailure("the container didn't start on $PORT"), "container did not start");
   assert.equal(classifyFailure('npm start → Missing script "start"'), "run command wrong");
+  // The shell's own wording, with and without the exit code beside it — this is
+  // what a Python repo sent down the Node lane actually printed on 1 Aug.
   assert.equal(classifyFailure("sh: 1: fastapi: not found — exit 127"), "run command wrong");
+  assert.equal(classifyFailure("sh: 1: fastapi: not found"), "run command wrong");
+  assert.equal(classifyFailure("bash: node: command not found"), "run command wrong");
+  // But a repository that is not there is a different failure with a different fix.
+  assert.equal(classifyFailure("remote: Repository not found"), "could not fetch the code");
   assert.equal(classifyFailure("Build failed:\nnpm ERR! code ELIFECYCLE"), "build failed");
   assert.equal(classifyFailure("403 Forbidden: caller does not have permission"), "platform: permission");
   assert.equal(classifyFailure("Quota exceeded for resource"), "platform: quota");

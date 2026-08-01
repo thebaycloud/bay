@@ -262,7 +262,10 @@ export function classifyFailure(error: string | null | undefined): string {
   if (!e.trim()) return "unrecorded";
   if (/cannot tell what this app is|declares .* and .*, and planning/.test(e)) return "refused: ambiguous repo";
   if (/didn'?t start on|failed to start and listen|container failed to start/.test(e)) return "container did not start";
-  if (/missing script|command not found|not found\b.*(npm|node|python|fastapi)|exit 127/.test(e)) return "run command wrong";
+  // `sh: 1: fastapi: not found` is the shell's own form and the most common way
+  // a wrong lane shows up. The colon is what keeps it apart from "repository not
+  // found", which is a different failure with a different fix.
+  if (/missing script|command not found|:\s*not found|exit 127/.test(e)) return "run command wrong";
   if (/build failed|npm err|pip install|uv sync/.test(e)) return "build failed";
   if (/permission|denied|403|iam|forbidden/.test(e)) return "platform: permission";
   if (/quota|429|rate limit|resource exhausted/.test(e)) return "platform: quota";
