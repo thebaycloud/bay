@@ -45,6 +45,30 @@ export function Caveat({ children }: { children: React.ReactNode }) {
   return <p className="an-caveat">{children}</p>;
 }
 
+/**
+ * One panel of the page.
+ *
+ * `error` replaces the contents rather than sitting beside them. A chart drawn
+ * from a failed read is a chart of nothing, and an operator would read it as a
+ * quiet week — which is the single confusion this page must not create.
+ */
+export function Panel({
+  title,
+  error,
+  children,
+}: {
+  title: React.ReactNode;
+  error?: string | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="an-panel">
+      <div className="an-panel-title">{title}</div>
+      {error ? <PanelError message={error} /> : children}
+    </div>
+  );
+}
+
 export function Section({
   title,
   blurb,
@@ -67,6 +91,28 @@ export function Section({
 
 export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="an-empty">{children}</div>;
+}
+
+/**
+ * A panel whose data could not be read.
+ *
+ * Rendered INSTEAD of the panel's chart, never beside it — a chart drawn from a
+ * failed read is a chart of nothing, and an operator would read it as a quiet
+ * week. The database's own words are shown verbatim because they name the
+ * defect: "column deploys.finished_at does not exist" is actionable in a way
+ * that "something went wrong" is not.
+ */
+export function PanelError({ message }: { message: string }) {
+  return (
+    <div className="an-panel-error">
+      <div className="an-panel-error-head">This panel could not be read.</div>
+      <div className="an-panel-error-msg mono">{message}</div>
+      <div className="an-panel-error-note">
+        This is not &ldquo;no activity&rdquo; — the query failed. Nothing here should be read as a
+        measurement.
+      </div>
+    </div>
+  );
 }
 
 /** Counts over time. Every bucket in the range is present, including the empty ones. */
