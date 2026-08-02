@@ -1950,6 +1950,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       extraEnv.push(`SUPERSONIC_CODE_OBJECT=${runnerObject}`);
       // How to run it, from the agent. Without this the runner falls back to a
       // Node-only default; Python can't start at all — so the agent must supply it.
+      // The WEB process's command IS the run command.
+      //
+      // `processes` was wired into the schema, the resolver, the planner and
+      // `supersonic check`, and the SERVICE deploy went on reading only `start`.
+      // So an app declaring `processes: { web: { command: … } }` and no `start`
+      // — which is the whole point of declaring processes — reached the runner
+      // with no SUPERSONIC_RUN and died on
+      //
+      //   FATAL: no run command for this app
+      //
+      // while every worker beside it started correctly, because the process path
+      // had been wired and the service path had not. Found by deploying a CRM;
+      // 695 tests had nothing to say about it.
+      const webCommand = (processes.find((pr) => pr.kind === "web") as { command?: string } | undefined)?.command;
+      if (!runCmd && webCommand) runCmd = webCommand;
       if (runCmd) { extraEnv.push(`SUPERSONIC_RUN=${runCmd}`); log(`Run command: ${runCmd}`); }
       else log("No run command supplied — using the default (Node only; Python needs one)");
     }

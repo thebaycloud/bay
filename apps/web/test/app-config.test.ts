@@ -199,3 +199,28 @@ test("a release declared as a process IS the release phase, not a second one", (
   }));
   assert.equal(releaseCommand(both.services[0]), "npm run m1");
 });
+
+test("a web process's command is the run command, under either spelling", () => {
+  // `processes` was wired into the schema, the resolver, the planner and
+  // `supersonic check`, and the SERVICE deploy went on reading only `start`. So a
+  // CRM declaring `processes: { web: { command: … } }` and no `start` — which is
+  // the entire point of declaring processes — reached the runner with no
+  // SUPERSONIC_RUN and died on "FATAL: no run command for this app", while every
+  // worker beside it started fine. Found by deploying one; 695 tests were silent.
+  const viaProcesses = parseAppConfig(JSON.stringify({
+    services: [{ processes: { web: { command: "gunicorn app:app --bind 0.0.0.0:$PORT" } } }],
+  }));
+  assert.equal(planFromConfig(viaProcesses).run, "gunicorn app:app --bind 0.0.0.0:$PORT");
+
+  // `start` still wins, so nothing already deployed changes.
+  const both = parseAppConfig(JSON.stringify({
+    services: [{ start: "npm start", processes: { web: { command: "npm run serve" } } }],
+  }));
+  assert.equal(planFromConfig(both).run, "npm start");
+
+  // And it is wrapped for the service's directory like `start` is.
+  const nested = parseAppConfig(JSON.stringify({
+    services: [{ dir: "backend", processes: { web: { command: "uvicorn app:app" } } }],
+  }));
+  assert.equal(planFromConfig(nested).run, "(cd backend && uvicorn app:app)");
+});

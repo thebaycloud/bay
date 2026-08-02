@@ -729,7 +729,12 @@ export function planFromConfig(config: AppConfig, service?: ServiceConfig, sourc
     // command — but that needs the app's env at build time, so today they are
     // still folded ahead of `start` exactly as a planned deploy does.
     preRun: releaseCommand(s) ? [inDir(releaseCommand(s), dir) as string] : undefined,
-    run: inDir(s.start, dir) ?? "",
+    // `start` or the web process's command — they are the same field under two
+    // spellings, and an app that declares `processes` writes the second. Threaded
+    // here as well as at the deploy's own SUPERSONIC_RUN so everything downstream
+    // that reads a plan — the dependency check, the repair agent's context — sees
+    // the command that will actually run rather than an empty string.
+    run: inDir(s.start ?? s.processes?.web?.command, dir) ?? "",
     static: isStatic,
     outputDir: isStatic ? (dir === "." ? (s.outputDir ?? ".") : `${dir}/${s.outputDir ?? "."}`.replace(/\/\.$/, "")) : undefined,
     needsDB: usesDatabase(s) || undefined,
