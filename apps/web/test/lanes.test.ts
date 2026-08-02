@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   deployArgs, dbContainerArgs, databaseEnv, databaseEnvNames,
-  DEFAULT_SCALE, DEFAULT_PORT, withScale, SERVICE_LANES, type Lane, type LaneDeploy,
+  DEFAULT_SCALE, DEFAULT_PORT, withScale, SERVICE_LANES,
+  type Lane, type LaneDeploy, type Scale,
 } from "../lib/lanes";
 
 /**
