@@ -277,6 +277,23 @@ function gcloudDeploy(args: string[], onLine: (l: string) => void, onRaw?: (l: s
   });
 }
 
+/**
+ * The variable NAMES the live service already carries, or none when there is no
+ * service yet.
+ *
+ * Names only, never values: the question is whether something supplied a value,
+ * and reading the value to answer it would pull a credential into a log-adjacent
+ * code path for no gain. A first deploy has no service and answers with an empty
+ * list, which is correct rather than an error.
+ */
+async function liveEnvNames(slug: string): Promise<string[]> {
+  const s = await describeServiceRest(slug).catch(() => null);
+  const containers = s?.spec?.template?.spec?.containers ?? [];
+  return containers.flatMap((c: { env?: { name?: string }[] }) =>
+    (c.env ?? []).map((e) => e.name).filter((n): n is string => Boolean(n)),
+  );
+}
+
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
 function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
@@ -1317,13 +1334,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // missing value IS the deploy, and the first thing to notice it would have
       // been the app's own driver, nine minutes later, inside a crash loop.
       //
-      // Checked against Secret Manager and not only against this deploy's upload:
-      // a value set on an earlier deploy, or with `supersonic env set`, is still
-      // set. Failing an app whose secret was stored last week is the same mistake
-      // assertReached made once already, pointed at a different field.
-      const uploaded = Boolean(secrets[externalDb.urlFrom]);
-      const stored = uploaded ? true : Boolean(await readAppSecret(slug, externalDb.urlFrom).catch(() => null));
-      if (!stored) {
+      // THREE places a value can already be, and the check has to ask all of
+      // them. Asking fewer is the mistake assertReached made once already, and
+      // the first version of this check made it again: it asked this deploy's
+      // upload and Secret Manager, while `supersonic env set` writes neither —
+      // `setEnv` in lib/gcloud.ts is `gcloud run services update
+      // --update-env-vars`, a plain variable on the live service. So the one
+      // documented way to supply a value out of band was the one way this could
+      // not see, and it would have refused the deploy of an app whose
+      // DATABASE_URL was set and working.
+      const supplied =
+        Boolean(secrets[externalDb.urlFrom])
+        || Boolean(await readAppSecret(slug, externalDb.urlFrom).catch(() => null))
+        || (await liveEnvNames(slug)).includes(externalDb.urlFrom);
+      if (!supplied) {
         throw new Error(
           `${CONFIG_FILENAME} declares an external database whose URL comes from ${externalDb.urlFrom}, ` +
           `and nothing has set a value for it.\n` +
