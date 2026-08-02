@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
-import { checkPlanDeps, assertRuntimeSupported, RUNTIME_UNSUPPORTED } from "@/lib/plan-deps";
+import { checkPlanDeps, RUNTIME_UNSUPPORTED } from "@/lib/plan-deps";
+import { repoRuntime, runnerServes, runtimeRouting } from "@/lib/repo-runtime";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
@@ -1406,12 +1407,31 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // refusal into a fallback that builds the same app on the same runner. It
     // also only runs when a config or the planner is in play, so the pure
     // detector path was never gated at all.
-    assertRuntimeSupported({
-      pyproject: existsSync(join(dir, "pyproject.toml")) ? readFileSync(join(dir, "pyproject.toml"), "utf8") : null,
+    // What the REPOSITORY asked for, read from its own files.
+    //
+    // This used to be `assertRuntimeSupported`, which THREW: an app pinning a
+    // version the runner does not have was refused outright and told to "widen
+    // requires-python, or wait for the runner to move. Nothing in the code can fix
+    // this one." That is the platform holding one Python and one Node and asking
+    // every business to fit them.
+    //
+    // Now it routes instead. A pinned runtime the runner cannot serve sends the
+    // app down the buildpack lane, which reads `.python-version`, `runtime.txt`,
+    // `requires-python`, `.nvmrc` and `engines.node` itself — so the app gets the
+    // version it asked for and the platform never picks one. The platform's whole
+    // involvement is one yes/no question it is deliberately pessimistic about.
+    const read = (f: string) => existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : null;
+    const pinned = repoRuntime({
+      pythonVersion: read(".python-version"),
+      runtimeTxt: read("runtime.txt"),
+      pyproject: read("pyproject.toml"),
+      nvmrc: read(".nvmrc"),
       packageJson: (() => {
         try { return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")); } catch { return null; }
       })(),
     });
+    const runtimePinned = Boolean(pinned && !runnerServes(pinned));
+    if (pinned && runtimePinned) log(runtimeRouting(pinned));
 
     if (configured || PLANNER_ENABLED) {
       try {
@@ -1582,6 +1602,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       dockerfile: hasDockerfile ? "Dockerfile" : undefined,
       runnerEnabled: RUNNER_ENABLED,
       runCommandSupplied: Boolean(runCmd),
+      runtimePinned,
     });
     const runnerLang: "node" | "python" | null = lane !== "runner" ? null
       : String(s.runtime || "").startsWith("python") ? "python" : "node";
@@ -2522,7 +2543,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // the outer handler instead of the repair agent — there is nothing in the
     // user's repository to fix.
     if (result.ok && appConfig) {
-      const resolvedApp = resolveFrom(appConfig, configWasWritten ? "config" : "inferred");
+      const resolvedApp = resolveFrom(appConfig, configWasWritten ? "config" : "inferred", runtimePinned);
       const primaryEnvelope = buildEnvelope(resolvedApp.services[0], resolvedApp);
       assertReached(primaryEnvelope, {
         revisionEnv,

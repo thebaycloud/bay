@@ -66,7 +66,12 @@ test("each phase is printed as it would actually run", async () => {
   assert.match(site, /publish {3}web\/dist {2}· {2}unknown paths → index\.html/);
   assert.doesNotMatch(site, /start|health/);
 
-  assert.match(api, /runner lane {2}· {2}\/api/);
+  // The buildpack lane, not the runner: this service pins `python3.12` and the
+  // runner has one Python. It used to say "runner", which is how an app asking
+  // for 3.12 was given 3.14 — parsed, validated, printed back right here, and
+  // ignored. `check` says what the deploy will actually do.
+  assert.match(api, /buildpack lane {2}· {2}\/api/);
+  assert.match(api, /runtime {3}python3\.12/);
   assert.match(api, /release {3}\(cd srv && alembic upgrade head\)/);
   assert.match(api, /start {5}\(cd srv && uvicorn main:app --port \$PORT\)/);
   assert.match(api, /health {4}GET \/ → 200/);

@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 93ec6d478cb7b4c9
+// supersonic-vendor-stamp 1238832cbf5daf6f
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -96,7 +96,7 @@ function databaseEnv(db) {
   ];
 }
 function databaseEnvNames() {
-  return databaseEnv({ databaseUrl: "", user: "", password: "", dbName: "" }).map((pair) => pair.slice(0, pair.indexOf("=")));
+  return databaseEnv({ databaseUrl: "", user: "", password: "", dbName: "" }).map((pair2) => pair2.slice(0, pair2.indexOf("=")));
 }
 var DEFAULT_SCALE = {
   memory: process.env.RUNNER_MEMORY || "2Gi",
@@ -645,6 +645,111 @@ async function inferAppConfig(repoDir, detect) {
   return { version: 1, services };
 }
 
+// lib/plan-deps.ts
+var RUNTIME_VERSIONS = { python: "3.14", node: "24" };
+var RUNTIME_UNSUPPORTED = "Runtime not available";
+function lowestAccepted(spec) {
+  const m = spec.match(/>=\s*(\d+)(?:\.(\d+))?/);
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : null;
+}
+function below(have, need) {
+  const [hMaj, hMin] = have.split(".").map(Number);
+  return hMaj < need[0] || hMaj === need[0] && (hMin ?? 0) < need[1];
+}
+function runtimeMismatch(manifests) {
+  const py = manifests.pyproject?.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (py) {
+    const need = lowestAccepted(py);
+    if (need && below(RUNTIME_VERSIONS.python, need)) {
+      return `this app needs Python ${py} and the runner has ${RUNTIME_VERSIONS.python} \u2014 widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the runner to move. Nothing in the code can fix this one.`;
+    }
+  }
+  const engines = manifests.packageJson?.engines?.node;
+  if (engines) {
+    const need = lowestAccepted(engines);
+    if (need && below(RUNTIME_VERSIONS.node, need)) {
+      return `this app needs Node ${engines} and the runner has ${RUNTIME_VERSIONS.node} \u2014 widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the runner to move. Nothing in the code can fix this one.`;
+    }
+  }
+  return null;
+}
+
+// lib/repo-runtime.ts
+var trim = (v) => (v ?? "").trim().split("\n")[0].trim();
+function repoRuntime(f) {
+  const pv = trim(f.pythonVersion);
+  if (pv) return { language: "python", spec: pv, from: ".python-version" };
+  const rt = trim(f.runtimeTxt);
+  if (/^python-/i.test(rt)) return { language: "python", spec: rt.replace(/^python-/i, ""), from: "runtime.txt" };
+  const nvm = trim(f.nvmrc);
+  if (nvm) return { language: "node", spec: nvm.replace(/^v/, ""), from: ".nvmrc" };
+  const requires = f.pyproject?.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (requires) return { language: "python", spec: requires.trim(), from: "pyproject.toml" };
+  const engines = f.packageJson?.engines?.node;
+  if (engines) return { language: "node", spec: engines.trim(), from: "package.json" };
+  return null;
+}
+function pair(v) {
+  const m = v.match(/^(\d+)(?:\.(\d+))?/);
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : null;
+}
+function ge(have, need) {
+  return have[0] > need[0] || have[0] === need[0] && have[1] >= need[1];
+}
+function runnerServes(r) {
+  const have = pair(RUNTIME_VERSIONS[r.language]);
+  if (!have) return false;
+  const spec = r.spec.trim();
+  if (/^\d+(\.\d+)*$/.test(spec)) {
+    const want = pair(spec);
+    return spec.includes(".") ? have[0] === want[0] && have[1] === want[1] : have[0] === want[0];
+  }
+  const clauses = spec.split(/\s*,\s*|\s+/).filter(Boolean);
+  if (!clauses.length) return false;
+  for (const c of clauses) {
+    const m = c.match(/^(>=|<=|==|!=|~=|\^|>|<)?\s*v?(\d+(?:\.\d+)*)$/);
+    if (!m) return false;
+    const [, op = ">=", v] = m;
+    const want = pair(v);
+    const exact = have[0] === want[0] && have[1] === want[1];
+    switch (op) {
+      case ">=":
+        if (!ge(have, want)) return false;
+        break;
+      case ">":
+        if (ge(want, have)) return false;
+        break;
+      case "<":
+        if (ge(have, want)) return false;
+        break;
+      case "<=":
+        if (!ge(want, have) && !exact) return false;
+        break;
+      case "==":
+        if (!exact) return false;
+        break;
+      case "!=":
+        if (exact) return false;
+        break;
+      // `~=3.11` and `^3.11` both mean "this minor, or compatible with it", and
+      // the honest answer for a runner pinned to one minor is only yes when it IS
+      // that minor.
+      case "~=":
+      case "^":
+        if (!exact) return false;
+        break;
+      default:
+        return false;
+    }
+  }
+  return true;
+}
+function declaredRuntime(runtime) {
+  const m = (runtime ?? "").trim().match(/^(python|node)\s*v?(\d+(?:\.\d+)*)$/i);
+  if (!m) return null;
+  return { language: m[1].toLowerCase(), spec: m[2], from: "supersonic.json" };
+}
+
 // lib/resolve.ts
 var ResolveError = class extends Error {
 };
@@ -652,9 +757,11 @@ var RUNNER_RUNTIMES = [/^node/, /^python/];
 function laneFor(i) {
   if (i.language === "static") return "static";
   const runnerAllowed = i.runnerEnabled ?? true;
+  const declaredPin = declaredRuntime(i.runtime);
+  const pinned = Boolean(i.runtimePinned) || (declaredPin ? !runnerServes(declaredPin) : false);
   if (i.dockerfile && !i.runCommandSupplied) return "container";
   const runtime = i.runtime ?? "";
-  const wantsRunner = RUNNER_RUNTIMES.some((re) => re.test(runtime)) || !runtime && (i.language === "node" || i.language === "python");
+  const wantsRunner = !pinned && (RUNNER_RUNTIMES.some((re) => re.test(runtime)) || !runtime && (i.language === "node" || i.language === "python"));
   if (wantsRunner) return runnerAllowed ? "runner" : i.dockerfile ? "container" : "buildpack";
   if (i.dockerfile) return "container";
   return "buildpack";
@@ -664,7 +771,13 @@ function deriveLane(s) {
 }
 var LANE_CONSUMES = {
   static: ["install", "build", "outputDir", "spaFallback", "buildEnv", "env"],
-  runner: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"],
+  // No `runtime`: the runner has exactly one version per language and cannot
+  // honour a declared one. Listing it here is what let `runtime: "python3.12"` be
+  // parsed, validated, printed back by `supersonic check` and silently ignored —
+  // the precise defect assert-consumed exists to catch, committed inside
+  // assert-consumed's own table. An app that pins a version is routed to the
+  // buildpack lane, which does implement it.
+  runner: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
   // No `start`: the Dockerfile's own CMD is the start command, and a second one
   // in the config would be read by nobody.
   container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
@@ -706,9 +819,14 @@ function declaredFields(s) {
   if (set(s.framework)) out.push("framework");
   return out;
 }
-function resolveService(s, index) {
+function resolveService(s, index, runtimePinned = false) {
   const dir = s.dir ?? ".";
-  const lane = deriveLane(s);
+  const lane = laneFor({
+    language: s.language,
+    runtime: s.runtime,
+    dockerfile: s.dockerfile,
+    runtimePinned
+  });
   const name = s.name ?? (index === 0 ? "app" : `svc${index}`);
   return {
     name,
@@ -755,9 +873,32 @@ async function resolve(dir, detect) {
   Run \`supersonic init\` to write a ${CONFIG_FILENAME} draft, then check it.`
     );
   }
-  return resolveFrom(config, source);
+  return resolveFrom(config, source, repoPinsRuntime(dir));
 }
-function resolveFrom(config, source) {
+function repoPinsRuntime(dir) {
+  const read = (f) => {
+    try {
+      return (0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, f)) ? (0, import_node_fs4.readFileSync)((0, import_node_path4.join)(dir, f), "utf8") : null;
+    } catch {
+      return null;
+    }
+  };
+  const pin = repoRuntime({
+    pythonVersion: read(".python-version"),
+    runtimeTxt: read("runtime.txt"),
+    pyproject: read("pyproject.toml"),
+    nvmrc: read(".nvmrc"),
+    packageJson: (() => {
+      try {
+        return JSON.parse(read("package.json") ?? "null");
+      } catch {
+        return null;
+      }
+    })()
+  });
+  return Boolean(pin && !runnerServes(pin));
+}
+function resolveFrom(config, source, runtimePinned = false) {
   const primary = primaryService(config);
   const ordered = [primary, ...config.services.filter((s) => s !== primary)];
   return {
@@ -768,7 +909,7 @@ function resolveFrom(config, source) {
     // a rule that holds on one of two paths is the shape of bug this whole
     // module exists to end.
     resources: appResources(config.resources, config.services) ?? {},
-    services: ordered.map(resolveService)
+    services: ordered.map((svc, i) => resolveService(svc, i, runtimePinned))
   };
 }
 function validate(app, dir) {
@@ -821,35 +962,6 @@ function missingSecrets(app, available) {
   const db = app.resources.database;
   if (db?.provider === "external") want.add(db.urlFrom);
   return [...want].filter((n) => !have.has(n)).sort();
-}
-
-// lib/plan-deps.ts
-var RUNTIME_VERSIONS = { python: "3.14", node: "24" };
-var RUNTIME_UNSUPPORTED = "Runtime not available";
-function lowestAccepted(spec) {
-  const m = spec.match(/>=\s*(\d+)(?:\.(\d+))?/);
-  return m ? [Number(m[1]), Number(m[2] ?? 0)] : null;
-}
-function below(have, need) {
-  const [hMaj, hMin] = have.split(".").map(Number);
-  return hMaj < need[0] || hMaj === need[0] && (hMin ?? 0) < need[1];
-}
-function runtimeMismatch(manifests) {
-  const py = manifests.pyproject?.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m)?.[1];
-  if (py) {
-    const need = lowestAccepted(py);
-    if (need && below(RUNTIME_VERSIONS.python, need)) {
-      return `this app needs Python ${py} and the runner has ${RUNTIME_VERSIONS.python} \u2014 widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the runner to move. Nothing in the code can fix this one.`;
-    }
-  }
-  const engines = manifests.packageJson?.engines?.node;
-  if (engines) {
-    const need = lowestAccepted(engines);
-    if (need && below(RUNTIME_VERSIONS.node, need)) {
-      return `this app needs Node ${engines} and the runner has ${RUNTIME_VERSIONS.node} \u2014 widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the runner to move. Nothing in the code can fix this one.`;
-    }
-  }
-  return null;
 }
 
 // lib/procfile.ts

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   readAppConfig, inDir, servicePath, primaryService, releaseCommand, appResources,
@@ -7,6 +7,7 @@ import {
 } from "./app-config";
 import { inferAppConfig, type Detect } from "./infer-services";
 import { withScale, type Lane, type Scale } from "./lanes";
+import { declaredRuntime, repoRuntime, runnerServes } from "./repo-runtime";
 
 /**
  * One resolved description of an app, and one place that produces it.
@@ -143,6 +144,26 @@ export interface LaneInputs {
    * `COPY dist/api` Dockerfile assumes a prior build).
    */
   runCommandSupplied?: boolean;
+  /**
+   * The repository asked for a runtime version the prebuilt runner does not have.
+   *
+   * The runner holds one Python and one Node, so an app that pins anything else
+   * cannot be served by it — and the platform's answer used to be to REFUSE THE
+   * DEPLOY and tell the author to "widen requires-python, or wait for the runner
+   * to move". That is a platform telling a business to change its software to fit
+   * the platform's single opinion.
+   *
+   * Routing is the answer instead: buildpacks read `.python-version`,
+   * `runtime.txt`, `requires-python`, `.nvmrc` and `engines.node` themselves, so
+   * the app gets the version it asked for and the platform never picks one. The
+   * cost is a build measured in minutes rather than seconds, which is the correct
+   * trade — the alternative is running someone's code on an interpreter they did
+   * not choose.
+   *
+   * See lib/repo-runtime.ts, and note the direction of its conservatism: anything
+   * it cannot confidently serve sets this.
+   */
+  runtimePinned?: boolean;
 }
 
 /**
@@ -165,10 +186,28 @@ export function laneFor(i: LaneInputs): Lane {
   // CLI has no RUNNER flag and answers for the lane a config describes, while the
   // pipeline passes the flag it actually runs under.
   const runnerAllowed = i.runnerEnabled ?? true;
+  // A `runtime` in the config is a pin exactly as `.python-version` is, so it has
+  // to reach the same answer the deploy reaches from the repo's files. Derived
+  // here rather than only passed in, because `deriveLane` answers for a FILE and
+  // has no repo to read — and a `check` that refused what the deploy runs would be
+  // worse than no check.
+  const declaredPin = declaredRuntime(i.runtime);
+  // `||`, not `??`. The two are INDEPENDENT signals — the repo's own version files
+  // and the config's `runtime` field — and either one pinning means pinned. With
+  // `??`, a caller passing `runtimePinned: false` (which `resolveService` does, as
+  // its default) silently overrode the config field, and a service declaring
+  // `runtime: "python3.12"` went back to the runner. The same `??`/`||` distinction
+  // this file already carries a comment about, in the other direction.
+  const pinned = Boolean(i.runtimePinned) || (declaredPin ? !runnerServes(declaredPin) : false);
   if (i.dockerfile && !i.runCommandSupplied) return "container";
   const runtime = i.runtime ?? "";
-  const wantsRunner = RUNNER_RUNTIMES.some((re) => re.test(runtime))
-    || (!runtime && (i.language === "node" || i.language === "python"));
+  // A pinned runtime the runner cannot serve takes the app off the runner, whatever
+  // else is true of it. This is the runner demoting from "the default for the two
+  // biggest languages" to a cache used only where it is genuinely equivalent.
+  const wantsRunner = !pinned && (
+    RUNNER_RUNTIMES.some((re) => re.test(runtime))
+    || (!runtime && (i.language === "node" || i.language === "python"))
+  );
   if (wantsRunner) return runnerAllowed ? "runner" : (i.dockerfile ? "container" : "buildpack");
   if (i.dockerfile) return "container";
   return "buildpack";
@@ -190,7 +229,13 @@ export function deriveLane(s: ServiceConfig): Lane {
  */
 const LANE_CONSUMES: Record<Lane, ReadonlyArray<keyof ResolvedService>> = {
   static: ["install", "build", "outputDir", "spaFallback", "buildEnv", "env"],
-  runner: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"],
+  // No `runtime`: the runner has exactly one version per language and cannot
+  // honour a declared one. Listing it here is what let `runtime: "python3.12"` be
+  // parsed, validated, printed back by `supersonic check` and silently ignored —
+  // the precise defect assert-consumed exists to catch, committed inside
+  // assert-consumed's own table. An app that pins a version is routed to the
+  // buildpack lane, which does implement it.
+  runner: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
   // No `start`: the Dockerfile's own CMD is the start command, and a second one
   // in the config would be read by nobody.
   container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
@@ -260,9 +305,11 @@ function declaredFields(s: ServiceConfig): Array<keyof ResolvedService> {
  * One service, fully resolved: every command already wrapped for its directory,
  * every optional field given its default, and the lane decided.
  */
-function resolveService(s: ServiceConfig, index: number): ResolvedService {
+function resolveService(s: ServiceConfig, index: number, runtimePinned = false): ResolvedService {
   const dir = s.dir ?? ".";
-  const lane = deriveLane(s);
+  const lane = laneFor({
+    language: s.language, runtime: s.runtime, dockerfile: s.dockerfile, runtimePinned,
+  });
   const name = s.name ?? (index === 0 ? "app" : `svc${index}`);
   return {
     name,
@@ -327,7 +374,31 @@ export async function resolve(dir: string, detect?: Detect): Promise<ResolvedApp
     );
   }
 
-  return resolveFrom(config, source);
+  return resolveFrom(config, source, repoPinsRuntime(dir));
+}
+
+/**
+ * Does this repository pin a runtime the prebuilt runner cannot serve?
+ *
+ * Read HERE, from the repo's own files, because `supersonic check` has to reach
+ * the answer the deploy reaches. The config's `runtime` field is handled inside
+ * `laneFor`; this is the other half — an app with `.python-version` and no
+ * `runtime:` in its config would otherwise be shown "runner lane" by the CLI and
+ * built on buildpacks by the server, which is the one-rule-two-readers failure
+ * this module is named after, in the module named after it.
+ */
+export function repoPinsRuntime(dir: string): boolean {
+  const read = (f: string) => {
+    try { return existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : null; } catch { return null; }
+  };
+  const pin = repoRuntime({
+    pythonVersion: read(".python-version"),
+    runtimeTxt: read("runtime.txt"),
+    pyproject: read("pyproject.toml"),
+    nvmrc: read(".nvmrc"),
+    packageJson: (() => { try { return JSON.parse(read("package.json") ?? "null"); } catch { return null; } })(),
+  });
+  return Boolean(pin && !runnerServes(pin));
 }
 
 /**
@@ -338,7 +409,7 @@ export async function resolve(dir: string, detect?: Detect): Promise<ResolvedApp
  * something other than what it validated — two answers to one question, which is
  * the failure this module is named after.
  */
-export function resolveFrom(config: AppConfig, source: ResolvedApp["source"]): ResolvedApp {
+export function resolveFrom(config: AppConfig, source: ResolvedApp["source"], runtimePinned = false): ResolvedApp {
   // Primary first. The order is part of the resolved shape: the primary is the
   // service deployed as the app itself, siblings are deployed beside it.
   const primary = primaryService(config);
@@ -352,7 +423,7 @@ export function resolveFrom(config: AppConfig, source: ResolvedApp["source"]): R
     // a rule that holds on one of two paths is the shape of bug this whole
     // module exists to end.
     resources: appResources(config.resources, config.services) ?? {},
-    services: ordered.map(resolveService),
+    services: ordered.map((svc, i) => resolveService(svc, i, runtimePinned)),
   };
 }
 
