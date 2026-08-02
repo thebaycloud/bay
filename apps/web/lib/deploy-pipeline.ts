@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
-import { checkPlanDeps, RUNTIME_UNSUPPORTED } from "@/lib/plan-deps";
+import { checkPlanDeps, RUNTIME_UNSUPPORTED, RUNTIME_VERSIONS } from "@/lib/plan-deps";
 import { repoRuntime, runnerServes, runtimeRouting } from "@/lib/repo-runtime";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
@@ -2612,7 +2612,24 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const snapshotted = await snapshotSources(dir);
       const repair = stages.start("repair-agent");
       const fixed = useOpencode
-        ? await opencodeRepair({ dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy: runDeploy, log })
+        ? await opencodeRepair({
+            dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy: runDeploy, log,
+            // What the platform DID, not only what it planned. Without this the
+            // agent reads every failure as the app's fault, because the repo is
+            // the only surface it can change — which is how a Telegram bot got an
+            // http.server shim written into it to satisfy a port check that should
+            // never have applied.
+            facts: {
+              lane,
+              serviceless,
+              processes: processes.map((pr) => ({ name: pr.name, kind: pr.kind, command: pr.command })),
+              runtime: pinned && runtimePinned
+                ? { pinned: pinned.spec, from: pinned.from, running: RUNTIME_VERSIONS[pinned.language] }
+                : null,
+              ownedEnv: extraEnv.map((e) => e.slice(0, e.indexOf("="))).filter(Boolean),
+              attached: resourcePlan.attach.map((r) => r.kind),
+            },
+          })
         : await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
       await stages.end(repair, fixed.ok ? "ok" : "failed");
       if (fixed.ok) {

@@ -256,6 +256,16 @@ Rules:
 
 \`deploy-plan.json\` (next to this file, NOT in \`./repo\`) is how the platform chose to install, build and run this app. Read it first — it tells you which half of the failure you are looking at.
 
+\`platform.json\` (same place, when present) is what the platform DID. Read it before you decide anything, because it changes what an error MEANS:
+
+- \`serviceless: true\` means this app has NO web process. It is a bot, a worker or a scheduled job. It must not listen on a port, it has no URL, and "container failed to start and listen on PORT" is not a bug in the app — do not add an HTTP server, a health endpoint or a \`$PORT\` listener to make that error go away. Look at why the process EXITED.
+- \`processes\` is what the app actually runs, by name and kind. A command failing here is the command in that list, not \`start\`.
+- \`runtime\` is present only when the repo asked for a version it did not get. If it is there, an import error or a library incompatibility is very likely THAT and not the app's code.
+- \`ownedEnv\` are names the platform writes. Editing one in the repo changes nothing that runs.
+- \`attached\` is what this app actually has. If the app reads something that is not in that list, the app is asking for a resource it was never given — say so rather than stubbing it.
+
+Never replace a credential with a literal to get past a failure. Turning \`os.environ["TOKEN"]\` into \`"dummy"\` makes the process start and the product silently not work, which is worse than the failure you were given. If a value is missing, report it.
+
 Some failures are NOT in the repository and you must not try to fix them by editing it:
 - permission errors, \`PermissionDenied\`, IAM, service accounts, quota
 - a secret or environment variable the PLATFORM was supposed to provide (the plan's \`needsDB\` is true and \`DATABASE_URL\` is missing, for example)
@@ -574,16 +584,51 @@ export async function planDeploy(opts: {
   return plan;
 }
 
+/**
+ * What the PLATFORM did, as opposed to what the app is.
+ *
+ * The repair agent is given a failure and one surface it can change: the repo. So
+ * when it does not know what the platform decided, every error reads as the app's
+ * fault, and its edits are reasonable answers to the wrong question. Watched
+ * happening on a real Telegram bot: given `container failed to start and listen on
+ * PORT=8080`, it began writing an `http.server` shim into a worker, renamed a
+ * schema key it did not recognise, and replaced `os.environ["BOT_TOKEN"]` with
+ * `"dummy"` so the process would boot.
+ *
+ * Every one of those is a sensible move for an agent that believes every app is a
+ * web app. The defect was context, not authority — so the fix is to tell it what
+ * it is operating on, not to take the scalpel away.
+ */
+export interface PlatformFacts {
+  /** How this app was built, so "your code is wrong" can be told from "we put you here". */
+  lane: string;
+  /** No web process at all: nothing should listen on a port, and there is no URL. */
+  serviceless: boolean;
+  processes: { name: string; kind: string; command: string }[];
+  /**
+   * What the repo pinned and what it actually got. Non-null only when they differ,
+   * because that difference is a whole class of failure the agent would otherwise
+   * spend its budget on inside the app's own traceback.
+   */
+  runtime?: { pinned: string; from: string; running: string } | null;
+  /** Names the platform writes. Editing one changes nothing and hides the failure. */
+  ownedEnv: string[];
+  /** Resources the app actually has, so a missing one is not read as a code bug. */
+  attached: string[];
+}
+
 export async function opencodeRepair(opts: {
   dir: string;              // the repo copy the agent edits (same as repairDeploy)
   slug: string;
   initialError: string;
   /** What the platform decided to do with this repo. See the note in AGENT_MD. */
   plan?: DeployPlan | null;
+  /** What the platform DID. See PlatformFacts — this is the half it kept guessing at. */
+  facts?: PlatformFacts | null;
   redeploy: Redeploy;
   log: (l: string) => void;
 }): Promise<RepairResult> {
-  const { dir, slug, initialError, plan, redeploy, log } = opts;
+  const { dir, slug, initialError, plan, facts, redeploy, log } = opts;
   const tokens: TokenUsage = { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
   const changes = new Set<string>();
   let steps = 0, redeploys = 0;
@@ -662,6 +707,9 @@ export async function opencodeRepair(opts: {
     // burned 287k tokens against a bug whose actual fix was an IAM grant.
     if (plan) {
       writeFileSync(join(ws, "deploy-plan.json"), JSON.stringify(plan, null, 2));
+    }
+    if (facts) {
+      writeFileSync(join(ws, "platform.json"), JSON.stringify(facts, null, 2));
     }
     const token = await providerToken();
     writeFileSync(join(ws, "opencode.json"), JSON.stringify(opencodeConfig(token), null, 2));

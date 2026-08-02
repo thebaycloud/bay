@@ -63,3 +63,27 @@ test("only vertex needs a Google token at all", () => {
   assert.doesNotThrow(() => providerConfig("openai/gpt-5.6-sol", { openaiApiKey: "o" }));
   assert.doesNotThrow(() => providerConfig("google/gemini-3.1-pro", { geminiApiKey: "g" }));
 });
+
+test("the repair agent is told what the platform did, not only what it planned", async () => {
+  // Watched on a real Telegram bot: given `container failed to start and listen on
+  // PORT=8080`, the agent began writing an `http.server` shim into a worker,
+  // renamed a schema key it did not recognise, and replaced
+  // `os.environ["BOT_TOKEN"]` with "dummy" so the process would boot.
+  //
+  // Every one of those is a sensible move for an agent that believes every app is
+  // a web app and can only change the repo. The defect was context, not authority.
+  const md = (await import("node:fs")).readFileSync(
+    new URL("../lib/opencode-deploy.ts", import.meta.url), "utf8",
+  );
+
+  // The four facts that each turn a wrong edit into a correct diagnosis.
+  assert.match(md, /serviceless: true.*NO web process/s);
+  assert.match(md, /do not add an HTTP server/);
+  assert.match(md, /runtime.*only when the repo asked for a version it did not get/s);
+  assert.match(md, /ownedEnv.*Editing one in the repo changes nothing/s);
+
+  // And the one edit that is never a fix, because it makes the failure invisible
+  // rather than removing it.
+  assert.match(md, /Never replace a credential with a literal/);
+  assert.match(md, /makes the process start and the product silently not work/);
+});
