@@ -8,8 +8,9 @@
  * bridged by a tiny localhost HTTP server: the agent runs `redeploy.sh`, which
  * POSTs to the bridge, which invokes `redeploy()` and returns {ok,url,error}.
  *
- * Model is provider-agnostic; config points at Vertex Gemini via the gcloud token
- * (no API key). Selected by DEPLOY_ENGINE=opencode on the control plane.
+ * Model is provider-agnostic, chosen by OPENCODE_MODEL as `<provider>/<model-id>`:
+ * `vertex/…` authenticates with the gcloud token, `google/…` and `openai/…` with
+ * their own API keys. Selected by DEPLOY_ENGINE=opencode on the control plane.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -51,12 +52,14 @@ function vertexBaseUrl(location: string): string {
  * model change is meaningless if only one of them moved.
  */
 const MODEL = process.env.OPENCODE_MODEL || "vertex/google/gemini-2.5-pro";
-/** `vertex` or `google` — which of the two Gemini APIs below to speak. */
+/** `vertex`, `google` or `openai` — which API the provider block below speaks. */
 const PROVIDER_ID = MODEL.split("/")[0];
 /** The model id the provider block has to declare, i.e. everything after the provider. */
 const MODEL_ID = MODEL.slice(PROVIDER_ID.length + 1);
 /** AI Studio key. Present ⇒ the Gemini Developer API is available. */
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+/** OpenAI platform key. Present ⇒ the `openai/…` models are available. */
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const MAX_REDEPLOYS = Number(process.env.OPENCODE_MAX_REDEPLOYS || 3);
 
 /**
@@ -68,7 +71,39 @@ const MAX_REDEPLOYS = Number(process.env.OPENCODE_MAX_REDEPLOYS || 3);
  * never been told existed — the switch looked like a config change and was
  * actually a code change waiting to happen.
  */
+export interface ProviderCreds {
+  /** AI Studio key, for `google/…`. */
+  geminiApiKey?: string;
+  /** OpenAI platform key, for `openai/…`. */
+  openaiApiKey?: string;
+  /** Google access token, for `vertex/…` only. */
+  vertexToken?: string;
+}
+
+/**
+ * The provider block for a model id, as a pure function of the id and the keys.
+ *
+ * Separate from the env-reading wrapper below so the choice of SDK per provider
+ * is testable. Picking the wrong one does not fail loudly — it fails on the
+ * second tool call, deep inside a repair run, which is the most expensive place
+ * in the product to discover a one-line mistake.
+ */
+export function providerConfig(model: string, creds: ProviderCreds) {
+  const providerId = model.split("/")[0];
+  const modelId = model.slice(providerId.length + 1);
+  return buildProviderConfig(providerId, modelId, creds);
+}
+
 function opencodeConfig(token: string) {
+  return buildProviderConfig(PROVIDER_ID, MODEL_ID, {
+    geminiApiKey: GEMINI_API_KEY,
+    openaiApiKey: OPENAI_API_KEY,
+    vertexToken: token,
+  });
+}
+
+function buildProviderConfig(PROVIDER_ID: string, MODEL_ID: string, creds: ProviderCreds) {
+  const { geminiApiKey: GEMINI_API_KEY = "", openaiApiKey: OPENAI_API_KEY = "", vertexToken: token = "" } = creds;
   // The Gemini Developer API (AI Studio key), spoken natively.
   //
   // This exists because the Vertex path CANNOT run a Gemini 3.x agent. Vertex is
@@ -90,6 +125,34 @@ function opencodeConfig(token: string) {
           npm: "@ai-sdk/google",
           name: "Gemini Developer API",
           options: { apiKey: GEMINI_API_KEY },
+          models: { [MODEL_ID]: { name: MODEL_ID } },
+        },
+      },
+    };
+  }
+  // OpenAI's own platform, spoken through `@ai-sdk/openai` — deliberately NOT
+  // `@ai-sdk/openai-compatible`, even though the name suggests it would do.
+  //
+  // The reason is the same one that forced `@ai-sdk/google` above, one provider
+  // over. A reasoning model carries state between tool calls that the chat
+  // completions shape has nowhere to put: Gemini calls it `thought_signature`
+  // and hard-400s on the second call without it; OpenAI carries reasoning items
+  // and silently discards them, so the agent re-derives its plan from scratch on
+  // every step of a loop whose whole value is remembering what it already tried.
+  // `@ai-sdk/openai` speaks the Responses API, which preserves them.
+  //
+  // Failing loudly here rather than falling through to Vertex: a missing key
+  // would otherwise send an `openai/…` model id to a Gemini endpoint, and the
+  // 404 that comes back reads as "that model does not exist".
+  if (PROVIDER_ID === "openai") {
+    if (!OPENAI_API_KEY) throw new Error("OPENCODE_MODEL selects the openai provider but OPENAI_API_KEY is not set");
+    return {
+      $schema: "https://opencode.ai/config.json",
+      provider: {
+        openai: {
+          npm: "@ai-sdk/openai",
+          name: "OpenAI",
+          options: { apiKey: OPENAI_API_KEY },
           models: { [MODEL_ID]: { name: MODEL_ID } },
         },
       },
@@ -117,6 +180,19 @@ function opencodeBin(): string {
   if (process.env.OPENCODE_BIN) return process.env.OPENCODE_BIN;
   const home = join(homedir(), ".opencode", "bin", "opencode");
   return existsSync(home) ? home : "opencode";
+}
+
+/**
+ * The credential the selected provider needs, and nothing more.
+ *
+ * Only Vertex authenticates with a Google token; `google` and `openai` carry
+ * their own API keys. Fetching one regardless meant a provider that does not
+ * use Google at all still died when Google credentials were missing or stale —
+ * so the OpenAI path could not run anywhere the deploy service account was not
+ * already working, including every developer machine.
+ */
+async function providerToken(): Promise<string> {
+  return PROVIDER_ID === "vertex" ? gcloudToken() : "";
 }
 
 /** Shared in-memory cache first (no subprocess), the gcloud spawn as fallback. */
@@ -391,7 +467,7 @@ export async function planDeploy(opts: {
   let fileText = "";
   try {
     symlinkSync(dir, join(ws, "repo"));
-    const token = await gcloudToken();
+    const token = await providerToken();
     writeFileSync(join(ws, "opencode.json"), JSON.stringify(opencodeConfig(token), null, 2));
     mkdirSync(join(ws, ".opencode", "agent"), { recursive: true });
     writeFileSync(join(ws, ".opencode", "agent", "plan.md"), PLAN_AGENT_MD);
@@ -587,7 +663,7 @@ export async function opencodeRepair(opts: {
     if (plan) {
       writeFileSync(join(ws, "deploy-plan.json"), JSON.stringify(plan, null, 2));
     }
-    const token = await gcloudToken();
+    const token = await providerToken();
     writeFileSync(join(ws, "opencode.json"), JSON.stringify(opencodeConfig(token), null, 2));
     mkdirSync(join(ws, ".opencode", "agent"), { recursive: true });
     writeFileSync(join(ws, ".opencode", "agent", "deploy.md"), AGENT_MD);
