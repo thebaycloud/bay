@@ -100,6 +100,44 @@ test("runner stays container-scoped without a database; the others stay flat", (
   assert.ok(!deployArgs(request("buildpack")).includes("--container"));
 });
 
+/**
+ * The shape belongs to the SERVICE, not to the lane deploying to it.
+ *
+ * Found by a real deploy, after a nine-minute build and a successful release job:
+ * hl52l was created by the buildpack lane with one unnamed container, gained a
+ * `supersonic.json` saying `language: "python"`, and moved to the runner lane —
+ * which always names its container. gcloud added `app` BESIDE the unnamed one
+ * rather than renaming it, and Cloud Run refused the revision with "should
+ * contain exactly one container with an exposed port".
+ */
+test("a service that already has an unnamed container keeps the flat shape", () => {
+  const argv = deployArgs(request("runner", { existingScoped: false }));
+  assert.ok(!argv.includes("--container"), "the runner lane must not name a container the live service left unnamed");
+  assert.ok(argv.includes("--port"), "the port survives — it is what the live container already exposes");
+});
+
+test("a service that already has named containers keeps the scoped shape", () => {
+  for (const lane of SERVICE_LANES) {
+    assert.ok(
+      deployArgs(request(lane, { existingScoped: true })).includes("--container"),
+      `${lane}: un-naming a live service's container rewrites its container set`,
+    );
+  }
+});
+
+test("a service that does not exist yet takes the lane's own default", () => {
+  assert.ok(deployArgs(request("runner", { existingScoped: null })).includes("--container"));
+  assert.ok(!deployArgs(request("buildpack", { existingScoped: null })).includes("--container"));
+});
+
+test("a sidecar forces the scoped shape whatever the live service looks like", () => {
+  // Not a free choice: Cloud Run requires it once more than one container exists,
+  // so an app gaining a database has to migrate however it looked before.
+  const argv = deployArgs(request("buildpack", { existingScoped: false, cloudsql: "p:r:i" }));
+  assert.ok(argv.includes("--container"));
+  assert.ok(argv.includes("--depends-on"));
+});
+
 test("a lane names its code the way that lane builds", () => {
   assert.ok(deployArgs(request("buildpack")).includes("--source"));
   assert.ok(!deployArgs(request("buildpack")).includes("--image"));

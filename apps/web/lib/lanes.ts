@@ -199,6 +199,26 @@ export interface LaneDeploy {
   cloudsql?: string | null;
   /** Lane-specific container flags, e.g. `--clear-base-image` on the buildpack retry. */
   containerFlags?: string[];
+  /**
+   * Whether the service ALREADY deployed carries named containers, or null when
+   * there is no service yet.
+   *
+   * The shape is a property of the live service, not of the lane that is about to
+   * deploy — and reading it off the lane was wrong for the one case nobody had
+   * tried: a service that CHANGES lane. hl52l was created by the buildpack lane
+   * (one unnamed container) and moved to the runner lane the moment it gained a
+   * `supersonic.json` saying `language: "python"`. The runner lane always names
+   * its container, gcloud added `app` BESIDE the unnamed one instead of renaming
+   * it, and two containers ended up with an exposed port:
+   *
+   *   spec.template.spec.containers: Revision template should contain exactly one
+   *   container with an exposed port.
+   *
+   * A nine-minute build, a successful release job, and then a rejection at the
+   * last command — for a transition the comment below already described and the
+   * code asked the wrong object about.
+   */
+  existingScoped?: boolean | null;
 }
 
 /**
@@ -229,7 +249,16 @@ export function deployArgs(d: LaneDeploy): string[] {
   if (!d.image && !d.source) {
     throw new Error(`lane "${d.lane}" needs an image or a source directory`);
   }
-  const scoped = d.lane === "runner" || Boolean(d.cloudsql);
+  // A sidecar leaves no choice — Cloud Run requires the scoped shape once more
+  // than one container is involved, so an app with a proxy beside it must migrate
+  // whatever it looked like before. Otherwise the LIVE service decides, because
+  // the shape belongs to it: a service already carrying named containers keeps
+  // them, one carrying an unnamed container keeps that, and only a service that
+  // does not exist yet takes the lane's default. That is the difference between
+  // "whatever this lane already did" — true only while a service never changes
+  // lane — and "whatever this service already did", which survives a repo gaining
+  // a `supersonic.json` that moves it from buildpack to runner.
+  const scoped = Boolean(d.cloudsql) || (d.existingScoped ?? d.lane === "runner");
 
   const buildSource = d.image ? ["--image", d.image] : ["--source", d.source!];
   // A multi-container service has no other way to say which container answers

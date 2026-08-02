@@ -294,6 +294,22 @@ async function liveEnvNames(slug: string): Promise<string[]> {
   );
 }
 
+/**
+ * Whether the live service's containers are NAMED, or null when it does not exist.
+ *
+ * `deployArgs` needs this because the flat and scoped argv shapes are not
+ * interchangeable on an existing service, and which one a service has is a fact
+ * about the service rather than about the lane deploying to it. A repo that gains
+ * a `supersonic.json` can move lane — buildpack to runner is one config line —
+ * and the lane's own default then disagrees with what is already deployed.
+ */
+async function liveContainerShape(service: string): Promise<boolean | null> {
+  const s = await describeServiceRest(service).catch(() => null);
+  const containers = s?.spec?.template?.spec?.containers;
+  if (!Array.isArray(containers) || containers.length === 0) return null;
+  return containers.some((c: { name?: string }) => Boolean(c.name));
+}
+
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
 function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
@@ -1883,7 +1899,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       try {
         const args = deployArgs({
           lane: "runner", service: name, serviceFlags: siblingFlags, appFlags: siblingApp,
-          image, port: 8080, scale, cloudsql,
+          image, port: 8080, scale, cloudsql, existingScoped: await liveContainerShape(name),
         });
         const out = await gcloudDeploy(args, log, (l) => builds.note(l));
         const url = JSON.parse(out.slice(out.indexOf("{")))?.status?.url ?? "";
@@ -1922,6 +1938,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
     const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
       if (staticServe) return runStatic(staticServe);
+      // Read once, before any lane runs: the container shape belongs to the
+      // service that already exists, and every lane below has to agree with it.
+      const existingScoped = await liveContainerShape(slug);
       if (runnerLang && runnerObject) {
         // No image is built. A one-time prepare step installs deps + builds on
         // the runner image (warm cache) and uploads a ready-to-run bundle; the
@@ -1956,7 +1975,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // every lane gets it, not only this one.
         return attempt(deployArgs({
           lane: "runner", service: slug, serviceFlags: deployFlags, appFlags,
-          image, port: 8080, scale, cloudsql,
+          image, port: 8080, scale, cloudsql, existingScoped,
         }));
       }
       if (useDockerBuild) {
@@ -1980,12 +1999,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (!relC.ok) return { ok: false, error: relC.error };
         return attempt(deployArgs({
           lane: "container", service: slug, serviceFlags: deployFlags, appFlags,
-          image: `${IMAGE}:latest`, scale, cloudsql,
+          image: `${IMAGE}:latest`, scale, cloudsql, existingScoped,
         }));
       }
       const buildpack = (containerFlags?: string[]) => deployArgs({
         lane: "buildpack", service: slug, serviceFlags: deployFlags, appFlags,
-        source: dir, scale, cloudsql, containerFlags,
+        source: dir, scale, cloudsql, containerFlags, existingScoped,
       });
       // This lane pays for its build twice: `run jobs deploy --source` runs
       // buildpacks again, because there is no image to reuse — the service's
