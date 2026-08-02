@@ -40,6 +40,10 @@ export interface RawStage {
   startedAt: Date;
   endedAt: Date | null;
   outcome: StageOutcome | null;
+  /** "python3.12". Null on a row written before the lane was known. */
+  runtime?: string | null;
+  /** The app's first deploy — a guaranteed cache miss. Null for static and when unknown. */
+  cold?: boolean | null;
 }
 
 /**

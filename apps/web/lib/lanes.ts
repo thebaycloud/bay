@@ -24,6 +24,18 @@ export type Lane = "static" | "runner" | "container" | "buildpack";
 export const SERVICE_LANES: Lane[] = ["runner", "container", "buildpack"];
 
 /**
+ * Every lane, as values rather than as a type.
+ *
+ * A runtime witness for the `Lane` union, so anything that has to agree with it
+ * — the `deploy_stages.lane` CHECK constraint, the analytics report's lane list —
+ * can be checked against it by a test instead of by someone remembering. The
+ * absence of exactly this is how a SECOND exported type called `Lane` lived in
+ * lib/stages.ts with two different values in it, undetectably, for as long as
+ * both existed.
+ */
+export const ALL_LANES: Lane[] = ["static", ...SERVICE_LANES];
+
+/**
  * Cloud Run's own default container port, and therefore the one an app already
  * gets when nothing says otherwise. Named here because the scoped argv has to
  * state it explicitly and must not state anything else.
@@ -79,13 +91,20 @@ export function databaseEnvNames(): string[] {
 }
 
 /**
- * The proxy container, appended after the app's own container flags.
+ * The proxy container itself, WITHOUT the startup probe.
  *
- * `--depends-on` makes Cloud Run start it first, so the app is not racing a port
- * that is not listening yet. The proxy authenticates as the service's own
- * identity, which therefore needs roles/cloudsql.client.
+ * The proxy authenticates as the service's own identity, which therefore needs
+ * roles/cloudsql.client.
+ *
+ * Split out because a Cloud Run worker pool has no probes: `gcloud beta run
+ * worker-pools deploy` exposes `--container` and `--depends-on` and no probe flag
+ * of any kind (verified against SDK 539.0.0). So a worker that needs a database
+ * needs this container and cannot have the probe below — and copying the image
+ * name and the arg string into a second module to get that is the drifting-second-
+ * copy defect this file's own comments are about. One source for the image, one
+ * for the args; the probe is what the service and job paths add on top.
  */
-export function dbContainerArgs(connectionName: string): string[] {
+export function dbProxyContainer(connectionName: string): string[] {
   return [
     "--container", "cloudsql-proxy",
     "--image", CLOUD_SQL_PROXY_IMAGE,
@@ -97,6 +116,20 @@ export function dbContainerArgs(connectionName: string): string[] {
     // The database port stays on loopback; the HEALTH port is what Cloud Run is
     // allowed to reach. See the probe below for why they cannot be the same one.
     `--args=--port=${DB_PORT},--address=${DB_HOST},--health-check,--http-address=0.0.0.0,--http-port=${DB_HEALTH_PORT},${connectionName}`,
+  ];
+}
+
+/**
+ * The proxy container plus its startup probe, for primitives that have probes.
+ *
+ * `--depends-on` makes Cloud Run start it first, so the app is not racing a port
+ * that is not listening yet — and the probe below is what makes `--depends-on`
+ * legal at all. A worker pool has neither, and uses `dbProxyContainer` with
+ * `proxyWait()` in front of the command instead; see lib/process-deploy.ts.
+ */
+export function dbContainerArgs(connectionName: string): string[] {
+  return [
+    ...dbProxyContainer(connectionName),
     // Required, not optional. Cloud Run refuses any revision whose `--depends-on`
     // names a container without one:
     //

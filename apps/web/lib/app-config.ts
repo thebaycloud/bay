@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DeployPlan } from "./opencode-deploy";
 import { databaseEnvNames } from "./lanes";
+import type { ProcessConfig } from "./processes";
 
 /**
  * `supersonic.json` — the deploy plan, written down.
@@ -130,6 +131,18 @@ export interface ServiceConfig {
   release?: string;
   /** The long-running command. Serves HTTP on $PORT. */
   start?: string;
+  /**
+   * What this service RUNS: `web`, `release`, and any number of workers and crons.
+   *
+   * `start` says one thing — one HTTP server on one port — and that is why a
+   * Telegram bot, an agent server's queue consumer and a CRM's nightly job have
+   * nowhere to be declared. Keyed by NAME rather than by kind, because an app may
+   * have two different workers and because that is what the app's own Procfile
+   * already looks like: `bot: python bot.py` resolves to a worker called `bot`
+   * with nobody learning our dialect. See lib/processes.ts for the kind rules and
+   * for why the sizing fields differ per kind.
+   */
+  processes?: Record<string, ProcessConfig>;
   /** Static only: the built directory, relative to `dir`. */
   outputDir?: string;
   /**
@@ -372,6 +385,67 @@ function scale(v: unknown, where: string): ScaleConfig | undefined {
   };
 }
 
+/**
+ * The `processes` map, shape-checked only.
+ *
+ * Kind derivation, per-kind field rules and defaults all live in lib/processes.ts
+ * — the one place that knows what each Cloud Run primitive accepts. This function
+ * exists so a malformed `processes` fails at parse time with the field named,
+ * rather than as a type error somewhere downstream.
+ */
+function processConfigs(v: unknown, where: string): Record<string, ProcessConfig> | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "object" || Array.isArray(v)) {
+    throw new ConfigError(`${where} must be an object of NAME: { command, … } — for example { "web": { "command": "…" } }`);
+  }
+  const out: Record<string, ProcessConfig> = {};
+  for (const [name, raw] of Object.entries(v as Record<string, unknown>)) {
+    // The same character class the Procfile reader accepts, so a name that works
+    // in one file works in the other. A process name becomes part of a Cloud Run
+    // resource name, which is where a stray dot or slash would surface instead.
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+      throw new ConfigError(`${where}: "${name}" is not a valid process name — letters, digits, "-" and "_" only`);
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new ConfigError(`${where}.${name} must be an object`);
+    }
+    const p = raw as Record<string, unknown>;
+    out[name] = {
+      command: str(p.command, `${where}.${name}.command`),
+      kind: str(p.kind, `${where}.${name}.kind`) as ProcessConfig["kind"],
+      memory: str(p.memory, `${where}.${name}.memory`),
+      cpu: num(p.cpu, `${where}.${name}.cpu`),
+      visibility: str(p.visibility, `${where}.${name}.visibility`) as ProcessConfig["visibility"],
+      health: health(p.health, `${where}.${name}.health`),
+      maxInstances: num(p.maxInstances, `${where}.${name}.maxInstances`),
+      concurrency: num(p.concurrency, `${where}.${name}.concurrency`),
+      cpuBoost: p.cpuBoost === undefined ? undefined : Boolean(p.cpuBoost),
+      timeout: num(p.timeout, `${where}.${name}.timeout`),
+      instances: num(p.instances, `${where}.${name}.instances`),
+      schedule: str(p.schedule, `${where}.${name}.schedule`),
+      timezone: str(p.timezone, `${where}.${name}.timezone`),
+      taskTimeout: num(p.taskTimeout, `${where}.${name}.taskTimeout`),
+      retries: num(p.retries, `${where}.${name}.retries`),
+      shutdownGrace: num(p.shutdownGrace, `${where}.${name}.shutdownGrace`),
+    };
+    // Dropped rather than spread, for the reason withScale documents: a key whose
+    // value is undefined is still a key, and `declaredFields` in lib/processes.ts
+    // would then read every unset field as authored.
+    for (const k of Object.keys(out[name]) as Array<keyof ProcessConfig>) {
+      if (out[name][k] === undefined) delete out[name][k];
+    }
+    if (out[name].visibility !== undefined && out[name].visibility !== "public" && out[name].visibility !== "internal") {
+      throw new ConfigError(`${where}.${name}.visibility must be "public" or "internal"`);
+    }
+    if (out[name].kind !== undefined && !PROCESS_KINDS.has(out[name].kind as string)) {
+      throw new ConfigError(`${where}.${name}.kind must be one of ${[...PROCESS_KINDS].join(", ")}`);
+    }
+  }
+  return out;
+}
+
+const PROCESS_KINDS = new Set(["web", "worker", "cron", "release"]);
+
 function resources(v: unknown): ResourcesConfig | undefined {
   if (v === undefined || v === null) return undefined;
   const where = `${CONFIG_FILENAME} resources`;
@@ -484,6 +558,7 @@ export function parseAppConfig(text: string): AppConfig {
       preDeploy: str(svc.preDeploy, `${where}.preDeploy`),
       release: str(svc.release, `${where}.release`),
       start: str(svc.start, `${where}.start`),
+      processes: processConfigs(svc.processes, `${where}.processes`),
       outputDir: str(svc.outputDir, `${where}.outputDir`),
       spaFallback: svc.spaFallback === undefined ? undefined : Boolean(svc.spaFallback),
       dockerfile: str(svc.dockerfile, `${where}.dockerfile`),
@@ -508,6 +583,20 @@ export function parseAppConfig(text: string): AppConfig {
         `${CONFIG_FILENAME} services[${i}]: "preDeploy" and "release" are the same field — keep "release".`,
       );
     }
+  }
+  // `processes` is deployed by the PRIMARY service only, for now.
+  //
+  // A sibling's workers would need the sibling's own image and env, and
+  // `deploySibling` builds neither of those in a shape this can reach yet. So a
+  // sibling declaring processes is refused rather than accepted and skipped —
+  // the whole reason this schema exists is that a field which parses, validates
+  // and quietly does nothing is the defect two plans have now been spent closing.
+  for (const [i, s] of services.entries()) {
+    if (!s.processes || s === primaryService({ services })) continue;
+    throw new ConfigError(
+      `${CONFIG_FILENAME} services[${i}]: "processes" on a sibling service is not deployed yet.\n` +
+      `  Only the service on "/" runs workers and crons today. Move them there, or give this service its own app.`,
+    );
   }
   // Checked here rather than at deploy time: two services claiming the same
   // prefix means one of them silently never receives a request, which is
@@ -674,9 +763,21 @@ export function usesDatabase(s: ServiceConfig): boolean {
   return Boolean(s.needsDB) || (s.uses ?? []).includes("database");
 }
 
-/** The one-shot pre-traffic command, under whichever name the file used. */
+/**
+ * The one-shot pre-traffic command, under whichever name the file used.
+ *
+ * Three spellings now, and `processes.release` is the one that matters: a config
+ * declaring its processes has said everything it runs in one place, and a release
+ * declared there that did not run — while the top-level `release` field silently
+ * did — would be two fields with one meaning and only one reader. That is the
+ * defect this schema exists to end, and the check output made it visible: it
+ * printed "release — nothing runs before traffic" directly above
+ * "release  python manage.py migrate", which are opposite claims about one deploy.
+ *
+ * Last in precedence, so a config carrying both keeps meaning what it meant.
+ */
 export function releaseCommand(s: ServiceConfig): string | undefined {
-  return s.release ?? s.preDeploy;
+  return s.release ?? s.preDeploy ?? s.processes?.release?.command;
 }
 
 /** The repo's config, or null when it has none. Throws ConfigError if it is unusable. */

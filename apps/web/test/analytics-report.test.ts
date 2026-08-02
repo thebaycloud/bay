@@ -211,10 +211,14 @@ test("lanes are read past the placeholder, and an unused lane is still listed", 
   assert.equal(lanes.get("static")!.total, 2);
   assert.equal(lanes.get("static")!.rate, 0.5);
   assert.equal(lanes.get("runner")!.rate, 1);
-  // Nobody used the fast lane this window. That is a finding; a row that
+  // Nobody used the buildpack lane this window. That is a finding; a row that
   // disappears cannot report it.
-  assert.equal(lanes.get("fast")!.total, 0);
-  assert.equal(lanes.get("fast")!.rate, null);
+  assert.equal(lanes.get("buildpack")!.total, 0);
+  assert.equal(lanes.get("buildpack")!.rate, null);
+  // And the report lists the lanes the deploy actually EXECUTES. It used to list
+  // "fast" and "generic" — the recorder's own names for these two — so a reader
+  // comparing the report against `deployArgs` was comparing two vocabularies.
+  assert.deepEqual(r.reliability.byLane.map((l) => l.lane), ["static", "runner", "container", "buildpack"]);
 });
 
 test("a deploy that never chose a lane is counted and kept out of every lane", () => {

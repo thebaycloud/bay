@@ -269,7 +269,11 @@ export function reliability(input: ReportInput, attempts: Attempt[]): Reliabilit
   // Lanes are listed in the order the product thinks about them, and a lane with
   // no deploys this window is still listed — "nobody used the fast lane" is a
   // finding, and a row that vanishes cannot say it.
-  const KNOWN_LANES = ["static", "fast", "runner", "generic"];
+  // The vocabulary the deploy executes, which is now also the vocabulary it
+  // records — see db/010_stage_lane_vocabulary.sql. `fast` and `generic` were
+  // the recorder's own names for the buildpack and container lanes, and the
+  // migration rewrote every historical row, so nothing here has to know both.
+  const KNOWN_LANES = ["static", "runner", "container", "buildpack"];
   const byLaneMap = groupBy(attempts.filter((a) => a.lane), (a) => a.lane as string);
   const lanes = [...KNOWN_LANES, ...[...byLaneMap.keys()].filter((l) => !KNOWN_LANES.includes(l))];
   const byLane: LaneReliability[] = lanes.map((lane) => {

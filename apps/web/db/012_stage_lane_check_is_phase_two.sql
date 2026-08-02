@@ -1,0 +1,45 @@
+-- Drop the CHECK that 011 added, because 011 added it one phase too early.
+--
+-- WHAT HAPPENED
+--
+-- 011 does two things: it rewrites the historical `lane` values into the
+-- vocabulary the deploy actually executes, and it constrains the column to that
+-- vocabulary. The rewrite is safe at any time. The constraint is not: it is only
+-- true once every writer has been deployed, and a migration lands the instant it
+-- is run while code lands whenever the next deploy happens.
+--
+-- The two are not the same instant, and on 2 Aug they were five minutes apart in
+-- the wrong order. The migration went out; a deploy from `main` then replaced the
+-- control plane with a commit that still wrote "generic"; and every stage write
+-- on production started failing:
+--
+--   new row for relation "deploy_stages" violates check constraint
+--   "deploy_stages_lane"
+--   Failing row contains (…, hdhxq, generic, detect, …)
+--
+-- Nothing broke, and that part is worth recording too: `StageRecorder.end` wraps
+-- every write precisely so telemetry can never be the reason a deploy fails, and
+-- it held. The cost was the measurement, which is what that guarantee is for.
+--
+-- THE RULE
+--
+-- A constraint that describes what the CODE writes is phase two of a two-phase
+-- change, never phase one:
+--
+--   phase 1  migration: add columns, rewrite old rows. Accepts both vocabularies.
+--   phase 2  deploy the code that writes only the new one. Wait for it to be live
+--            everywhere — the control plane AND supersonic-deploy-job, which are
+--            separate resources updated by separate steps.
+--   phase 3  migration: add the constraint.
+--
+-- Phase 3 is deliberately not in this file. It belongs in a migration written
+-- after the process-model work is on `main` and deployed, and it is one statement:
+--
+--   ALTER TABLE deploy_stages ADD CONSTRAINT deploy_stages_lane
+--     CHECK (lane IN ('unknown', 'static', 'runner', 'container', 'buildpack'));
+--
+-- Until then `test/stages.test.ts` is what holds the two vocabularies together —
+-- it reads STAGE_LANES and asserts the set, so a third one still cannot be added
+-- in code without a test failing. The database check is the belt to that
+-- suspenders, and it can wait for the code it describes.
+ALTER TABLE deploy_stages DROP CONSTRAINT IF EXISTS deploy_stages_lane;

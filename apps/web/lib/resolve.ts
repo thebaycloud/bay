@@ -55,6 +55,16 @@ export interface ResolvedService {
 
   uses: ("database" | "bucket")[];
 
+  /**
+   * The names of the processes this service declares, if any.
+   *
+   * Names only, deliberately: kinds, defaults and per-kind field rules live in
+   * lib/processes.ts, which knows what each Cloud Run primitive accepts. What
+   * this module needs is narrower — whether the service said what it runs, which
+   * is what decides whether demanding a `start` command is correct.
+   */
+  processes: string[];
+
   env: Record<string, string>;
   buildEnv: Record<string, string>;
   /** NAMES only. Never logged, never a --update-env-vars literal. */
@@ -103,20 +113,70 @@ export class ResolveError extends Error {}
 const RUNNER_RUNTIMES = [/^node/, /^python/];
 
 /**
- * The lane, decided from what the service is.
+ * Everything the lane decision depends on, from wherever the caller found it.
+ *
+ * A parameter object rather than a `ServiceConfig` because the two callers learn
+ * these facts from different places and had, until now, two different answers.
+ * `deriveLane` reads a config; the deploy pipeline reads a detector's stack, an
+ * env flag and whether an agent supplied a run command — and so it re-derived the
+ * lane inline instead of calling this, with rules that do not match.
+ */
+export interface LaneInputs {
+  language?: ServiceConfig["language"];
+  runtime?: string;
+  dockerfile?: string;
+  /**
+   * Whether the runner lane may be chosen at all.
+   *
+   * `RUNNER=1` in the control plane: the lane ships dark until its base images
+   * exist in Artifact Registry. Invisible to `deriveLane`, which is one of the
+   * two reasons the answers diverged — a config resolving to `runner` locally
+   * deployed on `buildpack` in production, and nothing said so.
+   */
+  runnerEnabled?: boolean;
+  /**
+   * An agent supplied the run command, so a committed Dockerfile is overridden.
+   *
+   * The other divergence. A repo Dockerfile normally wins because the author was
+   * explicit — except when the deploying agent has decided how to run this, which
+   * outranks a Dockerfile that may not even be self-contained (an Nx
+   * `COPY dist/api` Dockerfile assumes a prior build).
+   */
+  runCommandSupplied?: boolean;
+}
+
+/**
+ * The lane, decided from what the service is. THE one place that decides it.
+ *
+ * There were two. This function was called by the CLI and by `resolveService`,
+ * and by nothing in the deploy — `deploy-pipeline.ts` derived its own lane inline
+ * from a string match on the detector's runtime. So `assertConsumed` validated a
+ * service against a lane the deploy might not take, and a config could resolve to
+ * `runner` in `supersonic check` and deploy on `buildpack` with nobody informed.
+ * The exported `ResolvedApp` was read once, after the deploy, to audit it.
  *
  * Order matters and encodes precedence: an author who committed a Dockerfile has
  * already said how to build this, and that outranks anything inferred about the
- * language.
+ * language — unless the deploying agent overrode it.
  */
-export function deriveLane(s: ServiceConfig): Lane {
-  if (s.language === "static") return "static";
-  if (s.dockerfile) return "container";
-  const runtime = s.runtime ?? "";
-  if (RUNNER_RUNTIMES.some((re) => re.test(runtime))) return "runner";
-  if (runtime) return "buildpack";
-  if (s.language === "node" || s.language === "python") return "runner";
+export function laneFor(i: LaneInputs): Lane {
+  if (i.language === "static") return "static";
+  // Defaults to true so a plain `ServiceConfig` keeps meaning what it meant: the
+  // CLI has no RUNNER flag and answers for the lane a config describes, while the
+  // pipeline passes the flag it actually runs under.
+  const runnerAllowed = i.runnerEnabled ?? true;
+  if (i.dockerfile && !i.runCommandSupplied) return "container";
+  const runtime = i.runtime ?? "";
+  const wantsRunner = RUNNER_RUNTIMES.some((re) => re.test(runtime))
+    || (!runtime && (i.language === "node" || i.language === "python"));
+  if (wantsRunner) return runnerAllowed ? "runner" : (i.dockerfile ? "container" : "buildpack");
+  if (i.dockerfile) return "container";
   return "buildpack";
+}
+
+/** The lane a written config describes, with no deploy-time overrides applied. */
+export function deriveLane(s: ServiceConfig): Lane {
+  return laneFor({ language: s.language, runtime: s.runtime, dockerfile: s.dockerfile });
 }
 
 /**
@@ -130,11 +190,11 @@ export function deriveLane(s: ServiceConfig): Lane {
  */
 const LANE_CONSUMES: Record<Lane, ReadonlyArray<keyof ResolvedService>> = {
   static: ["install", "build", "outputDir", "spaFallback", "buildEnv", "env"],
-  runner: ["install", "build", "release", "start", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"],
+  runner: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"],
   // No `start`: the Dockerfile's own CMD is the start command, and a second one
   // in the config would be read by nobody.
-  container: ["dockerfile", "context", "release", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
-  buildpack: ["install", "build", "release", "start", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"],
+  container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
+  buildpack: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"],
 };
 
 /** Fields that are always meaningful and so are never "unconsumed". */
@@ -188,6 +248,7 @@ function declaredFields(s: ServiceConfig): Array<keyof ResolvedService> {
   if (s.env && Object.keys(s.env).length) out.push("env");
   if (s.buildEnv && Object.keys(s.buildEnv).length) out.push("buildEnv");
   if ((s.secrets ?? []).length) out.push("secrets");
+  if (Object.keys(s.processes ?? {}).length) out.push("processes");
   if (set(s.health)) out.push("health");
   if (set(s.scale)) out.push("scale");
   if (set(s.runtime)) out.push("runtime");
@@ -225,6 +286,7 @@ function resolveService(s: ServiceConfig, index: number): ResolvedService {
     dockerfile: s.dockerfile,
     context: s.dockerfile ? (s.context ?? dir) : undefined,
     uses: s.uses ?? (s.needsDB ? ["database"] : []),
+    processes: Object.keys(s.processes ?? {}),
     env: s.env ?? {},
     buildEnv: s.buildEnv ?? {},
     secrets: s.secrets ?? [],
@@ -335,10 +397,20 @@ export function validate(app: ResolvedApp, dir: string): void {
       if (!s.build && s.outputDir && !existsSync(join(dir, s.outputDir))) {
         problems.push(`${where}: outputDir "${s.outputDir}" does not exist and no build command would create it`);
       }
-    } else if (s.lane !== "container" && !s.start) {
+    } else if (s.lane !== "container" && !s.start && !s.processes.length) {
       // Not asked of the container lane: its Dockerfile carries its own CMD, and
       // that is the whole reason an author committed one.
-      problems.push(`${where}: the ${s.lane} lane runs a server and this service has no \`start\` command`);
+      //
+      // Nor of a service that declared its `processes`. `start` is the older
+      // spelling of exactly one shape — one HTTP server on one port — and
+      // demanding it from a Telegram bot is the schema telling a worker-only app
+      // to pretend to be a web server, which is the thing the process model
+      // exists to stop. What the processes ARE is checked by lib/processes.ts,
+      // which knows what each primitive accepts.
+      problems.push(
+        `${where}: the ${s.lane} lane runs a server and this service has no \`start\` command\n` +
+        `  If this app is a worker, a bot or a scheduled job, declare "processes" instead.`,
+      );
     }
 
     if (s.dockerfile) {

@@ -68,6 +68,33 @@ async function checkApp(dir, { resolver: r, detect }) {
 
   for (const s of app.services) {
     const abs = path.join(dir, s.dir);
+    // What this service RUNS, through the control plane's own resolver. Attached
+    // to the resolved service so `renderService` has nothing to decide.
+    //
+    // Without this, `check` printed "start — nothing to run: this lane needs one"
+    // for a Telegram bot with a perfectly good worker: the declared-but-not-
+    // reflected defect, inside the tool built to make that defect visible. And the
+    // scale line printed the WEB envelope for an app that has no web process.
+    try {
+      // Read from the file rather than off the resolved service: ResolvedService
+      // carries process NAMES only, deliberately — the kinds and per-kind fields
+      // belong to lib/processes.ts, which knows what each primitive accepts.
+      const cfg = r.readAppConfig(dir);
+      const declared = ((cfg && cfg.services.find((x) => (x.name || "app") === s.name)) || {}).processes;
+      s.runs = r.resolveProcesses(r.mergeProcfile(declared, r.readProcfile(abs)));
+      s.serviceless = r.isServiceless(s.runs);
+      // Resolved here so renderService stays a pure formatter with no resolver in
+      // scope — the split that lets it be tested against a literal.
+      s.notes = s.runs.flatMap((p) => r.unemittable(p));
+    } catch (e) {
+      // A malformed process set is a problem to report, not a reason to print
+      // nothing: the whole point of a local dry run is to name it in two seconds
+      // rather than nine minutes into a build.
+      s.runs = [];
+      s.serviceless = false;
+      s.notes = [];
+      problems.push(`✕ service "${s.name}": ${e && e.message ? e.message : String(e)}`);
+    }
     const mismatch = r.runtimeMismatch({
       pyproject: readOr(path.join(abs, "pyproject.toml"), null),
       packageJson: jsonOr(path.join(abs, "package.json"), null),
@@ -109,6 +136,21 @@ function phase(name, value) {
  * No such file or directory`. Printing the pretty version would hide the only
  * detail worth checking.
  */
+/**
+ * One process, as the line a person needs: what runs it, and how much of it.
+ *
+ * Per kind rather than one format, because the kinds genuinely differ — an
+ * instance count is meaningless for a job and a schedule is meaningless for a
+ * worker. The same reason lib/processes.ts does not share one `Scale`.
+ */
+function describeProcess(p) {
+  const size = `${p.memory || (p.scale && p.scale.memory)} · ${p.cpu || (p.scale && p.scale.cpu)} cpu`;
+  if (p.kind === "web") return `${p.command}  ·  ${p.visibility}`;
+  if (p.kind === "worker") return `${p.command}  ·  ${size} · ${p.instances} instance${p.instances === 1 ? "" : "s"}`;
+  if (p.kind === "cron") return `${p.command}  ·  ${p.schedule}${p.timezone ? ` ${p.timezone}` : " UTC"} · ${size}`;
+  return `${p.command}  ·  runs once before traffic · ${size}`;
+}
+
 function renderService(s) {
   const lines = [`  ${s.name}  ·  ${s.lane} lane  ·  ${s.path}`];
   if (s.runtime) lines.push(phase("runtime", s.runtime));
@@ -124,11 +166,26 @@ function renderService(s) {
     // every scale-out instance, concurrently. A blank line here is a fact about
     // this deploy, not a missing one.
     lines.push(phase("release", s.release || "—  (nothing runs before traffic)"));
-    lines.push(phase("start", s.lane === "container"
-      ? "the Dockerfile's own CMD"
-      : s.start || "—  (nothing to run: this lane needs one)"));
-    lines.push(phase("health", `GET ${s.health.path} → ${s.health.expect}`));
-    lines.push(phase("scale", `${s.scale.memory} · ${s.scale.cpu} cpu · max ${s.scale.maxInstances} · ${s.scale.timeout}s`));
+    // The web half of the app, printed only when there IS one. A worker-only app
+    // has no start command, no health path and no request timeout, and printing
+    // the defaults for all three would describe a service that is not deployed.
+    if (!s.serviceless) {
+      lines.push(phase("start", s.lane === "container"
+        ? "the Dockerfile's own CMD"
+        : s.start || (s.runs.length ? "—  (the web process below)" : "—  (nothing to run: this lane needs one)")));
+      lines.push(phase("health", `GET ${s.health.path} → ${s.health.expect}`));
+      lines.push(phase("scale", `${s.scale.memory} · ${s.scale.cpu} cpu · max ${s.scale.maxInstances} · ${s.scale.timeout}s`));
+    }
+    // `release` is skipped: it is the phase printed above, not a separate thing.
+    // Printing both put "release — nothing runs before traffic" directly over
+    // "release  python manage.py migrate" — two opposite claims about one deploy.
+    for (const p of s.runs || []) if (p.kind !== "release") lines.push(phase(p.kind, describeProcess(p)));
+    if (s.serviceless) {
+      // Said out loud, because "no URL" is the single most surprising thing about
+      // a worker-only deploy and the one most likely to read as a failure.
+      lines.push(phase("", "no web process — this app gets no URL"));
+    }
+    for (const n of s.notes || []) lines.push(phase("", `! ${n}`));
   }
 
   if (s.uses.length) lines.push(phase("uses", s.uses.join(", ")));

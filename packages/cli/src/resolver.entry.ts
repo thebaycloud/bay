@@ -47,3 +47,13 @@ export { readRepoFacts, declaredLanguages, normalizeLanguage } from "../../../ap
 export { RUNTIME_VERSIONS, runtimeMismatch, RUNTIME_UNSUPPORTED } from "../../../apps/web/lib/plan-deps";
 
 export { DEFAULT_SCALE } from "../../../apps/web/lib/lanes";
+
+// The process model. Bundled for the same reason as everything above: `check` has
+// to answer "what will this run" with the SAME code the deploy runs, and a worker
+// is now a thing an app can have. Without these, `check` printed
+// "start — nothing to run: this lane needs one" for a Telegram bot that has a
+// perfectly good worker — the declared-but-not-reflected defect, in the tool built
+// to make that defect visible.
+export { readProcfile, parseProcfile, ProcfileError } from "../../../apps/web/lib/procfile";
+export { mergeProcfile, resolveProcesses, unemittable, PRIMITIVE, ProcessError } from "../../../apps/web/lib/processes";
+export { isServiceless } from "../../../apps/web/lib/process-plan";

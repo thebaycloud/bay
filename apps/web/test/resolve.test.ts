@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolve, validate, deriveLane, assertConsumed, missingSecrets, ResolveError, type ResolvedService } from "../lib/resolve";
+import { resolve, resolveFrom, validate, deriveLane, laneFor, assertConsumed, missingSecrets, ResolveError, type ResolvedService } from "../lib/resolve";
 import { parseAppConfig, ConfigError, platformOwned, usesDatabase, planFromConfig } from "../lib/app-config";
 
 /** A repo on disk. The resolver checks the filesystem, so the tests need one. */
@@ -85,7 +85,8 @@ test("a field the lane does implement passes", () => {
   const s = {
     name: "api", dir: ".", path: "/", lane: "runner" as const,
     release: "python manage.py migrate", start: "gunicorn app:app",
-    spaFallback: false, uses: [], env: {}, buildEnv: {}, secrets: ["K"], envNeeded: [],
+    spaFallback: false,
+  processes: [], uses: [], env: {}, buildEnv: {}, secrets: ["K"], envNeeded: [],
     health: { path: "/", expect: 200 },
     scale: { memory: "2Gi", cpu: 1, maxInstances: 10, timeout: 900, concurrency: 80, cpuBoost: true },
     declared: ["release", "start", "secrets"],
@@ -556,4 +557,80 @@ test("a service wanting no database still says so", () => {
   const cfg = parseAppConfig(config({ version: 1, services: [{ language: "python", start: "x" }] }));
   assert.equal(usesDatabase(cfg.services[0]), false);
   assert.equal(planFromConfig(cfg).needsDB, undefined);
+});
+
+test("the deploy and the CLI answer the lane through one function", () => {
+  // The defect: `deriveLane` was called by the CLI and by `resolveService`, and
+  // by nothing in the deploy — `deploy-pipeline.ts` derived its own lane inline
+  // from a string match on the detector's runtime, with its own rules. So
+  // `assertConsumed` validated a service against a lane the deploy might not
+  // take, and a config could resolve to `runner` in `supersonic check` and deploy
+  // on `buildpack` with nobody informed.
+  //
+  // This is the pipeline's full truth table, asserted against the shared
+  // function. Each row is [runtime, hasDockerfile, RUNNER=1, agent gave --run].
+  const cases: Array<[string, boolean, boolean, boolean, string]> = [
+    // The runner lane, when it is enabled and nothing outranks it.
+    ["python3.12", false, true,  false, "runner"],
+    ["node22",     false, true,  false, "runner"],
+    // Shipped dark: RUNNER=0 sends the same app down the industry-standard path.
+    // Invisible to the old `deriveLane`, which is half of why they disagreed.
+    ["python3.12", false, false, false, "buildpack"],
+    ["python3.12", true,  false, false, "container"],
+    // A committed Dockerfile outranks the language: the author was explicit.
+    ["python3.12", true,  true,  false, "container"],
+    // Unless the deploying agent supplied the run command, which outranks a
+    // Dockerfile that may not be self-contained. The other half of the divergence.
+    ["python3.12", true,  true,  true,  "runner"],
+    // An overridden Dockerfile still cannot reach the runner without a language
+    // the runner has an image for.
+    ["go1.23",     true,  true,  true,  "container"],
+    ["go1.23",     false, true,  false, "buildpack"],
+    ["",           true,  true,  true,  "container"],
+    ["",           false, true,  false, "buildpack"],
+  ];
+
+  for (const [runtime, dockerfile, runnerEnabled, runCommandSupplied, expected] of cases) {
+    assert.equal(
+      laneFor({ runtime, dockerfile: dockerfile ? "Dockerfile" : undefined, runnerEnabled, runCommandSupplied }),
+      expected,
+      `runtime=${JSON.stringify(runtime)} dockerfile=${dockerfile} RUNNER=${runnerEnabled} run=${runCommandSupplied}`,
+    );
+  }
+});
+
+test("a written config answers for the lane it describes, with no deploy overrides", () => {
+  // `deriveLane` is now a thin wrapper, so the CLI cannot drift from the deploy —
+  // but it still answers the question the CLI is asking: what does this FILE say?
+  // The RUNNER flag is a property of the control plane, not of the config, so it
+  // defaults to enabled rather than leaking a server env var into `supersonic check`.
+  assert.equal(deriveLane({ language: "node" }), laneFor({ language: "node" }));
+  assert.equal(deriveLane({ runtime: "python3.12" }), "runner");
+  assert.equal(deriveLane({ runtime: "python3.12", dockerfile: "Dockerfile" }), "container");
+});
+
+test("a worker-only service is valid without a start command", () => {
+  // `start` is the older spelling of exactly one shape — one HTTP server on one
+  // port — so demanding it from a Telegram bot is the schema telling a
+  // worker-only app to pretend to be a web server. `supersonic check` refused
+  // exactly that config until processes became a thing a service could declare.
+  const bot = parseAppConfig(JSON.stringify({
+    services: [{ language: "python", processes: { bot: { command: "python bot.py" } } }],
+  }));
+
+  assert.doesNotThrow(() => validate(resolveFrom(bot, "config"), process.cwd()));
+
+  // And a service that declares neither is still refused, with the alternative named.
+  const nothing = parseAppConfig(JSON.stringify({ services: [{ language: "python" }] }));
+  assert.throws(() => validate(resolveFrom(nothing, "config"), process.cwd()), /declare "processes" instead/);
+});
+
+test("a static site cannot run a worker, and is told so", () => {
+  // The one lane where refusing processes is correct: a static site is files in a
+  // bucket. There is no container to run a bot in.
+  const s = parseAppConfig(JSON.stringify({
+    services: [{ language: "static", outputDir: ".", processes: { bot: { command: "python bot.py" } } }],
+  }));
+
+  assert.throws(() => validate(resolveFrom(s, "config"), process.cwd()), /static lane does not implement: processes/);
 });

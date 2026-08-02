@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { StageRecorder, durationMs, type StageRow, type StageSink } from "../lib/stages";
+import { STAGE_LANES, StageRecorder, durationMs, type StageRow, type StageSink } from "../lib/stages";
+import { ALL_LANES } from "../lib/lanes";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 function recordingSink() {
   const rows: StageRow[] = [];
@@ -30,7 +33,7 @@ test("a completed stage records its duration and outcome", async () => {
 
 test("a failing stage is recorded as failed and the error still propagates", async () => {
   const { sink, rows } = recordingSink();
-  const r = new StageRecorder("myapp", "generic", sink, clock(0, 100));
+  const r = new StageRecorder("myapp", "container", sink, clock(0, 100));
 
   await assert.rejects(
     () => r.around("clone", async () => { throw new Error("git exploded"); }),
@@ -47,7 +50,7 @@ test("a broken sink never fails the deploy", async () => {
   // the measurement, never the customer's deploy.
   const errors: unknown[] = [];
   const exploding: StageSink = { async write() { throw new Error("database is down"); } };
-  const r = new StageRecorder("myapp", "fast", exploding, clock(0, 10), (e) => errors.push(e));
+  const r = new StageRecorder("myapp", "buildpack", exploding, clock(0, 10), (e) => errors.push(e));
 
   const out = await r.around("build", async () => 42);
 
@@ -57,7 +60,7 @@ test("a broken sink never fails the deploy", async () => {
 
 test("a broken sink does not mask a real failure either", async () => {
   const exploding: StageSink = { async write() { throw new Error("database is down"); } };
-  const r = new StageRecorder("myapp", "fast", exploding, clock(0, 10), () => {});
+  const r = new StageRecorder("myapp", "buildpack", exploding, clock(0, 10), () => {});
 
   await assert.rejects(
     () => r.around("build", async () => { throw new Error("build failed"); }),
@@ -90,8 +93,34 @@ test("stages are recorded in the order they finish", async () => {
 
 test("a stage still running has no duration", () => {
   const row: StageRow = {
-    slug: "a", lane: "generic", stage: "build",
+    slug: "a", lane: "container", stage: "build",
     startedAt: new Date(0), endedAt: null, outcome: null,
   };
   assert.equal(durationMs(row), null);
+});
+
+test("the recorded vocabulary is the executed one, and the database agrees", () => {
+  // The defect this locks out: `lib/stages.ts` used to export its own
+  // `export type Lane = "static" | "fast" | "generic" | "runner"` beside
+  // `lib/lanes.ts`'s `"static" | "runner" | "container" | "buildpack"`. Same
+  // name, two modules, overlapping on two values. TypeScript cannot catch that —
+  // separate declarations — and `deploy_stages.lane` was `text NOT NULL`, so
+  // Postgres could not either. So `deploy_stages` collected data from 004 onward
+  // that could not answer the question 004 was created to ask.
+  //
+  // Three things now have to agree, and nothing but this test makes them.
+  assert.deepEqual(STAGE_LANES, ["unknown", "static", "runner", "container", "buildpack"]);
+  for (const lane of ALL_LANES) assert.ok(STAGE_LANES.includes(lane), `${lane} deploys but cannot be recorded`);
+
+  // The database CHECK is phase THREE of a two-phase change and is not applied
+  // yet — see db/012_stage_lane_check_is_phase_two.sql for why 011 adding it was
+  // wrong, and what it cost. Until it lands, THIS test is the only thing holding
+  // the vocabularies together, so it asserts against the statement the migration
+  // will use rather than against a live constraint.
+  const phase3 = readFileSync(join(import.meta.dirname, "../db/012_stage_lane_check_is_phase_two.sql"), "utf8");
+  const check = /CHECK \(lane IN \(([^)]*)\)\)/.exec(phase3);
+  assert.ok(check, "the migration no longer records the constraint to apply, so nothing pins the vocabulary");
+  const allowed = check[1].split(",").map((s) => s.trim().replace(/^'|'$/g, ""));
+
+  assert.deepEqual(allowed.slice().sort(), STAGE_LANES.slice().sort());
 });

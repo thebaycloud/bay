@@ -228,7 +228,7 @@ export async function POST(req: Request) {
     //
     // Split at the two boundaries this process can actually see. The third,
     // "job accepted → job running", belongs to the job and is recorded there.
-    const handoff = new StageRecorder(slug, "generic");
+    const handoff = new StageRecorder(slug, "unknown");
     try {
       const recording = handoff.start("run-record");
       runId = await createRun(input, archive);

@@ -61,7 +61,7 @@ async function main() {
   // two stages here, it becomes four in total, and the next person to look at
   // this number will know which part to attack.
   if (createdAt) {
-    const cold = new StageRecorder(request.slug, "generic");
+    const cold = new StageRecorder(request.slug, "unknown");
     // From the row being written to this process reaching this line: scheduling,
     // image pull, container start, and the archive round-trip inside claimRun.
     await cold.end({ stage: "job-cold-start", startedAt: createdAt }, "ok");

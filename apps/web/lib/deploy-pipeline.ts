@@ -12,7 +12,7 @@ import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
-import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
+import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv } from "@/lib/env-merge";
 import { pgConfig } from "@/lib/pg-config";
@@ -30,7 +30,7 @@ import { StageRecorder } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
-import { deployArgs, databaseEnv, DB_HOST, DB_PORT, withScale, type Scale } from "@/lib/lanes";
+import { deployArgs, databaseEnv, DB_HOST, DB_PORT, withScale, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -38,7 +38,10 @@ import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan } 
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
-import { resolveFrom, type DeploymentFacts } from "@/lib/resolve";
+import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
+import { readProcfile } from "@/lib/procfile";
+import { mergeProcfile, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
+import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
 import { buildEnvelope, assertReached } from "@/lib/envelope";
 
 const PROJECT = "supersonic-deploy-prod";
@@ -310,6 +313,204 @@ async function liveContainerShape(service: string): Promise<boolean | null> {
   return containers.some((c: { name?: string }) => Boolean(c.name));
 }
 
+/**
+ * Whether this app has no live Cloud Run service yet — a first deploy.
+ *
+ * The cold/warm signal `deploy_stages` has never had, and half of what makes the
+ * build-path decision measurable rather than arguable. A first deploy cannot hit
+ * any cache by construction, so a cache hit rate computed without separating them
+ * out is measuring the wrong population — and a first deploy is also the moment
+ * someone decides whether this product is fast, which is the number that settles
+ * whether a 2-4 minute cold build is affordable.
+ *
+ * Null rather than a guess in the two cases where the answer is not knowable:
+ * when the API call fails, and for the static lane, which publishes to GCS and
+ * has no service of its own to be absent. `apps.release_hash` cannot stand in for
+ * any of this — it is null for everything built in the cloud, which is every
+ * deploy this measures.
+ *
+ * Telemetry must never be the reason a deploy fails, so this cannot throw.
+ */
+async function isFirstDeploy(service: string): Promise<boolean | null> {
+  try {
+    return (await describeServiceRest(service)) ? false : true;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The app's processes, from its Procfile and its config, or [] when it declares none.
+ *
+ * Read ONCE per deploy and threaded, rather than resolved where it is needed.
+ * Two readers would be two answers to "does this app have a web process", and
+ * that question decides whether a Cloud Run service is deployed at all — the most
+ * expensive thing in this file to be of two minds about.
+ *
+ * Never throws. A malformed process set is the author's to fix and is reported by
+ * `deployProcesses` with the field named; failing here would fail the whole deploy
+ * on a file the app may not even have meant for us.
+ */
+function readProcesses(dir: string, config: ServiceConfig | undefined, log: (l: string) => void): ResolvedProcess[] {
+  try {
+    // The service's own directory, not always the repo root: a config with
+    // `dir: "backend"` runs its commands there, so that is where its Procfile is.
+    // Reading the root's would give a monorepo's frontend Procfile to its API.
+    const fromFile = readProcfile(join(dir, config?.dir ?? "."));
+    return resolveProcesses(mergeProcfile(config?.processes, fromFile));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The image the live service is running.
+ *
+ * The buildpack lane's image is built by `run deploy --source` and named by Cloud
+ * Run, so it cannot be known before the deploy and must not be guessed. Reading
+ * it back is one API call; the alternative — handing each worker `--source` — pays
+ * for the whole build again per process, on a lane whose release job already pays
+ * for it twice and says so.
+ */
+async function liveContainerImage(service: string): Promise<string | null> {
+  const s = await describeServiceRest(service).catch(() => null);
+  const image = s?.spec?.template?.spec?.containers?.[0]?.image;
+  return typeof image === "string" && image ? image : null;
+}
+
+/**
+ * Deploy the app's workers and crons, and remove the ones it no longer declares.
+ *
+ * The imperative half of the process model. Every decision is made by the pure
+ * planner in lib/process-plan.ts and every argv by lib/process-deploy.ts, so what
+ * is left here is a loop — which is the point of the split: the risk lives in
+ * about thirty lines and the rules stay under test.
+ *
+ * Nothing in here can fail the deploy. A worker that does not come up leaves an
+ * app whose web service is live, and tearing that down would make the situation
+ * strictly worse; the same rule a sibling already follows. Failures are logged
+ * AND written to the deploy row, because the log is a window — on a build with
+ * dense output the one line that says why scrolls out of it.
+ */
+async function deployProcesses(o: {
+  slug: string;
+  dir: string;
+  lane: Lane;
+  image?: string;
+  source?: string;
+  env: string[];
+  secrets: string | null;
+  cloudsql: string | null;
+  labels: string[];
+  config?: ServiceConfig;
+  processes: ResolvedProcess[];
+  log: (l: string) => void;
+}): Promise<void> {
+  const { slug, log } = o;
+
+  // Resolved once, by `readProcesses`, and handed in — because whether this app
+  // has a `web` process decided whether a Cloud Run service was deployed at all,
+  // long before this runs. Re-reading here could disagree with that decision.
+  //
+  // The same read is repeated in strict mode purely to report WHY a malformed set
+  // was empty: `readProcesses` swallows the error so a bad Procfile cannot fail a
+  // deploy, and swallowing it silently is the defect this plan is named after.
+  const { processes } = o;
+  try {
+    resolveProcesses(mergeProcfile(o.config?.processes, readProcfile(join(o.dir, o.config?.dir ?? "."))));
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    log(`! ${why}`);
+    await setDeploy(slug, { stage: `processes not deployed — ${why}` });
+    return;
+  }
+
+  // A Procfile `release:` line is read and does not run yet: the release phase
+  // has its own path (lib/release-job.ts) that already knows the two things easy
+  // to get wrong there, and a second implementation is the defect this plan is
+  // named after. Said out loud rather than dropped, and it names the field that
+  // does work today.
+  if (processes.some((p) => p.kind === "release") && !releaseCommand(o.config ?? {})) {
+    log(`! the Procfile declares a "release" process and it did NOT run — put it in ${CONFIG_FILENAME} as "release" instead`);
+  }
+
+  // Without an artifact there is nothing to run, and a worker deployed from a
+  // source tree would build the app a third time. Loud rather than silent: the
+  // processes did not deploy and the deploy row says why.
+  if (!o.image && !o.source && processes.some((p) => p.kind === "worker" || p.kind === "cron")) {
+    const why = "could not resolve the image the app was deployed with";
+    log(`! processes not deployed — ${why}`);
+    await setDeploy(slug, { stage: `processes not deployed — ${why}` });
+    return;
+  }
+
+  const d = {
+    service: slug, lane: o.lane, region: REGION, project: PROJECT,
+    image: o.image, source: o.source, serviceAccount: APP_RUNTIME_SA || undefined,
+    labels: o.labels, env: o.env, secrets: o.secrets, cloudsql: o.cloudsql,
+  };
+  const steps = planProcesses(processes, d, { schedulerServiceAccount: SCHEDULER_SA });
+
+  const failed: string[] = [];
+  for (const step of steps) {
+    // Notes before the attempt: a field that will not be emitted is something the
+    // author should hear about whether or not the deploy then works.
+    for (const note of step.notes) log(`! ${note}`);
+    try {
+      log(`Deploying ${step.label}…`);
+      await capture("gcloud", step.deploy);
+      if (step.schedule) {
+        // Update-then-create, because `scheduler jobs create` is not
+        // create-or-update: it fails ALREADY_EXISTS on the second deploy of an
+        // unchanged app, which would fail every redeploy of a CRM on a cron that
+        // was already correct.
+        await capture("gcloud", step.schedule.update)
+          .catch(() => capture("gcloud", step.schedule!.create));
+      }
+      log(`${step.label} is running`);
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      log(`! ${step.label} did not deploy: ${why}`);
+      await setDeploy(slug, { stage: `${step.label} did not deploy — ${why}` });
+      failed.push(step.label);
+    }
+  }
+
+  // What the app HAS that its config no longer describes.
+  //
+  // Listed every time rather than only when processes are declared, and the two
+  // list calls are the cost of that. The alternative is skipping the pass for an
+  // app that declares none — which is exactly the app that just deleted its last
+  // worker, so the one case where cleanup matters most is the one that would be
+  // skipped. Two reads on a deploy that takes minutes is the right trade.
+  const live: LiveProcess[] = [];
+  const [pools, jobs] = await Promise.all([
+    capture("gcloud", listWorkerPoolsArgs(d)).catch(() => ""),
+    capture("gcloud", listProcessJobsArgs(d)).catch(() => ""),
+  ]);
+  for (const [out, primitive] of [[pools, "worker-pool"], [jobs, "job"]] as const) {
+    for (const name of out.split("\n").map((l) => l.trim()).filter(Boolean)) live.push({ name, primitive });
+  }
+
+  for (const gone of orphans(live, steps, d)) {
+    log(`Removing ${gone.label} — it is no longer in the config`);
+    for (const argv of gone.deletes) {
+      // Best-effort and in order. A schedule that is already gone is not a
+      // failure, and stopping here would leave the job it pointed at behind.
+      await capture("gcloud", argv).catch((e) => log(`! could not remove ${gone.name}: ${e instanceof Error ? e.message : String(e)}`));
+    }
+  }
+
+  // Thrown so the STAGE records a failure, after the cleanup pass has run.
+  //
+  // Caught by the caller, which is what keeps a failed worker from failing the
+  // deploy — but a stage that reports "ok" while a worker never started would put
+  // the platform back in the position this plan is about: telemetry that agrees
+  // with the code rather than with what happened. Every individual failure has
+  // already been logged and written to the deploy row; this is the summary.
+  if (failed.length) throw new Error(`${failed.length} of ${steps.length} processes did not deploy: ${failed.join(", ")}`);
+}
+
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
 function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
@@ -387,6 +588,16 @@ async function provisionStorage(slug: string, log: (l: string) => void): Promise
   }
   return bucket;
 }
+
+/**
+ * The identity Cloud Scheduler authenticates as when it triggers a cron's job.
+ *
+ * Defaults to the deployer, which already has run.jobs.run. A dedicated account
+ * is better and is a permissions change rather than a code one, so it is an env
+ * var rather than a constant to edit.
+ */
+const SCHEDULER_SA = process.env.SCHEDULER_SERVICE_ACCOUNT
+  ?? "supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com";
 
 const PROXY_SA = process.env.PROXY_SERVICE_ACCOUNT
   ?? "supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com";
@@ -894,7 +1105,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
   let releaseCmd = "";
   const url = input.repoUrl;
   const send = emit;
-  let stages = new StageRecorder(slug, "generic");
+  // "unknown", not "generic": no lane has been chosen yet, and `generic` used to
+  // mean both that and the Dockerfile lane — one string for two facts, which is
+  // what LANE_BLIND_STAGES in lib/analytics/attempts.ts exists to work around.
+  let stages = new StageRecorder(slug, "unknown");
   let lastStage = 0;
   const log = (line: string) => {
     send({ type: "log", line });
@@ -1228,23 +1442,51 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       ? { outputDir: String(s.serve.outputDir || ".") }
       : null;
 
-    // The prebuilt-runner lane owns server apps — Node or Python. A static SPA
-    // stays on the instant static lane above. A Dockerfile normally keeps the
-    // container build (the author was explicit) — EXCEPT when the agent hands us
-    // a run command (--run): that means the agent decided how to run this, which
-    // overrides a repo Dockerfile that may not even be self-contained (e.g. an
-    // Nx `COPY dist/api` Dockerfile that assumes a prior build). Language is the
-    // ONLY thing read here, from the runtime string — not the framework.
-    const dockerfileOverridden = hasDockerfile && Boolean(runCmd);
-    const runnerLang: "node" | "python" | null =
-      RUNNER_ENABLED && !staticServe && (!hasDockerfile || dockerfileOverridden)
-        ? (String(s.runtime || "").startsWith("node") ? "node"
-          : String(s.runtime || "").startsWith("python") ? "python"
-          : null)
-        : null;
+    // ONE lane decision, in lib/resolve.ts, for the deploy and for the CLI.
+    //
+    // This used to be a second derivation living here — a string match on
+    // `s.runtime` with its own rules — while `deriveLane` was called only by
+    // `supersonic check` and by `resolveService`. So `assertConsumed` validated a
+    // service against a lane the deploy might not take, and a config could
+    // resolve to `runner` locally and deploy on `buildpack` in production with
+    // nobody informed. The two extra facts this side knows — the RUNNER flag and
+    // an agent-supplied run command — are now inputs to that function rather than
+    // a reason to have a second one.
+    //
+    // A Dockerfile normally wins because the author was explicit; an agent's
+    // `--run` overrides it, because a repo Dockerfile may not be self-contained
+    // (an Nx `COPY dist/api` Dockerfile assumes a prior build). Language comes
+    // from the runtime string only — never from the framework.
+    const lane = staticServe ? "static" : laneFor({
+      runtime: String(s.runtime || ""),
+      dockerfile: hasDockerfile ? "Dockerfile" : undefined,
+      runnerEnabled: RUNNER_ENABLED,
+      runCommandSupplied: Boolean(runCmd),
+    });
+    const runnerLang: "node" | "python" | null = lane !== "runner" ? null
+      : String(s.runtime || "").startsWith("python") ? "python" : "node";
 
-    // Now that the lane is known, the rest of the deploy is charged to it.
-    stages = new StageRecorder(slug, staticServe ? "static" : runnerLang ? "runner" : hasDockerfile ? "generic" : "fast");
+    // Now that the lane is known, the rest of the deploy is charged to it — in
+    // the vocabulary the deploy actually EXECUTES. `deployArgs` is called below
+    // with lane: "runner", "container" and "buildpack"; the recorder used to
+    // write "runner", "generic" and "fast" for the same three paths, so
+    // `deploy_stages` has been collecting data since 004 that could not answer
+    // the question 004 was created to ask.
+    //
+    // `runtime` and `cold` are attached here for the same reason the lane is:
+    // this is the first moment all three are known. `cold` is a first deploy —
+    // no live Cloud Run service — which is a guaranteed cache miss and also the
+    // moment the product is judged, so it is the number that decides whether a
+    // 2-4 minute cold build is affordable.
+    const laneNow = lane;
+    stages = new StageRecorder(slug, laneNow, undefined, undefined, undefined, {
+      runtime: String(s.runtime || "") || null,
+      // Null for the static lane on purpose: it publishes to GCS and has no
+      // Cloud Run service of its own, so "no service exists" is not evidence of a
+      // first deploy there. A wrong value in a column that exists to settle an
+      // argument is worse than an absent one.
+      cold: staticServe ? null : await isFirstDeploy(slug),
+    });
 
     if (staticServe) {
       log(`${s.framework} builds to a directory — publishing it without a container`);
@@ -1278,6 +1520,23 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
 
     const primaryConfigService = appConfig ? primaryService(appConfig) : undefined;
+
+    // What this app RUNS, read once, before anything is built.
+    //
+    // `serviceless` is the answer to a question the pipeline has never had to ask:
+    // does this app have a `web` process at all? A Telegram bot does not. It has
+    // no HTTP, no port, no URL, no domain mapping and nothing to probe — and
+    // deploying a Cloud Run service for it anyway would put the bot right back to
+    // pretending to be a web server, which is the defect this whole plan removes.
+    //
+    // An app that declares NO processes is not serviceless: its `start` command IS
+    // its web process under an older spelling, and it takes exactly the path it
+    // took yesterday. See `isServiceless`.
+    const processes = readProcesses(dir, primaryConfigService, log);
+    const serviceless = !staticServe && isServiceless(processes);
+    if (serviceless) {
+      log(`No web process — deploying ${processes.length === 1 ? "one process" : `${processes.length} processes`} and no service`);
+    }
 
     const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
     // The literals the author committed, FIRST — so the platform's own values
@@ -1584,6 +1843,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // (buildkit vs the Kaniko default); see lib/build-config.ts. Without a
     // Dockerfile, fall back to buildpacks.
     const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
+    // What a worker or a cron runs. The SAME artifact the web process got — a
+    // worker built separately could differ from the service beside it, which is
+    // the one thing a process model must not allow.
+    //
+    // The buildpack lane has no image at this point: `run deploy --source` builds
+    // one and only Cloud Run knows its name. Building again with `--source` per
+    // worker would pay for the same build a third time (the release job already
+    // pays for it twice, and says so), so the deployed image is read back from
+    // the live service instead — one API call against N builds.
+    const processImage = lane === "runner"
+      ? (runnerLang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE)
+      // A serviceless buildpack app built its image with `builds submit --pack`
+      // under the same name, so there is no service to read it back from and no
+      // need to.
+      : lane === "container" || serviceless ? `${IMAGE}:latest` : undefined;
     const useDockerBuild = existsSync(join(dir, "Dockerfile"));
     const builder = selectedBuilder();
     if (useDockerBuild) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder, slug));
@@ -1603,6 +1877,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     let revisionEnv: { name: string; fromSecret: boolean }[] = [];
     let hasRevision = false;
     const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
+      // A worker-only app builds exactly as any other app and then deploys no
+      // service. Skipping HERE rather than branching per lane is deliberate: every
+      // lane reaches its `gcloud run deploy` through this one function, so one
+      // guard covers all of them and no lane can be added that forgets it. The
+      // prepare/build/release steps above are untouched — they are what produces
+      // the artifact the workers run.
+      if (serviceless) return { ok: true };
       lastArgv = args;
       const hb = setInterval(() => log("deploying…"), 6000);
       builds.reset();
@@ -2013,6 +2294,35 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           image: `${IMAGE}:latest`, scale, cloudsql, existingScoped,
         }));
       }
+      if (serviceless) {
+        // The one lane where skipping the deploy would skip the BUILD: buildpacks
+        // run inside `run deploy --source`, so with no service there is nothing to
+        // produce an image. `builds submit --pack` is the same builder without the
+        // deploy, which is exactly what a worker-only app needs.
+        //
+        // NOT `--source` on the worker pool itself, though it accepts one: that
+        // would rebuild the app once per process, on a lane whose release job
+        // already pays for the build twice and says so.
+        try {
+          await stages.around("build", async () => {
+            log("Building with buildpacks — no service to deploy, so the image is built directly…");
+            const hb = setInterval(() => log("building…"), 8000);
+            builds.reset();
+            try {
+              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`], buildLine);
+            } finally { clearInterval(hb); }
+          });
+        } catch (e) {
+          const buildLog = await builds.error();
+          return { ok: false, error: `Build failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
+        }
+        // Released against the image that now exists, not against the source —
+        // otherwise the release job pays for a second buildpack build of bytes it
+        // has already built.
+        const relS = await runRelease({ lane: "container", service: slug, image: `${IMAGE}:latest`, env: extraEnv, release: releaseCmd });
+        if (!relS.ok) return { ok: false, error: relS.error };
+        return { ok: true };
+      }
       const buildpack = (containerFlags?: string[]) => deployArgs({
         lane: "buildpack", service: slug, serviceFlags: deployFlags, appFlags,
         source: dir, scale, cloudsql, containerFlags, existingScoped,
@@ -2201,9 +2511,41 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (built.length > 1) routes = built;
       }
     }
+    // The app's OTHER processes: its workers and its crons.
+    //
+    // Additive, and that is deliberate. `web` still deploys exactly as it did
+    // above, `release` still runs through lib/release-job.ts, and everything here
+    // is a resource that did not exist before — so an app with no processes
+    // declared takes a path identical to yesterday's, and an app with them gets
+    // more without its web service moving.
+    //
+    // Reported and recorded, never fatal: a worker that fails to come up leaves
+    // an app whose frontend is live, and tearing the frontend down would make
+    // that strictly worse. Same rule as a sibling, for the same reason.
+    if (result.ok && !staticServe) {
+      // The buildpack lane's image only exists once `run deploy` has run, and its
+      // name is Cloud Run's to choose — so it is read off the service that was
+      // just deployed rather than guessed. Null means the read failed, and a
+      // worker with no image is skipped loudly inside deployProcesses rather than
+      // deployed from a source tree that would build a third time.
+      const built = processImage ?? await liveContainerImage(slug);
+      await stages.around("processes", () => deployProcesses({
+        slug, dir, lane, image: built ?? undefined,
+        env: extraEnv, secrets: secretRefs.length ? setSecretsFlag(secretRefs) : null,
+        cloudsql, labels: labelPairs, config: primaryConfigService, processes, log,
+      })).catch((e) => log(`! processes: ${e instanceof Error ? e.message : String(e)}`));
+    }
+
     // The two routing models are mutually exclusive: a per-app domain
     // mapping points straight at Cloud Run, which a sealed app refuses.
-    if (SEAL_APPS || staticServe) {
+    if (serviceless) {
+      // A worker-only app has no address, and saying so plainly is the point. It
+      // is not "deployed but broken" and it is not waiting for a URL — a Telegram
+      // bot is reached through Telegram. Creating a domain mapping here would
+      // point a hostname at a Cloud Run service that does not exist, and the
+      // failure would read as the deploy having gone wrong.
+      log(`Running — this app has no web process, so it has no URL. Logs: supersonic logs ${friendlyName}`);
+    } else if (SEAL_APPS || staticServe) {
       // A static app has no service of its own to map a name onto — the
       // proxy routes it by apps.run_url to the shared static server, the
       // same way it routes everything else. So the visibility rules apply
@@ -2216,11 +2558,18 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     if (ownerId && ownerWorkspace) {
       await markAppLive(slug, result.url ?? "", null, routes);
       // Not awaited: the deploy is finished, and a thumbnail must never hold it.
-      void requestThumbnail(slug, result.url ?? "");
+      // Skipped entirely for a worker-only app: there is no page to photograph,
+      // and asking the shot service for one produces a screenshot of an error
+      // that then sits on the dashboard as this app's picture.
+      if (!serviceless) void requestThumbnail(slug, result.url ?? "");
     }
     // A static app's run_url is the shared static server, which is useless to
-    // show someone — their app lives at its own name, reached through the proxy.
-    send({ type: "done", slug, url: SEAL_APPS || staticServe ? `https://${slug}.supersonic.cv` : result.url });
+    // show someone. A worker-only app has no URL at all, and sending the app's
+    // would-be hostname would put a dead link in front of whoever deployed it.
+    send({
+      type: "done", slug,
+      url: serviceless ? undefined : SEAL_APPS || staticServe ? `https://${slug}.supersonic.cv` : result.url,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     setDeploy(slug, { status: "failed", error: msg });

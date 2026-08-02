@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAppConfig, planFromConfig, inDir, ConfigError, primaryService, extraServices, servicePath } from "../lib/app-config";
+import { parseAppConfig, planFromConfig, inDir, ConfigError, primaryService, extraServices, servicePath, releaseCommand } from "../lib/app-config";
 
 test("a plan says where it came from, and does not name a file that does not exist", () => {
   // `Plan ready: supersonic.json (frontend)` was printed on a deploy of a repo
@@ -113,4 +113,89 @@ test("two services cannot claim the same path", () => {
     services: [{ name: "a", path: "/api", start: "x" }, { name: "b", path: "/api/", start: "y" }],
   })), /both serve \/api/);
   assert.throws(() => parseAppConfig(JSON.stringify({ services: [{ path: "api", start: "x" }] })), /must start with/);
+});
+
+test("processes are parsed, and a sibling declaring them is refused", () => {
+  // The Procfile-shaped app this schema exists for: a bot with no HTTP, a cron,
+  // and a release — none of which `start` can express.
+  const cfg = parseAppConfig(JSON.stringify({
+    services: [{
+      name: "app",
+      processes: {
+        web: { command: "gunicorn config.wsgi --bind 0.0.0.0:$PORT", visibility: "internal" },
+        bot: { command: "python bot.py", instances: 3 },
+        nightly: { command: "python manage.py digest", schedule: "0 3 * * *" },
+      },
+    }],
+  }));
+
+  assert.deepEqual(Object.keys(cfg.services[0].processes!), ["web", "bot", "nightly"]);
+  assert.equal(cfg.services[0].processes!.bot.instances, 3);
+  // Dropped rather than carried as undefined, so `declaredFields` in
+  // lib/processes.ts cannot read an unset field as authored.
+  assert.equal("memory" in cfg.services[0].processes!.bot, false);
+
+  // A sibling's workers would need the sibling's own image and env, which
+  // `deploySibling` does not build in a shape the process planner can reach. So
+  // it is refused, not accepted and skipped.
+  assert.throws(() => parseAppConfig(JSON.stringify({
+    services: [
+      { name: "web", path: "/", start: "npm start" },
+      { name: "api", path: "/api", start: "uvicorn app:app", processes: { bot: { command: "python bot.py" } } },
+    ],
+  })), /"processes" on a sibling service is not deployed yet/);
+});
+
+test("a malformed process is named at parse time, not discovered downstream", () => {
+  const bad = (processes: unknown) =>
+    () => parseAppConfig(JSON.stringify({ services: [{ processes }] }));
+
+  assert.throws(bad("web"), /must be an object of NAME/);
+  assert.throws(bad([{ command: "x" }]), /must be an object of NAME/);
+  assert.throws(bad({ "my web": { command: "x" } }), /not a valid process name/);
+  assert.throws(bad({ web: "npm start" }), /services\[0\]\.processes\.web must be an object/);
+  assert.throws(bad({ web: { command: 3 } }), /services\[0\]\.processes\.web\.command must be a string/);
+  assert.throws(bad({ web: { command: "x", cpu: "1" } }), /services\[0\]\.processes\.web\.cpu must be a number/);
+  assert.throws(bad({ web: { command: "x", visibility: "private" } }), /must be "public" or "internal"/);
+  assert.throws(bad({ web: { command: "x", kind: "daemon" } }), /kind must be one of web, worker, cron, release/);
+});
+
+test("a service with no processes is untouched by any of this", () => {
+  // The whole of step 1 is additive: every config that deploys today parses
+  // exactly as it did, and `processes` is undefined rather than an empty object —
+  // which is what keeps `declaredFields` from reading it as authored.
+  const cfg = parseAppConfig(JSON.stringify({ services: [{ language: "node", start: "npm start" }] }));
+
+  assert.equal(cfg.services[0].processes, undefined);
+  assert.equal(cfg.services[0].start, "npm start");
+});
+
+test("a cron's timezone survives the parser", () => {
+  // It did not. `timezone` was added to ProcessConfig and to TaskProcess and NOT
+  // to processConfigs, so `supersonic check` printed "0 3 * * * UTC" for a config
+  // that said Asia/Almaty — a field parsed nowhere and dropped silently, which is
+  // the defect this schema exists to end, committed while building the fix for it.
+  const cfg = parseAppConfig(JSON.stringify({
+    services: [{ processes: { nightly: { command: "x", schedule: "0 3 * * *", timezone: "Asia/Almaty" } } }],
+  }));
+
+  assert.equal(cfg.services[0].processes!.nightly.timezone, "Asia/Almaty");
+});
+
+test("a release declared as a process IS the release phase, not a second one", () => {
+  // Two fields with one meaning and only one reader is the defect. The check
+  // output made it visible: "release — nothing runs before traffic" printed
+  // directly above "release  python manage.py migrate".
+  const cfg = parseAppConfig(JSON.stringify({
+    services: [{ processes: { web: { command: "npm start" }, release: { command: "npm run migrate" } } }],
+  }));
+
+  assert.equal(releaseCommand(cfg.services[0]), "npm run migrate");
+
+  // And the top-level field still wins, so a config carrying both keeps meaning
+  // exactly what it meant.
+  const both = parseAppConfig(JSON.stringify({
+    services: [{ release: "npm run m1", processes: { release: { command: "npm run m2" } } }],
+  }));
+  assert.equal(releaseCommand(both.services[0]), "npm run m1");
 });

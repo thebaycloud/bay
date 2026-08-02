@@ -276,9 +276,9 @@ export async function apps(): Promise<Read<AppRow>> {
  * deploy from every app.
  */
 export async function stages(w: Window): Promise<Read<RawStage> & { truncated: boolean }> {
-  const r = await attempt<{ slug: string; lane: string; stage: string; started_at: Date; ended_at: Date | null; outcome: StageOutcome | null }>(
+  const r = await attempt<{ slug: string; lane: string; stage: string; started_at: Date; ended_at: Date | null; outcome: StageOutcome | null; runtime: string | null; cold: boolean | null }>(
     { source: "stages", relation: "deploy_stages" },
-    `SELECT slug, lane, stage, started_at, ended_at, outcome
+    `SELECT slug, lane, stage, started_at, ended_at, outcome, runtime, cold
        FROM deploy_stages
       WHERE started_at >= $1 AND started_at <= $2
       ORDER BY slug, started_at
@@ -290,6 +290,8 @@ export async function stages(w: Window): Promise<Read<RawStage> & { truncated: b
     rows: r.rows.slice(0, ROW_CAP).map((x) => ({
       slug: x.slug,
       lane: x.lane,
+      runtime: x.runtime,
+      cold: x.cold,
       stage: x.stage,
       startedAt: x.started_at,
       endedAt: x.ended_at,
