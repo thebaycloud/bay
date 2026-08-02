@@ -159,3 +159,49 @@ export async function deleteAppSecrets(slug: string): Promise<void> {
     }
   } catch { /* nothing stored, or listing failed — the app is going away regardless */ }
 }
+
+/**
+ * Every secret this app has, not only the ones this deploy just stored.
+ *
+ * The distinction is invisible on the service path and decisive on the process
+ * path, which is how it reached production. `--update-secrets` MERGES, so a
+ * redeploy that re-sends nothing leaves the previous revision's mounts in place
+ * and the app keeps its keys. Worker pools and jobs are deployed with
+ * `--set-secrets` — desired state, on purpose, so a secret removed from the
+ * config is gone from the next revision — and desired state means anything not
+ * passed is dropped.
+ *
+ * `putAppSecrets` returns only what this deploy WROTE, and the CLI deliberately
+ * does not re-send a value already set on the app ("vars already set are left
+ * alone"). So on the second deploy of a Telegram bot the worker came up with
+ * `SUPERSONIC_CODE_KEY` and nothing else, and died on
+ * `KeyError: 'BOT_TOKEN'` — the app's own error, for a secret the platform was
+ * holding the whole time.
+ *
+ * Listing is the fix rather than threading more state through the pipeline,
+ * because Secret Manager is the actual source of truth for what the app has, and
+ * anything derived from this deploy's inputs answers a narrower question than the
+ * one being asked.
+ *
+ * Best-effort: a listing failure returns what the caller already had rather than
+ * failing the deploy, and the app's own error then names the missing variable —
+ * which is strictly better than a deploy that stops for a permission problem.
+ */
+export async function allAppSecrets(slug: string, thisDeploy: SecretRef[]): Promise<SecretRef[]> {
+  const refs = new Map(thisDeploy.map((r) => [r.key, r]));
+  try {
+    const out = await gcloud(["secrets", "list", "--project", PROJECT,
+      "--filter", `name~^projects/.*/secrets/app-${slug}-`, "--format=value(name)"]);
+    for (const line of out.split("\n").map((l) => l.trim()).filter(Boolean)) {
+      const name = line.split("/").pop()!;
+      const key = name.slice(`app-${slug}-`.length);
+      // A key that does not round-trip is a secret this scheme did not create —
+      // never guessed at, because mounting the wrong name onto a variable is
+      // worse than leaving it unset.
+      if (key && VALID_KEY.test(key) && secretName(slug, key) === name && !refs.has(key)) {
+        refs.set(key, { key, name });
+      }
+    }
+  } catch { /* keep what this deploy stored; the app names anything still missing */ }
+  return [...refs.values()];
+}

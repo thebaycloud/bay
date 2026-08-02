@@ -10,7 +10,7 @@ import { checkPlanDeps, assertRuntimeSupported, RUNTIME_UNSUPPORTED } from "@/li
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
-import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, type SecretRef } from "@/lib/app-secrets";
+import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -2529,9 +2529,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // worker with no image is skipped loudly inside deployProcesses rather than
       // deployed from a source tree that would build a third time.
       const built = processImage ?? await liveContainerImage(slug);
+      // EVERY secret the app has, not just the ones this deploy stored. The
+      // service path can pass the delta because `--update-secrets` merges; these
+      // primitives are deployed with `--set-secrets`, so a secret not passed is a
+      // secret dropped. See allAppSecrets for the deploy this cost.
+      const allSecrets = setSecretsFlag(await allAppSecrets(slug, secretRefs));
       await stages.around("processes", () => deployProcesses({
         slug, dir, lane, image: built ?? undefined,
-        env: extraEnv, secrets: secretRefs.length ? setSecretsFlag(secretRefs) : null,
+        env: extraEnv, secrets: allSecrets || null,
         cloudsql, labels: labelPairs, config: primaryConfigService, processes, log,
       })).catch((e) => log(`! processes: ${e instanceof Error ? e.message : String(e)}`));
     }
