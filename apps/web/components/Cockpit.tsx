@@ -19,6 +19,8 @@ import { DeploymentsSection } from "./DeploymentsSection";
 interface ServiceInfo {
   slug: string; name: string; url: string; ready: boolean; region: string;
   created: string; revision: string; image: string; envKeys: string[]; cloudsql: string; repo: string; storageBucket: string; owner: string;
+  /** Optional so a server that has not been redeployed yet still renders. */
+  workers?: { name: string; ready: boolean }[];
 }
 
 type Tab = "overview" | "issues" | "data" | "deployments" | "settings";
@@ -42,6 +44,14 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
   const displayName = d.name || appName;
   const hasDb = Boolean(d.cloudsql);
   const hasStorage = Boolean(d.storageBucket);
+  // An app with workers and no web service is not a broken web app — it is a
+  // different kind of app. A Telegram bot has no URL, no revision and no request
+  // to be ready for, and reading it through a service's eyes reported DOWN while
+  // the worker was running perfectly.
+  const workers = d.workers ?? [];
+  const workerOnly = workers.length > 0 && !d.url;
+  const workersRunning = workers.length > 0 && workers.every((w) => w.ready);
+  const running = workerOnly ? workersRunning : d.ready;
   const dbName = hasDb ? d.cloudsql.split(":").pop() ?? "attached" : "";
   const imageShort = d.image.split("/").pop() ?? "";
   const created = d.created ? d.created.slice(0, 10) : "—";
@@ -50,7 +60,12 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
     Boolean(d.url) && { icon: Lock, label: "Secure web address", desc: `${liveHost} · HTTPS is on` },
     hasDb && { icon: Database, label: "Database", desc: "Your app's data is saved and backed up" },
     hasStorage && { icon: HardDrive, label: "File uploads", desc: "Files stored and served fast worldwide" },
-    { icon: Server, label: "Always online", desc: "Handles anything from 1 to millions of visitors" },
+    // What the app actually IS, rather than one sentence for everything. Offering
+    // "handles millions of visitors" to a bot that answers no requests is the
+    // dashboard asserting a shape the app does not have.
+    workerOnly
+      ? { icon: Server, label: "Always running", desc: workers.length === 1 ? "One background worker, always on" : `${workers.length} background workers, always on` }
+      : { icon: Server, label: "Always online", desc: "Handles anything from 1 to millions of visitors" },
   ].filter(Boolean) as { icon: typeof Lock; label: string; desc: string }[];
 
   const [tab, setTab] = useState<Tab>("overview");
@@ -196,11 +211,15 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
 
                 <div className="ct-head">
                   <div className="eyebrow">
-                    <span className="live"><span className="d" style={{ background: d.ready ? "var(--live)" : "var(--faint)" }} />{d.ready ? "LIVE" : "DOWN"}</span>
+                    <span className="live"><span className="d" style={{ background: running ? "var(--live)" : "var(--faint)" }} />{running ? (workerOnly ? "RUNNING" : "LIVE") : "DOWN"}</span>
                     <span>/ YOUR APP</span>
                   </div>
                   <h1>{displayName}</h1>
-                  <p className="sub">{d.ready ? "Running smoothly on Cloud Run — nothing for you to babysit." : "This app is currently down. Check Issues for what to fix."}</p>
+                  <p className="sub">{running
+                    ? (workerOnly
+                      ? "Running in the background — this app has no web address, and does not need one."
+                      : "Running smoothly on Cloud Run — nothing for you to babysit.")
+                    : "This app is currently down. Check Issues for what to fix."}</p>
                 </div>
 
                 <div className="haves">

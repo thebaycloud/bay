@@ -52,6 +52,16 @@ export interface ServiceInfo {
   repo: string;
   storageBucket: string;
   owner: string;
+  /**
+   * The app's worker pools, and whether each is running.
+   *
+   * Everything else here describes a Cloud Run SERVICE, which is what an app was
+   * assumed to be. A worker-only app has none — a Telegram bot has no URL, no
+   * revision and no request to be ready for — so the dashboard read it as DOWN
+   * while the worker was running perfectly, and offered it "Handles anything from
+   * 1 to millions of visitors" as a feature.
+   */
+  workers: { name: string; ready: boolean }[];
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -109,6 +119,26 @@ function servingRevision(s: any): string | null {
   return best?.revisionName ?? null;
 }
 
+/**
+ * The app's worker pools, by label.
+ *
+ * Best-effort: an app with no workers is the common case and a listing failure
+ * must not take the dashboard down with it. Empty means "none found", which for
+ * an app that has a web service is also simply true.
+ */
+export async function listWorkers(slug: string): Promise<{ name: string; ready: boolean }[]> {
+  try {
+    const out = await capture(["beta", "run", "worker-pools", "list", "--region", REGION, "--project", PROJECT,
+      "--filter", `metadata.labels.supersonic-parent=${slug}`, "--format=json"]);
+    return (JSON.parse(out) as any[]).map((w) => ({
+      name: w.metadata?.name ?? "",
+      ready: (w.status?.conditions ?? []).find((c: any) => c.type === "Ready")?.status === "True",
+    })).filter((w) => w.name);
+  } catch {
+    return [];
+  }
+}
+
 export async function describeService(slug: string): Promise<ServiceInfo> {
   const s = await serviceResource(slug);
   const c = s.spec?.template?.spec?.containers?.[0] ?? {};
@@ -131,9 +161,18 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
     repo: (c.env ?? []).find((e: any) => e.name === "SUPERSONIC_REPO")?.value ?? "",
     storageBucket: (c.env ?? []).find((e: any) => e.name === "STORAGE_BUCKET")?.value ?? "",
     owner: s.metadata?.labels?.[OWNER_LABEL] ?? "",
+    workers: await listWorkers(slug),
   };
 }
 
+/**
+ * An app's bucket name.
+ *
+ * The same rule as `bucketName` in lib/deploy-pipeline.ts, and that is one copy
+ * too many — a name that decides whether a bucket is FOUND in one place and
+ * CREATED in another has to be one function. Left here for now because unifying
+ * it crosses a module boundary the deploy path owns; it is on the list.
+ */
 export function bucketForSlug(slug: string): string {
   return `supersonicdeploy-${slug}`.slice(0, 63);
 }

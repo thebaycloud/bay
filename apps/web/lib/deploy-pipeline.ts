@@ -43,6 +43,7 @@ import { readProcfile } from "@/lib/procfile";
 import { mergeProcfile, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
 import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
 import { buildEnvelope, assertReached } from "@/lib/envelope";
+import { planResources, type Declared } from "@/lib/resources";
 
 const PROJECT = "supersonic-deploy-prod";
 const REGION = "us-central1";
@@ -559,8 +560,44 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
  */
 
 /** Create a per-app GCS bucket (idempotent) and return its name. */
+/** One place that names an app's bucket, so existence and creation cannot disagree. */
+function bucketName(slug: string): string {
+  return `supersonicdeploy-${slug}`.slice(0, 63);
+}
+
+/**
+ * Whether the app's bucket exists, and whether anything is in it.
+ *
+ * The second half is what makes gating storage safe. Every app deployed before
+ * the gate existed was given a bucket whether it asked or not, so "undeclared"
+ * cannot be read as "unused" — an app that has been writing uploads without ever
+ * declaring `uses: ["bucket"]` would lose STORAGE_BUCKET on its next deploy and
+ * start failing at runtime on a variable it never asked for and always had.
+ *
+ * Unknown counts as in use. Detaching on a failed read would be a silent
+ * behaviour change decided by a transient error, and keeping a bucket wired for
+ * one more deploy costs nothing.
+ */
+async function bucketState(slug: string): Promise<{ exists: boolean; inUse: boolean }> {
+  const name = bucketName(slug);
+  try {
+    await capture("gcloud", ["storage", "buckets", "describe", `gs://${name}`, "--project", PROJECT, "--format=value(name)"]);
+  } catch {
+    return { exists: false, inUse: false };
+  }
+  try {
+    const out = await capture("gcloud", ["storage", "ls", `gs://${name}/**`, "--project", PROJECT]);
+    return { exists: true, inUse: Boolean(out.trim()) };
+  } catch (e) {
+    // "matched no objects" is an empty bucket, which is the one case that may be
+    // let go. Anything else is unknown, and unknown keeps it.
+    const m = e instanceof Error ? e.message : String(e);
+    return { exists: true, inUse: !/matched no|no url|not found|404/i.test(m) };
+  }
+}
+
 async function provisionStorage(slug: string, log: (l: string) => void): Promise<string> {
-  const bucket = `supersonicdeploy-${slug}`.slice(0, 63);
+  const bucket = bucketName(slug);
   try {
     await capture("gcloud", ["storage", "buckets", "create", `gs://${bucket}`, "--location", REGION, "--project", PROJECT]);
     log(`Provisioned storage bucket ${bucket}`);
@@ -1631,10 +1668,43 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         );
       }
     }
-    const storagePromise = provisionStorage(slug, log).then(
-      (bucket) => ({ ok: true as const, bucket }),
-      (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
-    );
+    // WHAT THIS APP GETS, decided once, from what it asked for.
+    //
+    // `provisionStorage` used to be called right here with no condition at all,
+    // while `resources.bucket` and `uses: ["bucket"]` were both parsed and read by
+    // nothing — so every app was billed for a bucket, carried STORAGE_BUCKET it
+    // never asked for, and was told in the dashboard that it had "File uploads".
+    // That was not an oversight in one branch; it was that no place existed where
+    // "what does this app need" is a single value. lib/resources.ts is that place.
+    const declaredNeeds: Declared = {
+      database: Boolean(s.database?.engine) || Boolean(appConfig?.resources?.database),
+      externalDatabase: Boolean(externalDb),
+      bucket: Boolean(appConfig?.resources?.bucket)
+        || Boolean(appConfig?.services.some((svc) => (svc.uses ?? []).includes("bucket"))),
+      processes: processes.some((pr) => pr.kind === "worker" || pr.kind === "cron"),
+      web: !staticServe && !serviceless,
+      secrets: Object.keys(secrets),
+    };
+    const bucketNow = await bucketState(slug);
+    const resourcePlan = planResources(declaredNeeds, {
+      bucketExists: bucketNow.exists,
+      bucketInUse: bucketNow.inUse,
+      databaseExists: Boolean(s.database?.engine),
+    });
+    const wants = (kind: string) => resourcePlan.attach.some((r) => r.kind === kind);
+    // Said out loud, and only for the ones with something to say. A resource the
+    // app is losing is the line somebody needs when a variable stops appearing.
+    for (const r of resourcePlan.release) {
+      if (r.kind === "bucket" && bucketNow.exists) log(`Object storage: ${r.reason}`);
+      if (r.kind === "database" && r.reason.includes("kept")) log(`Database: ${r.reason}`);
+    }
+
+    const storagePromise = wants("bucket")
+      ? provisionStorage(slug, log).then(
+          (bucket) => ({ ok: true as const, bucket }),
+          (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
+        )
+      : null;
     if (s.database?.engine && s.database.engine !== "postgres") {
       log(`(${s.database.engine} provisioning not wired yet — deploying without it)`);
     }
@@ -1673,13 +1743,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           log(`! ${r.error} — deploying without a database`);
         }
       }
-      log("Provisioning object storage…");
-      const st = await storagePromise;
-      if (st.ok) {
-        extraEnv.push(`STORAGE_BUCKET=${st.bucket}`);
-        extraEnv.push(`GOOGLE_CLOUD_PROJECT=${PROJECT}`);
-      } else {
-        log(`! storage skipped: ${st.error}`);
+      // Only when the app asked, or when it already has objects in one — see
+      // `bucketState` for why an in-use bucket is kept for an app that never
+      // declared it. GOOGLE_CLOUD_PROJECT rides with it because it is only
+      // meaningful for reaching the bucket.
+      if (storagePromise) {
+        log("Provisioning object storage…");
+        const st = await storagePromise;
+        if (st.ok) {
+          extraEnv.push(`STORAGE_BUCKET=${st.bucket}`);
+          extraEnv.push(`GOOGLE_CLOUD_PROJECT=${PROJECT}`);
+        } else {
+          log(`! storage skipped: ${st.error}`);
+        }
       }
     }
 
