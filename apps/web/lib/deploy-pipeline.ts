@@ -512,6 +512,27 @@ async function deployProcesses(o: {
   if (failed.length) throw new Error(`${failed.length} of ${steps.length} processes did not deploy: ${failed.join(", ")}`);
 }
 
+/**
+ * Whether this app's database actually exists on the shared instance.
+ *
+ * A fact about the cloud, not about the config. The resource engine needs it to
+ * tell "this app never had a database" from "this app HAD one and no longer
+ * declares it" — and only the second is worth saying out loud, because it is the
+ * one where somebody's data is sitting there unwired and they should know.
+ *
+ * Unknown counts as absent: a failed read must not produce a log line telling
+ * someone their data was kept when we could not confirm any exists.
+ */
+async function databaseExists(slug: string): Promise<boolean> {
+  try {
+    await capture("gcloud", ["sql", "databases", "describe", dbNameForSlug(slug),
+      "--instance=supersonic-shared-pg", "--project", PROJECT, "--format=value(name)"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
 function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
@@ -1086,6 +1107,68 @@ async function staticServiceUrl(): Promise<string | null> {
 // CNAME + this per-app mapping is what routes it). SSL provisions async.
 // `service` is the Cloud Run service behind the name: the app's own for the
 // container lanes, the one shared static server for the static lane.
+/**
+ * Drop the app's hostname mapping.
+ *
+ * The `remove` half of the domain resource, and the case it exists for: an app
+ * that HAD a web process and becomes worker-only leaves a hostname pointing at a
+ * Cloud Run service that no longer serves. Nothing removed it, because nothing
+ * owned the question — the deploy path only ever created mappings.
+ *
+ * Quiet and best-effort. An app that never had one is the common case, and a
+ * mapping that cannot be removed is not a reason to fail a deploy that otherwise
+ * worked.
+ */
+async function removeDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
+  try {
+    await capture("gcloud", ["beta", "run", "domain-mappings", "describe", "--domain", `${slug}.supersonic.cv`,
+      "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
+  } catch {
+    return; // there is no mapping, which is the state we wanted
+  }
+  try {
+    await capture("gcloud", ["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`,
+      "--region", REGION, "--project", PROJECT, "--quiet"]);
+    log(`Removed the address ${slug}.supersonic.cv — this app no longer has a web process`);
+  } catch (e) {
+    log(`! could not remove ${slug}.supersonic.cv: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/**
+ * Clear a Cloud SQL attachment the app no longer has any use for.
+ *
+ * The drift the resource engine exists to end, in its original form. Nothing in
+ * the deploy path sets this annotation any more — `deployArgs` deliberately does
+ * not (`--set-cloudsql-instances` mounts a Unix socket, which apps that build a
+ * connection URL out of parts cannot express), and the proxy runs as a sidecar
+ * instead. So every annotation still out there is residue from the
+ * managed-database era, and nothing has ever removed one.
+ *
+ * It is not inert residue. `describeService` reports a "Database" card off it,
+ * so an app with no database is told it has one; and `execCommand` builds its
+ * one-off jobs with `--set-cloudsql-instances` read straight from it, so the
+ * drift propagates into a second feature. Tonight it also carried a container
+ * shape across a lane change and broke a deploy outright.
+ *
+ * Only when the app has NO platform database. An app that has one gets its
+ * connection from the sidecar and the annotation is equally stale — but clearing
+ * it there is a change to a working app's spec for no benefit this step needs,
+ * and that belongs with the wholesale spec-replace rather than here.
+ */
+async function clearStaleCloudSql(slug: string, log: (l: string) => void): Promise<void> {
+  const live = await describeServiceRest(slug).catch(() => null);
+  const ann = live?.spec?.template?.metadata?.annotations?.["run.googleapis.com/cloudsql-instances"];
+  if (!ann) return;
+  try {
+    await capture("gcloud", ["run", "services", "update", slug, "--clear-cloudsql-instances",
+      "--region", REGION, "--project", PROJECT, "--quiet"]);
+    log(`Cleared a leftover Cloud SQL attachment (${ann}) — this app has no platform database`);
+  } catch (e) {
+    log(`! could not clear the leftover Cloud SQL attachment: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 async function createDomainMapping(slug: string, log: (l: string) => void, service: string = slug): Promise<void> {
   try {
     await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", service, "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT]);
@@ -1626,7 +1709,38 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const externalDb = appConfig?.resources?.database?.provider === "external"
       ? appConfig.resources.database
       : null;
-    const pgPromise = !externalDb && s.database?.engine === "postgres"
+    // WHAT THIS APP GETS, decided once, from what it asked for.
+    //
+    // `provisionStorage` used to be called right here with no condition at all,
+    // while `resources.bucket` and `uses: ["bucket"]` were both parsed and read by
+    // nothing — so every app was billed for a bucket, carried STORAGE_BUCKET it
+    // never asked for, and was told in the dashboard that it had "File uploads".
+    // That was not an oversight in one branch; it was that no place existed where
+    // "what does this app need" is a single value. lib/resources.ts is that place.
+    const declaredNeeds: Declared = {
+      database: Boolean(s.database?.engine) || Boolean(appConfig?.resources?.database),
+      externalDatabase: Boolean(externalDb),
+      bucket: Boolean(appConfig?.resources?.bucket)
+        || Boolean(appConfig?.services.some((svc) => (svc.uses ?? []).includes("bucket"))),
+      processes: processes.some((pr) => pr.kind === "worker" || pr.kind === "cron"),
+      web: !staticServe && !serviceless,
+      secrets: Object.keys(secrets),
+    };
+    const bucketNow = await bucketState(slug);
+    const resourcePlan = planResources(declaredNeeds, {
+      bucketExists: bucketNow.exists,
+      bucketInUse: bucketNow.inUse,
+      databaseExists: await databaseExists(slug),
+    });
+    const wants = (kind: string) => resourcePlan.attach.some((r) => r.kind === kind);
+    // Said out loud, and only for the ones with something to say. A resource the
+    // app is losing is the line somebody needs when a variable stops appearing.
+    for (const r of resourcePlan.release) {
+      if (r.kind === "bucket" && bucketNow.exists) log(`Object storage: ${r.reason}`);
+      if (r.kind === "database" && r.reason.includes("kept")) log(`Database: ${r.reason}`);
+    }
+
+    const pgPromise = wants("database") && s.database?.engine === "postgres"
       ? provisionPostgres(slug, log).then(
           (pg) => ({ ok: true as const, pg }),
           (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
@@ -1668,37 +1782,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         );
       }
     }
-    // WHAT THIS APP GETS, decided once, from what it asked for.
-    //
-    // `provisionStorage` used to be called right here with no condition at all,
-    // while `resources.bucket` and `uses: ["bucket"]` were both parsed and read by
-    // nothing — so every app was billed for a bucket, carried STORAGE_BUCKET it
-    // never asked for, and was told in the dashboard that it had "File uploads".
-    // That was not an oversight in one branch; it was that no place existed where
-    // "what does this app need" is a single value. lib/resources.ts is that place.
-    const declaredNeeds: Declared = {
-      database: Boolean(s.database?.engine) || Boolean(appConfig?.resources?.database),
-      externalDatabase: Boolean(externalDb),
-      bucket: Boolean(appConfig?.resources?.bucket)
-        || Boolean(appConfig?.services.some((svc) => (svc.uses ?? []).includes("bucket"))),
-      processes: processes.some((pr) => pr.kind === "worker" || pr.kind === "cron"),
-      web: !staticServe && !serviceless,
-      secrets: Object.keys(secrets),
-    };
-    const bucketNow = await bucketState(slug);
-    const resourcePlan = planResources(declaredNeeds, {
-      bucketExists: bucketNow.exists,
-      bucketInUse: bucketNow.inUse,
-      databaseExists: Boolean(s.database?.engine),
-    });
-    const wants = (kind: string) => resourcePlan.attach.some((r) => r.kind === kind);
-    // Said out loud, and only for the ones with something to say. A resource the
-    // app is losing is the line somebody needs when a variable stops appearing.
-    for (const r of resourcePlan.release) {
-      if (r.kind === "bucket" && bucketNow.exists) log(`Object storage: ${r.reason}`);
-      if (r.kind === "database" && r.reason.includes("kept")) log(`Database: ${r.reason}`);
-    }
-
     const storagePromise = wants("bucket")
       ? provisionStorage(slug, log).then(
           (bucket) => ({ ok: true as const, bucket }),
@@ -1984,7 +2067,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (liveUrl) {
           // Grant before probing: a sealed app 403s the control plane's own
           // probe until the binding exists.
-          if (SEAL_APPS) await grantInvokers(slug, log);
+          if (SEAL_APPS && wants("invoker")) await grantInvokers(slug, log);
           log("verifying the app responds…");
           const probe = await probeApp(liveUrl, log, SEAL_APPS, primaryHealth);
           if (!probe.ok) return { ok: false, error: probe.reason };
@@ -2619,12 +2702,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
     // The two routing models are mutually exclusive: a per-app domain
     // mapping points straight at Cloud Run, which a sealed app refuses.
-    if (serviceless) {
+    // `db-proxy` is a `remove` kind, and this is what removing it means for a
+    // service that was attached to Cloud SQL under the old model.
+    if (!wants("db-proxy") && !staticServe) await clearStaleCloudSql(slug, log);
+
+    if (!wants("domain")) {
       // A worker-only app has no address, and saying so plainly is the point. It
       // is not "deployed but broken" and it is not waiting for a URL — a Telegram
       // bot is reached through Telegram. Creating a domain mapping here would
       // point a hostname at a Cloud Run service that does not exist, and the
       // failure would read as the deploy having gone wrong.
+      //
+      // And the case that had no code at all until the resource engine: an app
+      // that HAD a web process and becomes worker-only leaves a live hostname
+      // pointing at a service that no longer serves. `remove` means remove.
+      await removeDomainMapping(slug, log);
       log(`Running — this app has no web process, so it has no URL. Logs: supersonic logs ${friendlyName}`);
     } else if (SEAL_APPS || staticServe) {
       // A static app has no service of its own to map a name onto — the

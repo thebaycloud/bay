@@ -187,3 +187,41 @@ test("every reason is specific enough to put in a deploy log", () => {
     }
   }
 });
+
+test("no destructive gcloud verb can be reached from a detach kind", () => {
+  // The property, asserted against reality rather than intent. `destroys` is the
+  // one question the imperative half must ask before running anything that
+  // deletes, and it is phrased so a caller has to hold a Planned and read its
+  // retention rather than remember which kinds are safe.
+  //
+  // Every combination of declared/live, checked exhaustively: if a stateful kind
+  // ever comes back destructible, this fails.
+  const bools = [false, true];
+  for (const database of bools) for (const externalDatabase of bools)
+  for (const bucket of bools) for (const processes of bools) for (const web of bools)
+  for (const bucketExists of bools) for (const bucketInUse of bools) for (const databaseExists of bools) {
+    const plan = planResources(
+      { database, externalDatabase, bucket, processes, web, secrets: [] },
+      { bucketExists, bucketInUse, databaseExists },
+    );
+    for (const p of plan.release) {
+      if (["database", "bucket", "secrets"].includes(p.kind)) {
+        assert.equal(destroys(p), false, `${p.kind} became destructible`);
+      }
+    }
+  }
+});
+
+test("a bucket holding objects is never released, under any declaration", () => {
+  // The grandfather rule, exhaustively. Detaching a bucket an app is writing to
+  // would drop STORAGE_BUCKET from an app that never declared it and always had
+  // it — every app deployed before the gate existed.
+  const bools = [false, true];
+  for (const database of bools) for (const processes of bools) for (const web of bools) {
+    const plan = planResources(
+      { database, externalDatabase: false, bucket: false, processes, web, secrets: [] },
+      { bucketExists: true, bucketInUse: true, databaseExists: false },
+    );
+    assert.ok(plan.attach.some((p) => p.kind === "bucket"), "an in-use bucket was released");
+  }
+});
