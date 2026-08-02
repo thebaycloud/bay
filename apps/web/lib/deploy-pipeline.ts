@@ -30,7 +30,7 @@ import { StageRecorder } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
-import { deployArgs, databaseEnv, DB_HOST, DB_PORT, DEFAULT_SCALE, type Scale } from "@/lib/lanes";
+import { deployArgs, databaseEnv, DB_HOST, DB_PORT, withScale, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -1556,10 +1556,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
     if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
     deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
-    // The resource envelope, identical on every lane. `scale` becomes an
-    // authored field in schema v2; until then every app gets the defaults,
-    // which is still four lanes' worth more than the one that had them.
-    const scale: Scale = DEFAULT_SCALE;
+    // The resource envelope. Authored in schema v2, defaulted when it is not —
+    // `withScale` merges a partial over DEFAULT_SCALE, so declaring `cpu` alone
+    // does not silently drop the memory floor that four lanes depend on.
+    //
+    // This was `= DEFAULT_SCALE` until the deploy that declared `scale` and got
+    // the defaults anyway: parsed, validated, listed by `supersonic check`, named
+    // in LANE_CONSUMES, and thrown away by one assignment. The plan called it the
+    // last schema v2 field a deploy accepts and does not act on, and deferred it
+    // to Phase 3's executor; it turned out to be this line. assertReached is what
+    // stopped the deploy rather than shipping a fifth instance of the same bug.
+    const scale: Scale = withScale(primaryConfigService?.scale);
     // What "it works" means for THIS app. `strict` records whether the author
     // said so or the platform defaulted it: a declared `expect: 200` that comes
     // back 302 is a broken deploy and the field exists to say so, while an
@@ -1899,7 +1906,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       try {
         const args = deployArgs({
           lane: "runner", service: name, serviceFlags: siblingFlags, appFlags: siblingApp,
-          image, port: 8080, scale, cloudsql, existingScoped: await liveContainerShape(name),
+          // Its OWN envelope, for the same reason it gets its own env and its own
+          // facts: `scale` is per service in the schema, and a Django API beside
+          // a Next frontend is not the same size as the frontend.
+          image, port: 8080, scale: withScale(svc.scale), cloudsql,
+          existingScoped: await liveContainerShape(name),
         });
         const out = await gcloudDeploy(args, log, (l) => builds.note(l));
         const url = JSON.parse(out.slice(out.indexOf("{")))?.status?.url ?? "";
