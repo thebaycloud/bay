@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp bf07a407c4ecd39c
+// supersonic-vendor-stamp 58ba2d6a88491559
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -96,7 +96,10 @@ var DEFAULT_SCALE = {
   cpuBoost: true
 };
 function withScale(over) {
-  return { ...DEFAULT_SCALE, ...over ?? {} };
+  const declared = Object.fromEntries(
+    Object.entries(over ?? {}).filter(([, v]) => v !== void 0)
+  );
+  return { ...DEFAULT_SCALE, ...declared };
 }
 
 // lib/app-config.ts
