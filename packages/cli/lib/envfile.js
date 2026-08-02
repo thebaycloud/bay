@@ -24,8 +24,24 @@ const path = require("node:path");
 // packageFolder), because a value baked into an image cannot be rotated.
 const ENV_FILES = [".env", ".env.production", ".env.local", ".env.production.local"];
 
-// Set by the platform on every deploy — a local value would overwrite the real one and
-// point the app at a database that does not exist in production.
+// Written by the deploy itself and not by anything the app declares: the bucket it
+// provisions and the project it runs in. Unconditional, because nothing in a config
+// can change who supplies them.
+const ALWAYS_SKIPPED = new Set(["STORAGE_BUCKET", "GOOGLE_CLOUD_PROJECT"]);
+
+/**
+ * The set this file used to own outright, kept as the fallback.
+ *
+ * It was the second reader of a rule the control plane already had, and the two
+ * drifted the way two copies always do — this one listed 6 names against the 17
+ * `databaseEnv()` writes. Worse than the drift is that the rule stopped being true:
+ * whether DATABASE_URL belongs to the platform depends on whether the platform
+ * provisions the database, and this file cannot know that on its own. So callers
+ * that can resolve `supersonic.json` pass the real predicate in, and this remains
+ * only for the ones that cannot — where over-refusing is the safe direction, since
+ * a skipped variable is reported to the user and a wrongly-sent one silently
+ * points a live app at a laptop.
+ */
 const PLATFORM_OWNED = new Set([
   "DATABASE_URL",
   "STORAGE_BUCKET",
@@ -101,14 +117,22 @@ function readEnvFiles(cwd, files = ENV_FILES) {
  * value in production is the one the user set deliberately, and the one in `.env` is
  * very often a test key. Overwriting a live Stripe key with `sk_test_…` on an unrelated
  * redeploy breaks payments silently, which is the worst way for this to fail.
+ *
+ * `platformOwned` is the control plane's own predicate, injected rather than
+ * reimplemented — the same reason `draft.js` takes it. It has to be injected because
+ * the answer is no longer a property of the NAME: an app that declares
+ * `"provider": "external"` owns DATABASE_URL, and this file dropping it as "set by
+ * Supersonic" would strip the one value that deploy cannot run without, before the
+ * server ever sees it. The failure would then arrive as a crash loop about a
+ * variable the user had, in fact, set.
  */
-function selectEnv(vars, { existingKeys = [] } = {}) {
+function selectEnv(vars, { existingKeys = [], platformOwned = (k) => PLATFORM_OWNED.has(k) } = {}) {
   const have = new Set(existingKeys);
   const send = {};
   const skipped = [];
   for (const [key, value] of Object.entries(vars)) {
     if (!value) { skipped.push({ key, reason: "empty" }); continue; }
-    if (PLATFORM_OWNED.has(key)) { skipped.push({ key, reason: "set by Supersonic" }); continue; }
+    if (ALWAYS_SKIPPED.has(key) || platformOwned(key)) { skipped.push({ key, reason: "set by Supersonic" }); continue; }
     if (LOCAL_HOSTS.some((h) => value.includes(h))) { skipped.push({ key, reason: "points at your machine" }); continue; }
     if (have.has(key)) { skipped.push({ key, reason: "already set on the app" }); continue; }
     send[key] = value;
@@ -131,4 +155,4 @@ function encodeEnvHeader(send) {
   return Buffer.byteLength(encoded) > MAX_HEADER_BYTES ? null : encoded;
 }
 
-module.exports = { parseEnv, readEnvFiles, selectEnv, encodeEnvHeader, ENV_FILES, PLATFORM_OWNED, MAX_HEADER_BYTES };
+module.exports = { parseEnv, readEnvFiles, selectEnv, encodeEnvHeader, ENV_FILES, PLATFORM_OWNED, ALWAYS_SKIPPED, MAX_HEADER_BYTES };

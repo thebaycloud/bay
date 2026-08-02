@@ -96,12 +96,23 @@ test("env names are found in both languages and in every spelling", () => {
   assert.deepEqual(buildEnv, ["VITE_URL"]);
 });
 
+const MANAGED_DB = { provider: "managed", engine: "postgres" };
+
 test("names the platform writes are never offered as secrets", () => {
   // Offering one would produce a config parseAppConfig refuses outright — a draft
   // that cannot be parsed is worse than no draft.
   const dir = tree({ "a.js": "process.env.DATABASE_URL; process.env.PORT; process.env.PGHOST; process.env.NODE_ENV; process.env.REAL_KEY;" });
-  const { secrets } = envNames(dir, { platformOwned: r.platformOwned });
+  const { secrets } = envNames(dir, { platformOwned: (n) => r.platformOwned(n, MANAGED_DB) });
   assert.deepEqual(secrets, ["REAL_KEY"]);
+});
+
+test("an app with no database of ours keeps the connection names as its own", () => {
+  // The other half of the same rule. Nothing is provisioned, so nothing writes
+  // these, so they are ordinary secrets the author has to supply — and a draft
+  // that hid them would be hiding the variables the app cannot start without.
+  const dir = tree({ "a.js": "process.env.DATABASE_URL; process.env.PORT; process.env.REAL_KEY;" });
+  const { secrets } = envNames(dir, { platformOwned: (n) => r.platformOwned(n, undefined) });
+  assert.deepEqual(secrets, ["DATABASE_URL", "REAL_KEY"]);
 });
 
 test("somebody else's dependencies are not this app's environment", () => {

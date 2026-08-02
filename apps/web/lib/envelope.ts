@@ -55,6 +55,18 @@ export interface ServiceEnvelope {
   scale: Scale;
 
   /**
+   * The secret NAME carrying an external database's URL, when the app owns its
+   * own database. Absent for a managed one, where the platform writes the
+   * connection itself.
+   *
+   * An app-level fact rather than a service-level one, carried on the envelope
+   * because this is the object the checks below read, and `uses: ["database"]`
+   * means two different observable things depending on it: a database the
+   * platform provisioned, or a secret reference that reached the revision.
+   */
+  dbUrlName?: string;
+
+  /**
    * What the AUTHOR wrote, carried through from the resolver.
    *
    * Not re-derived from the values here, because it cannot be: `health` and
@@ -70,7 +82,8 @@ export interface ServiceEnvelope {
 /** Which envelope fields the AUTHOR actually declared, in envelope terms. */
 export type Declared = ReadonlyArray<keyof ServiceEnvelope>;
 
-export function buildEnvelope(service: ResolvedService, _app: ResolvedApp): ServiceEnvelope {
+export function buildEnvelope(service: ResolvedService, app: ResolvedApp): ServiceEnvelope {
+  const db = app.resources?.database;
   return {
     name: service.name,
     dir: service.dir,
@@ -92,6 +105,7 @@ export function buildEnvelope(service: ResolvedService, _app: ResolvedApp): Serv
     uses: service.uses,
     health: service.health,
     scale: service.scale,
+    dbUrlName: db?.provider === "external" ? db.urlFrom : undefined,
     declared: service.declared as Declared,
   };
 }
@@ -100,7 +114,7 @@ export function buildEnvelope(service: ResolvedService, _app: ResolvedApp): Serv
  * Fields that carry a value on every service whether or not anyone asked for
  * them, so reading them proves nothing and not reading them means nothing.
  */
-const NEVER_ASSERTED = new Set<string>(["name", "dir", "path", "lane", "declared"]);
+const NEVER_ASSERTED = new Set<string>(["name", "dir", "path", "lane", "declared", "dbUrlName"]);
 
 export interface Tracked {
   envelope: ServiceEnvelope;
@@ -200,7 +214,17 @@ const REACHED: Partial<Record<keyof ServiceEnvelope, (e: ServiceEnvelope, o: Dep
   // one, so `secrets` is the field where HOW it arrived is the whole point.
   secrets: (e, o) => !o.hasRevision || e.secrets.every((s) => carries(o, s, true)),
   release: (e, o) => o.releaseCommand.trim() !== "",
-  uses: (e, o) => !e.uses.includes("database") || o.hasDatabase,
+  // What counts as "the database reached the app" depends on whose database it
+  // is, and both halves have to be checked or the new mode becomes the next
+  // declared-and-ignored field — the exact class this module exists to end.
+  // Managed: provisioning ran. External: the connection secret is mounted on the
+  // revision, by reference, which is the only observable the platform has and the
+  // only one it needs.
+  uses: (e, o) => {
+    if (!e.uses.includes("database")) return true;
+    if (e.dbUrlName) return !o.hasRevision || carries(o, e.dbUrlName, true);
+    return o.hasDatabase;
+  },
   scale: (e, o) => o.argv.includes(e.scale.memory) && o.argv.includes(`--timeout=${e.scale.timeout}`),
   // Read by the verifier after the revision is live rather than by the argv, so
   // its effect is not visible here. Present so it is not reported unverifiable.

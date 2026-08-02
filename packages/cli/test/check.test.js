@@ -51,7 +51,7 @@ test("a correct config passes with nothing to say", async () => {
   assert.equal(app.services.length, 2);
   // Resources are once per app: the sibling asked for a database and the primary
   // did not, and the app still provisions one.
-  assert.deepEqual(app.resources.database, { engine: "postgres" });
+  assert.deepEqual(app.resources.database, { provider: "managed", engine: "postgres" });
 });
 
 test("each phase is printed as it would actually run", async () => {

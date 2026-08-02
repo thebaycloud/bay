@@ -284,6 +284,15 @@ function usesFor(service) {
 async function buildDraft(repoDir, { resolver: r, detect }) {
   const { config, stacks } = await draftServices(repoDir, r, detect);
   const candidates = new Map();
+  // Decided over ALL services before any one of them is scanned, because whether
+  // DATABASE_URL is a secret the author must supply or a value the platform writes
+  // depends on it — and a draft that offers DATABASE_URL as a secret for an app
+  // about to be handed a provisioned Postgres is asking the author for something
+  // they must not answer. Same ordering the parser needs, for the same reason.
+  const draftDatabase = config.services.some((s) => usesFor(s).length > 0)
+    ? { provider: "managed", engine: "postgres" }
+    : undefined;
+  const ownedInDraft = (name) => r.platformOwned(name, draftDatabase);
   let wantsDatabase = false;
 
   const services = config.services.map((s) => {
@@ -291,7 +300,7 @@ async function buildDraft(repoDir, { resolver: r, detect }) {
     const absDir = dir === "." ? repoDir : path.join(repoDir, dir);
     const stack = stacks.get(dir);
     const isStatic = s.language === "static";
-    const env = envNames(absDir, { platformOwned: r.platformOwned });
+    const env = envNames(absDir, { platformOwned: ownedInDraft });
     candidates.set(s.name, env);
     wantsDatabase = wantsDatabase || usesFor(s).length > 0;
 

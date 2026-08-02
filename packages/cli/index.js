@@ -592,7 +592,36 @@ async function collectEnv(slug, args) {
   if (!Object.keys(local).length) return none;
   let existingKeys = [];
   try { existingKeys = (await api(`/api/apps/${slug}/env`)).keys || []; } catch { /* no service yet */ }
-  return selectEnv(local, { existingKeys });
+  return selectEnv(local, { existingKeys, platformOwned: ownedHere() });
+}
+
+/**
+ * Which names THIS repo's deploy will write for itself.
+ *
+ * Asked of the control plane's own resolver rather than answered here, because it
+ * is not a property of the name: DATABASE_URL belongs to the platform when the
+ * platform provisions the database and to the app when the app already has one.
+ * Answering it locally from a hard-coded list is what made the CLI strip the one
+ * variable a bring-your-own-database deploy cannot run without.
+ *
+ * Undefined on any failure — no config, a malformed one, a build with no bundled
+ * resolver — which leaves `selectEnv` on its own conservative set. A variable
+ * wrongly skipped is printed to the user with a reason; a variable wrongly sent
+ * points a live app at a laptop.
+ */
+function ownedHere() {
+  try {
+    const { resolver } = require("./lib/resolver");
+    const r = resolver();
+    const config = r.readAppConfig(process.cwd());
+    if (!config) return undefined;
+    // Already OR'd with every service's `uses`/`needsDB` by parseAppConfig, so
+    // this is the same answer the server will reach.
+    const database = config.resources && config.resources.database;
+    return (name) => r.platformOwned(name, database);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

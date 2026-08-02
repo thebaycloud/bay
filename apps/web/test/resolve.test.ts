@@ -191,7 +191,7 @@ test("a service that uses a resource has it provisioned, whatever the config's s
     }),
   });
   const app = await resolve(dir);
-  assert.deepEqual(app.resources.database, { engine: "postgres" });
+  assert.deepEqual(app.resources.database, { provider: "managed", engine: "postgres" });
   assert.equal(app.resources.bucket, true);
   assert.doesNotThrow(() => validate(app, dir));
 });
@@ -228,7 +228,7 @@ test("a sibling that needs a database gets the app one provisioned", () => {
       { name: "api", language: "python", start: "gunicorn app:app", path: "/api", needsDB: true },
     ],
   }));
-  assert.deepEqual(cfg.resources?.database, { engine: "postgres" });
+  assert.deepEqual(cfg.resources?.database, { provider: "managed", engine: "postgres" });
 });
 
 test("uses: [database] provisions one too, without the deprecated shorthand", () => {
@@ -236,7 +236,7 @@ test("uses: [database] provisions one too, without the deprecated shorthand", ()
     version: 1,
     services: [{ language: "python", start: "x", uses: ["database"] }],
   }));
-  assert.deepEqual(cfg.resources?.database, { engine: "postgres" });
+  assert.deepEqual(cfg.resources?.database, { provider: "managed", engine: "postgres" });
 });
 
 test("an explicitly declared database keeps its version", () => {
@@ -245,16 +245,73 @@ test("an explicitly declared database keeps its version", () => {
     resources: { database: { engine: "postgres", version: "16" }, bucket: true },
     services: [{ language: "python", start: "x" }],
   }));
-  assert.deepEqual(cfg.resources?.database, { engine: "postgres", version: "16" });
+  assert.deepEqual(cfg.resources?.database, { provider: "managed", engine: "postgres", version: "16" });
   assert.equal(cfg.resources?.bucket, true);
+});
+
+/* ── bring your own database ─────────────────────────────────────────────── */
+
+test("a database declared external is not provisioned and names its secret", () => {
+  const cfg = parseAppConfig(config({
+    version: 1,
+    resources: { database: { provider: "external", engine: "postgres", urlFrom: "DATABASE_URL" } },
+    services: [{ language: "python", start: "x", uses: ["database"] }],
+  }));
+  assert.deepEqual(cfg.resources?.database, { provider: "external", engine: "postgres", urlFrom: "DATABASE_URL" });
+});
+
+test("an external database must say which secret holds its URL", () => {
+  assert.throws(
+    () => parseAppConfig(config({
+      version: 1,
+      resources: { database: { provider: "external" } },
+      services: [{ language: "python", start: "x" }],
+    })),
+    /needs "urlFrom"/,
+  );
+});
+
+test("urlFrom cannot name a variable the platform always owns", () => {
+  assert.throws(
+    () => parseAppConfig(config({
+      version: 1,
+      resources: { database: { provider: "external", urlFrom: "PORT" } },
+      services: [{ language: "python", start: "x" }],
+    })),
+    /"PORT" is set by the platform/,
+  );
+});
+
+test("provider must be managed or external, and says so", () => {
+  assert.throws(
+    () => parseAppConfig(config({
+      version: 1,
+      resources: { database: { provider: "supabase", urlFrom: "DATABASE_URL" } },
+      services: [{ language: "python", start: "x" }],
+    })),
+    /must be "managed".*or "external"/,
+  );
+});
+
+test("an engine the platform cannot provision points at the external escape hatch", () => {
+  assert.throws(
+    () => parseAppConfig(config({
+      version: 1,
+      resources: { database: { engine: "mysql" } },
+      services: [{ language: "python", start: "x" }],
+    })),
+    /can be declared with "provider": "external"/,
+  );
 });
 
 /* ── parse-time rules ────────────────────────────────────────────────────── */
 
+const MANAGED = { database: { engine: "postgres" } };
+
 test("a platform-owned variable is a parse error naming the variable", () => {
   for (const name of ["DATABASE_URL", "POSTGRES_USER", "PGPASSWORD", "DB_NAME", "PORT", "SUPERSONIC_RUN"]) {
     assert.throws(
-      () => parseAppConfig(config({ version: 1, services: [{ env: { [name]: "x" } }] })),
+      () => parseAppConfig(config({ version: 1, resources: MANAGED, services: [{ env: { [name]: "x" } }] })),
       (e: Error) => {
         assert.ok(e instanceof ConfigError);
         assert.match(e.message, new RegExp(`"${name}" is set by the platform`));
@@ -268,16 +325,59 @@ test("a platform-owned variable is a parse error naming the variable", () => {
 test("the protected set covers every name databaseEnv writes, by derivation", () => {
   // 6 names were protected while 17 were written. Everything in the gap was a
   // user value the platform silently overwrote.
-  assert.ok(platformOwned("POSTGRES_SERVER"));
-  assert.ok(platformOwned("PGHOST"));
-  assert.ok(platformOwned("DB_PASSWORD"));
-  assert.ok(!platformOwned("STRIPE_SECRET_KEY"));
-  assert.ok(!platformOwned("LOG_LEVEL"));
+  const managed = { provider: "managed", engine: "postgres" } as const;
+  assert.ok(platformOwned("POSTGRES_SERVER", managed));
+  assert.ok(platformOwned("PGHOST", managed));
+  assert.ok(platformOwned("DB_PASSWORD", managed));
+  assert.ok(!platformOwned("STRIPE_SECRET_KEY", managed));
+  assert.ok(!platformOwned("LOG_LEVEL", managed));
+});
+
+test("PORT and SUPERSONIC_* are ours whatever the app declares", () => {
+  // Nothing releases these: Cloud Run assigns the port, and SUPERSONIC_* is the
+  // platform's own namespace. They do not depend on who supplies the database.
+  for (const db of [undefined, { provider: "managed", engine: "postgres" } as const,
+                    { provider: "external", urlFrom: "DATABASE_URL" } as const]) {
+    assert.ok(platformOwned("PORT", db));
+    assert.ok(platformOwned("SUPERSONIC_RUN", db));
+  }
+});
+
+test("database names belong to the app when the platform does not supply one", () => {
+  // The refusal that excluded every app with infrastructure of its own. The
+  // original reasoning — "somebody setting DATABASE_URL is describing a database
+  // they do not have" — is exactly inverted for an app on Supabase.
+  const external = { provider: "external", urlFrom: "DATABASE_URL" } as const;
+  assert.ok(!platformOwned("DATABASE_URL", external));
+  assert.ok(!platformOwned("PGHOST", external));
+  assert.ok(!platformOwned("DATABASE_URL", undefined));
+});
+
+test("an app that owns its database may declare the connection names", () => {
+  const cfg = parseAppConfig(config({
+    version: 1,
+    resources: { database: { provider: "external", urlFrom: "DATABASE_URL" } },
+    services: [{ language: "python", start: "x", uses: ["database"], secrets: ["DATABASE_URL"], env: { PGSSLMODE: "require" } }],
+  }));
+  assert.deepEqual(cfg.services[0].secrets, ["DATABASE_URL"]);
+  assert.deepEqual(cfg.services[0].env, { PGSSLMODE: "require" });
+});
+
+test("refusing a database name points at the way to declare one", () => {
+  // A refusal that only says no leaves the author with no next move. This is the
+  // whole reason the name was refused, so it is the right place to say it.
+  assert.throws(
+    () => parseAppConfig(config({ version: 1, resources: MANAGED, services: [{ env: { DATABASE_URL: "x" } }] })),
+    /"provider": "external", "urlFrom": "DATABASE_URL"/,
+  );
 });
 
 test("a platform-owned name is refused in buildEnv and secrets too, not only env", () => {
   assert.throws(() => parseAppConfig(config({ version: 1, services: [{ buildEnv: { PORT: "3000" } }] })), /set by the platform/);
-  assert.throws(() => parseAppConfig(config({ version: 1, services: [{ secrets: ["DATABASE_URL"] }] })), /set by the platform/);
+  assert.throws(
+    () => parseAppConfig(config({ version: 1, resources: MANAGED, services: [{ secrets: ["DATABASE_URL"] }] })),
+    /set by the platform/,
+  );
 });
 
 test("release and preDeploy are the same field and cannot disagree", () => {
@@ -335,6 +435,35 @@ test("a declared secret with no value anywhere is reported by name", () => {
     assert.deepEqual(missingSecrets(app, ["SENTRY_DSN"]), ["STRIPE_SECRET_KEY"]);
     assert.deepEqual(missingSecrets(app, ["SENTRY_DSN", "STRIPE_SECRET_KEY"]), []);
   });
+});
+
+test("an external database's URL is a required secret without anyone listing it", () => {
+  // Required by construction: the app said it has a database and said where the
+  // connection string lives, and nothing else supplies one. Left out of this set
+  // it would surface as a driver error inside the customer's own stack trace.
+  const dir = repo({
+    "app.py": "x = 1",
+    "supersonic.json": config({
+      version: 1,
+      resources: { database: { provider: "external", urlFrom: "DATABASE_URL" } },
+      services: [{ language: "python", start: "x", uses: ["database"] }],
+    }),
+  });
+  return resolve(dir).then((app) => {
+    assert.deepEqual(missingSecrets(app, []), ["DATABASE_URL"]);
+    assert.deepEqual(missingSecrets(app, ["DATABASE_URL"]), []);
+  });
+});
+
+test("a managed database asks for no secret of its own", () => {
+  const dir = repo({
+    "app.py": "x = 1",
+    "supersonic.json": config({
+      version: 1,
+      services: [{ language: "python", start: "x", uses: ["database"] }],
+    }),
+  });
+  return resolve(dir).then((app) => assert.deepEqual(missingSecrets(app, []), []));
 });
 
 /* ── the simplest possible file stays the fastest path ───────────────────── */

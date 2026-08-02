@@ -79,6 +79,30 @@ test("vars the platform sets itself are never taken from .env", () => {
   assert.deepEqual(skipped.map((s) => s.key).sort(), ["DATABASE_URL", "PORT"]);
 });
 
+test("an app that owns its database keeps its own connection URL", () => {
+  // The bug this closes: the rule "DATABASE_URL is set by Supersonic" lived here
+  // as a hard-coded name, so a repo declaring `"provider": "external"` had the one
+  // value its deploy cannot run without stripped on the way up — and the failure
+  // arrived as a crash loop about a variable the user had set.
+  const owned = (k) => k === "PORT";
+  const { send, skipped } = selectEnv(
+    { DATABASE_URL: "postgres://user:pw@db.supabase.co:6543/postgres", PORT: "3000" },
+    { platformOwned: owned },
+  );
+  assert.deepEqual(send, { DATABASE_URL: "postgres://user:pw@db.supabase.co:6543/postgres" });
+  assert.deepEqual(skipped.map((s) => s.key), ["PORT"]);
+});
+
+test("the bucket and project are skipped whatever the predicate says", () => {
+  // Not part of the injected rule: nothing an app declares changes who provisions
+  // its bucket or which project it runs in.
+  const { send } = selectEnv(
+    { STORAGE_BUCKET: "mine", GOOGLE_CLOUD_PROJECT: "mine", KEEP: "yes" },
+    { platformOwned: () => false },
+  );
+  assert.deepEqual(send, { KEEP: "yes" });
+});
+
 test("anything aimed at the developer's own machine is left behind", () => {
   const { send } = selectEnv({
     REDIS_URL: "redis://127.0.0.1:6379",

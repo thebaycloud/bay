@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 8f1eb85c8b742804
+// supersonic-vendor-stamp bf07a407c4ecd39c
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -104,10 +104,14 @@ var CONFIG_FILENAME = "supersonic.json";
 var ConfigError = class extends Error {
 };
 var LANGUAGES = /* @__PURE__ */ new Set(["node", "python", "static", "other"]);
-var PLATFORM_OWNED_PREFIXES = [/^POSTGRES_/, /^PG/, /^DB_/, /^SUPERSONIC_/];
-var PLATFORM_OWNED_EXACT = /* @__PURE__ */ new Set([...databaseEnvNames(), "PORT"]);
-function platformOwned(name) {
-  return PLATFORM_OWNED_EXACT.has(name) || PLATFORM_OWNED_PREFIXES.some((re) => re.test(name));
+var ALWAYS_OWNED_PREFIXES = [/^SUPERSONIC_/];
+var ALWAYS_OWNED_EXACT = /* @__PURE__ */ new Set(["PORT"]);
+var DATABASE_OWNED_PREFIXES = [/^POSTGRES_/, /^PG/, /^DB_/];
+var DATABASE_OWNED_EXACT = new Set(databaseEnvNames());
+function platformOwned(name, database) {
+  if (ALWAYS_OWNED_EXACT.has(name) || ALWAYS_OWNED_PREFIXES.some((re) => re.test(name))) return true;
+  if (database?.provider !== "managed") return false;
+  return DATABASE_OWNED_EXACT.has(name) || DATABASE_OWNED_PREFIXES.some((re) => re.test(name));
 }
 function safeDir(dir, where) {
   if (dir === void 0 || dir === null || dir === "") return ".";
@@ -129,16 +133,16 @@ function num(v, where) {
   if (typeof v !== "number" || !Number.isFinite(v)) throw new ConfigError(`${where} must be a number`);
   return v;
 }
-function literals(v, where) {
+function literals(v, where, database) {
   if (v === void 0 || v === null) return void 0;
   if (typeof v !== "object" || Array.isArray(v)) {
     throw new ConfigError(`${where} must be an object of NAME: value, or an array of variable NAMES`);
   }
   const out = {};
   for (const [k, raw] of Object.entries(v)) {
-    if (platformOwned(k)) {
+    if (platformOwned(k, database)) {
       throw new ConfigError(
-        `${where}: "${k}" is set by the platform and cannot be declared here. Remove it \u2014 the value the app receives is the one the platform provisions.`
+        `${where}: "${k}" is set by the platform and cannot be declared here. ` + ownedBecause(k, database)
       );
     }
     if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
@@ -148,14 +152,20 @@ function literals(v, where) {
   }
   return out;
 }
-function names(v, where) {
+function ownedBecause(name, database) {
+  if (ALWAYS_OWNED_EXACT.has(name) || ALWAYS_OWNED_PREFIXES.some((re) => re.test(name))) {
+    return name === "PORT" ? `Cloud Run assigns the port and injects it \u2014 read it from the environment instead.` : `SUPERSONIC_* is the platform's own namespace.`;
+  }
+  return `The platform provisions this app's database, so it writes this value itself. If the app already HAS a database, declare it instead: "resources": { "database": { "provider": "external", "urlFrom": "${name}" } }`;
+}
+function names(v, where, database) {
   if (v === void 0 || v === null) return void 0;
   if (!Array.isArray(v) || v.some((e) => typeof e !== "string")) {
     throw new ConfigError(`${where} must be an array of variable NAMES`);
   }
   for (const n of v) {
-    if (platformOwned(n)) {
-      throw new ConfigError(`${where}: "${n}" is set by the platform and cannot be declared here.`);
+    if (platformOwned(n, database)) {
+      throw new ConfigError(`${where}: "${n}" is set by the platform and cannot be declared here. ` + ownedBecause(n, database));
     }
   }
   return v;
@@ -198,9 +208,32 @@ function resources(v) {
       throw new ConfigError(`${where}.database must be an object`);
     }
     const d = o.database;
-    const engine = str(d.engine, `${where}.database.engine`) ?? "postgres";
-    if (engine !== "postgres") throw new ConfigError(`${where}.database.engine: only "postgres" is provisioned today (got ${JSON.stringify(engine)})`);
-    database = { engine: "postgres", version: str(d.version, `${where}.database.version`) };
+    const provider = str(d.provider, `${where}.database.provider`) ?? "managed";
+    if (provider !== "managed" && provider !== "external") {
+      throw new ConfigError(
+        `${where}.database.provider must be "managed" (the platform creates it) or "external" (it already exists and the platform only injects it) \u2014 got ${JSON.stringify(provider)}`
+      );
+    }
+    if (provider === "external") {
+      const urlFrom = str(d.urlFrom, `${where}.database.urlFrom`)?.trim();
+      if (!urlFrom) {
+        throw new ConfigError(
+          `${where}.database: an external database needs "urlFrom" \u2014 the NAME of the secret holding its connection URL, for example "DATABASE_URL". The value itself belongs in your .env or in \`supersonic env set\`, never in this file.`
+        );
+      }
+      if (platformOwned(urlFrom)) {
+        throw new ConfigError(`${where}.database.urlFrom: "${urlFrom}" is set by the platform and cannot hold your connection URL.`);
+      }
+      database = { provider: "external", engine: str(d.engine, `${where}.database.engine`), urlFrom };
+    } else {
+      const engine = str(d.engine, `${where}.database.engine`) ?? "postgres";
+      if (engine !== "postgres") {
+        throw new ConfigError(
+          `${where}.database.engine: only "postgres" is provisioned today (got ${JSON.stringify(engine)}). An ${engine} the app already has can be declared with "provider": "external".`
+        );
+      }
+      database = { provider: "managed", engine: "postgres", version: str(d.version, `${where}.database.version`) };
+    }
   }
   return { database, bucket: o.bucket === void 0 ? void 0 : Boolean(o.bucket) };
 }
@@ -216,6 +249,8 @@ function parseAppConfig(text) {
   if (!Array.isArray(o.services) || o.services.length === 0) {
     throw new ConfigError(`${CONFIG_FILENAME} needs a non-empty "services" array`);
   }
+  const declaredResources = resources(o.resources);
+  const database = declaredDatabase(declaredResources, o.services);
   const services = o.services.map((s, i) => {
     const where = `${CONFIG_FILENAME} services[${i}]`;
     if (!s || typeof s !== "object" || Array.isArray(s)) throw new ConfigError(`${where} must be an object`);
@@ -225,7 +260,7 @@ function parseAppConfig(text) {
       throw new ConfigError(`${where}.language must be one of ${[...LANGUAGES].join(", ")}`);
     }
     const envIsNameList = Array.isArray(svc.env);
-    const uses = svc.uses === void 0 ? void 0 : names(svc.uses, `${where}.uses`);
+    const uses = svc.uses === void 0 ? void 0 : names(svc.uses, `${where}.uses`, database);
     for (const u of uses ?? []) {
       if (u !== "database" && u !== "bucket") {
         throw new ConfigError(`${where}.uses: "${u}" is not a resource \u2014 expected "database" or "bucket"`);
@@ -248,10 +283,10 @@ function parseAppConfig(text) {
       context: svc.context === void 0 ? void 0 : safeDir(svc.context, `${where}.context`),
       needsDB: svc.needsDB === void 0 ? void 0 : Boolean(svc.needsDB),
       uses,
-      env: envIsNameList ? void 0 : literals(svc.env, `${where}.env`),
-      envNeeded: envIsNameList ? names(svc.env, `${where}.env`) : void 0,
-      buildEnv: literals(svc.buildEnv, `${where}.buildEnv`),
-      secrets: names(svc.secrets, `${where}.secrets`),
+      env: envIsNameList ? void 0 : literals(svc.env, `${where}.env`, database),
+      envNeeded: envIsNameList ? names(svc.env, `${where}.env`, database) : void 0,
+      buildEnv: literals(svc.buildEnv, `${where}.buildEnv`, database),
+      secrets: names(svc.secrets, `${where}.secrets`, database),
       health: health(svc.health, `${where}.health`),
       scale: scale(svc.scale, `${where}.scale`),
       path: str(svc.path, `${where}.path`)
@@ -272,14 +307,23 @@ function parseAppConfig(text) {
   }
   return {
     version: typeof o.version === "number" ? o.version : 1,
-    resources: appResources(resources(o.resources), services),
+    resources: appResources(declaredResources, services),
     services
   };
+}
+function declaredDatabase(declared, rawServices) {
+  if (declared?.database) return declared.database;
+  const wants = rawServices.some((s) => {
+    if (!s || typeof s !== "object" || Array.isArray(s)) return false;
+    const svc = s;
+    return Boolean(svc.needsDB) || Array.isArray(svc.uses) && svc.uses.includes("database");
+  });
+  return wants ? { provider: "managed", engine: "postgres" } : void 0;
 }
 function appResources(declared, services) {
   const wantsDb = services.some(usesDatabase);
   const wantsBucket = services.some((s) => (s.uses ?? []).includes("bucket"));
-  const database = declared?.database ?? (wantsDb ? { engine: "postgres" } : void 0);
+  const database = declared?.database ?? (wantsDb ? { provider: "managed", engine: "postgres" } : void 0);
   const bucket = declared?.bucket ?? (wantsBucket ? true : void 0);
   if (!database && bucket === void 0) return declared;
   return { database, bucket };
@@ -698,6 +742,8 @@ function validate(app, dir) {
 function missingSecrets(app, available) {
   const have = new Set(available);
   const want = new Set(app.services.flatMap((s) => s.secrets));
+  const db = app.resources.database;
+  if (db?.provider === "external") want.add(db.urlFrom);
   return [...want].filter((n) => !have.has(n)).sort();
 }
 
