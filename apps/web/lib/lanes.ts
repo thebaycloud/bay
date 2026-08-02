@@ -157,9 +157,29 @@ export const DEFAULT_SCALE: Scale = {
   cpuBoost: true,
 };
 
-/** Merge a partial, user-declared scale over the defaults. */
+/**
+ * Merge a partial, user-declared scale over the defaults.
+ *
+ * Undefined values are DROPPED rather than spread, and that is the whole
+ * function. `parseAppConfig` builds its ScaleConfig by calling `num()` on every
+ * field, so a config declaring only `memory` still yields an object with
+ * `concurrency: undefined` — and `{...DEFAULT_SCALE, ...that}` overwrites the
+ * default with the undefined, because spreading does not skip a key just because
+ * its value is undefined. The result reached gcloud intact:
+ *
+ *   argument --concurrency: Bad value [undefined]: must be an integer greater
+ *   than 0 or "default".
+ *
+ * Which is a whole deploy spent on a property this function was described as
+ * having and did not have. An author raising one field must not silently lose
+ * the 2Gi floor the other lanes depend on — that floor exists because Cloud
+ * Run's 512Mi OOM-kills a real Node app at 564Mi before it binds $PORT.
+ */
 export function withScale(over?: Partial<Scale> | null): Scale {
-  return { ...DEFAULT_SCALE, ...(over ?? {}) };
+  const declared = Object.fromEntries(
+    Object.entries(over ?? {}).filter(([, v]) => v !== undefined),
+  ) as Partial<Scale>;
+  return { ...DEFAULT_SCALE, ...declared };
 }
 
 /** Scale flags that belong to the SERVICE, not to a container. */

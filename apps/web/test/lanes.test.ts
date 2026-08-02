@@ -100,6 +100,31 @@ test("runner stays container-scoped without a database; the others stay flat", (
   assert.ok(!deployArgs(request("buildpack")).includes("--container"));
 });
 
+test("a partly-declared scale keeps every default it did not mention", () => {
+  // parseAppConfig calls num() on every field, so a config naming only `memory`
+  // produces `{memory: "1Gi", cpu: undefined, concurrency: undefined, …}`.
+  // Spreading that over the defaults overwrote them with undefined and reached
+  // gcloud verbatim: "argument --concurrency: Bad value [undefined]".
+  const partial = withScale({
+    memory: "1Gi", cpu: 1, maxInstances: 4, timeout: 300,
+    concurrency: undefined, cpuBoost: undefined,
+  } as Partial<Scale>);
+  assert.equal(partial.memory, "1Gi");
+  assert.equal(partial.timeout, 300);
+  assert.equal(partial.concurrency, DEFAULT_SCALE.concurrency, "an undeclared field keeps its default");
+  assert.equal(partial.cpuBoost, DEFAULT_SCALE.cpuBoost);
+  // And every value that reaches the argv is a value gcloud will accept.
+  for (const [k, v] of Object.entries(partial)) {
+    assert.notEqual(v, undefined, `${k} must never reach the argv undefined`);
+  }
+});
+
+test("an empty or absent scale is exactly the defaults", () => {
+  assert.deepEqual(withScale(), DEFAULT_SCALE);
+  assert.deepEqual(withScale(null), DEFAULT_SCALE);
+  assert.deepEqual(withScale({}), DEFAULT_SCALE);
+});
+
 /**
  * The shape belongs to the SERVICE, not to the lane deploying to it.
  *
