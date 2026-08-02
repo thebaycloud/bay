@@ -144,8 +144,14 @@ function renderCheck(configFilename, app, problems, warnings) {
 
   if (app) {
     const n = app.services.length;
+    // "provisions postgres" for a database the deploy will not create is the same
+    // class of lie as printing a config filename for an inferred app — it sends
+    // someone looking for an instance that is not there, and it hides the one
+    // thing they need to have set.
+    const db = app.resources.database;
+    const external = db && db.provider === "external" ? db : null;
     const provisioned = [
-      app.resources.database ? "postgres" : null,
+      db && !external ? "postgres" : null,
       app.resources.bucket ? "bucket" : null,
     ].filter(Boolean);
     // Which of the two sources this came from, always. "Plan ready:
@@ -154,7 +160,8 @@ function renderCheck(configFilename, app, problems, warnings) {
     const from = app.source === "config"
       ? configFilename
       : `inferred — there is no ${configFilename} (\`supersonic init\` writes one)`;
-    lines.push(`${from} — ${n} service${n === 1 ? "" : "s"}${provisioned.length ? `, provisions ${provisioned.join(" + ")}` : ""}`);
+    const yours = external ? `, uses your own ${external.engine || "database"} from ${external.urlFrom}` : "";
+    lines.push(`${from} — ${n} service${n === 1 ? "" : "s"}${provisioned.length ? `, provisions ${provisioned.join(" + ")}` : ""}${yours}`);
     lines.push("");
     for (const s of app.services) lines.push(...renderService(s), "");
   }

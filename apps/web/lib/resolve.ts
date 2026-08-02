@@ -372,6 +372,13 @@ export function validate(app: ResolvedApp, dir: string): void {
 export function missingSecrets(app: ResolvedApp, available: Iterable<string>): string[] {
   const have = new Set(available);
   const want = new Set(app.services.flatMap((s) => s.secrets));
+  // An external database's URL is a required secret by construction: the app
+  // declared that it has a database and named where its connection string lives,
+  // and nothing else supplies one. Left out of this set it would fail at container
+  // start, inside the customer's own stack trace, which is precisely where a value
+  // the platform already knew was missing must not first be noticed.
+  const db = app.resources.database;
+  if (db?.provider === "external") want.add(db.urlFrom);
   return [...want].filter((n) => !have.has(n)).sort();
 }
 

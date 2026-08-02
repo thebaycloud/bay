@@ -145,6 +145,40 @@ test("uses: [database] with no database provisioned fails the deploy", () => {
   assert.doesNotThrow(() => assertReached(e, outcome({ hasDatabase: true })));
 });
 
+test("uses: [database] on an external database is proved by the secret, not by provisioning", () => {
+  // The same declaration means two different observable things depending on whose
+  // database it is, and checking only the platform's half would let the new mode
+  // become the next field that is declared, valid, and acted on by nobody —
+  // which is the failure this module was written for.
+  const external = {
+    source: "config",
+    resources: { database: { provider: "external", urlFrom: "DATABASE_URL" } },
+    services: [],
+  } as unknown as ResolvedApp;
+  const e = buildEnvelope(service({ uses: ["database"], declared: ["uses"] }), external);
+
+  // Provisioning did not run, and must not be what this asks about.
+  assert.throws(() => assertReached(e, outcome({ hasDatabase: false })), /did not apply: uses/);
+  assert.doesNotThrow(() =>
+    assertReached(e, outcome({ revisionEnv: [{ name: "DATABASE_URL", fromSecret: true }] })));
+});
+
+test("an external database URL arriving as a plain variable does not count", () => {
+  // A credential written verbatim into the revision spec has reached the app and
+  // defeated the reason for it being a secret — the same distinction `secrets`
+  // already turns on.
+  const external = {
+    source: "config",
+    resources: { database: { provider: "external", urlFrom: "DATABASE_URL" } },
+    services: [],
+  } as unknown as ResolvedApp;
+  const e = buildEnvelope(service({ uses: ["database"], declared: ["uses"] }), external);
+  assert.throws(
+    () => assertReached(e, outcome({ revisionEnv: [{ name: "DATABASE_URL", fromSecret: false }] })),
+    /did not apply: uses/,
+  );
+});
+
 test("a declared secret that never got mounted fails the deploy", () => {
   const e = buildEnvelope(service({ secrets: ["STRIPE_KEY"], declared: ["secrets"] }), app);
   assert.throws(() => assertReached(e, outcome()), /did not apply: secrets/);

@@ -162,7 +162,13 @@ Three rules:
   // Provisioned ONCE per app. Today provisioning is driven by the PRIMARY service's
   // plan, so a sibling that needs a database does not get one.
   "resources": {
-    "database": { "engine": "postgres", "version": "16" },
+    // "provider" defaults to "managed" — the platform creates it and injects the
+    // connection under all seventeen names. An app that already HAS a database
+    // says so instead, and nothing is provisioned:
+    //   "database": { "provider": "external", "engine": "postgres", "urlFrom": "DATABASE_URL" }
+    // `urlFrom` is a secret NAME, never a URL. The value lives in .env or in
+    // `supersonic env set`, and the deploy stops before the build if it is unset.
+    "database": { "provider": "managed", "engine": "postgres", "version": "16" },
     "bucket": true
   },
 
@@ -212,6 +218,7 @@ Three rules:
 | Field | Why | Closes |
 |---|---|---|
 | `resources.database` (top level) | Provisioning is once per app; two services share one database. `needsDB` stays as a deprecated per-service shorthand that ORs in. | provisioner bug |
+| `database.provider` + `urlFrom` | `resources.database` was a boolean in disguise — present meant PROVISION — so there was nowhere to say "there is a database and it is not yours". That excluded every app with infrastructure of its own. | goal: any existing app |
 | `uses: [...]` | Says which services receive credentials — the unit per-app DB isolation is scoped to. | goal: per-app DB |
 | `runtime` | The pipeline detects `requires-python >= 3.14`, logs "the build will probably fail on it", and builds anyway. | #28, #29 |
 | `framework` | One token letting the platform inject proxy-awareness. The app cannot configure for a proxy it does not know exists. | #14, #15 |
@@ -226,11 +233,14 @@ Three rules:
 
 **Three parse-time rules:**
 
-1. **Platform-owned names are a parse error.** If the file or the `.env` declares `DATABASE_URL`,
-   any `POSTGRES_*`, `PG*`, `DB_*`, `PORT`, or `SUPERSONIC_*` — fail, naming the variable.
-   `PLATFORM_OWNED` (`envfile.js:29-36`) lists 6 names; `databaseEnv()`
-   (`deploy-pipeline.ts:324-334`) sets 17. The fix is not adding 11 names — it is **deriving the
-   protected set from `databaseEnv()`** so it can never drift again. (#18, #19)
+1. **Platform-owned names are a parse error — when they are ours.** `PORT` and `SUPERSONIC_*`
+   always are. `DATABASE_URL`, `POSTGRES_*`, `PG*` and `DB_*` are ours **only while we provision
+   the database**, because the rule turns on fact rather than on intent. The original reasoning —
+   "somebody setting DATABASE_URL is describing a database they do not have" — is true of an app
+   the platform supplies and exactly inverted for an app on Supabase, which has the database while
+   the platform refuses to accept it. Under `provider: "external"`, or with no database at all,
+   those names are the app's own. The protected set is still **derived from `databaseEnv()`** so it
+   cannot drift, and the refusal message now names the line to write instead. (#18, #19)
 2. **`secrets[]` is enforced.** Today `envNeeded` is logged at `:1139` and checked nowhere.
 3. **`LOCAL_HOSTS` becomes per-value, not whole-value.** `envfile.js:40,112` drops any value
    *containing* `localhost`, so `CORS_ORIGINS=https://app.com,http://localhost:3000` is dropped
@@ -852,6 +862,7 @@ found" below.*
 | 3 — single-consumer executor | **not started** | lanes still read three objects for the same facts |
 | 4 — init + check | in progress | — |
 | 5a — per-app DB role | done | `Give each app a Postgres login of its own` |
+| BYO — external database | done | `Let an app bring the database it already has` |
 | 5b — control plane off the shared instance | **not started** | — |
 | 5c — code key out of the spec | done | `Stop shipping the bundle key in the spec that hides it` |
 | 6 — release phase | done | `Run migrations once, before traffic` |
@@ -960,3 +971,41 @@ left that a deploy accepts and does not act on.
 - The **per-app Postgres role is best-effort**: it falls back to the shared
   superuser credential and says so. Every fallback is a tenant boundary that did
   not get created, so those log lines are worth watching on the first real deploys.
+
+### Bring-your-own database — what landed, and what it left
+
+The refusal was one function, and it was why an app with infrastructure of its own
+could not deploy at all. It is now a function of what the deploy will DO rather
+than of how a name is spelled: `PORT` and `SUPERSONIC_*` are always ours, and the
+seventeen database names are ours only while we provision the database that gives
+them meaning.
+
+What this closed beyond the feature: `platformOwned` had a **second reader**.
+`envfile.js:29` kept its own hard-coded copy of the list, so the CLI would have
+stripped the user's `DATABASE_URL` on the way up and the deploy would have failed
+on a variable they had in fact set — the one-rule-many-readers defect this plan is
+named after, reproduced inside the fix for it. The CLI now injects the control
+plane's own predicate; only the bucket and project names stay local, because
+nothing an app declares changes who supplies those.
+
+`missingSecrets` was likewise enforced in exactly one place — `supersonic check`,
+on the user's machine — so the rule the schema calls ENFORCED was skippable by not
+running the tool. An external database's URL is now checked server-side, against
+Secret Manager as well as this deploy's upload, before anything is provisioned or
+built.
+
+Still open:
+
+- **`provisionStorage` runs unconditionally** (`deploy-pipeline.ts:1295`).
+  `resources.bucket` and `uses: ["bucket"]` are both parsed and neither gates it,
+  so every non-static app gets a bucket and `STORAGE_BUCKET` whether it asked or
+  not. The same subtraction as the database, not yet made.
+- **No static egress IP.** Cloud Run reaches the public internet by default, so
+  Supabase and Neon work with no VPC — but a provider that IP-allowlists needs a
+  VPC connector plus Cloud NAT, and the docs recommend a connector over Direct VPC
+  egress there because Direct VPC with Cloud NAT pushes cold start past 30s.
+- **Connection pooling is the user's problem and must be documented as one.**
+  Direct connections exhaust under Cloud Run scale-out; the pooler URL is the one
+  to set.
+- **Nothing verifies the URL before the app does.** The deploy proves the secret
+  reached the revision, not that anything answers at the other end.

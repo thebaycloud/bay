@@ -10,7 +10,7 @@ import { checkPlanDeps, assertRuntimeSupported, RUNTIME_UNSUPPORTED } from "@/li
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
-import { putAppSecrets, setSecretsFlag, grantBuildAccess, type SecretRef } from "@/lib/app-secrets";
+import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -1286,12 +1286,52 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // the bucket get created while Cloud Build is already working. Both
     // settle rather than reject: a missing bucket has always been survivable,
     // and starting them early must not change that.
-    const pgPromise = s.database?.engine === "postgres"
+    // Whose database this is decides whether anything is provisioned at all.
+    //
+    // An app that already has one — Supabase, Neon, an RDS instance — gets its
+    // connection from its own secret and nothing else happens: no Cloud SQL
+    // database, no per-app role, and no proxy container beside it. That last
+    // omission is the reason this mode is simpler rather than more complex, since
+    // the sidecar is what drags in the container-scoped argv, the mandatory
+    // startup probe and the one-container-must-declare-a-port rule.
+    const externalDb = appConfig?.resources?.database?.provider === "external"
+      ? appConfig.resources.database
+      : null;
+    const pgPromise = !externalDb && s.database?.engine === "postgres"
       ? provisionPostgres(slug, log).then(
           (pg) => ({ ok: true as const, pg }),
           (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
         )
       : null;
+    if (externalDb) {
+      // Said out loud, because "no database was provisioned" and "the database is
+      // yours" look identical in a log otherwise, and the first is a failure.
+      log(`Using your own ${externalDb.engine ?? "database"} — reading its URL from ${externalDb.urlFrom}, provisioning nothing`);
+      // Before the build, not at container start.
+      //
+      // `missingSecrets` has existed since schema v2 and was called from exactly
+      // one place: `supersonic check`, on the user's machine. So the rule the
+      // schema calls ENFORCED was enforced only by the tool a deploy does not have
+      // to run through. For a managed database that was survivable, because the
+      // platform supplied the connection either way; for one the app owns, the
+      // missing value IS the deploy, and the first thing to notice it would have
+      // been the app's own driver, nine minutes later, inside a crash loop.
+      //
+      // Checked against Secret Manager and not only against this deploy's upload:
+      // a value set on an earlier deploy, or with `supersonic env set`, is still
+      // set. Failing an app whose secret was stored last week is the same mistake
+      // assertReached made once already, pointed at a different field.
+      const uploaded = Boolean(secrets[externalDb.urlFrom]);
+      const stored = uploaded ? true : Boolean(await readAppSecret(slug, externalDb.urlFrom).catch(() => null));
+      if (!stored) {
+        throw new Error(
+          `${CONFIG_FILENAME} declares an external database whose URL comes from ${externalDb.urlFrom}, ` +
+          `and nothing has set a value for it.\n` +
+          `  Put ${externalDb.urlFrom} in your .env, or run \`supersonic env ${friendlyName} set ${externalDb.urlFrom}=…\`, then deploy again.\n` +
+          `  Nothing was provisioned and nothing was built — this stopped before either.`,
+        );
+      }
+    }
     const storagePromise = provisionStorage(slug, log).then(
       (bucket) => ({ ok: true as const, bucket }),
       (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),

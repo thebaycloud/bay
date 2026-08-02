@@ -47,9 +47,44 @@ export interface ScaleConfig {
   cpuBoost?: boolean;
 }
 
+/**
+ * A database the platform creates, owns and injects. The default, and the whole
+ * zero-config promise: nothing is declared, Postgres appears, seventeen variable
+ * names point at it.
+ */
+export interface ManagedDatabase {
+  provider: "managed";
+  engine: "postgres";
+  version?: string;
+}
+
+/**
+ * A database that already exists and that the platform must not touch.
+ *
+ * This is the mode that was inexpressible, and its absence excluded every app
+ * with infrastructure of its own — anything already on Supabase, Neon or an RDS
+ * instance. Not because such an app is hard to run: because `resources.database`
+ * was a boolean in disguise, where present meant PROVISION, so there was nowhere
+ * to say "there is a database and it is not yours".
+ *
+ * `urlFrom` is a secret NAME, never a URL. The platform does not need to know the
+ * connection string — only that a value exists under that name and reached the
+ * revision — so the credential travels the same path as every other secret and is
+ * never committed to a file.
+ */
+export interface ExternalDatabase {
+  provider: "external";
+  /** Free-form, for the log line only. Nothing is provisioned, so nothing validates it. */
+  engine?: string;
+  /** The SECRET NAME holding the connection URL — "DATABASE_URL". Never the URL itself. */
+  urlFrom: string;
+}
+
+export type DatabaseConfig = ManagedDatabase | ExternalDatabase;
+
 /** Provisioned once per APP, not once per service. Two services share one database. */
 export interface ResourcesConfig {
-  database?: { engine: "postgres"; version?: string };
+  database?: DatabaseConfig;
   bucket?: boolean;
 }
 
@@ -164,7 +199,18 @@ export class ConfigError extends Error {}
 const LANGUAGES = new Set(["node", "python", "static", "other"]);
 
 /**
- * Names the platform writes, which a config may therefore not declare.
+ * Ours no matter what the app declares.
+ *
+ * `PORT` is assigned by Cloud Run and injected into the ingress container, and the
+ * runtime contract says so outright; `SUPERSONIC_*` is this platform's own
+ * namespace. Neither depends on anything the app asked for, so neither is ever
+ * released back.
+ */
+const ALWAYS_OWNED_PREFIXES = [/^SUPERSONIC_/];
+const ALWAYS_OWNED_EXACT = new Set(["PORT"]);
+
+/**
+ * Ours only while we are the one writing them.
  *
  * Derived from `databaseEnv()` rather than typed out again. The two lists were
  * maintained separately once — 6 protected names against 17 written — and every
@@ -172,15 +218,31 @@ const LANGUAGES = new Set(["node", "python", "static", "other"]);
  * to the user as their own config being ignored.
  *
  * The prefixes are deliberately broad. `PGSSLMODE` is not written by
- * `databaseEnv()` today, but it configures the same connection the platform owns,
- * and a user setting it is describing a connection they do not control. Refusing
- * it by name is a better failure than honouring it into a contradiction.
+ * `databaseEnv()` today, but it configures the same connection, and a user setting
+ * it while the platform supplies the endpoint is describing a connection they do
+ * not control.
  */
-const PLATFORM_OWNED_PREFIXES = [/^POSTGRES_/, /^PG/, /^DB_/, /^SUPERSONIC_/];
-const PLATFORM_OWNED_EXACT = new Set([...databaseEnvNames(), "PORT"]);
+const DATABASE_OWNED_PREFIXES = [/^POSTGRES_/, /^PG/, /^DB_/];
+const DATABASE_OWNED_EXACT = new Set(databaseEnvNames());
 
-export function platformOwned(name: string): boolean {
-  return PLATFORM_OWNED_EXACT.has(name) || PLATFORM_OWNED_PREFIXES.some((re) => re.test(name));
+/**
+ * Whether a name belongs to the platform rather than to the app.
+ *
+ * The rule turns on FACT, not on intent: these names are ours precisely when we
+ * provision the database that gives them meaning. Unconditionally, they were a
+ * refusal aimed at the wrong app. The reasoning behind the original block —
+ * "somebody setting DATABASE_URL is describing a database they do not have" — is
+ * true of an app the platform supplies, and exactly inverted for an app on
+ * Supabase: it has the database, and the platform was refusing to accept it.
+ *
+ * So the same seventeen names are a parse error under `provider: "managed"` and
+ * the app's own business under `provider: "external"` or with no database at all.
+ * One rule, applied to what the deploy will actually do.
+ */
+export function platformOwned(name: string, database?: DatabaseConfig): boolean {
+  if (ALWAYS_OWNED_EXACT.has(name) || ALWAYS_OWNED_PREFIXES.some((re) => re.test(name))) return true;
+  if (database?.provider !== "managed") return false;
+  return DATABASE_OWNED_EXACT.has(name) || DATABASE_OWNED_PREFIXES.some((re) => re.test(name));
 }
 
 /** A path that stays inside the repo. */
@@ -219,7 +281,7 @@ function num(v: unknown, where: string): number | undefined {
  * finding it out at the least useful moment. The message names the variable
  * because "invalid configuration" sends someone reading the whole file.
  */
-function literals(v: unknown, where: string): Record<string, string> | undefined {
+function literals(v: unknown, where: string, database?: DatabaseConfig): Record<string, string> | undefined {
   if (v === undefined || v === null) return undefined;
   if (typeof v !== "object" || Array.isArray(v)) {
     // Both spellings are named, because `env` is the one field whose meaning
@@ -229,10 +291,10 @@ function literals(v: unknown, where: string): Record<string, string> | undefined
   }
   const out: Record<string, string> = {};
   for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
-    if (platformOwned(k)) {
+    if (platformOwned(k, database)) {
       throw new ConfigError(
         `${where}: "${k}" is set by the platform and cannot be declared here. ` +
-        `Remove it — the value the app receives is the one the platform provisions.`,
+        ownedBecause(k, database),
       );
     }
     if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
@@ -243,14 +305,37 @@ function literals(v: unknown, where: string): Record<string, string> | undefined
   return out;
 }
 
-function names(v: unknown, where: string): string[] | undefined {
+/**
+ * Why a name was refused, and what to do instead.
+ *
+ * The two cases need different advice and used to share one sentence. Under a
+ * managed database the answer is "remove it"; a name refused because it is
+ * `PORT` or `SUPERSONIC_*` can never be un-refused, and saying "the platform
+ * provisions it" to someone who declared PORT explains nothing. The third case is
+ * the one this exists for: an app that HAS a database and wants to name it should
+ * be told which line to write, not merely told no.
+ */
+function ownedBecause(name: string, database?: DatabaseConfig): string {
+  if (ALWAYS_OWNED_EXACT.has(name) || ALWAYS_OWNED_PREFIXES.some((re) => re.test(name))) {
+    return name === "PORT"
+      ? `Cloud Run assigns the port and injects it — read it from the environment instead.`
+      : `SUPERSONIC_* is the platform's own namespace.`;
+  }
+  return (
+    `The platform provisions this app's database, so it writes this value itself. ` +
+    `If the app already HAS a database, declare it instead: ` +
+    `"resources": { "database": { "provider": "external", "urlFrom": "${name}" } }`
+  );
+}
+
+function names(v: unknown, where: string, database?: DatabaseConfig): string[] | undefined {
   if (v === undefined || v === null) return undefined;
   if (!Array.isArray(v) || v.some((e) => typeof e !== "string")) {
     throw new ConfigError(`${where} must be an array of variable NAMES`);
   }
   for (const n of v as string[]) {
-    if (platformOwned(n)) {
-      throw new ConfigError(`${where}: "${n}" is set by the platform and cannot be declared here.`);
+    if (platformOwned(n, database)) {
+      throw new ConfigError(`${where}: "${n}" is set by the platform and cannot be declared here. ` + ownedBecause(n, database));
     }
   }
   return v as string[];
@@ -292,15 +377,48 @@ function resources(v: unknown): ResourcesConfig | undefined {
   const where = `${CONFIG_FILENAME} resources`;
   if (typeof v !== "object" || Array.isArray(v)) throw new ConfigError(`${where} must be an object`);
   const o = v as Record<string, unknown>;
-  let database: ResourcesConfig["database"];
+  let database: DatabaseConfig | undefined;
   if (o.database !== undefined && o.database !== null && o.database !== false) {
     if (typeof o.database !== "object" || Array.isArray(o.database)) {
       throw new ConfigError(`${where}.database must be an object`);
     }
     const d = o.database as Record<string, unknown>;
-    const engine = str(d.engine, `${where}.database.engine`) ?? "postgres";
-    if (engine !== "postgres") throw new ConfigError(`${where}.database.engine: only "postgres" is provisioned today (got ${JSON.stringify(engine)})`);
-    database = { engine: "postgres", version: str(d.version, `${where}.database.version`) };
+    // Defaulted rather than required, so every file written before this field
+    // existed keeps meaning exactly what it meant. "managed" is what the platform
+    // has always done.
+    const provider = str(d.provider, `${where}.database.provider`) ?? "managed";
+    if (provider !== "managed" && provider !== "external") {
+      throw new ConfigError(
+        `${where}.database.provider must be "managed" (the platform creates it) or "external" ` +
+        `(it already exists and the platform only injects it) — got ${JSON.stringify(provider)}`,
+      );
+    }
+    if (provider === "external") {
+      const urlFrom = str(d.urlFrom, `${where}.database.urlFrom`)?.trim();
+      if (!urlFrom) {
+        throw new ConfigError(
+          `${where}.database: an external database needs "urlFrom" — the NAME of the secret holding its ` +
+          `connection URL, for example "DATABASE_URL". The value itself belongs in your .env or in ` +
+          `\`supersonic env set\`, never in this file.`,
+        );
+      }
+      // Refused here rather than at deploy time: an external database whose URL is
+      // said to live in PORT is a file that cannot be honoured, and finding that
+      // out after provisioning is finding it out at the least useful moment.
+      if (platformOwned(urlFrom)) {
+        throw new ConfigError(`${where}.database.urlFrom: "${urlFrom}" is set by the platform and cannot hold your connection URL.`);
+      }
+      database = { provider: "external", engine: str(d.engine, `${where}.database.engine`), urlFrom };
+    } else {
+      const engine = str(d.engine, `${where}.database.engine`) ?? "postgres";
+      if (engine !== "postgres") {
+        throw new ConfigError(
+          `${where}.database.engine: only "postgres" is provisioned today (got ${JSON.stringify(engine)}). ` +
+          `An ${engine} the app already has can be declared with "provider": "external".`,
+        );
+      }
+      database = { provider: "managed", engine: "postgres", version: str(d.version, `${where}.database.version`) };
+    }
   }
   return { database, bucket: o.bucket === undefined ? undefined : Boolean(o.bucket) };
 }
@@ -323,6 +441,16 @@ export function parseAppConfig(text: string): AppConfig {
   if (!Array.isArray(o.services) || o.services.length === 0) {
     throw new ConfigError(`${CONFIG_FILENAME} needs a non-empty "services" array`);
   }
+  // Resources FIRST, and then the services against them.
+  //
+  // The order is load-bearing now that a name is refused on the strength of what
+  // the deploy will do rather than on the strength of its spelling: whether
+  // DATABASE_URL belongs to the platform or to the app is decided by
+  // `resources.database`, so validating a service's `env` before knowing the
+  // answer would refuse the very configuration this supports. The services are
+  // scanned for `uses`/`needsDB` first because those OR into the same decision.
+  const declaredResources = resources(o.resources);
+  const database = declaredDatabase(declaredResources, o.services);
   const services = o.services.map((s, i): ServiceConfig => {
     const where = `${CONFIG_FILENAME} services[${i}]`;
     if (!s || typeof s !== "object" || Array.isArray(s)) throw new ConfigError(`${where} must be an object`);
@@ -339,7 +467,7 @@ export function parseAppConfig(text: string): AppConfig {
     // turning a field that was only ever logged into one that fails the deploy
     // would break working apps on a rename.
     const envIsNameList = Array.isArray(svc.env);
-    const uses = svc.uses === undefined ? undefined : names(svc.uses, `${where}.uses`);
+    const uses = svc.uses === undefined ? undefined : names(svc.uses, `${where}.uses`, database);
     for (const u of uses ?? []) {
       if (u !== "database" && u !== "bucket") {
         throw new ConfigError(`${where}.uses: "${u}" is not a resource — expected "database" or "bucket"`);
@@ -362,10 +490,10 @@ export function parseAppConfig(text: string): AppConfig {
       context: svc.context === undefined ? undefined : safeDir(svc.context, `${where}.context`),
       needsDB: svc.needsDB === undefined ? undefined : Boolean(svc.needsDB),
       uses: uses as ServiceConfig["uses"],
-      env: envIsNameList ? undefined : literals(svc.env, `${where}.env`),
-      envNeeded: envIsNameList ? names(svc.env, `${where}.env`) : undefined,
-      buildEnv: literals(svc.buildEnv, `${where}.buildEnv`),
-      secrets: names(svc.secrets, `${where}.secrets`),
+      env: envIsNameList ? undefined : literals(svc.env, `${where}.env`, database),
+      envNeeded: envIsNameList ? names(svc.env, `${where}.env`, database) : undefined,
+      buildEnv: literals(svc.buildEnv, `${where}.buildEnv`, database),
+      secrets: names(svc.secrets, `${where}.secrets`, database),
       health: health(svc.health, `${where}.health`),
       scale: scale(svc.scale, `${where}.scale`),
       path: str(svc.path, `${where}.path`),
@@ -392,9 +520,29 @@ export function parseAppConfig(text: string): AppConfig {
   }
   return {
     version: typeof o.version === "number" ? o.version : 1,
-    resources: appResources(resources(o.resources), services),
+    resources: appResources(declaredResources, services),
     services,
   };
+}
+
+/**
+ * The database mode, decided before the services have been validated against it.
+ *
+ * A chicken-and-egg that has to be broken somewhere: `uses: ["database"]` on any
+ * service means the app gets a managed database, and whether a service may
+ * declare DATABASE_URL depends on that answer — so the raw services are scanned
+ * for the two spellings before any of them is parsed. Deliberately permissive
+ * about shape, because a malformed service is reported by the parser below with a
+ * far better message than anything this could say.
+ */
+function declaredDatabase(declared: ResourcesConfig | undefined, rawServices: unknown[]): DatabaseConfig | undefined {
+  if (declared?.database) return declared.database;
+  const wants = rawServices.some((s) => {
+    if (!s || typeof s !== "object" || Array.isArray(s)) return false;
+    const svc = s as Record<string, unknown>;
+    return Boolean(svc.needsDB) || (Array.isArray(svc.uses) && svc.uses.includes("database"));
+  });
+  return wants ? { provider: "managed", engine: "postgres" } : undefined;
 }
 
 /**
@@ -409,7 +557,12 @@ export function parseAppConfig(text: string): AppConfig {
 export function appResources(declared: ResourcesConfig | undefined, services: ServiceConfig[]): ResourcesConfig | undefined {
   const wantsDb = services.some(usesDatabase);
   const wantsBucket = services.some((s) => (s.uses ?? []).includes("bucket"));
-  const database = declared?.database ?? (wantsDb ? { engine: "postgres" as const } : undefined);
+  // A service asking for a database without the app saying whose it is gets the
+  // platform's, which is what `needsDB` has always meant. An app that owns its own
+  // has to say so at the top level, because there is nothing about `uses:
+  // ["database"]` that could carry a connection URL.
+  const database: DatabaseConfig | undefined =
+    declared?.database ?? (wantsDb ? { provider: "managed", engine: "postgres" } : undefined);
   const bucket = declared?.bucket ?? (wantsBucket ? true : undefined);
   if (!database && bucket === undefined) return declared;
   return { database, bucket };
