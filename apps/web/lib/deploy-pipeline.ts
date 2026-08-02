@@ -2011,9 +2011,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // back 302 is a broken deploy and the field exists to say so, while an
     // undeclared default cannot be that strict — plenty of correct apps redirect
     // their root to /login.
+    // The WEB process's own health check outranks the service-level one.
+    //
+    // `processes.web.health` was added to the schema, parsed, validated and
+    // printed back by `supersonic check` — and the probe went on reading the
+    // service-level field, so a CRM declaring `/health` was probed at `/`. A
+    // field accepted and not applied is the single defect this whole effort is
+    // about, and adding a new instance of it while removing the old ones is
+    // exactly how the old ones got there.
+    //
+    // Service-level `health` still works and still wins when a service declares
+    // it and its web process does not, so nothing already deployed changes.
+    const webProcess = processes.find((pr) => pr.kind === "web") as { health?: HealthConfig } | undefined;
+    const declaredHealth = webProcess?.health ?? primaryConfigService?.health;
     const primaryHealth = {
-      health: primaryConfigService?.health ?? { path: "/", expect: 200 },
-      strict: Boolean(primaryConfigService?.health),
+      health: declaredHealth ?? { path: "/", expect: 200 },
+      strict: Boolean(declaredHealth),
       spaFallback: primaryConfigService?.spaFallback,
     };
 

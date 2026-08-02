@@ -173,7 +173,13 @@ function renderService(s) {
       lines.push(phase("start", s.lane === "container"
         ? "the Dockerfile's own CMD"
         : s.start || (s.runs.length ? "—  (the web process below)" : "—  (nothing to run: this lane needs one)")));
-      lines.push(phase("health", `GET ${s.health.path} → ${s.health.expect}`));
+      // The web process's own health check is what the deploy probes, so it is
+      // what this line has to show. Printing the service-level default beside a
+      // `processes.web.health` that overrides it is the check disagreeing with
+      // the deploy about the one thing it exists to predict.
+      const web = (s.runs || []).find((p) => p.kind === "web");
+      const health = (web && web.health) || s.health;
+      lines.push(phase("health", `GET ${health.path} → ${health.expect}`));
       lines.push(phase("scale", `${s.scale.memory} · ${s.scale.cpu} cpu · max ${s.scale.maxInstances} · ${s.scale.timeout}s`));
     }
     // `release` is skipped: it is the phase printed above, not a separate thing.

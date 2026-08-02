@@ -239,3 +239,20 @@ test("a default is never mistaken for something the author declared", () => {
     ["command", "instances"],
   );
 });
+
+test("a web process's health check is a real field, not decoration", () => {
+  // It was decoration for one commit: parsed, validated, printed back by
+  // `supersonic check`, and the deploy went on probing the service-level `/`.
+  // A CRM declaring `/health` — because `/` hits the database and a probe should
+  // not — was probed at `/` anyway.
+  const web = resolveProcess("web", {
+    command: "gunicorn app:app --bind 0.0.0.0:$PORT",
+    health: { path: "/health", expect: 200 },
+  }) as WebProcess;
+
+  assert.deepEqual(web.health, { path: "/health", expect: 200 });
+  assert.ok(web.declared.includes("health"), "an author who wrote it must be distinguishable from the default");
+
+  // And the default stays the default when nobody said otherwise.
+  assert.deepEqual((resolveProcess("web", { command: "x" }) as WebProcess).health, { path: "/", expect: 200 });
+});
