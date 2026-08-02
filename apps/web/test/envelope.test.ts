@@ -232,3 +232,24 @@ test("a lane with no revision to read cannot fail on the environment", () => {
   const e = buildEnvelope(service({ lane: "static", env: { A: "1" }, declared: ["env"] }), app);
   assert.doesNotThrow(() => assertReached(e, outcome({ hasRevision: false })));
 });
+
+test("processes are not asserted against the revision, because they are not in it", () => {
+  // The first real worker-only deploy failed here, between building the bundle
+  // and creating the worker pool: `assertReached` was asked whether the REVISION
+  // carried `processes` and could only answer "nothing knows what this field's
+  // effect looks like". The app was correct and the deploy was refused.
+  //
+  // A worker pool and a cron job are separate Cloud Run resources created after
+  // this check runs. Their evidence is that they exist — `deployProcesses` throws
+  // a summary naming any that failed — which is a stronger outcome than a spec
+  // read, and the same standard this module exists to enforce.
+  const e = buildEnvelope(
+    service({ processes: ["bot"], declared: ["processes"] as ResolvedService["declared"] }),
+    app,
+  );
+  assert.ok(e.declared.includes("processes" as never), "the envelope should carry what the author declared");
+
+  assert.doesNotThrow(() => assertReached(e, {
+    revisionEnv: [], hasRevision: true, releaseCommand: "", argv: [], hasDatabase: false,
+  }));
+});

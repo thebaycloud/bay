@@ -114,7 +114,29 @@ export function buildEnvelope(service: ResolvedService, app: ResolvedApp): Servi
  * Fields that carry a value on every service whether or not anyone asked for
  * them, so reading them proves nothing and not reading them means nothing.
  */
-const NEVER_ASSERTED = new Set<string>(["name", "dir", "path", "lane", "declared", "dbUrlName"]);
+const NEVER_ASSERTED = new Set<string>([
+  "name", "dir", "path", "lane", "declared", "dbUrlName",
+  // `processes` is asserted, but not HERE and not against this evidence.
+  //
+  // Everything else in this envelope is a property of the REVISION — a variable
+  // in its spec, a secret mounted on it, a command in its argv — and the whole
+  // point of this check is to read the revision back and refuse to call a deploy
+  // successful when the revision does not carry what the author declared.
+  //
+  // A worker and a cron are not revision fields. They are separate Cloud Run
+  // resources — a worker pool and a job — created after this runs, by
+  // `deployProcesses`. Asked about them here, this check can only answer "nothing
+  // knows what this field's effect looks like", which is what it did on the first
+  // real worker-only deploy: the app was correct, the processes were correct, and
+  // the deploy was refused between building the bundle and creating the pool.
+  //
+  // Their independent evidence is stronger than a spec read anyway: the deploy
+  // either created the resources or it did not, and `deployProcesses` throws a
+  // summary naming every process that failed. That is the same standard this
+  // module was written to enforce — an outcome, not a second declaration — applied
+  // to a resource that lives outside the revision.
+  "processes",
+]);
 
 export interface Tracked {
   envelope: ServiceEnvelope;
