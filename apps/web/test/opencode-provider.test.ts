@@ -77,10 +77,10 @@ test("the repair agent is told what the platform did, not only what it planned",
   );
 
   // The four facts that each turn a wrong edit into a correct diagnosis.
-  assert.match(md, /serviceless: true.*NO web process/s);
+  assert.match(md, /serviceless: true[\s\S]*NO web process/);
   assert.match(md, /do not add an HTTP server/);
-  assert.match(md, /runtime.*only when the repo asked for a version it did not get/s);
-  assert.match(md, /ownedEnv.*Editing one in the repo changes nothing/s);
+  assert.match(md, /runtime[\s\S]*only when the repo asked for a version it did not get/);
+  assert.match(md, /ownedEnv[\s\S]*Editing one in the repo changes nothing/);
 
   // And the one edit that is never a fix, because it makes the failure invisible
   // rather than removing it.

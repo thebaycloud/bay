@@ -75,6 +75,37 @@ const PLATFORM: Array<{ re: RegExp; reason: string }> = [
 ];
 
 /**
+ * The builder could not provide the runtime version the repo pinned.
+ *
+ * Matched BEFORE the generic rules, because the generic ones swallowed it whole:
+ * a buildpack version failure ends with `gcloud exited 1`, which matched the
+ * catch-all above and told the user "Google Cloud returned an internal error.
+ * Nothing in your repository caused it and nothing there can fix it."
+ *
+ * Every clause of that was wrong. It is not internal, it is not Google's fault,
+ * and the repository is exactly where it can be fixed — the builder had already
+ * printed the precise reason and the full list of versions it does have. Telling
+ * someone their problem is unfixable while holding the answer is the worst thing
+ * an error message can do, and it is why this pattern gets its own rule instead of
+ * a widened regex.
+ */
+const RUNTIME_UNRESOLVED = /failed to resolve version matching:\s*(\S+)\s+against\s+\[([^\]]*)\]/i;
+
+export function builderRuntimeError(text: string): string | null {
+  const m = RUNTIME_UNRESOLVED.exec(text);
+  if (!m) return null;
+  const [, wanted, availableRaw] = m;
+  // The builder lists newest first and there are usually twenty of them. Two
+  // minors is what a person needs to decide, and the full list is in the build log.
+  const minors = [...new Set(availableRaw.split(/\s+/).filter(Boolean).map((v) => v.split(".").slice(0, 2).join(".")))];
+  return `this app pins runtime ${wanted}, and the builder only has ${minors.slice(0, 4).join(", ")}`
+    + `${minors.length > 4 ? " and older" : ""}.\n`
+    + `  Nothing is wrong with your code. Either move the pin to a version the builder has, `
+    + `or keep it and wait for a builder that carries it — the pin is being honoured, which is why this stopped here `
+    + `rather than running your app on the wrong version.`;
+}
+
+/**
  * Marker constants the pipeline throws with. Matched exactly rather than by
  * pattern, because these are ours and a substring match on them is a promise.
  */
@@ -86,6 +117,17 @@ export function classify(error: string | undefined | null): Classified {
   for (const marker of PLATFORM_MARKERS) {
     if (e.includes(marker)) return { blame: "platform", reason: e };
   }
+  // Before the generic rules, which would otherwise swallow this: a buildpack
+  // version failure ends in `gcloud exited 1` and was reported as an internal
+  // Google error that nothing could fix, while the builder had already printed
+  // both the reason and the list of versions it does have.
+  //
+  // Blamed on the platform rather than the app so it never reaches the repair
+  // agent: there is no bug in the repository, and an agent handed this would
+  // "fix" it by deleting the pin — which is the platform overruling the author's
+  // version choice by proxy, the exact thing routing exists to stop.
+  const runtime = builderRuntimeError(e);
+  if (runtime) return { blame: "platform", reason: runtime };
   for (const { re, reason } of PLATFORM) {
     if (re.test(e)) return { blame: "platform", reason };
   }

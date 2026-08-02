@@ -90,3 +90,33 @@ test("an absent previous failure is never the same as the first one", () => {
 test("the fingerprint is bounded, so a giant build log cannot be the comparison", () => {
   assert.ok(errorFingerprint("x".repeat(50000)).length <= 2000);
 });
+
+test("a builder that lacks the pinned runtime is explained, not called unfixable", () => {
+  // What production said when a real app pinned `.python-version: 3.12` and the
+  // builder only carried 3.13 and 3.14:
+  //
+  //   Google Cloud returned an internal error. Nothing in your repository caused
+  //   it and nothing there can fix it.
+  //
+  // Every clause of that was wrong. It is not internal, not Google's fault, and
+  // the repository is exactly where it can be fixed — the builder had already
+  // printed the reason and the full list of versions it has. Telling someone
+  // their problem is unfixable while holding the answer is the worst thing an
+  // error can do.
+  const real = `Step #1: [builder] Using Python version from /workspace/.python-version: 3.12
+Step #1: [builder] failed to build: (error ID: 7c5435e0):
+Step #1: [builder] invalid Python version specified: failed to resolve version matching: 3.12 against [3.14.6 3.14.5 3.13.14 3.13.0]
+gcloud exited 1`;
+
+  const c = classify(real);
+  assert.equal(c.blame, "platform", "this must never reach the repair agent");
+  assert.match(c.reason!, /pins runtime 3\.12/);
+  assert.match(c.reason!, /builder only has 3\.14, 3\.13/);
+  assert.match(c.reason!, /Nothing is wrong with your code/);
+  // And it says why stopping was the right outcome, so the pin does not read as
+  // the thing that broke the deploy.
+  assert.match(c.reason!, /the pin is being honoured/);
+
+  assert.doesNotMatch(c.reason!, /internal error/);
+  assert.doesNotMatch(c.reason!, /nothing there can fix it/);
+});
