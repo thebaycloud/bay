@@ -43,7 +43,17 @@ const PLATFORM: Array<{ re: RegExp; reason: string }> = [
     reason: "The project hit a Google Cloud quota. Your code is fine; this needs a quota raise or a retry later.",
   },
   {
-    re: /runtime not available|requires a different python|requires-python/i,
+    // Narrowed to OUR marker. It used to include `requires a different python`
+    // and `requires-python`, with the sentence "This app needs a language version
+    // the platform does not run yet. No edit to your repository can change that."
+    //
+    // That sentence stopped being true the moment `FROM python:3.14` became
+    // buildable. pip prints "requires a different Python" straight into the build
+    // log whenever a DEPENDENCY disagrees with the interpreter — an ordinary app
+    // problem, usually one line of a manifest — and blaming the platform for it
+    // hid a fixable error from the only thing that fixes those. Keeping the
+    // marker keeps the case where WE refused, which is still ours.
+    re: /runtime not available/i,
     reason: "This app needs a language version the platform does not run yet. No edit to your repository can change that.",
   },
   {
@@ -111,9 +121,44 @@ export function builderRuntimeError(text: string): string | null {
  */
 export const PLATFORM_MARKERS = ["IAM_FAILURE", "AMBIGUOUS_STACK", "Runtime not available"];
 
+/**
+ * How a build failure arrives: a one-line verdict, then up to forty lines of log.
+ *
+ * The distinction is the whole of the fix below. `Build failed:` is OUR sentence
+ * about the build; everything after it is the BUILDER quoting the app's own
+ * tooling, and the two must not be classified by the same rules.
+ */
+const BUILD_LOG_BLOB = /^[^\n]*build failed:\s*\n/i;
+
+/**
+ * The part of a failure that is a verdict, rather than evidence for one.
+ *
+ * Platform rules are matched against this and never against an embedded log.
+ * They are word-anchored, which was necessary and is not sufficient: `\bpermission
+ * denied\b` matches `EACCES: permission denied, mkdir '/root/.npm'` perfectly
+ * well, and that line is npm failing inside the customer's own build — an app
+ * error, wrongly withheld from the agent that fixes those routinely.
+ *
+ * The log lines are selected FOR containing words like "denied", "not found" and
+ * "invalid" (deploy-pipeline's `keep` filter), so the blob is close to a
+ * worst-case input for a substring classifier: it is forty lines chosen for
+ * looking alarming. And the misclassification is silent — attempts.ts records
+ * `repair: "none"`, which is indistinguishable from a deploy that never needed
+ * one.
+ *
+ * With build-time failures now dominant, this withheld the dominant failure mode
+ * from the mechanism meant to handle it.
+ */
+function verdictOf(e: string): string {
+  const m = e.match(BUILD_LOG_BLOB);
+  return m ? e.slice(0, m[0].length) : e;
+}
+
 export function classify(error: string | undefined | null): Classified {
   const e = error ?? "";
   if (!e.trim()) return { blame: "platform", reason: "The deploy failed without saying why. That is a gap in our reporting, not in your code." };
+  // Markers still match anywhere: they are strings WE throw, so finding one is a
+  // statement rather than a coincidence.
   for (const marker of PLATFORM_MARKERS) {
     if (e.includes(marker)) return { blame: "platform", reason: e };
   }
@@ -128,8 +173,9 @@ export function classify(error: string | undefined | null): Classified {
   // version choice by proxy, the exact thing routing exists to stop.
   const runtime = builderRuntimeError(e);
   if (runtime) return { blame: "platform", reason: runtime };
+  const verdict = verdictOf(e);
   for (const { re, reason } of PLATFORM) {
-    if (re.test(e)) return { blame: "platform", reason };
+    if (re.test(verdict)) return { blame: "platform", reason };
   }
   return { blame: "app" };
 }

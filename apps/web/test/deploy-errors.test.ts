@@ -120,3 +120,48 @@ gcloud exited 1`;
   assert.doesNotMatch(c.reason!, /internal error/);
   assert.doesNotMatch(c.reason!, /nothing there can fix it/);
 });
+
+test("an app error inside a build log is not the platform's fault", () => {
+  // The failure this closes was silent and total. Build failures arrive as a
+  // one-line verdict plus up to forty log lines, and those lines are SELECTED for
+  // containing words like "denied", "not found" and "invalid" — so the blob is a
+  // worst case for a substring classifier: forty lines chosen for looking
+  // alarming. One `EACCES: permission denied` from npm made the whole deploy
+  // "platform", which returns before the repair agent ever sees it.
+  //
+  // And it was invisible: attempts.ts records `repair: "none"`, which is
+  // indistinguishable from a deploy that never needed one.
+  const npmEacces = [
+    "Build failed:",
+    "npm error code EACCES",
+    "npm error syscall mkdir",
+    "npm error Error: EACCES: permission denied, mkdir '/root/.npm'",
+    "npm error [Error: EACCES: permission denied, mkdir '/root/.npm'] {",
+  ].join("\n");
+  assert.equal(classify(npmEacces).blame, "app");
+
+  // Same for the other alarming words the log filter deliberately keeps.
+  for (const line of ["module not found: ./config", "403 Forbidden from the npm registry", "quota exceeded in your test fixture"]) {
+    assert.equal(classify(`Build failed:\n${line}`).blame, "app", line);
+  }
+});
+
+test("a real platform failure is still caught, because the verdict says so", () => {
+  // Scoping to the verdict must not blind it: when the platform genuinely fails,
+  // that IS the one-line summary rather than something quoted from a build.
+  assert.equal(classify("Permission denied granting the build access to the secret").blame, "platform");
+  assert.equal(classify("gcloud: quota exceeded").blame, "platform");
+  // …and our own markers match anywhere, because those are strings we throw.
+  assert.equal(classify("Build failed:\nRuntime not available: something").blame, "platform");
+});
+
+test("pip disagreeing with the interpreter is the app's problem now", () => {
+  // It was the platform's while the platform held one Python. `FROM python:3.14`
+  // is buildable, so "requires a different Python" in a build log is an ordinary
+  // dependency conflict — usually one line of a manifest — and the repair agent
+  // fixes those. Blaming the platform hid a fixable error from the only thing
+  // that fixes it.
+  assert.equal(classify("Build failed:\nERROR: Package 'x' requires a different Python: 3.12.13 not in '>=3.14'").blame, "app");
+  // Our own refusal is still ours.
+  assert.equal(classify("Runtime not available: the builder has no 3.15").blame, "platform");
+});
