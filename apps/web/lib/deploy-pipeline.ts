@@ -2960,6 +2960,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // There is nothing there to fix in any of those cases, so the agent
       // invents work — it once invented an app, wrote a fake .env, deleted a
       // migrate script, and spent 428k tokens reaching `gcloud exited 1`.
+      // Where it died, attached once, before the failure fans out.
+      //
+      // The ordinary deploy failure RETURNS a result rather than throwing, so it
+      // never reaches the outer catch — annotating only there covered the rare
+      // path and missed the dominant one. Done here instead, so `classify`, the
+      // deploy row, the error event, the fix prompt and the repair agent all see
+      // the same sentence.
+      //
+      // Appended as its own line: `classify` reads the FIRST line as the verdict,
+      // and a stage name is context rather than a symptom.
+      const failedIn = stages.failedStage();
+      if (failedIn && result.error && !result.error.includes("failed during:")) {
+        result = { ...result, error: `${result.error}\n  (failed during: ${failedIn})` };
+      }
       const blame = classify(result.error);
       if (blame.blame === "platform") {
         if (blame.reason && blame.reason !== result.error) log(blame.reason);
@@ -3181,7 +3195,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    setDeploy(slug, { status: "failed", error: msg });
+    // Which stage it died in, recorded with the failure.
+    //
+    // Part 5 needs this and nothing had it: `classify` was handed a bare string
+    // and had to infer platform-versus-app blame from its wording alone, which is
+    // how one `permission denied` inside a build log spoke for the whole deploy.
+    // A stage is a fact about WHERE the failure happened, and it does not have to
+    // be guessed from the message.
+    //
+    // Appended rather than prefixed so the first line of the error — the thing
+    // `classify` now reads as the verdict — keeps saying what went wrong rather
+    // than where.
+    const stage = stages.failedStage();
+    setDeploy(slug, { status: "failed", error: stage ? `${msg}\n  (failed during: ${stage})` : msg });
     // Anything thrown after the row was created — a clone failure, bad
     // detector output, a provisioning error — would otherwise leave the app
     // stuck at status 'deploying' forever.

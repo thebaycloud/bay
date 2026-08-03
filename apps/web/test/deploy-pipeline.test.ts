@@ -128,19 +128,26 @@ async function install() {
   mock.module("@/lib/pg-role", { namedExports: { ensureAppRole: asyncNoop, DB_PASSWORD_SECRET: "pw" } });
 
   // Stage rows: captured rather than written.
+  //
+  // SUBCLASSED rather than reimplemented. A hand-written stand-in has to be
+  // updated every time the real recorder grows a method, and it fails silently
+  // when it is not: `failedStage()` was added and this file kept passing, because
+  // the only caller is the outer catch and every test here succeeded. Extending
+  // the real class means new behaviour arrives for free and only the sink — the
+  // one part that talks to Postgres — is replaced.
   const stages = await import("@/lib/stages");
+  const capturingSink = {
+    async write(r: { stage: string; outcome: string | null; lane: string }) {
+      active.stages.push({ stage: r.stage, outcome: r.outcome, lane: r.lane });
+    },
+  };
   mock.module("@/lib/stages", {
     namedExports: {
       ...stages,
-      StageRecorder: class {
-        constructor(private slug: string, private lane: string) {}
-        start(stage: string) { return { stage, startedAt: new Date(0) }; }
-        async end(h: { stage: string }, outcome: string) { active.stages.push({ stage: h.stage, outcome, lane: this.lane }); }
-        async around<T>(stage: string, fn: () => Promise<T>) {
-          try { const out = await fn(); await this.end({ stage }, "ok"); return out; }
-          catch (e) { await this.end({ stage }, "failed"); throw e; }
+      StageRecorder: class extends stages.StageRecorder {
+        constructor(slug: string, lane: string) {
+          super(slug, lane as never, capturingSink as never);
         }
-        async skipped(stage: string) { await this.end({ stage }, "skipped"); }
       },
     },
   });
@@ -358,4 +365,31 @@ test("a sibling builds from its own directory into its own image", { ...NEEDS_MO
   // …and the Go sibling is no longer refused for being Go.
   const refusal = rec.events.some((e) => JSON.stringify(e).includes("must be node or python"));
   assert.ok(!refusal, "a generated image has no language restriction to enforce");
+});
+
+test("a failure says which stage it died in", NEEDS_MOCKS, async () => {
+  // Part 5 needs this and nothing had it. `classify` was handed a bare string and
+  // had to infer platform-versus-app blame from its wording, which is how one
+  // `permission denied` inside a build log spoke for a whole deploy. Where the
+  // failure happened is a fact; it should not have to be read out of prose.
+  const rec = await run(
+    { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
+    {},
+    (argv) => {
+      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
+      // The build fails, which is the dominant failure mode now that every app
+      // builds an image.
+      if (argv[1] === "builds" && argv[2] === "submit") return { code: 1 };
+      if (argv[1] === "run" && argv[2] === "deploy") return { code: 1 };
+      return {};
+    },
+  );
+
+  const failed = rec.stages.filter((s) => s.outcome === "failed").map((s) => s.stage);
+  assert.ok(failed.length > 0, `nothing recorded a failure; stages were ${rec.stages.map((s) => s.stage).join(", ")}`);
+
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.ok(errors.length > 0, "a failed deploy must emit an error");
+  const text = JSON.stringify(errors);
+  assert.match(text, /failed during: \w/, `the error must name the stage — got ${text.slice(0, 400)}`);
 });

@@ -121,7 +121,27 @@ export class StageRecorder {
     return { stage, startedAt: this.now() };
   }
 
+  /**
+   * The last stage that ended in failure, or null.
+   *
+   * Kept here because this class is the only thing that already sees every stage
+   * boundary — the alternative is a `let currentStage` in runDeploy that every
+   * one of its twenty-odd `around` calls has to remember to update, which is the
+   * kind of bookkeeping that is correct on the day it is written.
+   *
+   * Part 5 is what needs it: `classify` had to infer platform-versus-app blame
+   * from the wording of an error, because where the failure happened was not
+   * recorded anywhere it could reach. "The build failed" and "the deploy failed"
+   * want different default blame, and that is a fact rather than a guess.
+   */
+  private lastFailure: string | null = null;
+
+  failedStage(): string | null {
+    return this.lastFailure;
+  }
+
   async end(handle: StageHandle, outcome: Outcome): Promise<void> {
+    if (outcome === "failed") this.lastFailure = handle.stage;
     try {
       await this.sink.write({
         slug: this.slug,
