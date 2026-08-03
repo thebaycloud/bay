@@ -197,11 +197,32 @@ const DIAGNOSE_TOOLS = [
 
 const DIAGNOSE_SYSTEM = `You are Supersonic's diagnosis assistant. A deployed app is throwing an error in production. Read the relevant repo files, then produce a SHORT, surgical fix-prompt the user can paste into their own coding agent (e.g. Claude Code) to fix it — reference the exact file(s), line(s), and the change to make. Do NOT rewrite whole files or edit anything. When ready, call report_fix with the prompt. Act only through tools.`;
 
-export async function diagnoseError(opts: { dir: string; error: string }): Promise<string> {
-  const { dir, error } = opts;
+export async function diagnoseError(opts: { dir?: string; error: string; about?: Record<string, unknown> }): Promise<string> {
+  const { dir, error, about } = opts;
+  // WITH the source when there is any, and usefully without it when there is not.
+  //
+  // `dir` was required, and both callers got it by cloning `svc.repo` — which is
+  // set only when the deploy had a git URL. The default deploy is a folder upload
+  // from somebody's machine, so the endpoints this powers answered 400 to the
+  // majority of apps: "no source repo on file", for an app that had deployed
+  // perfectly well.
+  //
+  // Without the files the model cannot read code, and it can still do the thing
+  // that is actually being asked — turn a production error into a sentence the
+  // owner's own coding agent can act on — given what the platform knows about the
+  // app. That is strictly better than a 400, and it is honest about which it is
+  // doing rather than pretending to have read a repository.
+  const known = about && Object.keys(about).length
+    ? `\n\nWhat the platform knows about this app:\n${JSON.stringify(about, null, 2)}`
+    : "";
+  const source = dir
+    ? `\n\nRepo files:\n${listFiles(dir).join("\n")}\n\nRead what you need, then call report_fix with a precise fix-prompt.`
+    : `${known}\n\nYou do NOT have the source for this app — do not call read_file, and do not guess at file contents.`
+      + ` Write a fix-prompt the owner can hand to their own coding agent, which DOES have the code:`
+      + ` say what the error means, the most likely cause, and exactly what to change. Then call report_fix.`;
   const contents: any[] = [{
     role: "user",
-    parts: [{ text: `Production error:\n\n${error}\n\nRepo files:\n${listFiles(dir).join("\n")}\n\nRead what you need, then call report_fix with a precise fix-prompt.` }],
+    parts: [{ text: `Production error:\n\n${error}${dir ? known : ""}${source}` }],
   }];
   for (let step = 0; step < 10; step++) {
     let resp: any;
@@ -230,8 +251,13 @@ export async function diagnoseError(opts: { dir: string; error: string }): Promi
       const args = call.args ?? {};
       let result = "";
       try {
-        if (name === "list_files") result = listFiles(dir).join("\n");
-        else if (name === "read_file") result = readFileSync(safe(dir, args.path), "utf8").slice(0, 8000);
+        // A model told it has no source will still sometimes reach for the file
+        // tools. Answering plainly beats throwing: it corrects course and writes
+        // the prompt, where an error would send it round the loop again.
+        if (name === "list_files") result = dir ? listFiles(dir).join("\n") : "no source available for this app";
+        else if (name === "read_file") {
+          result = dir ? readFileSync(safe(dir, args.path), "utf8").slice(0, 8000) : "no source available for this app";
+        }
         else if (name === "report_fix") return String(args.prompt ?? "No fix produced.");
         else result = "unknown tool";
       } catch (e) { result = `error: ${e instanceof Error ? e.message : String(e)}`; }

@@ -56,12 +56,33 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   }
 
   const svc = await describeService(slug);
-  if (!svc.repo) return Response.json({ error: "no source repo on file — deploy this app via Supersonic to enable diagnosis" }, { status: 400 });
+  // NO 400 without a repo any more.
+  //
+  // `svc.repo` is set only when the deploy carried a git URL, and the default
+  // deploy is a folder upload from somebody's machine — so this endpoint refused
+  // the majority of apps with "no source repo on file", about apps that had
+  // deployed perfectly well. The diagnosis is worth less without the code and it
+  // is worth a great deal more than a 400.
 
   const dir = mkdtempSync(join(tmpdir(), "ss-diag-"));
   try {
-    await run("git", ["clone", "--depth", "1", svc.repo, dir]);
-    const fixPrompt = await diagnoseError({ dir, error: String(error) });
+    let cloned = false;
+    if (svc.repo) {
+      // Still best-effort: a private repo has no credentials here, and failing
+      // the whole request over that would be the 400 again by another route.
+      try { await run("git", ["clone", "--depth", "1", svc.repo, dir]); cloned = true; } catch { /* diagnose without it */ }
+    }
+    const fixPrompt = await diagnoseError({
+      error: String(error),
+      dir: cloned ? dir : undefined,
+      // What the platform knows, which is what makes a source-less diagnosis
+      // more than a guess: the language and version it was built on, how it is
+      // started, and whether it has a database.
+      // Only fields describeService actually returns. The image is the useful
+      // one: since the collapse it names the base the app was built on, and after
+      // digest pinning it names it exactly.
+      about: { slug, image: svc.image, url: svc.url, envKeys: svc.envKeys, hasDatabase: Boolean(svc.cloudsql) },
+    });
     // Field is "subject" (not "error") so the CLI's generic error handling
     // doesn't mistake the diagnosed error for an API failure.
     return Response.json({ subject: String(error), fixPrompt });
