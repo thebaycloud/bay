@@ -93,9 +93,19 @@ test("the lane-blind set is derived, and its membership did not move", () => {
   // exactly how that happened. Deriving it must not quietly reclassify anything:
   // `lane` is taken from the last stage NOT in this set, so a name moving in or
   // out changes which lane a deploy is charged to, retroactively.
-  assert.deepEqual([...LANE_BLIND_STAGES].sort(), [
+  // The invariant is not "this set never changes" — it is that no name ever
+  // LEAVES it and no previously-lane-known name ever enters it. Adding a name
+  // nothing has written is free: no historical row changes meaning. Moving an
+  // existing one rewrites the past, because `lane` is taken from the last stage
+  // NOT in this set.
+  //
+  // The seven below are what the set contained when it was hand-written in
+  // analytics/attempts.ts. They must all still be here.
+  for (const historical of [
     "clone", "detect", "infer-services", "job-cold-start", "job-dispatch", "run-fetch", "run-record",
-  ]);
+  ]) {
+    assert.ok(LANE_BLIND_STAGES.has(historical), `"${historical}" left the lane-blind set — that re-charges past deploys`);
+  }
   assert.deepEqual([...LANE_BLIND_STAGES].sort(), [...HANDOFF_STAGES, ...PRE_LANE_STAGES].sort());
 
   // …and the two halves are disjoint, or a stage would be both blind and evidence.

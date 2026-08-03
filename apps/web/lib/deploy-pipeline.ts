@@ -1672,7 +1672,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // build never emits is the regression the three conditional framework rows in
     // detect.ts exist to avoid.
     const servesStatic = s.serve?.mode === "static";
+    // RECORDED as a stage, which is half of what Part 4 asks for and the half
+    // that is free.
+    //
+    // Part 4 wants this extracted into a function with explicit inputs. That is
+    // worth doing and it is not this: the block reads nine closure variables that
+    // are assigned above it and below it, and moving it is a hundred lines of
+    // surgery on a two-thousand-line function whose behaviour is covered by eight
+    // scenarios. Recording it costs one wrapper and makes the thing Part 4 wanted
+    // the measurement FOR — how long rendering takes, and whether it is where
+    // deploys die — answerable today from `deploy_stages`.
+    //
+    // Nothing else here changes: no rendering decision moves, and the file is
+    // still written where every later existence check expects it.
     if ((runtimePinned || generatedBuild) && !servesStatic && !existsSync(join(dir, "Dockerfile"))) {
+      const renderStage = stages.start("render");
       const runCommand = runCmd || s.startCommand || "";
       // What the REPOSITORY says, read by code rather than by a model. `pinned`
       // answered only "python or node, at the version a file named" and only for
@@ -1770,6 +1784,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         log(`! could not generate a Dockerfile (${e instanceof Error ? e.message : String(e)})`
           + ` — deploying the way this app would have been deployed before.`);
       }
+      // Outcome, not exit path: this block swallows its own failure on purpose,
+      // so "did it throw" is not the question — "did an image get described" is.
+      await stages.end(renderStage, renderInput ? "ok" : "failed");
     }
     const hasDockerfile = existsSync(join(dir, "Dockerfile"));
 

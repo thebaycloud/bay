@@ -38,11 +38,15 @@ export const HANDOFF_STAGES = ["run-record", "job-dispatch", "job-cold-start", "
  * `unpack` is deliberately NOT here even though it is also emitted before the
  * recorder learns the lane. It is charged to "static" on the prebuilt path and to
  * "unknown" on the upload path, and reclassifying it would change what
- * `LANE_BLIND_STAGES` means for rows already in the table. The membership here
- * reproduces exactly what was hand-written in analytics/attempts.ts; only its
- * source moved.
+ * `LANE_BLIND_STAGES` means for rows already in the table.
+ *
+ * `render` — writing the Dockerfile, the .dockerignore and the base-image digest
+ * lookup — is safe to add for the opposite reason: it is a name nothing has ever
+ * written, so no historical row changes meaning. Adding a NEW name is free;
+ * moving an OLD one rewrites the past. That is the distinction, and it is why
+ * `unpack` stays where it is despite belonging here on the merits.
  */
-export const PRE_LANE_STAGES = ["clone", "detect", "infer-services"] as const;
+export const PRE_LANE_STAGES = ["clone", "detect", "infer-services", "render"] as const;
 
 /** Written by a recorder that knows the lane. */
 export const LANE_KNOWN_STAGES = [
