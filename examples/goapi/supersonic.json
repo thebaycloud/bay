@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "name": "app",
+      "language": "other",
+      "build": "go build -o /app/server ./cmd/server && go build -o /app/migrate ./cmd/migrate",
+      "start": "/app/server",
+      "release": "/app/migrate",
+      "uses": ["database"]
+    }
+  ]
+}

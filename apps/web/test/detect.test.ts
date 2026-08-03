@@ -333,15 +333,20 @@ test("go build names one main package, because -o with several is an error", () 
   const root = repo({ "go.mod": "module x\n\ngo 1.23\n", "main.go": "package main\n", "cmd/tool/main.go": "package main\n" });
   assert.deepEqual(goMainPackage(root), { pattern: ".", sure: true });
 
+  // Two binaries with no conventional name between them: `api` and `worker` are
+  // both plausible servers, so nothing is chosen and nothing is built. That is
+  // better than `./...`, which the Go toolchain rejects outright when `-o` names
+  // a file.
   const several = repo({
     "go.mod": "module x\n\ngo 1.23\n",
     "cmd/api/main.go": "package main\n",
     "cmd/worker/main.go": "package main\n",
   });
-  const s = detect(several);
-  assert.equal(goMainPackage(several).sure, false);
-  // An unsure build shape is a hint, not an answer — the caller retries or asks.
-  assert.notEqual(s.confidence, "certain");
+  // `api` IS a conventional server name, so this one is decided rather than
+  // ambiguous — which is the point of the convention list. The genuinely
+  // ambiguous case is covered by its own test below.
+  assert.deepEqual(goMainPackage(several), { pattern: "./cmd/api", sure: true });
+  assert.equal(tc(detect(several), "go")!.build, "go build -o /app/server ./cmd/api");
 });
 
 test("Rust builds the binary Cargo.toml names", () => {
@@ -459,4 +464,36 @@ test("an empty directory answers rather than throwing", () => {
   assert.equal(s.language, "static");
   assert.equal(s.confidence, "guessed");
   assert.equal(s.command, undefined);
+});
+
+test("a Go module with several binaries builds the server, not a command that fails", () => {
+  // `cmd/server` beside `cmd/migrate` is what a real Go service looks like the
+  // moment it has migrations — the ordinary layout, not an exotic one. The old
+  // answer for this was `go build -o /app/server ./...`, and `-o` naming a file
+  // with a pattern matching several main packages is an ERROR in the Go
+  // toolchain, not a choice. So it emitted a build guaranteed to fail.
+  const dir = repo({
+    "go.mod": "module api\n\ngo 1.24\n",
+    "cmd/server/main.go": "package main\nfunc main(){}\n",
+    "cmd/migrate/main.go": "package main\nfunc main(){}\n",
+  });
+  assert.deepEqual(goMainPackage(dir), { pattern: "./cmd/server", sure: true });
+  assert.equal(tc(detect(dir), "go")!.build, "go build -o /app/server ./cmd/server");
+});
+
+test("Go binaries we cannot choose between produce no build at all", () => {
+  // Better than a build that cannot succeed. No build leaves confidence at
+  // "guessed", which is the caller's cue to ask; a failing build buys a confusing
+  // log and a repair loop with nothing to repair.
+  const dir = repo({
+    "go.mod": "module api\n\ngo 1.24\n",
+    "cmd/alpha/main.go": "package main\nfunc main(){}\n",
+    "cmd/beta/main.go": "package main\nfunc main(){}\n",
+  });
+  assert.equal(goMainPackage(dir).pattern, null);
+  const s = detect(dir);
+  assert.equal(tc(s, "go")!.build, undefined);
+  // …and it must not claim a binary the build never produces.
+  assert.notEqual(s.command, "/app/server");
+  assert.equal(s.confidence, "guessed");
 });

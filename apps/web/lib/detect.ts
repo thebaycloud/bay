@@ -447,7 +447,11 @@ const FRAMEWORK_START: FrameworkRow[] = [
 
   { when: (f) => hasFile(f.dir, "config.ru"), start: () => "bundle exec rackup -p $PORT -o 0.0.0.0" },
 
-  { when: (f) => hasFile(f.dir, "go.mod"), start: () => "/app/server" },
+  // Only when there is a binary to run. With several main packages and no
+  // convention to choose between them, nothing builds `/app/server` — so naming
+  // it as the start command would be a container that exits 127 on a file the
+  // build never produced.
+  { when: (f) => hasFile(f.dir, "go.mod"), start: (f) => (goMainPackage(f.dir).pattern ? "/app/server" : null) },
 
   { when: (f) => Boolean(f.cargo),
     start: (f) => `/app/target/release/${cargoBinary(f.cargo) ?? "app"}` },
@@ -683,7 +687,16 @@ function detectRelease(f: DirFacts, procfile: ProcfileEntry[] | null, config?: S
  * the module has one, and only falls back to `./...` when the shape is unusual —
  * at which point `confidence` drops and the caller knows to check.
  */
-export function goMainPackage(dir: string): { pattern: string; sure: boolean } {
+/**
+ * Directory names that mean "this is the server" when a module has several mains.
+ *
+ * `cmd/server` beside `cmd/migrate` is the ordinary Go layout, not an exotic one,
+ * and it is what a real repository looks like the moment it has a migration
+ * binary. Ordered: the first of these with a main package wins.
+ */
+const GO_SERVER_DIRS = ["server", "api", "web", "app", "service", "daemon", "http"];
+
+export function goMainPackage(dir: string): { pattern: string | null; sure: boolean } {
   const mains: string[] = [];
   const walk = (abs: string, rel: string, depth: number) => {
     if (depth > 3 || mains.length > 8) return;
@@ -709,7 +722,21 @@ export function goMainPackage(dir: string): { pattern: string; sure: boolean } {
   if (mains.includes(".")) return { pattern: ".", sure: true };
   const underCmd = mains.filter((m) => m.startsWith("./cmd/"));
   if (underCmd.length === 1) return { pattern: underCmd[0], sure: true };
-  return { pattern: "./...", sure: false };
+
+  // Several binaries. `cmd/server` beside `cmd/migrate` is what a real Go service
+  // looks like as soon as it has migrations, so this is the common case rather
+  // than the exotic one, and convention answers it.
+  const named = GO_SERVER_DIRS
+    .map((n) => underCmd.find((m) => m === `./cmd/${n}`))
+    .filter(Boolean) as string[];
+  if (named.length === 1) return { pattern: named[0], sure: true };
+
+  // Genuinely ambiguous. NOT `./...`, which is what this used to answer and which
+  // is a command that cannot succeed: `-o` naming a file, with a pattern matching
+  // several main packages, is an error in the Go toolchain rather than a choice.
+  // Emitting a build we know fails buys a confusing build log; emitting none
+  // leaves `confidence: "guessed"`, which is the caller's cue to ask.
+  return { pattern: null, sure: false };
 }
 
 /**
@@ -727,7 +754,12 @@ function buildFor(language: RuntimeLanguage, manager: string, f: DirFacts): { bu
   }
   if (language === "go") {
     const main = goMainPackage(f.dir);
-    return { build: `go build -o /app/server ${main.pattern}`, sure: main.sure };
+    // No pattern means several binaries and no convention to pick between them.
+    // No build is better than one that cannot succeed: it leaves `confidence`
+    // at "guessed", which is the caller's cue to ask rather than to build.
+    return main.pattern
+      ? { build: `go build -o /app/server ${main.pattern}`, sure: main.sure }
+      : { sure: false };
   }
   if (language === "rust") return { build: "cargo build --release", sure: true };
   if (language === "java") {
