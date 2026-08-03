@@ -2840,7 +2840,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             const hb = setInterval(() => log("building…"), 8000);
             builds.reset();
             try {
-              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`, ...buildIdentityArgs()], buildLine);
+              // No `--service-account` here, and it is not an oversight. This is
+              // the one submit that writes no cloudbuild.yaml, so it has no
+              // `logging: CLOUD_LOGGING_ONLY` — and Cloud Build REFUSES a
+              // user-specified build account unless a logging destination is
+              // set, which would turn a scoped identity into a failed deploy.
+              // The buildpack lane is what step 4 deletes anyway; it keeps the
+              // default account until it goes.
+              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`], buildLine);
             } finally { clearInterval(hb); }
           });
         } catch (e) {
