@@ -10,6 +10,7 @@ import { checkPlanDeps, RUNTIME_UNSUPPORTED, RUNTIME_VERSIONS } from "@/lib/plan
 import { repoRuntime, runnerServes, runtimeRouting } from "@/lib/repo-runtime";
 import { generateDockerfile, baseImage, dockerignore, manifestPaths, DockerfileError, type DockerfileInput } from "@/lib/dockerfile";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
+import { readBuildHints, rememberBuildHints, aptPackagesIn } from "@/lib/build-hints";
 import { detect } from "@/lib/detect";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
@@ -1702,7 +1703,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // A repo declaring no manifest we know has no toolchain, and the flat
           // fields above carry it instead.
           toolchains: toolchains.length ? toolchains : undefined,
-          needs: spec.needs,
+          // What this app's own build has already been repaired into needing.
+          //
+          // `needs` starts nearly empty and grows from real failures — but until
+          // now it grew only within a single deploy, in a scratch directory that
+          // dies with it. So an app rescued by adding `libpq-dev` regenerated the
+          // identical Dockerfile next time and paid the whole repair loop again,
+          // which reads as the fix not having worked rather than not having been
+          // kept.
+          needs: [...new Set([...spec.needs, ...((await readBuildHints(slug))?.needs ?? [])])],
           command: runCommand || spec.command!,
           // Resolved against the disk, so only files that exist are named. The
           // glob this replaces was a hard build failure on zero matches, which is
@@ -3009,6 +3018,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       if (fixed.ok) {
         result = { ok: true, url: fixed.url };
         log(`Agent fixed it (${fixed.changes.join(", ")})`);
+        // Keep what the repair taught us about BUILDING this app, so the next
+        // deploy starts from it instead of rediscovering it.
+        //
+        // Read back off the Dockerfile the agent left rather than from its own
+        // description of what it did: "Fixed: Dockerfile" is not a package list,
+        // and the file is the only statement that cannot be a paraphrase. Only
+        // apt packages, because those are what survive a template change — see
+        // build-hints.ts for why the file itself is deliberately not stored.
+        try {
+          const finalDockerfile = existsSync(join(dir, "Dockerfile")) ? readFileSync(join(dir, "Dockerfile"), "utf8") : "";
+          const learned = aptPackagesIn(finalDockerfile);
+          if (learned.length && await rememberBuildHints(slug, learned)) {
+            log(`Remembered for next time: this app's build needs ${learned.join(", ")}`);
+          }
+        } catch { /* a hint we failed to keep costs a slower repair, never a deploy */ }
         // The fix, in a form that can leave this machine. Printed into the log
         // rather than kept in a summary, because a description of a change is not
         // a change: "Fixed: package.json" tells nobody what to type. Now that
