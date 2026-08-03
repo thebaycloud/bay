@@ -1,0 +1,12 @@
+{
+  "services": [{
+    "language": "python",
+    "install": "pip install --no-cache-dir -r requirements.txt",
+    "uses": ["database"],
+    "processes": {
+      "web":     { "command": "gunicorn app:app --bind 0.0.0.0:$PORT", "health": { "path": "/health", "expect": 200 } },
+      "release": { "command": "python migrate.py" },
+      "nightly": { "command": "python digest.py", "schedule": "*/10 * * * *", "timezone": "Asia/Almaty" }
+    }
+  }]
+}

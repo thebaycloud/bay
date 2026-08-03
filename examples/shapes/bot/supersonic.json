@@ -1,0 +1,18 @@
+{
+  "services": [
+    {
+      "language": "python",
+      "install": "pip install --no-cache-dir -r requirements.txt",
+      "secrets": [
+        "BOT_TOKEN"
+      ],
+      "processes": {
+        "bot": {
+          "command": "python bot.py",
+          "memory": "512Mi",
+          "cpu": 1
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{ "services": [{ "language": "node",
+  "processes": {
+    "web":   { "command": "node server.js" },
+    "queue": { "command": "node worker.js", "instances": 1 }
+  } }] }
