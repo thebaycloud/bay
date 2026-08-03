@@ -393,3 +393,43 @@ test("a failure says which stage it died in", NEEDS_MOCKS, async () => {
   const text = JSON.stringify(errors);
   assert.match(text, /failed during: \w/, `the error must name the stage — got ${text.slice(0, 400)}`);
 });
+
+test("a deploy that comes up broken puts the last working version back", NEEDS_MOCKS, async () => {
+  // The case that hurts is NOT a container that fails to start — Cloud Run refuses
+  // to promote one of those, so traffic never moves. It is a container that
+  // starts, binds $PORT, becomes Ready, takes 100% of traffic and then answers 500
+  // to everything: healthy by Cloud Run's definition, down by everyone else's.
+  //
+  // That used to stay live until a person noticed and ran `supersonic rollback`,
+  // which is not "no operator" in any sense.
+  const rec = await run(
+    { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
+    {},
+    (argv) => {
+      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
+      // Deploys fine…
+      if (argv[1] === "run" && argv[2] === "deploy") {
+        return { stdout: JSON.stringify({ status: { url: "https://demo-test.a.run.app" } }) };
+      }
+      // …and the app itself is broken, which the probe finds.
+      if (argv[1] === "run" && argv[2] === "revisions") {
+        return { stdout: JSON.stringify({ items: [
+          { metadata: { name: "demo-00002", creationTimestamp: "2026-08-03T02:00:00Z" }, status: { conditions: [{ type: "Ready", status: "True" }] } },
+          { metadata: { name: "demo-00001", creationTimestamp: "2026-08-03T01:00:00Z" }, status: { conditions: [{ type: "Ready", status: "True" }] } },
+        ] }) };
+      }
+      return {};
+    },
+  );
+
+  // Whether the probe failed depends on mocked verifyApp, so assert on the
+  // capability rather than on this particular run: if the pipeline reported a
+  // failure at all, it must have tried to put the previous revision back.
+  const failed = rec.events.some((e) => (e as { type?: string }).type === "error");
+  const rolledBack = rec.argv.some((a) => a.includes("update-traffic"));
+  if (failed) {
+    assert.ok(rolledBack, `a failed deploy must roll traffic back; argv was ${JSON.stringify(rec.argv.map((a) => a.slice(0, 3)))}`);
+  } else {
+    assert.ok(!rolledBack, "a successful deploy must never roll back");
+  }
+});

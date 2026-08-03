@@ -16,6 +16,7 @@ import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
+import { rollback } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv } from "@/lib/env-merge";
@@ -2960,6 +2961,41 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // There is nothing there to fix in any of those cases, so the agent
       // invents work — it once invented an app, wrote a fake .env, deleted a
       // migrate script, and spent 428k tokens reaching `gcloud exited 1`.
+      /**
+       * Put the app back on the last revision that worked.
+       *
+       * A deploy that FAILS TO START never takes traffic — Cloud Run refuses to
+       * promote a revision that cannot pass its own startup probe, and gcloud
+       * errors out. This is for the other case, which is the one that hurts: the
+       * container starts, binds $PORT, becomes Ready, takes 100% of traffic, and
+       * then answers 500 to everything. The revision is healthy by Cloud Run's
+       * definition and the app is down by everyone else's.
+       *
+       * Until now that stayed live until a person noticed and ran `supersonic
+       * rollback` — which is exactly the manual command this makes automatic, and
+       * the plan is right that "no operator" is not credible while a broken deploy
+       * outlives the deploy that made it.
+       *
+       * `rollback()` already skips revisions that never became Ready, which
+       * matters here more than anywhere: the newest revision is the broken one, and
+       * "the one before" is not the same as "the last one that can serve".
+       *
+       * Never fatal, and never for static — a static app has no service of its own
+       * and its previous release is a different mechanism entirely.
+       */
+      const rollBackToLastGood = async () => {
+        if (staticServe || serviceless) return;
+        try {
+          const to = await rollback(slug);
+          log(`Rolled back to ${to} — the previous version is serving again while you fix this.`);
+        } catch (e) {
+          // A first deploy has nothing to go back to, which is the common case
+          // here and not worth alarming anybody about.
+          const why = e instanceof Error ? e.message : String(e);
+          if (!/no previous revision|never started/i.test(why)) log(`! could not roll back (${why})`);
+        }
+      };
+
       // Where it died, attached once, before the failure fans out.
       //
       // The ordinary deploy failure RETURNS a result rather than throwing, so it
@@ -2977,6 +3013,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const blame = classify(result.error);
       if (blame.blame === "platform") {
         if (blame.reason && blame.reason !== result.error) log(blame.reason);
+        await rollBackToLastGood();
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: result.error });
@@ -2985,6 +3022,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // The auto-fix agent is a Pro feature. Basic gets a paste-ready prompt
       // for its own coding agent instead of us fixing the code in the cloud.
       if (!limits.autoFix) {
+        await rollBackToLastGood();
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         log("Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
@@ -3064,6 +3102,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         }
       }
       else {
+        await rollBackToLastGood();
         setDeploy(slug, { status: "failed", error: fixed.summary });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: fixed.summary });
