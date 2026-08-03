@@ -1,5 +1,55 @@
 # Make deploys work — the complete build
 
+> ## Status, 3 Aug — read this first
+>
+> **The cutover is live.** `_LANE_ENV` in `cloudbuild.yaml` carries `RUNNER=0`,
+> so every app without a Dockerfile of its own now builds a generated image.
+> Verified in production before flipping, not after: a Node app deployed through
+> the collapsed path, buildx pulled its daemon from the mirror, `FROM` resolved
+> through it, the per-app cache repo was written, the build ran as a scoped
+> service account, and the service answered 200.
+>
+> Roll back by setting `_LANE_ENV` to `RUNNER=1` and pushing.
+>
+> | Row | Status |
+> |---|---|
+> | 0 stamp manifest, buildkit prerequisites | **done** — stamp derives from esbuild's metafile; `docker-hub` pull-through repo created; canary measured 44s cold / 15s warm |
+> | 1 `detect.ts`, `repo-runtime` rewrite | **done and wired** |
+> | 2 manifest COPY, templates, `proxyWait` | **done and wired** |
+> | 3 build secrets, `buildEnv` | **done** |
+> | 4 collapse, siblings, `check` | **done** — `RUNNER_ENABLED` re-scoped to select a build implementation |
+> | 5 buildkit default, base mirror, digest pinning | 2 of 3 — **digest pinning not done** |
+> | 6 build SA, registry GC, slug reuse, deploy cap | 3 of 4 — **per-owner in-flight deploy cap not done** |
+> | 7 stage the pipeline | vocabulary, render split and a real harness done; **`runDeploy` is still one 1700-line function** |
+> | 8 `classify`, repair channel | verdict-scoping and the patch pathspec done; **Dockerfile persistence and rerender-on-repair not done** |
+> | 9 Dockerfile cache, config write-back | **not started** |
+> | 10 backfill, decommission | query done (`scripts/runner-decommission.sh`); **backfill not done — see below** |
+> | 11 auto-rollback, watch, backups | **not started** |
+>
+> ### Three things this work found that the plan did not know
+>
+> **The backfill cannot be fully automated.** `scripts/runner-decommission.sh`
+> reports **17 services still on the runner**. An upload-path app's source exists
+> only as the encrypted per-deploy bundle in `ready/<slug>/`, readable only by
+> that app's own revision — a git-deployed app can be re-cloned, an uploaded one
+> cannot be reconstructed from anything the platform holds. Until those 17 are
+> redeployed by their owners, `services/runner/` cannot be deleted: `build.sh` is
+> the only thing that builds the images they cold-start from.
+>
+> **`cloudbuild.yaml` env never reached the deploy job.** The job step updated
+> only `--image`, and `DEPLOY_JOB=1` means the job is where deploys execute — so
+> every flag in that file described what the *service* would have done. Found by
+> setting one and watching a build come out as the old identity anyway. Both
+> steps now read one `_LANE_ENV` substitution.
+>
+> **The plan's canary was not expressible.** `BUILDER` is read from the job's
+> environment, which every deploy shares, so "canary on one app" would have
+> applied it to all of them first. `BUILDKIT_APPS` was added for that.
+>
+> Row 6's `LIMITS` gap is worth doing before customers: build-seconds per deploy
+> are now 3–6× higher and nothing throttles.
+
+
 Written against the whole of `deploy-pipeline.ts` (2,883 lines), `resolve.ts`,
 `dockerfile.ts`, `repo-facts.ts`, `repo-runtime.ts`, `build-config.ts`,
 `release-job.ts`, `services/runner/*`, and the CLI. Every capability the pipeline
