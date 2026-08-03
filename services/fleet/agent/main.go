@@ -79,6 +79,7 @@ type live struct {
 
 type Agent struct {
 	rt   *Runtime
+	src  *Source
 	mu   sync.Mutex
 	live map[string]*live
 	// writeMu serialises publishing the routing table. Starts run concurrently
@@ -114,7 +115,27 @@ func main() {
 		log.Fatalf("runtime: %v", err)
 	}
 
-	a := &Agent{rt: rt, live: map[string]*live{}, slots: map[int]string{}}
+	// Identity is best-effort. A node that cannot read its own metadata can still
+	// serve from the local file, which is what the lab does — refusing to start
+	// would make the agent undebuggable off a GCE instance.
+	src := &Source{
+		Endpoint: os.Getenv("FLEET_ENDPOINT"),
+		Token:    os.Getenv("FLEET_TOKEN"),
+		Local:    statePath,
+	}
+	if src.Endpoint != "" {
+		id, ierr := Identify()
+		if ierr != nil {
+			log.Fatalf("identity: %v", ierr)
+		}
+		src.Identity = id
+		log.Printf("node %s in %s (%s), %d cpus, %.0f GiB",
+			id.Name, id.Zone, id.InternalIP, id.CPUs, float64(id.MemoryBytes)/(1<<30))
+	} else {
+		log.Printf("no FLEET_ENDPOINT set; reading desired state from %s", statePath)
+	}
+
+	a := &Agent{rt: rt, src: src, live: map[string]*live{}, slots: map[int]string{}}
 
 	go a.serve(*addr)
 	go NewRouter(*rootDomain).Serve(*routerAddr, routesPath)
@@ -152,16 +173,9 @@ func writeResolvConf() error {
 }
 
 func (a *Agent) loadDesired() (Desired, error) {
-	var d Desired
-	b, err := os.ReadFile(statePath)
+	d, err := a.src.Fetch()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Desired{}, nil
-		}
 		return d, err
-	}
-	if err := json.Unmarshal(b, &d); err != nil {
-		return d, fmt.Errorf("parse %s: %w", statePath, err)
 	}
 	for i := range d.Apps {
 		if d.Apps[i].Port == 0 {
