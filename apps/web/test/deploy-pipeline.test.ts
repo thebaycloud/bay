@@ -433,3 +433,54 @@ test("a deploy that comes up broken puts the last working version back", NEEDS_M
     assert.ok(!rolledBack, "a successful deploy must never roll back");
   }
 });
+
+test("a sibling's Dockerfile is written for the context it is built in", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
+  // The bug that broke EVERY sibling, and it is invisible from argv alone: the
+  // context was right and the file inside it was written for a different one.
+  //
+  // `deploySibling` roots the build context at the service's own directory and
+  // then detected with `rel = svc.dir`, so every command came out wrapped as
+  // `(cd api && …)` inside a context that IS api. `/app/api` does not exist, so
+  // the first RUN failed — on every sibling, because a sibling by definition has
+  // a directory of its own.
+  //
+  // Asserted by reading the file the build was actually handed, at the moment it
+  // was handed over. The generated Dockerfile is the deliverable; a context path
+  // says nothing about whether the thing inside it can build.
+  const written = new Map<string, string>();
+  const rec = await run(
+    {
+      "supersonic.json": JSON.stringify({
+        version: 1,
+        services: [
+          { name: "web", dir: "web", language: "node", start: "node server.js", path: "/" },
+          { name: "api", dir: "api", language: "python", start: "uvicorn main:app --host 0.0.0.0 --port $PORT", path: "/api" },
+        ],
+      }),
+      "web/package.json": '{"scripts":{"start":"node server.js"}}',
+      "web/server.js": "",
+      "api/requirements.txt": "fastapi\nuvicorn\n",
+      "api/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+    },
+    {},
+    (argv) => {
+      if (argv[1] === "builds" && argv[2] === "submit") {
+        const df = join(argv[3], "Dockerfile");
+        if (existsSync(df)) written.set(argv[3], readFileSync(df, "utf8"));
+      }
+      return detect()(argv);
+    },
+  );
+
+  const api = [...written.entries()].find(([ctx]) => ctx.endsWith("/api"));
+  assert.ok(api, `no Dockerfile was written for the api context; contexts were ${[...written.keys()].join(", ")}`);
+  const [, dockerfile] = api!;
+
+  // Nothing may reach outside the context it was written for.
+  assert.doesNotMatch(dockerfile, /\(cd api &&/, "the context IS api — there is no api/ inside it");
+  assert.doesNotMatch(dockerfile, /^WORKDIR \/app\/api$/m);
+  // And the install it does emit is the one the directory's own manifest implies.
+  assert.match(dockerfile, /^RUN pip install .*requirements\.txt$/m);
+
+  assert.ok(rec.argv.some((a) => a[1] === "builds" && a[2] === "submit"), "the sibling never built");
+});

@@ -53,6 +53,20 @@ export interface DetectedStack {
   startCommand: string;
   serve: { mode: "static"; outputDir: string } | { mode: "container" };
   database?: { engine: string | null; via?: string | null };
+  /**
+   * The one-shot migration command, when the directory implies one.
+   *
+   * Absent from this interface until now, which meant `detect()` found
+   * `alembic upgrade head` for a `backend/` and `serviceFor` had nowhere to put
+   * it — so an inferred service deployed GREEN against an unmigrated schema. That
+   * is the wrong-success shape docs/MAKE-DEPLOYS-WORK.md calls the worst failure
+   * the platform has, and it was reachable only through inference, which is the
+   * path a config-less repo takes by definition.
+   *
+   * Optional because the detector subprocess is still a legal `Detect` and does
+   * not answer it.
+   */
+  release?: string;
 }
 
 /**
@@ -208,7 +222,12 @@ export function serviceFor(relDir: string, stack: DetectedStack, absoluteDir: st
   if (language === "static") {
     return { ...base, outputDir: stack.serve.mode === "static" ? stack.serve.outputDir : "dist" };
   }
-  return { ...base, start: startFor(stack, absoluteDir) };
+  // `release` sits beside `start` and not on `base`, for the same reason `start`
+  // does: a release is a one-shot run of the app's own image, and a static
+  // service has no image to run it in. `check` reports a field a lane cannot act
+  // on as a defect, and it is right to — an accepted-and-ignored field is the
+  // exact shape the Rules section of docs/MAKE-DEPLOYS-WORK.md forbids.
+  return { ...base, start: startFor(stack, absoluteDir), release: stack.release };
 }
 
 /**
@@ -286,6 +305,7 @@ export function stackFromSpec(spec: BuildSpec): DetectedStack {
     startCommand: spec.command ?? "",
     serve: isStatic ? { mode: "static", outputDir: spec.outputDir ?? "." } : { mode: "container" },
     database: spec.database ? { engine: spec.database.engine, via: spec.database.via } : undefined,
+    release: spec.release,
   };
 }
 
@@ -324,6 +344,29 @@ export async function inferAppConfig(repoDir: string, detect: Detect): Promise<A
   if (facts.dockerfiles.includes("Dockerfile")) return null;
 
   const parts = deployableParts(repoDir, facts);
+  // Below two parts there is nothing to SPLIT — but there can still be something
+  // to point at, and those are different questions.
+  //
+  // A workspace root with exactly one deployable member is the shape: the root
+  // `package.json` declares `workspaces`, which `deployableParts` reads as "the
+  // real apps live somewhere else" and drops the root for. Returning null then
+  // handed the deploy back to a root `detect()`, which reads the workspace root
+  // as the app — and a workspace root's `scripts.start` is a delegation to the
+  // member (`yarn --cwd excalidraw-app start`), which is a DEV SERVER. So the
+  // repository built, deployed, bound port 5173, and failed its health check with
+  // "didn't start on $PORT" — at `confidence: "certain"`, because every
+  // individual reading was correct about the wrong directory.
+  //
+  // One service, no siblings, no path routing: the answer is the same deploy it
+  // would have had, aimed one level down.
+  if (parts.length === 1 && parts[0] !== "." && isWorkspaceRoot(repoDir)) {
+    try {
+      const abs = join(repoDir, parts[0]);
+      return { version: 1, services: [{ ...serviceFor(parts[0], await detect(abs), abs), path: "/" }] };
+    } catch {
+      return null;
+    }
+  }
   if (parts.length < 2) return null;
 
   // A part we could not read is a part we cannot deploy, so the whole split is

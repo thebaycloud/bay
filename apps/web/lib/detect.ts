@@ -77,6 +77,20 @@ export interface Toolchain {
    * job is to feed them is a bug waiting for a monorepo.
    */
   dir: string;
+  /**
+   * Where `install` runs, when that is not where everything else runs.
+   *
+   * Only a workspace member sets it, and it is the whole reason a workspace
+   * member can build at all. npm, pnpm and yarn workspaces resolve dependencies
+   * at the ROOT: the lockfile is there, `node_modules` is hoisted there, and
+   * running `npm install` inside `packages/app` either fails for want of a
+   * lockfile or installs a second, unhoisted copy that shadows the workspace.
+   * The build and the start command still belong to the member, which is what
+   * `dir` keeps saying.
+   *
+   * Absent means "the same place as `dir`", which is every non-workspace repo.
+   */
+  installDir?: string;
 }
 
 export interface BuildSpec {
@@ -148,6 +162,35 @@ interface PackageRule {
   manager: string;
   install?: string;
   installProject?: string;
+  /**
+   * The install, when the manifest's own contents change the answer.
+   *
+   * Only yarn needs it, and it needs it badly — see `yarnInstall`. Takes the
+   * directory so a rule can read the file it matched on.
+   */
+  installFor?: (dir: string) => string;
+}
+
+/**
+ * `--immutable` or `--frozen-lockfile`, decided by the lockfile itself.
+ *
+ * Yarn 1 and Yarn Berry are different programs sharing a filename, and the flag
+ * that means "do not touch the lockfile" was RENAMED between them: Berry takes
+ * `--immutable` and Yarn 1 exits non-zero on it. `corepack enable` with no
+ * `packageManager` field in package.json activates Yarn 1.22 — so naming Berry's
+ * flag for every `yarn.lock` fails the install layer of every classic Yarn repo,
+ * which is most of the large ones. Excalidraw is one.
+ *
+ * Berry writes a `__metadata:` block and a `version:` key at the top of the
+ * lockfile; Yarn 1 writes `# yarn lockfile v1`. Reading the file is the only way
+ * to know, because the filename is identical either way.
+ */
+function yarnInstall(dir: string): string {
+  const lock = readText(dir, "yarn.lock") ?? "";
+  const berry = /^__metadata:/m.test(lock) || /^\s{2}version:\s*\d/m.test(lock);
+  return berry
+    ? "corepack enable && yarn install --immutable"
+    : "corepack enable && yarn install --frozen-lockfile";
 }
 
 /**
@@ -166,8 +209,16 @@ const PACKAGE_RULES: Record<RuntimeLanguage, PackageRule[]> = {
     { file: "uv.lock", manager: "uv",
       install: "pip install --no-cache-dir uv && uv sync --frozen --no-dev --no-install-project",
       installProject: "uv sync --frozen --no-dev" },
+    // `POETRY_VIRTUALENVS_CREATE=false` is not a preference, it is what makes the
+    // installed packages reachable. Poetry's default is a venv under
+    // `~/.cache/pypoetry/virtualenvs/<hash>` — a path nothing in the image knows,
+    // and one this Dockerfile cannot put on `PATH` because the hash is computed at
+    // install time. So the build was green, every dependency was installed, and
+    // the container exited 127 on its own entry point. Installing into the image's
+    // system python is what a container wants anyway: the isolation a venv buys is
+    // already the container's job.
     { file: "poetry.lock", manager: "poetry",
-      install: "pip install --no-cache-dir poetry && poetry install --no-root --only main" },
+      install: "pip install --no-cache-dir poetry && POETRY_VIRTUALENVS_CREATE=false poetry install --no-root --only main" },
     { file: "Pipfile.lock", manager: "pipenv",
       install: "pip install --no-cache-dir pipenv && pipenv install --deploy --system" },
     { file: "requirements.txt", manager: "pip",
@@ -179,7 +230,7 @@ const PACKAGE_RULES: Record<RuntimeLanguage, PackageRule[]> = {
   ],
   node: [
     { file: "pnpm-lock.yaml", manager: "pnpm", install: "corepack enable && pnpm install --frozen-lockfile" },
-    { file: "yarn.lock", manager: "yarn", install: "corepack enable && yarn install --immutable" },
+    { file: "yarn.lock", manager: "yarn", installFor: yarnInstall },
     // bun >= 1.2 writes a TEXT lockfile. Listing only `bun.lockb` drops every
     // modern bun repo to `npm install`, which cannot install a bun workspace.
     { file: "bun.lock", manager: "bun", install: "bun install --frozen-lockfile" },
@@ -535,9 +586,27 @@ export function pythonModule(serviceDir: string): string | null {
  * is the right answer when neither manifest is present.
  */
 export function pythonInstall(serviceDir: string, detected: string | null): string | undefined {
-  if (existsSync(join(serviceDir, "requirements.txt"))) return detected ?? "pip install --no-cache-dir -r requirements.txt";
-  if (existsSync(join(serviceDir, "pyproject.toml"))) return "pip install --no-cache-dir .";
-  return undefined;
+  // The same table `detect()` reads, so a lockfile is not a second opinion.
+  //
+  // This used to know two manifests: `requirements.txt`, else `pip install .`.
+  // The FastAPI template's backend is `pyproject.toml` + `uv.lock`, so it fell to
+  // the second row — replacing `uv sync --frozen --no-dev`, an install pinned to
+  // a resolved dependency graph, with an unpinned resolve from PyPI. That is a
+  // downgrade applied to precisely the repositories that pinned most carefully,
+  // and it happened only through inference, which is the path a config-less repo
+  // takes by definition.
+  //
+  // `install` and `installProject` are joined, because a ServiceConfig has one
+  // field and both halves have to run for the environment to be complete. The
+  // Dockerfile keeps them apart for the layer cache; a plan-supplied string
+  // cannot, so it trades the cache for correctness.
+  const rule = PACKAGE_RULES.python.find((r) => existsSync(join(serviceDir, r.file)));
+  if (!rule) return undefined;
+  // `requirements.txt` is the row the detector subprocess can also be right
+  // about, and its answer may name a file or a flag we would not have guessed.
+  if (rule.file === "requirements.txt" && detected) return detected;
+  const full = [rule.install, rule.installProject].filter(Boolean).join(" && ");
+  return full || undefined;
 }
 
 /**
@@ -813,9 +882,25 @@ export function languagesIn(dir: string): RuntimeLanguage[] {
 function toolchainFor(
   language: RuntimeLanguage, f: DirFacts, rel: string, repoRoot: string,
 ): { tc: Toolchain; sure: boolean } | null {
-  const rule = PACKAGE_RULES[language].find((r) => hasFile(f.dir, r.file));
+  let rule = PACKAGE_RULES[language].find((r) => hasFile(f.dir, r.file));
+  // A workspace member installs at the root, with the root's manager.
+  //
+  // Its own `package.json` matches the last node rule and yields `npm install` —
+  // which is wrong twice over in a yarn or pnpm workspace: the wrong program, and
+  // the wrong directory. The root is where the lockfile is, where `node_modules`
+  // is hoisted to, and where the member's own dependencies are actually resolved
+  // from. Detected on the root's `workspaces` declaration rather than on the
+  // member, because that declaration is the thing that makes it a member.
+  const rootInstall = language === "node" && rel !== "." && workspaceRootOf(repoRoot)
+    ? PACKAGE_RULES.node.find((r) => r.install || r.installFor ? hasFile(repoRoot, r.file) : false)
+    : undefined;
+  // Only when the root has a REAL lockfile — a bare root `package.json` is not a
+  // dependency set worth preferring over the member's own.
+  const hoisted = rootInstall && rootInstall.file !== "package.json" ? rootInstall : undefined;
+  if (hoisted) rule = hoisted;
   if (!rule) return null;
 
+  const installFrom = hoisted ? repoRoot : f.dir;
   const { build, sure } = buildFor(language, rule.manager, f);
 
   // This directory first, then the repository root. A `backend/` with no version
@@ -836,13 +921,27 @@ function toolchainFor(
       version: runtime.version,
       versionFrom: runtime.versionFrom,
       packageManager: rule.manager,
-      install: rule.install,
+      install: rule.installFor ? rule.installFor(installFrom) : rule.install,
       installProject: rule.installProject,
       build,
       dir: rel,
+      // The root, when the root is where the dependencies live.
+      installDir: hoisted ? "." : undefined,
     },
     sure,
   };
+}
+
+/**
+ * The `workspaces` declaration of a `package.json`, if it has one.
+ *
+ * Its presence is the whole signal: it says the real apps live somewhere else,
+ * and that their dependencies are resolved here.
+ */
+function workspaceRootOf(dir: string): boolean {
+  const pkg = readJson(dir, "package.json");
+  const w = (pkg ?? {}).workspaces;
+  return Array.isArray(w) ? w.length > 0 : Boolean(w && typeof w === "object");
 }
 
 /**
@@ -943,9 +1042,23 @@ export function detect(dir: string, options: DetectOptions = {}, rel = "."): Bui
   if (extra) {
     const python = built.find((b) => b.tc.language === "python");
     if (python && !new RegExp(`(^|[^\\w-])${extra}`, "i").test(f.pythonText)) {
-      python.tc.install = python.tc.install
-        ? `${python.tc.install} && pip install --no-cache-dir ${extra}`
+      // Into the SAME environment the app's own dependencies went into.
+      //
+      // A bare `pip install uvicorn` installs to the image's system python, and
+      // uv puts the project in `/app/.venv`. Both then exist: uvicorn is on PATH
+      // and starts, and immediately fails to import the app, because the
+      // interpreter running it is not the one holding FastAPI. That reads as the
+      // app being broken rather than as the server having been installed beside
+      // it. `uv pip install` targets the project venv; poetry already installs
+      // into the system python because `POETRY_VIRTUALENVS_CREATE=false` above
+      // says so, so plain pip is right for every other manager.
+      const into = python.tc.packageManager === "uv"
+        ? `uv pip install ${extra}`
         : `pip install --no-cache-dir ${extra}`;
+      // Appended to whichever half of the install runs LAST. uv's project install
+      // recreates the venv, so anything added before it is discarded.
+      const target = python.tc.installProject ? "installProject" : "install";
+      python.tc[target] = python.tc[target] ? `${python.tc[target]} && ${into}` : into;
     }
   }
 

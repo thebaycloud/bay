@@ -346,3 +346,98 @@ test("the seven-language vocabulary maps onto the four ServiceConfig allows", ()
   for (const l of ["go", "rust", "ruby", "php", "java"]) assert.equal(serviceLanguage(l), "other", l);
   assert.equal(serviceLanguage("node", true), "static");
 });
+
+test("a workspace whose only app is nested is pointed at, not read from its root", () => {
+  // The Excalidraw shape, and the failure is a wrong SUCCESS.
+  //
+  // `deployableParts` correctly drops the workspace root — it declares
+  // `workspaces`, so the real app lives elsewhere — leaving one part, which was
+  // below the two-part threshold for a SPLIT. Returning null then handed the
+  // deploy back to a root `detect()`, which reads the workspace root as the app.
+  // A workspace root's `scripts.start` is a delegation to the member
+  // (`yarn --cwd excalidraw-app start`), which is a DEV SERVER: the repo built,
+  // deployed, bound port 5173 and failed its health check with "didn't start on
+  // $PORT" — at confidence "certain", because every individual reading was
+  // correct about the wrong directory.
+  //
+  // There is nothing to split here. There is something to aim at.
+  const dir = repo({
+    "package.json": JSON.stringify({
+      private: true, workspaces: ["excalidraw-app", "packages/*"],
+      scripts: { start: "yarn --cwd excalidraw-app start", build: "yarn --cwd excalidraw-app build" },
+    }),
+    "yarn.lock": "# yarn lockfile v1\n",
+    "excalidraw-app/package.json": JSON.stringify({
+      scripts: { start: "vite", build: "vite build" },
+      dependencies: { react: "18.2.0" }, devDependencies: { vite: "5.0.12" },
+    }),
+    "excalidraw-app/vite.config.mts": "export default {}\n",
+  });
+
+  return inferAppConfig(dir, detectorFromFiles(dir)).then((cfg) => {
+    assert.ok(cfg, "a workspace with one app is still an app");
+    assert.equal(cfg!.services.length, 1, "one app is one service — no sibling, no path routing");
+    const only = cfg!.services[0];
+    assert.equal(only.dir, "excalidraw-app");
+    assert.equal(only.path, "/");
+    // A Vite SPA is a directory of files, which is the lane it deploys on today.
+    // The dev server must not have survived into the answer.
+    assert.equal(only.language, "static");
+    assert.notEqual(only.start, "yarn start");
+  });
+});
+
+test("a plain repo with one app is still declined, because there is nothing to aim at", () => {
+  // The narrowing matters as much as the widening: `workspaces` is the signal,
+  // not "there is a subdirectory". Without it the root may well be the app —
+  // a root Express API beside a `frontend/` is the shape `deployableParts`
+  // already keeps the root for — and declining hands the repo to the path it
+  // takes today, which is the rule this module never breaks.
+  const dir = repo({
+    "package.json": JSON.stringify({ dependencies: { next: "^15" }, scripts: { build: "next build", start: "next start" } }),
+  });
+  return inferAppConfig(dir, detectorFromFiles(dir)).then((cfg) => assert.equal(cfg, null));
+});
+
+test("an inferred service carries the migration its directory implies", () => {
+  // `DetectedStack` had nowhere to put a release command, so `detect()` found
+  // `alembic upgrade head` for a backend and `serviceFor` dropped it — and the
+  // service deployed GREEN against an unmigrated schema. That is the worst
+  // failure shape the platform has, and it was reachable only through inference,
+  // which is the path a config-less repo takes by definition.
+  const dir = repo({
+    "frontend/package.json": JSON.stringify({ dependencies: { vite: "^5" }, scripts: { build: "vite build" } }),
+    "backend/requirements.txt": "fastapi\nuvicorn\nalembic\nsqlalchemy\npsycopg2-binary\n",
+    "backend/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+    "backend/alembic.ini": "[alembic]\n",
+  });
+
+  return inferAppConfig(dir, detectorFromFiles(dir)).then((cfg) => {
+    const api = cfg!.services.find((s) => s.dir === "backend")!;
+    assert.equal(api.release, "alembic upgrade head");
+    // And the database that migration needs was inferred alongside it.
+    assert.equal(api.needsDB, true);
+  });
+});
+
+test("a lockfile-pinned python service is not downgraded to an unpinned resolve", () => {
+  // `pythonInstall` knew two manifests — `requirements.txt`, else
+  // `pip install .`. The FastAPI template's backend is `pyproject.toml` +
+  // `uv.lock`, so it fell to the second row: an install pinned to a resolved
+  // dependency graph replaced by an unpinned resolve from PyPI, applied to
+  // precisely the repositories that pinned most carefully.
+  const dir = repo({
+    "frontend/package.json": JSON.stringify({ dependencies: { vite: "^5" }, scripts: { build: "vite build" } }),
+    "backend/pyproject.toml": '[project]\nname = "app"\ndependencies = ["fastapi"]\n',
+    "backend/uv.lock": "version = 1\n",
+    "backend/app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+  });
+
+  return inferAppConfig(dir, detectorFromFiles(dir)).then((cfg) => {
+    const api = cfg!.services.find((s) => s.dir === "backend")!;
+    assert.match(api.install!, /uv sync --frozen/);
+    // Both halves are present: a ServiceConfig has one field where a toolchain
+    // has two, and an environment missing the project install is incomplete.
+    assert.match(api.install!, /--no-install-project.*&&.*uv sync --frozen --no-dev$/);
+  });
+});

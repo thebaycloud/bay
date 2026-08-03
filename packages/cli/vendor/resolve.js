@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 8c41a84e3b2cceea
+// supersonic-vendor-stamp 78cb06605ef1dad4
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -717,11 +717,26 @@ function clauseSpan(clause) {
       return null;
   }
 }
+function hyphenSpan(alt) {
+  const m = alt.match(/^v?(\d+(?:\.\d+)*)(?:\.(?:\*|x))*\s+-\s+v?(\d+(?:\.\d+)*)(?:\.(?:\*|x))*$/i);
+  if (!m) return null;
+  const lo = parts(m[1]);
+  const hi = familySpan(m[2]);
+  if (!lo || !hi) return null;
+  return { lo: ver(lo), loInc: true, hi: hi.hi, hiInc: false };
+}
 function satisfying(language, spec) {
   const alternatives = spec.split("||").map((s) => s.trim()).filter(Boolean);
   if (!alternatives.length) return null;
   const accepted = /* @__PURE__ */ new Set();
   for (const alt of alternatives) {
+    const hyphen = hyphenSpan(alt);
+    if (hyphen) {
+      for (const known of KNOWN_VERSIONS[language]) {
+        if (overlaps(familySpan(known), hyphen)) accepted.add(known);
+      }
+      continue;
+    }
     const clauses = alt.split(/\s*,\s*|\s+/).filter(Boolean);
     const spans = [];
     const excluded = [];
@@ -851,6 +866,11 @@ function runtimePins(f) {
   if (/^python-/i.test(rt)) add("python", rt, rt.replace(/^python-/i, ""), "runtime.txt");
   const requiresPython = f.pyproject?.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m)?.[1];
   if (requiresPython) add("python", requiresPython, requiresPython, "pyproject.toml requires-python", "range");
+  const poetryTable = f.pyproject?.match(/^[ \t]*\[tool\.poetry\.dependencies\][ \t]*\r?\n([\s\S]*?)(?=^[ \t]*\[|$(?![\s\S]))/m)?.[1];
+  const poetryPython = poetryTable?.match(/^\s*python\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (poetryPython) {
+    add("python", poetryPython, poetryPython, "pyproject.toml [tool.poetry.dependencies] python", "range");
+  }
   const nvm = firstLine(f.nvmrc);
   if (nvm) {
     const codename = nvm.toLowerCase().match(/^lts\/(.+)$/)?.[1];
@@ -1025,6 +1045,11 @@ function declaredRuntime(runtime) {
 }
 
 // lib/detect.ts
+function yarnInstall(dir) {
+  const lock = readText(dir, "yarn.lock") ?? "";
+  const berry = /^__metadata:/m.test(lock) || /^\s{2}version:\s*\d/m.test(lock);
+  return berry ? "corepack enable && yarn install --immutable" : "corepack enable && yarn install --frozen-lockfile";
+}
 var PACKAGE_RULES = {
   python: [
     // `uv sync` builds the local project, and the cached layer runs before the
@@ -1035,10 +1060,18 @@ var PACKAGE_RULES = {
       install: "pip install --no-cache-dir uv && uv sync --frozen --no-dev --no-install-project",
       installProject: "uv sync --frozen --no-dev"
     },
+    // `POETRY_VIRTUALENVS_CREATE=false` is not a preference, it is what makes the
+    // installed packages reachable. Poetry's default is a venv under
+    // `~/.cache/pypoetry/virtualenvs/<hash>` — a path nothing in the image knows,
+    // and one this Dockerfile cannot put on `PATH` because the hash is computed at
+    // install time. So the build was green, every dependency was installed, and
+    // the container exited 127 on its own entry point. Installing into the image's
+    // system python is what a container wants anyway: the isolation a venv buys is
+    // already the container's job.
     {
       file: "poetry.lock",
       manager: "poetry",
-      install: "pip install --no-cache-dir poetry && poetry install --no-root --only main"
+      install: "pip install --no-cache-dir poetry && POETRY_VIRTUALENVS_CREATE=false poetry install --no-root --only main"
     },
     {
       file: "Pipfile.lock",
@@ -1057,7 +1090,7 @@ var PACKAGE_RULES = {
   ],
   node: [
     { file: "pnpm-lock.yaml", manager: "pnpm", install: "corepack enable && pnpm install --frozen-lockfile" },
-    { file: "yarn.lock", manager: "yarn", install: "corepack enable && yarn install --immutable" },
+    { file: "yarn.lock", manager: "yarn", installFor: yarnInstall },
     // bun >= 1.2 writes a TEXT lockfile. Listing only `bun.lockb` drops every
     // modern bun repo to `npm install`, which cannot install a bun workspace.
     { file: "bun.lock", manager: "bun", install: "bun install --frozen-lockfile" },
@@ -1247,7 +1280,11 @@ var FRAMEWORK_START = [
     token: "rails"
   },
   { when: (f) => hasFile(f.dir, "config.ru"), start: () => "bundle exec rackup -p $PORT -o 0.0.0.0" },
-  { when: (f) => hasFile(f.dir, "go.mod"), start: () => "/app/server" },
+  // Only when there is a binary to run. With several main packages and no
+  // convention to choose between them, nothing builds `/app/server` — so naming
+  // it as the start command would be a container that exits 127 on a file the
+  // build never produced.
+  { when: (f) => hasFile(f.dir, "go.mod"), start: (f) => goMainPackage(f.dir).pattern ? "/app/server" : null },
   {
     when: (f) => Boolean(f.cargo),
     start: (f) => `/app/target/release/${cargoBinary(f.cargo) ?? "app"}`
@@ -1277,9 +1314,11 @@ function pythonModule(serviceDir) {
   return null;
 }
 function pythonInstall(serviceDir, detected) {
-  if ((0, import_node_fs5.existsSync)((0, import_node_path5.join)(serviceDir, "requirements.txt"))) return detected ?? "pip install --no-cache-dir -r requirements.txt";
-  if ((0, import_node_fs5.existsSync)((0, import_node_path5.join)(serviceDir, "pyproject.toml"))) return "pip install --no-cache-dir .";
-  return void 0;
+  const rule = PACKAGE_RULES.python.find((r) => (0, import_node_fs5.existsSync)((0, import_node_path5.join)(serviceDir, r.file)));
+  if (!rule) return void 0;
+  if (rule.file === "requirements.txt" && detected) return detected;
+  const full = [rule.install, rule.installProject].filter(Boolean).join(" && ");
+  return full || void 0;
 }
 function serviceLanguage(language, isStatic = false) {
   if (isStatic) return "static";
@@ -1338,6 +1377,7 @@ function detectRelease(f, procfile, config) {
   if (f.gemfile && /rails/i.test(f.gemfile)) return "bundle exec rails db:migrate";
   return void 0;
 }
+var GO_SERVER_DIRS = ["server", "api", "web", "app", "service", "daemon", "http"];
 function goMainPackage(dir) {
   const mains = [];
   const walk = (abs, rel, depth) => {
@@ -1367,7 +1407,9 @@ function goMainPackage(dir) {
   if (mains.includes(".")) return { pattern: ".", sure: true };
   const underCmd = mains.filter((m) => m.startsWith("./cmd/"));
   if (underCmd.length === 1) return { pattern: underCmd[0], sure: true };
-  return { pattern: "./...", sure: false };
+  const named = GO_SERVER_DIRS.map((n) => underCmd.find((m) => m === `./cmd/${n}`)).filter(Boolean);
+  if (named.length === 1) return { pattern: named[0], sure: true };
+  return { pattern: null, sure: false };
 }
 function buildFor(language, manager, f) {
   if (language === "node") {
@@ -1376,7 +1418,7 @@ function buildFor(language, manager, f) {
   }
   if (language === "go") {
     const main = goMainPackage(f.dir);
-    return { build: `go build -o /app/server ${main.pattern}`, sure: main.sure };
+    return main.pattern ? { build: `go build -o /app/server ${main.pattern}`, sure: main.sure } : { sure: false };
   }
   if (language === "rust") return { build: "cargo build --release", sure: true };
   if (language === "java") {
@@ -1400,8 +1442,12 @@ function languagesIn(dir) {
   return RUNTIME_LANGUAGES.filter((l) => PACKAGE_RULES[l].some((r) => hasFile(dir, r.file)));
 }
 function toolchainFor(language, f, rel, repoRoot) {
-  const rule = PACKAGE_RULES[language].find((r) => hasFile(f.dir, r.file));
+  let rule = PACKAGE_RULES[language].find((r) => hasFile(f.dir, r.file));
+  const rootInstall = language === "node" && rel !== "." && workspaceRootOf(repoRoot) ? PACKAGE_RULES.node.find((r) => r.install || r.installFor ? hasFile(repoRoot, r.file) : false) : void 0;
+  const hoisted = rootInstall && rootInstall.file !== "package.json" ? rootInstall : void 0;
+  if (hoisted) rule = hoisted;
   if (!rule) return null;
+  const installFrom = hoisted ? repoRoot : f.dir;
   const { build, sure } = buildFor(language, rule.manager, f);
   const own = pinFor(runtimePins(readRuntimeFiles(f.dir)), language);
   const inherited = !own && repoRoot !== f.dir ? pinFor(runtimePins(readRuntimeFiles(repoRoot)), language) : null;
@@ -1415,13 +1461,20 @@ function toolchainFor(language, f, rel, repoRoot) {
       version: runtime.version,
       versionFrom: runtime.versionFrom,
       packageManager: rule.manager,
-      install: rule.install,
+      install: rule.installFor ? rule.installFor(installFrom) : rule.install,
       installProject: rule.installProject,
       build,
-      dir: rel
+      dir: rel,
+      // The root, when the root is where the dependencies live.
+      installDir: hoisted ? "." : void 0
     },
     sure
   };
+}
+function workspaceRootOf(dir) {
+  const pkg = readJson(dir, "package.json");
+  const w = (pkg ?? {}).workspaces;
+  return Array.isArray(w) ? w.length > 0 : Boolean(w && typeof w === "object");
 }
 function detect(dir, options = {}, rel = ".") {
   const { run, config } = options;
@@ -1467,7 +1520,9 @@ function detect(dir, options = {}, rel = ".") {
   if (extra) {
     const python = built.find((b) => b.tc.language === "python");
     if (python && !new RegExp(`(^|[^\\w-])${extra}`, "i").test(f.pythonText)) {
-      python.tc.install = python.tc.install ? `${python.tc.install} && pip install --no-cache-dir ${extra}` : `pip install --no-cache-dir ${extra}`;
+      const into = python.tc.packageManager === "uv" ? `uv pip install ${extra}` : `pip install --no-cache-dir ${extra}`;
+      const target = python.tc.installProject ? "installProject" : "install";
+      python.tc[target] = python.tc[target] ? `${python.tc[target]} && ${into}` : into;
     }
   }
   const needs = [...new Set(NEEDS.filter((n) => n.when(f)).flatMap((n) => n.packages))];
@@ -1587,7 +1642,7 @@ function serviceFor(relDir, stack, absoluteDir) {
   if (language === "static") {
     return { ...base, outputDir: stack.serve.mode === "static" ? stack.serve.outputDir : "dist" };
   }
-  return { ...base, start: startFor(stack, absoluteDir) };
+  return { ...base, start: startFor(stack, absoluteDir), release: stack.release };
 }
 function deployableParts(repoDir, facts) {
   const dirs = [];
@@ -1605,6 +1660,14 @@ async function inferAppConfig(repoDir, detect2) {
   if (!facts.declarations.length) return null;
   if (facts.dockerfiles.includes("Dockerfile")) return null;
   const parts2 = deployableParts(repoDir, facts);
+  if (parts2.length === 1 && parts2[0] !== "." && isWorkspaceRoot(repoDir)) {
+    try {
+      const abs = (0, import_node_path6.join)(repoDir, parts2[0]);
+      return { version: 1, services: [{ ...serviceFor(parts2[0], await detect2(abs), abs), path: "/" }] };
+    } catch {
+      return null;
+    }
+  }
   if (parts2.length < 2) return null;
   let detected;
   try {

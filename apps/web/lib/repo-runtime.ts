@@ -325,6 +325,33 @@ function clauseSpan(clause: string): Span | { exclude: Span } | null {
 }
 
 /**
+ * A semver HYPHEN range — `18.0.0 - 22.x.x` — as one span.
+ *
+ * npm's only range syntax that is written with spaces around an infix operator,
+ * which is what makes it the one the clause splitter cannot survive: splitting
+ * `18.0.0 - 22.x.x` on whitespace yields `["18.0.0", "-", "22.x.x"]`, `"-"` is
+ * ungrammatical, and the WHOLE spec becomes unreadable. So an app that pinned its
+ * runtime precisely got the platform default instead — Excalidraw's
+ * `"engines": { "node": "18.0.0 - 22.x.x" }` built on Node 24, which is the exact
+ * failure the version resolver exists to prevent, arrived at from inside the
+ * resolver.
+ *
+ * The upper bound is inclusive of the FAMILY: `- 22.x.x` and `- 22` both admit
+ * every 22.x, which is what `familySpan` already means everywhere else here.
+ */
+function hyphenSpan(alt: string): Span | null {
+  // `(?:\.(?:\*|x))*` and not `?`: `22.x.x` carries two wildcard segments, and
+  // matching only one leaves a trailing `.x` that fails the anchor — which is the
+  // exact spelling npm's own docs use for a hyphen range's upper bound.
+  const m = alt.match(/^v?(\d+(?:\.\d+)*)(?:\.(?:\*|x))*\s+-\s+v?(\d+(?:\.\d+)*)(?:\.(?:\*|x))*$/i);
+  if (!m) return null;
+  const lo = parts(m[1]);
+  const hi = familySpan(m[2]);
+  if (!lo || !hi) return null;
+  return { lo: ver(lo), loInc: true, hi: hi.hi, hiInc: false };
+}
+
+/**
  * Every version in `KNOWN_VERSIONS[language]` the spec accepts, newest last.
  *
  * `||` is a union of alternatives (npm, Composer); commas and spaces are an
@@ -338,6 +365,15 @@ function satisfying(language: RuntimeLanguage, spec: string): string[] | null {
 
   const accepted = new Set<string>();
   for (const alt of alternatives) {
+    // Before the splitter, because a hyphen range is the one npm spelling whose
+    // separator IS whitespace — splitting it first destroys it.
+    const hyphen = hyphenSpan(alt);
+    if (hyphen) {
+      for (const known of KNOWN_VERSIONS[language]) {
+        if (overlaps(familySpan(known)!, hyphen)) accepted.add(known);
+      }
+      continue;
+    }
     const clauses = alt.split(/\s*,\s*|\s+/).filter(Boolean);
     const spans: Span[] = [];
     const excluded: Span[] = [];
@@ -544,6 +580,22 @@ export function runtimePins(f: RuntimeFiles): RuntimePin[] {
   if (/^python-/i.test(rt)) add("python", rt, rt.replace(/^python-/i, ""), "runtime.txt");
   const requiresPython = f.pyproject?.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m)?.[1];
   if (requiresPython) add("python", requiresPython, requiresPython, "pyproject.toml requires-python", "range");
+  // Poetry declares the interpreter as a DEPENDENCY, not as `requires-python`.
+  //
+  // A poetry project is a pyproject.toml without the PEP 621 key, so reading only
+  // that key meant every one of them reported "platform default" while its own
+  // file said `python = "^3.11"` two lines away. Scoped to the
+  // `[tool.poetry.dependencies]` table so a package literally named `python` in
+  // some other table cannot be mistaken for the interpreter.
+  // `$(?![\s\S])` and not `\z`: JavaScript has no `\z`, so writing one matches a
+  // literal "z" and the table-to-end-of-file case — a pyproject.toml whose LAST
+  // section is the dependency table, which is the common shape — never matched.
+  const poetryTable = f.pyproject
+    ?.match(/^[ \t]*\[tool\.poetry\.dependencies\][ \t]*\r?\n([\s\S]*?)(?=^[ \t]*\[|$(?![\s\S]))/m)?.[1];
+  const poetryPython = poetryTable?.match(/^\s*python\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (poetryPython) {
+    add("python", poetryPython, poetryPython, "pyproject.toml [tool.poetry.dependencies] python", "range");
+  }
 
   // 3. Node.
   const nvm = firstLine(f.nvmrc);

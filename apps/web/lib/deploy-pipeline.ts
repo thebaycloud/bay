@@ -1694,14 +1694,45 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // apt packages and every toolchain the repo declares, for all seven
       // languages, and it resolves the version to a tag rather than passing a
       // range through to `FROM`.
-      const spec = detect(dir, { run: runCmd, config: appConfig ? primaryService(appConfig) : undefined });
+      //
+      // Rooted at the PRIMARY SERVICE's directory rather than at the repository,
+      // because those are only the same thing for a single-app repo. When
+      // inference splits a monorepo the primary can be `apps/web` — and detecting
+      // the parent of that is the measurement `infer-services.ts` was written
+      // around: the same detector pointed at the parent answered "Static site,
+      // 80%" and was wrong about a repository it read correctly one level down.
+      //
+      // The build CONTEXT stays the repository root — a workspace member's
+      // install needs the root lockfile — so the toolchain's `dir` is what
+      // carries the offset, which is exactly what `dir` is for.
+      const primaryCfg = appConfig ? primaryService(appConfig) : undefined;
+      const primaryRel = primaryCfg?.dir && primaryCfg.dir !== "." ? primaryCfg.dir : ".";
+      const spec = detect(
+        primaryRel === "." ? dir : join(dir, primaryRel),
+        { run: runCmd, config: primaryCfg, repoRoot: dir },
+        primaryRel,
+      );
 
       // The detector's and the planner's answers still win where they have one:
       // they are what deploys apps today, and this step replaces the ROUTING, not
       // their opinions. Applied to the serving toolchain rather than alongside it,
       // because `generateDockerfile` reads `toolchains` in preference to the flat
       // fields — so setting both would silently drop one of them.
-      const override = { install: runnerInstall ?? s.installCommand ?? undefined, build: runnerBuild ?? s.buildCommand ?? undefined };
+      // An INFERRED config must not override the toolchain, because it is the
+      // same reading arriving twice — and the second copy is lossier.
+      //
+      // `inferAppConfig` builds its services out of `detect()`, and a
+      // `ServiceConfig` has ONE install field where a toolchain has two. So
+      // `uv sync --frozen --no-dev --no-install-project` (cacheable, before the
+      // source) and `uv sync --frozen --no-dev` (after it) come back joined by
+      // `&&` and land entirely in the cached layer — where the project install
+      // has no source to install and the build fails. A user's config and a
+      // planner's plan are genuinely new information and still win; our own
+      // inference is not.
+      const configIsOurs = Boolean(appConfig) && !configWasWritten;
+      const override = configIsOurs
+        ? { install: undefined, build: undefined }
+        : { install: runnerInstall ?? s.installCommand ?? undefined, build: runnerBuild ?? s.buildCommand ?? undefined };
       const toolchains = spec.toolchains.map((t, i) => (i === 0
         ? { ...t, install: override.install ?? t.install, build: override.build ?? t.build }
         : t));
@@ -1731,7 +1762,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // Resolved against the disk, so only files that exist are named. The
           // glob this replaces was a hard build failure on zero matches, which is
           // every Maven, Gradle, .NET and bare-`index.php` repository.
-          manifests: manifestPaths(dir),
+          // Every directory a toolchain installs in, plus the repository root —
+          // a workspace member's install reads the ROOT lockfile, so naming only
+          // the member's own manifests loses the cache and, for a frozen
+          // lockfile install, the build.
+          manifests: manifestPaths(dir, [".", ...toolchains.map((t) => t.dir)]),
           // Declared here so the `--build-arg` the build config passes has
           // somewhere to land: an arg a Dockerfile never declares is dropped, and
           // the bundler runs without it while everything reports success.
@@ -2601,7 +2636,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const deploySibling = async (svc: ServiceConfig): Promise<{ ok: boolean; url?: string; error?: string; name: string }> => {
       const label = (svc.name || servicePath(svc).replace(/[^a-z0-9]+/gi, "") || "svc").toLowerCase();
       const name = cloudRunName(`${slug}-${label}`);
-      const plan = planFromConfig({ services: [svc] }, svc, planSource);
+      /**
+       * Planned as though this service were at the root, because in its own build
+       * context it is.
+       *
+       * `planFromConfig` wraps every command with `inDir(cmd, svc.dir)` — right
+       * when the context is the repository, which is what it was until a sibling
+       * started building from its own directory. Now `contextDir` IS `svc.dir`,
+       * so the wrap points at `api/api`: the install ran as
+       * `(cd api && pip install …)` inside a context that has no `api/`, and the
+       * CMD came out `(cd api && uvicorn …)` in an image whose WORKDIR already
+       * holds the app. One of the two has to account for the directory, and the
+       * context is the one that already does.
+       */
+      const plan = planFromConfig({ services: [svc] }, { ...svc, dir: "." }, planSource);
       const lang: "node" | "python" | null =
         plan.language === "node" ? "node" : plan.language === "python" ? "python" : null;
       // The refusal that made siblings node-or-python. It was never a statement
@@ -2649,7 +2697,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             // difference `inferAppConfig` was written for: the same detector
             // pointed at `frontend/` and `backend/` returns 95% and 90%, and
             // pointed at their parent returns "Static site, 80%" and is wrong.
-            const spec = detect(contextDir, { run: plan.run, config: svc }, svc.dir ?? ".");
+            // `rel` is where the toolchain sits IN THE BUILD CONTEXT, and this
+            // context is the service's own directory — so it is ".", not
+            // `svc.dir`. Passing `svc.dir` made every command in the generated
+            // file `(cd backend && …)` inside a context that IS backend, so the
+            // first RUN failed on a path that cannot exist. It broke every
+            // sibling, since a sibling by definition has a directory of its own.
+            //
+            // `repoRoot` still points at the repository, because version files
+            // are inherited downward: a monorepo writes `.nvmrc` once, at the top.
+            const spec = detect(contextDir, { run: plan.run, config: svc, repoRoot: dir }, ".");
             const primary = spec.toolchains[0];
             writeFileSync(join(contextDir, "Dockerfile"), generateDockerfile({
               language: primary?.language ?? plan.language ?? "node",

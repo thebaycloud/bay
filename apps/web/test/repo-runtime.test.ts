@@ -367,3 +367,56 @@ test("the log line says what was asked, where, and what happens next", () => {
   assert.match(msg, new RegExp(RUNTIME_VERSIONS.python.replace(".", "\\.")));
   assert.match(msg, /building this one from source/);
 });
+
+test("a semver hyphen range is a range, not three unreadable clauses", () => {
+  // npm's only range syntax written with spaces around an infix operator, which
+  // is what made it the one the clause splitter could not survive: splitting
+  // `18.0.0 - 22.x.x` on whitespace yields ["18.0.0", "-", "22.x.x"], "-" is
+  // ungrammatical, and the WHOLE spec became unreadable. So an app that pinned
+  // its runtime precisely got the platform default — Excalidraw's
+  // `"node": "18.0.0 - 22.x.x"` built on Node 24, which is the exact failure
+  // this resolver exists to prevent, arrived at from inside the resolver.
+  const files = (node: string) => ({ packageJson: { engines: { node } } });
+
+  assert.equal(tag(files("18.0.0 - 22.x.x"), "node"), "22");
+  // The upper bound is inclusive of the family, whichever way it is spelled.
+  assert.equal(tag(files("18 - 20"), "node"), "20");
+  assert.equal(tag(files("18.0.0 - 20.11.1"), "node"), "20");
+  // And it is recorded as a resolution rather than as a default.
+  assert.match(resolved(files("18.0.0 - 22.x.x"), "node").versionFrom!, /18\.0\.0 - 22\.x\.x → 22/);
+
+  // A hyphen that is not a range still declares nothing, rather than half of one
+  // — and says so, naming the file, which is the whole contract of a fallback.
+  assert.match(resolved(files("- 20"), "node").versionFrom!, /^platform default — .*not a version range we read/);
+  assert.equal(tag(files("- 20"), "node"), "24");
+});
+
+test("poetry declares the interpreter as a dependency, and it is still a pin", () => {
+  // A poetry project is a pyproject.toml WITHOUT the PEP 621 `requires-python`
+  // key, so reading only that key meant every one of them reported "platform
+  // default" while its own file said so two lines away.
+  const poetry = (python: string) => ({
+    pyproject: `[tool.poetry]\nname = "api"\n\n[tool.poetry.dependencies]\npython = "${python}"\nfastapi = "^0.110"\n`,
+  });
+
+  assert.equal(tag(poetry(">=3.10,<3.12"), "python"), "3.11");
+  assert.equal(tag(poetry("~3.10"), "python"), "3.10");
+  assert.match(resolved(poetry("~3.10"), "python").versionFrom!, /\[tool\.poetry\.dependencies\]/);
+
+  // The table may be the LAST thing in the file — the common shape, and the one
+  // an end-of-input lookahead written as `\z` (which JavaScript does not have)
+  // silently failed to match.
+  assert.equal(tag({ pyproject: '[tool.poetry.dependencies]\npython = "3.10"\n' }, "python"), "3.10");
+
+  // PEP 621 still wins where a project states both: it is the standard key.
+  assert.equal(
+    tag({ pyproject: '[project]\nrequires-python = ">=3.12"\n\n[tool.poetry.dependencies]\npython = "3.9"\n' }, "python"),
+    "3.14",
+  );
+
+  // A package named `python` in some other table is not the interpreter.
+  assert.equal(
+    resolved({ pyproject: '[tool.poetry.group.dev.dependencies]\npython = "3.9"\n' }, "python").versionFrom,
+    "platform default",
+  );
+});

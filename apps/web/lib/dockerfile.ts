@@ -73,6 +73,14 @@ export interface DockerfileToolchain {
   build?: string;
   /** Relative to the build context. `"."` is the root. */
   dir: string;
+  /**
+   * Where `install` runs, when that is not `dir`.
+   *
+   * A workspace member: the lockfile and the hoisted `node_modules` are at the
+   * root, and the build and the start command are in the member. See
+   * `Toolchain.installDir` in detect.ts.
+   */
+  installDir?: string;
 }
 
 /** How the app's dependencies and start command are already resolved elsewhere. */
@@ -446,9 +454,15 @@ function graftNode(version: string | undefined): string[] {
 function pathEntries(toolchains: DockerfileToolchain[]): string[] {
   const out: string[] = [];
   for (const t of toolchains) {
-    const root = t.dir === "." || t.dir === "" ? "/app" : `/app/${t.dir}`;
+    // Where the install PUT them, which for a workspace member is the root.
+    const at = t.installDir ?? t.dir;
+    const root = at === "." || at === "" ? "/app" : `/app/${at}`;
     if (t.language === "python") out.push(`${root}/.venv/bin`);
     if (t.language === "node") out.push(`${root}/node_modules/.bin`);
+    // A workspace member can also carry its own unhoisted binaries.
+    if (t.language === "node" && at !== t.dir) {
+      out.push(t.dir === "." || t.dir === "" ? "/app/node_modules/.bin" : `/app/${t.dir}/node_modules/.bin`);
+    }
   }
   return [...new Set(out)];
 }
@@ -559,13 +573,16 @@ export function generateDockerfile(i: DockerfileInput): string {
 
   const run = (cmd: string, dir: string) => runWithSecrets(inDir(cmd.trim(), dir), secrets);
 
+  // `installDir` when it is set: a workspace member installs at the root.
+  const installIn = (t: DockerfileToolchain) => t.installDir ?? t.dir;
+
   if (copies.length) {
     lines.push(...copies);
-    for (const t of cacheable) if (t.install?.trim()) lines.push(run(t.install, t.dir));
+    for (const t of cacheable) if (t.install?.trim()) lines.push(run(t.install, installIn(t)));
     lines.push(``, `COPY . .`);
   } else {
     lines.push(`COPY . .`);
-    for (const t of cacheable) if (t.install?.trim()) lines.push(run(t.install, t.dir));
+    for (const t of cacheable) if (t.install?.trim()) lines.push(run(t.install, installIn(t)));
   }
 
   // `uv sync` and `pip install .` build the LOCAL project, so they cannot run in
@@ -579,6 +596,13 @@ export function generateDockerfile(i: DockerfileInput): string {
   const path = pathEntries(chains);
   lines.push(
     ``,
+    // The command runs where the app is, which is not always the root of the
+    // context. A primary service in `apps/web/` installs and builds under
+    // `(cd apps/web && …)` — and then `npm start` from `/app` reads the
+    // WORKSPACE's package.json, so it either runs the wrong script or none. The
+    // start command is the one instruction `inDir` cannot wrap, because `CMD` is
+    // not a `RUN`; `WORKDIR` is how a Dockerfile says the same thing.
+    ...(primary.dir && primary.dir !== "." ? [`WORKDIR /app/${primary.dir}`] : []),
     // Cloud Run assigns the port and injects it; the app must read it. Stated so
     // an image run anywhere else has a sane default rather than nothing.
     `ENV PORT=8080`,

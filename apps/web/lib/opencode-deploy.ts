@@ -45,13 +45,22 @@ function vertexBaseUrl(location: string): string {
   return `https://${host}/v1beta1/projects/${PROJECT}/locations/${location}/endpoints/openapi`;
 }
 /**
- * The model both agents run on, as `vertex/<vertex-model-id>`.
+ * The model both agents run on, as `<provider>/<model-id>`.
  *
  * One constant, because the planner and the repair agent must never diverge:
  * the repair agent's job is to fix what the planner produced, and comparing a
  * model change is meaningless if only one of them moved.
+ *
+ * OpenAI rather than Vertex Gemini, and the provider is the reason rather than
+ * the model. Vertex is reached through `@ai-sdk/openai-compatible`, whose
+ * chat-completions shape has nowhere to carry the state a reasoning model keeps
+ * between tool calls — Gemini 3.x hard-400s on the second call without its
+ * `thought_signature`, which is why the Vertex default was pinned to 2.5-pro and
+ * could not move forward. `@ai-sdk/openai` speaks the Responses API, which
+ * preserves reasoning items across a tool loop, and the repair agent IS a tool
+ * loop: its whole value is remembering what it already tried.
  */
-const MODEL = process.env.OPENCODE_MODEL || "vertex/google/gemini-2.5-pro";
+const MODEL = process.env.OPENCODE_MODEL || "openai/gpt-5.6-sol";
 /** `vertex`, `google` or `openai` — which API the provider block below speaks. */
 const PROVIDER_ID = MODEL.split("/")[0];
 /** The model id the provider block has to declare, i.e. everything after the provider. */

@@ -516,3 +516,49 @@ test("a monorepo's manifests really do land in their own directories", { skip: !
 test("a Dockerfile with nothing to run is refused rather than built", () => {
   assert.throws(() => generateDockerfile({ ...base, command: "  " }), /needs a command to run/);
 });
+
+/* -------------------------------------------------------------------------- */
+/* Workspace members and services that are not at the root                    */
+/* -------------------------------------------------------------------------- */
+
+test("a workspace member installs at the root and runs in its own directory", () => {
+  // Two halves of one shape, and each one on its own is a broken image.
+  //
+  // The install belongs at the ROOT: the lockfile is there and `node_modules` is
+  // hoisted there. The start command belongs to the MEMBER: `npm start` from
+  // `/app` reads the workspace root's package.json, so it runs the wrong script
+  // or none. `CMD` is not a `RUN`, so `inDir` cannot wrap it — `WORKDIR` is how a
+  // Dockerfile says the same thing.
+  const df = generateDockerfile({
+    language: "node",
+    command: "npm start",
+    manifests: ["package.json", "package-lock.json", "apps/web/package.json"],
+    toolchains: [{
+      language: "node", version: "22", packageManager: "npm",
+      install: "npm ci", build: "npm run build", dir: "apps/web", installDir: ".",
+    } as never],
+  });
+
+  // Installed at the root, unwrapped.
+  assert.match(df, /^RUN npm ci$/m);
+  // Built in the member.
+  assert.match(df, /^RUN \(cd apps\/web && npm run build\)$/m);
+  // Started in the member.
+  assert.match(df, /^WORKDIR \/app\/apps\/web$/m);
+  // The hoisted binaries are the ones on PATH, and the member's own are too.
+  assert.match(df, /^ENV PATH=.*\/app\/node_modules\/\.bin.*\/app\/apps\/web\/node_modules\/\.bin/m);
+  // The member's manifest keeps its path, or the root install cannot see the
+  // workspace it is installing for.
+  assert.match(df, /^COPY apps\/web\/package\.json apps\/web\/$/m);
+});
+
+test("a service at the root still gets no WORKDIR of its own", () => {
+  // The default has to stay exactly what it was: `WORKDIR /app`, named once. A
+  // second `WORKDIR /app/.` would be harmless and wrong, and this is the case
+  // every single-directory app takes.
+  const df = generateDockerfile({
+    language: "python", version: "3.12", command: "gunicorn app:app -b :$PORT",
+    install: "pip install -r requirements.txt", manifests: ["requirements.txt"],
+  });
+  assert.equal(df.match(/^WORKDIR /gm)?.length, 1);
+});

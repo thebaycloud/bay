@@ -497,3 +497,93 @@ test("Go binaries we cannot choose between produce no build at all", () => {
   assert.notEqual(s.command, "/app/server");
   assert.equal(s.confidence, "guessed");
 });
+
+/* -------------------------------------------------------------------------- */
+/* Package managers whose flags depend on the manifest                        */
+/* -------------------------------------------------------------------------- */
+
+test("yarn's frozen-lockfile flag comes from the lockfile, not from the filename", () => {
+  // Yarn 1 and Yarn Berry are different programs sharing a filename, and the flag
+  // meaning "do not touch the lockfile" was RENAMED between them. `corepack
+  // enable` with no `packageManager` field activates Yarn 1.22, which exits
+  // non-zero on `--immutable` — so naming Berry's flag for every `yarn.lock`
+  // failed the install layer of every classic Yarn repo, which is most of the
+  // large ones.
+  const classic = repo({
+    "package.json": pkg({ scripts: { build: "vite build" } }),
+    "yarn.lock": "# yarn lockfile v1\n\n\nfoo@^1.0.0:\n  version \"1.0.0\"\n",
+  });
+  assert.match(tc(detect(classic), "node")!.install!, /--frozen-lockfile/);
+
+  const berry = repo({
+    "package.json": pkg({ scripts: { build: "vite build" } }),
+    "yarn.lock": "__metadata:\n  version: 8\n  cacheKey: 10c0\n",
+  });
+  assert.match(tc(detect(berry), "node")!.install!, /--immutable/);
+});
+
+test("poetry installs into the image's own python, not a venv nothing can find", () => {
+  // Poetry's default is a venv under `~/.cache/pypoetry/virtualenvs/<hash>` — a
+  // path this Dockerfile cannot put on PATH, because the hash is computed at
+  // install time. So the build was green, every dependency was installed, and the
+  // container exited 127 on its own entry point.
+  const dir = repo({
+    "pyproject.toml": "[tool.poetry]\nname = \"api\"\n",
+    "poetry.lock": "# lock\n",
+    "main.py": "app = 1\n",
+  });
+  assert.match(tc(detect(dir), "python")!.install!, /POETRY_VIRTUALENVS_CREATE=false/);
+});
+
+test("a server binary the app lacks is installed into the environment the app is in", () => {
+  // A bare `pip install uvicorn` lands in the image's system python while uv put
+  // the project in `/app/.venv`. Both then exist: uvicorn is on PATH and starts,
+  // and immediately fails to import the app, because the interpreter running it
+  // is not the one holding FastAPI. That reads as the app being broken.
+  const dir = repo({
+    "pyproject.toml": "[project]\nname = \"app\"\ndependencies = [\"fastapi\"]\n",
+    "uv.lock": "version = 1\n",
+    "main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+  });
+  const python = tc(detect(dir), "python")!;
+  assert.match(python.installProject!, /uv pip install uvicorn/);
+  // And never into the system python, which is where it would be unreachable.
+  assert.doesNotMatch(python.install!, /pip install --no-cache-dir uvicorn/);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Workspaces                                                                 */
+/* -------------------------------------------------------------------------- */
+
+test("a workspace member installs at the root, where its dependencies actually are", () => {
+  // npm, pnpm and yarn workspaces resolve at the ROOT: the lockfile is there and
+  // `node_modules` is hoisted there. The member's own `package.json` matches the
+  // last node rule and yields `npm install`, which in a yarn workspace is the
+  // wrong program in the wrong directory.
+  const dir = repo({
+    "package.json": pkg({ private: true, workspaces: ["apps/*"] }),
+    "yarn.lock": "# yarn lockfile v1\n",
+    "apps/web/package.json": pkg({ scripts: { build: "vite build", start: "node server.js" } }),
+  });
+  const s = detect(join(dir, "apps", "web"), { repoRoot: dir }, "apps/web");
+  const node = tc(s, "node")!;
+  assert.equal(node.packageManager, "yarn");
+  assert.match(node.install!, /yarn install --frozen-lockfile/);
+  // The install runs at the root; the build and the start stay with the member.
+  assert.equal(node.installDir, ".");
+  assert.equal(node.dir, "apps/web");
+  assert.equal(node.build, "yarn run build");
+});
+
+test("a repo that is not a workspace keeps installing where it lives", () => {
+  // The rule is the root's `workspaces` declaration, not "there is a directory
+  // above this one". A plain subdirectory service owns its own dependencies.
+  const dir = repo({
+    "package.json": pkg({ scripts: { build: "tsc" } }),
+    "package-lock.json": "{}",
+    "backend/package.json": pkg({ scripts: { start: "node index.js" } }),
+  });
+  const node = tc(detect(join(dir, "backend"), { repoRoot: dir }, "backend"), "node")!;
+  assert.equal(node.installDir, undefined);
+  assert.equal(node.dir, "backend");
+});
