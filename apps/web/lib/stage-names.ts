@@ -1,0 +1,65 @@
+/**
+ * The stage names, which are an API rather than labels.
+ *
+ * Its own module, with NO imports, for one reason: `lib/analytics/attempts.ts` is
+ * deliberately pure — its header says so, "kept pure so it can be tested against
+ * rows that are awkward on purpose" — and `lib/stages.ts` opens a Postgres pool.
+ * Putting the vocabulary in stages.ts would have made the analytics reconstruction
+ * depend on a database connection to know the name of a string.
+ *
+ * WHY ONE LIST AT ALL
+ *
+ * `deploy_stages` has consumers that hardcode every name, and the table has no
+ * CHECK constraint on `stage` — 004 constrains only `outcome`, and `lane`'s
+ * constraint is deferred to phase two by 012 — so nothing in the database objects
+ * to a typo either. The failure that produces is not an error, it is a number that
+ * quietly becomes zero:
+ *
+ *   - activation is `min(ended_at) FILTER (WHERE stage = 'deploy' AND outcome =
+ *     'ok')` with no WHERE and no window (`analytics/queries.ts`), so a renamed
+ *     `deploy` makes every app look like it never went live.
+ *   - `lane` is taken from the last stage NOT in `LANE_BLIND_STAGES`, so a new
+ *     name that should have been blind silently becomes the lane of record.
+ *   - `run-record` is what splits rows into deploys at all.
+ *
+ * This file is what those three read from, so a rename has to move one line and
+ * a test rather than be remembered in four places.
+ */
+
+/**
+ * Written OUTSIDE the pipeline — `app/api/deploy/route.ts` and
+ * `scripts/deploy-job.ts` — before a lane exists at all.
+ */
+export const HANDOFF_STAGES = ["run-record", "job-dispatch", "job-cold-start", "run-fetch"] as const;
+
+/**
+ * Written inside the pipeline before the lane is chosen.
+ *
+ * `unpack` is deliberately NOT here even though it is also emitted before the
+ * recorder learns the lane. It is charged to "static" on the prebuilt path and to
+ * "unknown" on the upload path, and reclassifying it would change what
+ * `LANE_BLIND_STAGES` means for rows already in the table. The membership here
+ * reproduces exactly what was hand-written in analytics/attempts.ts; only its
+ * source moved.
+ */
+export const PRE_LANE_STAGES = ["clone", "detect", "infer-services"] as const;
+
+/** Written by a recorder that knows the lane. */
+export const LANE_KNOWN_STAGES = [
+  "unpack", "prepare", "build", "upload", "release", "deploy", "verify", "processes", "repair-agent",
+] as const;
+
+/** Every stage name this system may write. */
+export const ALL_STAGES: readonly string[] = [...HANDOFF_STAGES, ...PRE_LANE_STAGES, ...LANE_KNOWN_STAGES];
+
+/** The stage whose presence means a new deploy began. */
+export const ATTEMPT_START_STAGE = "run-record";
+
+/**
+ * The stage whose successful end means the app went live.
+ *
+ * Read by the activation metric and emitted by the pipeline. Both go through this
+ * constant so a test can assert they still agree — which is the whole defence,
+ * because the query returns a perfectly well-formed null when they do not.
+ */
+export const ACTIVATION_STAGE = "deploy";

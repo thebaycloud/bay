@@ -38,6 +38,18 @@ export type StageLane = Lane | "unknown";
 export const STAGE_LANES: StageLane[] = ["unknown", ...ALL_LANES];
 export type Outcome = "ok" | "failed" | "skipped";
 
+/**
+ * The stage vocabulary lives in `lib/stage-names.ts`, which imports nothing.
+ *
+ * Re-exported here so a caller that already has the recorder does not need a
+ * second import, and kept OUT of this file because analytics/attempts.ts needs the
+ * names and must not acquire a Postgres pool to read a string.
+ */
+export {
+  HANDOFF_STAGES, PRE_LANE_STAGES, LANE_KNOWN_STAGES, ALL_STAGES,
+  ATTEMPT_START_STAGE, ACTIVATION_STAGE,
+} from "./stage-names";
+
 export interface StageRow {
   slug: string;
   lane: StageLane;

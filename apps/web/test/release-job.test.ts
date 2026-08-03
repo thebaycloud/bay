@@ -194,10 +194,36 @@ test("a release command with a comma survives the argv", () => {
 
 test("the proxy wait is bounded, POSIX, and probes for its tools", () => {
   const wait = proxyWait("127.0.0.1", "5432", 30);
-  assert.ok(!wait.includes("/dev/tcp"), "bash-only; the customer's /bin/sh is usually dash");
   assert.ok(wait.includes("command -v"), "a missing interpreter must not hang the release");
   assert.ok(wait.includes("[ $i -lt 30 ]"), "an unbounded wait turns a slow proxy into a task timeout");
   assert.ok(!wait.includes("~~"), "the delimiter would split the command it is embedded in");
+
+  // `/dev/tcp` is bash-only and the customer's /bin/sh is usually dash — so it is
+  // allowed ONLY inside a `bash -c`, guarded by `command -v bash`. Inline, it is
+  // a redirect dash cannot perform. This assertion replaces a flat ban: the ban
+  // was right while this string only ever ran in the runner's Node and Python
+  // images, and became wrong the moment it started prefixing a Go container's
+  // CMD, where bash is the only one of the four probes that exists.
+  assert.ok(wait.includes("command -v bash >/dev/null 2>&1 && bash -c 'exec 3<>/dev/tcp/"),
+    "the /dev/tcp probe must be guarded and run through bash, never inline");
+  assert.doesNotMatch(wait.replace(/bash -c '[^']*'/g, ""), /\/dev\/tcp/,
+    "no unguarded /dev/tcp outside the bash -c");
+});
+
+test("an image with none of the four probes waits zero seconds, not thirty", () => {
+  // The loop had no early exit for "none of these tools is here": it ran the full
+  // count sleeping one second per iteration and then fell through. On the runner
+  // that never happened — every image was Node or Python. Prefixed to a generated
+  // Go, Rust or Java image it is a silent 30-second penalty on every cold start,
+  // which reads as the platform being slow and appears in no log.
+  const wait = proxyWait("127.0.0.1", "5432", 30);
+  const guard = wait.slice(0, wait.indexOf("then"));
+  for (const tool of ["nc", "python3", "node", "bash"]) {
+    assert.ok(guard.includes(`command -v ${tool} `), `${tool} is not in the availability guard`);
+  }
+  // The loop is INSIDE the guard, so a shell that finds nothing skips it whole.
+  assert.ok(wait.indexOf("while") > wait.indexOf("then"));
+  assert.ok(wait.trimEnd().endsWith("fi;"));
 });
 
 test("executing waits for the verdict, on the job the deploy just wrote", () => {

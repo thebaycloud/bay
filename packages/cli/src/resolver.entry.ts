@@ -41,6 +41,18 @@ export {
 
 export { readRepoFacts, declaredLanguages, normalizeLanguage } from "../../../apps/web/lib/repo-facts";
 
+/**
+ * What the deploy will build, read by the same code the deploy reads it with.
+ *
+ * `check` used to answer "which version does the platform have, and does this app
+ * fit" — a question that stopped existing when the platform stopped having one
+ * Python and one Node. It now answers "which version will this be built on, and
+ * which file said so", and that answer has to come from `detect()` itself rather
+ * than from a second reader, or `check` and the deploy disagree about the one
+ * thing `check` exists to predict.
+ */
+export { detect, serviceLanguage } from "../../../apps/web/lib/detect";
+
 // The manifest half of plan-deps: what the runner images actually provide, and
 // the sentence to say when a repo asks for more. `check` is the first thing that
 // can say it before a build starts paying for it.

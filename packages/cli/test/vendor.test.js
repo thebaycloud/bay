@@ -13,6 +13,14 @@
  * Written because the committed vendor/detector.js had been stale for two days
  * and was still answering `python:3.12` after plan-deps.ts moved the platform to
  * 3.14 — the exact number whose wrongness that file's comment is about.
+ *
+ * The list of sources is no longer written down twice. It used to be a literal in
+ * stamp.mjs naming seven files, and esbuild inlines more than seven — so a rewrite
+ * of an unlisted input (repo-runtime.ts is the one that mattered) moved nothing and
+ * this test stayed green on a bundle built from the old rules. It now comes from
+ * esbuild's own metafile via vendor/inputs.json, and the first assertion below is
+ * that the file is there at all: an empty list makes a stamp loop pass by iterating
+ * nothing, which is the same silence in a new place.
  */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -26,13 +34,54 @@ const REPO_ROOT = path.join(CLI_ROOT, "..", "..");
 const inCheckout = fs.existsSync(path.join(REPO_ROOT, "apps/web/lib/resolve.ts"));
 
 test("every vendored bundle was built from the source that is here now", { skip: !inCheckout }, async () => {
-  const { BUNDLES, stampSources, stampOf } = await import("../scripts/stamp.mjs");
-  for (const [file, sources] of Object.entries(BUNDLES)) {
+  const { readInputs, stampSources, stampOf } = await import("../scripts/stamp.mjs");
+  const inputs = readInputs(CLI_ROOT);
+
+  // A missing or half-written inputs.json turns the loop below into zero
+  // assertions, which reads as a pass. Both bundles have to be described before
+  // anything is compared.
+  assert.deepEqual(
+    Object.keys(inputs).sort(), ["detector.js", "resolve.js"],
+    "vendor/inputs.json does not describe both bundles — run `npm run bundle` in packages/cli",
+  );
+
+  // Each bundle's own entry point has to be in its list. That is the cheapest
+  // proof the metafile was actually read: a list assembled any other way is
+  // liable to describe the imports and forget the file doing the importing.
+  const ENTRY = {
+    "resolve.js": "packages/cli/src/resolver.entry.ts",
+    "detector.js": "services/deploy-agent/src/index.ts",
+  };
+
+  for (const [file, sources] of Object.entries(inputs)) {
+    assert.ok(sources.includes(ENTRY[file]), `vendor/inputs.json for ${file} is missing its entry point ${ENTRY[file]}`);
     const built = stampOf(path.join(CLI_ROOT, "vendor", file));
     assert.equal(
       built, stampSources(REPO_ROOT, sources),
       `vendor/${file} is stale — run \`npm run bundle\` in packages/cli`,
     );
+  }
+});
+
+test("the stamp covers every file esbuild inlines, not a list somebody maintains", { skip: !inCheckout }, async () => {
+  // The regression this closes: stamp.mjs named seven sources for resolve.js and
+  // esbuild pulls in fourteen, so a rewrite of any of the other seven moved
+  // nothing and this file stayed green on a bundle built from the old rules.
+  // repo-runtime.ts is the one that mattered — it is the first file the deploy
+  // plan rewrites. Named individually rather than counted, because a count passes
+  // the day somebody swaps one file for another.
+  const { readInputs } = await import("../scripts/stamp.mjs");
+  const listed = new Set(readInputs(CLI_ROOT)["resolve.js"] ?? []);
+  for (const rel of [
+    "apps/web/lib/repo-runtime.ts",
+    "apps/web/lib/procfile.ts",
+    "apps/web/lib/processes.ts",
+    "apps/web/lib/process-plan.ts",
+    "apps/web/lib/process-deploy.ts",
+    "apps/web/lib/release-job.ts",
+    "apps/web/lib/slug.ts",
+  ]) {
+    assert.ok(listed.has(rel), `${rel} is bundled into vendor/resolve.js but not covered by its stamp`);
   }
 });
 

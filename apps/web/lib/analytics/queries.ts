@@ -1,4 +1,5 @@
 import { getPool } from "../db";
+import { ACTIVATION_STAGE } from "../stage-names";
 import type { RawStage, StageOutcome } from "./attempts";
 
 const DB = "supersonic_platform";
@@ -317,9 +318,14 @@ export interface FirstDeployRow {
 export async function firstDeploys(): Promise<Read<FirstDeployRow>> {
   const r = await attempt<{ slug: string; first_stage_at: Date; first_success_at: Date | null }>(
     { source: "firstDeploys", relation: "deploy_stages" },
+    // The stage name is interpolated from the shared constant rather than typed
+    // here. This filter has no WHERE and no window, so a pipeline that stops
+    // emitting that exact string does not make this query fail — it makes
+    // `first_success_at` null for every app, and activation reads as a product
+    // problem rather than a wiring one.
     `SELECT slug,
             min(started_at) AS first_stage_at,
-            min(ended_at) FILTER (WHERE stage = 'deploy' AND outcome = 'ok') AS first_success_at
+            min(ended_at) FILTER (WHERE stage = '${ACTIVATION_STAGE}' AND outcome = 'ok') AS first_success_at
        FROM deploy_stages
       GROUP BY slug
       LIMIT ${ROW_CAP}`,

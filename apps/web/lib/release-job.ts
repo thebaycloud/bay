@@ -170,22 +170,45 @@ function withEnv(pairs: string[], name: string, value: string): string[] {
  *
  * It gives up quietly instead of failing. The app's own connection error names
  * the database and the port; a wait loop that turned a slow proxy into a task
- * timeout would replace a diagnosable failure with an undiagnosable one. Written
- * without bash-isms (no /dev/tcp) because it runs inside the customer's own
+ * timeout would replace a diagnosable failure with an undiagnosable one. The loop
+ * itself is written without bash-isms because it runs inside the customer's own
  * image, whose /bin/sh is usually dash, and it probes for its tools rather than
  * assuming them for the same reason.
+ *
+ * TWO CHANGES FOR THE GENERATED-IMAGE WORLD
+ *
+ * This used to run for workers, crons and release jobs only — all of which are
+ * Node or Python, because they were runner bundles. Prefixed to a WEB command in
+ * a generated image it can now land on Go, Rust and Java, and none of those base
+ * images has `nc`, `python3` or `node`.
+ *
+ * So, first: a fourth probe. `bash` is present in every Debian- and Ubuntu-based
+ * official language image — which is all of them, since dockerfile.ts ships the
+ * full base rather than `-slim` — and `/dev/tcp` needs nothing else installed.
+ * It is invoked through `bash -c` rather than used inline, because Debian's
+ * `/bin/sh` is dash and would fail the redirect even where bash exists.
+ *
+ * Second, and this is the one that was costing real time: the loop had no early
+ * exit for "none of these tools is here". It ran the full count, sleeping one
+ * second per iteration, and then fell through — a silent 30-second penalty on
+ * every cold start of every container that could not probe at all. Availability
+ * is now checked once, before the loop, so an image with no probe waits zero
+ * seconds instead of thirty and the app's own connect error arrives immediately.
  *
  * The runner lane does not use this: services/runner/entrypoint.sh waits for the
  * same port before it execs anything, which covers the runner's release job too
  * because the release job runs that same image through that same entrypoint.
  */
 export function proxyWait(host = DB_HOST, port = DB_PORT, seconds = 30): string {
+  const tools = ["nc", "python3", "node", "bash"];
   const probe = [
     `command -v nc >/dev/null 2>&1 && nc -z ${host} ${port} >/dev/null 2>&1`,
     `command -v python3 >/dev/null 2>&1 && python3 -c 'import socket,sys;s=socket.socket();s.settimeout(1);sys.exit(s.connect_ex(("${host}",${port})))' >/dev/null 2>&1`,
     `command -v node >/dev/null 2>&1 && node -e 'const s=require("net").connect(${port},"${host}");s.on("connect",()=>process.exit(0));s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),1000)' >/dev/null 2>&1`,
+    `command -v bash >/dev/null 2>&1 && bash -c 'exec 3<>/dev/tcp/${host}/${port}' >/dev/null 2>&1`,
   ].map((c) => `{ ${c}; }`).join(" || ");
-  return `i=0; while [ $i -lt ${seconds} ]; do if ${probe}; then break; fi; i=$((i+1)); sleep 1; done; `;
+  const available = tools.map((t) => `command -v ${t} >/dev/null 2>&1`).join(" || ");
+  return `if ${available}; then i=0; while [ $i -lt ${seconds} ]; do if ${probe}; then break; fi; i=$((i+1)); sleep 1; done; fi; `;
 }
 
 /**

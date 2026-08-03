@@ -17,10 +17,31 @@ export type Builder = "kaniko" | "buildkit";
  * out and reverted without a code change, and it defaults to the behaviour that
  * is in production today.
  *
- *   BUILDER=buildkit  → buildx/BuildKit with a registry cache in mode=max
- *   anything else     → Kaniko (default)
+ *   BUILDKIT_APPS=a,b  → those slugs take buildx, everything else is unchanged
+ *   BUILDER=buildkit   → every build takes buildx
+ *   anything else      → Kaniko (default)
+ *
+ * THE PER-APP LIST IS WHAT MAKES A CANARY POSSIBLE AT ALL.
+ *
+ * The rollout this is for is written down in docs/CUTOVER.md:369-378 — "Registry
+ * auth for `--push` is unverified … If any fails, every Dockerfile deploy fails
+ * with `denied` … total failure of the lane, not a degraded cache. Test this on
+ * one app before any wider rollout." But `BUILDER` is read from the environment
+ * of the deploy JOB, which every deploy shares, so setting it tests the change on
+ * one app by first applying it to all of them. A canary that cannot be scoped is
+ * not a canary; it is the rollout with a smaller word.
+ *
+ * Slug-keyed rather than percentage-keyed because the failure being probed is a
+ * per-registry IAM grant, which is the same for every build — one app either
+ * proves it or disproves it, and a percentage would just spread a total failure
+ * thinner.
  */
-export function selectedBuilder(env: Record<string, string | undefined> = process.env): Builder {
+export function selectedBuilder(
+  env: Record<string, string | undefined> = process.env,
+  slug?: string,
+): Builder {
+  const canaries = (env.BUILDKIT_APPS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (slug && canaries.includes(slug)) return "buildkit";
   return env.BUILDER === "buildkit" ? "buildkit" : "kaniko";
 }
 
@@ -76,13 +97,83 @@ export function cloudBuildIdFrom(line: string): string | null {
 }
 
 /**
+ * What a BUILD may read, which is not what the runtime gets.
+ *
+ * `runnerPrepareConfig` is the only build config in this repo that ever mounted a
+ * secret, and it is being deleted. The reason it has to be replaced rather than
+ * dropped is written down at its own call site: Prisma 7 evaluates
+ * `env('DATABASE_URL')` while loading prisma.config.js on EVERY cli command, so
+ * `prisma generate` died on an app whose database the platform had just
+ * provisioned. Deleting the runner without porting this regresses the largest
+ * language on the platform.
+ *
+ * The split between the two fields is a security boundary, not a convenience.
+ * `buildArgs` become `--build-arg`, and **`--build-arg` values are visible in
+ * image history** — in an image that is pushed to a shared repository, exported to
+ * a `mode=max` registry cache holding MORE layers than the image, and never
+ * deleted by anything. So anything secret goes in `secretEnv` and is mounted; only
+ * public build-time values (a `NEXT_PUBLIC_*`, an API base URL) may be an arg.
+ */
+export interface BuildInputs {
+  /** Secret Manager references the build may read. Mounted, never baked. */
+  secretEnv?: { key: string; name: string }[];
+  /** Public build-time values. `--build-arg`, and visible in image history forever. */
+  buildArgs?: { key: string; value: string }[];
+}
+
+/** An env var name. Anything else would be injected into a shell line. */
+const SAFE_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function assertSafeKeys(inputs: BuildInputs): void {
+  for (const k of [...(inputs.secretEnv ?? []), ...(inputs.buildArgs ?? [])]) {
+    if (!SAFE_KEY.test(k.key)) {
+      throw new Error(`build variable "${k.key}" is not a usable name — letters, digits and underscore only`);
+    }
+  }
+}
+
+/**
+ * Cloud Build expands `$FOO` and `$(...)` as its own substitutions before a step
+ * runs, and a bare `$` in the YAML fails validation outright. `$$` is the escape.
+ */
+const escapeDollars = (v: string) => v.replace(/\$/g, "$$$$");
+
+/** The `availableSecrets:` block, which is how a step is allowed to see a secret at all. */
+function availableSecretsBlock(secretEnv: { key: string; name: string }[]): string[] {
+  if (!secretEnv.length) return [];
+  return [
+    "availableSecrets:",
+    "  secretManager:",
+    ...secretEnv.flatMap((s) => [
+      `    - versionName: projects/supersonic-deploy-prod/secrets/${s.name}/versions/latest`,
+      `      env: "${s.key}"`,
+    ]),
+  ];
+}
+
+/**
  * Kaniko build with registry layer caching. Caches each layer (crucially the
  * `npm install` layer) keyed on the files it depends on, so an unchanged
  * package.json means deps are pulled from cache instead of rebuilt.
  *
  * Kept as the default and as the revert path for BUILDER=buildkit.
+ *
+ * IT CANNOT CARRY A BUILD SECRET, and that refusal is deliberate. `RUN
+ * --mount=type=secret` is a BuildKit feature; kaniko has no equivalent, so the
+ * only way to get a value into a kaniko `RUN` is `--build-arg` — which lands in
+ * image history, in an image nothing ever deletes. Passing it anyway and saying
+ * nothing is how a database password ends up readable by anyone who can pull the
+ * repository. The error names the one-line fix instead.
  */
-export function kanikoBuildConfig(image: string, slug?: string): string {
+export function kanikoBuildConfig(image: string, slug?: string, inputs: BuildInputs = {}): string {
+  assertSafeKeys(inputs);
+  if (inputs.secretEnv?.length) {
+    throw new Error(
+      `this build needs ${inputs.secretEnv.map((s) => s.key).join(", ")} at build time, and kaniko cannot mount a secret — ` +
+      `its only channel is --build-arg, which is readable in the image's history forever.\n` +
+      `  Set BUILDER=buildkit for this build.`,
+    );
+  }
   return [
     "steps:",
     "  - name: gcr.io/kaniko-project/executor:latest",
@@ -94,6 +185,7 @@ export function kanikoBuildConfig(image: string, slug?: string): string {
     `      - --cache-repo=${image}-cache`,
     "      - --snapshot-mode=redo",
     "      - --use-new-run",
+    ...(inputs.buildArgs ?? []).map((a) => `      - --build-arg=${escapeDollars(`${a.key}=${a.value}`)}`),
     "options:",
     // No machineType on purpose. Asking for a non-default machine makes Cloud
     // Build provision a dedicated worker, and that wait is not small: across the
@@ -169,16 +261,39 @@ export function buildkitImage(env: Record<string, string | undefined> = process.
   return ref && SAFE_IMAGE_REF.test(ref) ? ref : null;
 }
 
-export function buildkitBuildConfig(image: string, daemonImage: string | null = buildkitImage(), slug?: string): string {
+export function buildkitBuildConfig(
+  image: string,
+  daemonImage: string | null = buildkitImage(),
+  slug?: string,
+  inputs: BuildInputs = {},
+): string {
+  assertSafeKeys(inputs);
   const cache = `${image}-cache:cache`;
+  const secrets = inputs.secretEnv ?? [];
+
+  // The secret arrives as an env var of the STEP (via availableSecrets) and has to
+  // reach buildx. `--secret id=K,env=K` would be the direct route and is buildx
+  // ≥0.12 only — this project has captured runs on 0.8.2 as well as 0.23.0, so the
+  // file form is used instead, which every version that supports `type=secret`
+  // understands.
+  //
+  // `/tmp`, not `/workspace`: only /workspace persists between Cloud Build steps
+  // AND it is the build context, so a secret written there would be a candidate
+  // for `COPY . .`. /tmp is per-step and outside the context, and dies with the
+  // step, so there is nothing to clean up.
+  const stage = secrets.map((s) => `printf '%s' "$$${s.key}" > /tmp/ss-secret-${s.key}`);
+
   const script = [
     "docker buildx version",
     ["docker buildx create --use --driver docker-container", ...(daemonImage ? [`--driver-opt image=${daemonImage}`] : [])].join(" "),
+    ...stage,
     [
       "docker buildx build",
       "-f Dockerfile",
       `--cache-from type=registry,ref=${cache}`,
       `--cache-to type=registry,ref=${cache},mode=max,ignore-error=true`,
+      ...secrets.map((s) => `--secret id=${s.key},src=/tmp/ss-secret-${s.key}`),
+      ...(inputs.buildArgs ?? []).map((a) => `--build-arg ${escapeDollars(`${a.key}=${a.value}`)}`),
       `-t ${image}:latest`,
       "--push",
       ".",
@@ -193,21 +308,39 @@ export function buildkitBuildConfig(image: string, daemonImage: string | null = 
     // JSON-quoted args, the same style staticBuildConfig uses. A `|` block
     // scalar would reintroduce both indentation bugs and `$` exposure: Cloud
     // Build expands `$FOO`/`$(...)` as its own substitutions before the step
-    // runs, so a bare `$` in the YAML fails validation. This script contains no
-    // `$` at all, which is the cheapest way to be right.
+    // runs, so a bare `$` in the YAML fails validation. Every `$` this script
+    // does contain is written `$$`, which is the escape, and nothing else in it
+    // introduces one.
     `    args: ["-c", ${JSON.stringify(script)}]`,
+    ...(secrets.length ? [`    secretEnv: [${secrets.map((s) => `"${s.key}"`).join(", ")}]`] : []),
     "options:",
     // No machineType, for the same measured reason as the Kaniko config above.
     "  logging: CLOUD_LOGGING_ONLY",
+    ...availableSecretsBlock(secrets),
     ...buildTagsBlock(slug),
     ...BUILD_TIMEOUT,
     "",
   ].join("\n");
 }
 
-/** The Cloud Build config for a Dockerfile build, per the BUILDER env var. */
-export function cachedBuildConfig(image: string, builder: Builder = selectedBuilder(), slug?: string): string {
-  return builder === "buildkit" ? buildkitBuildConfig(image, buildkitImage(), slug) : kanikoBuildConfig(image, slug);
+/**
+ * The Cloud Build config for a Dockerfile build, per the BUILDER env var.
+ *
+ * A build that needs a secret takes buildkit whatever BUILDER says, because kaniko
+ * has no way to mount one — see kanikoBuildConfig. That is a narrow, stated
+ * override rather than a silent one: the alternative is refusing the deploy of
+ * every Prisma app until step 5 flips the default.
+ */
+export function cachedBuildConfig(
+  image: string,
+  builder: Builder = selectedBuilder(),
+  slug?: string,
+  inputs: BuildInputs = {},
+): string {
+  const needsSecrets = Boolean(inputs.secretEnv?.length);
+  return builder === "buildkit" || needsSecrets
+    ? buildkitBuildConfig(image, buildkitImage(), slug, inputs)
+    : kanikoBuildConfig(image, slug, inputs);
 }
 
 /* -------------------------------------------------------------------------- */

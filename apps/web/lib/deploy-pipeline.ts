@@ -8,8 +8,9 @@ import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps, RUNTIME_UNSUPPORTED, RUNTIME_VERSIONS } from "@/lib/plan-deps";
 import { repoRuntime, runnerServes, runtimeRouting } from "@/lib/repo-runtime";
-import { generateDockerfile, dockerignore, DockerfileError } from "@/lib/dockerfile";
+import { generateDockerfile, dockerignore, manifestPaths, DockerfileError, type DockerfileInput } from "@/lib/dockerfile";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
+import { detect } from "@/lib/detect";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
@@ -28,7 +29,7 @@ import { listObjectNames, readObjectText, writeObject, describeServiceRest } fro
 import { take as takeClone } from "@/lib/clone-cache";
 import { staticBuildConfig } from "@/lib/static-build";
 import { verifyRelease } from "@/lib/verify-release";
-import { StageRecorder } from "@/lib/stages";
+import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
@@ -36,7 +37,7 @@ import { deployArgs, databaseEnv, DB_HOST, DB_PORT, withScale, type Lane, type S
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
-import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan } from "@/lib/release-job";
+import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, proxyWait } from "@/lib/release-job";
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
@@ -1267,13 +1268,28 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
     if (isPrebuilt && archive) {
       stages = new StageRecorder(slug, "static");
-      await publishPrebuilt({ dir, archive, slug, hash: prebuiltHash, log, send, stages });
-      setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
-      if (ownerId && ownerWorkspace) {
-        const staticUrl = (await staticServiceUrl()) ?? "";
-        await markAppLive(slug, staticUrl, prebuiltHash || null);
-        void requestThumbnail(slug, staticUrl);
-      }
+      // Wrapped in the ACTIVATION stage, which this path has never emitted.
+      //
+      // `publishPrebuilt` writes `unpack`, `upload` and `verify` and then this
+      // block returns — so a `--prebuilt` deploy produced no `deploy` row, ever.
+      // Activation is `min(ended_at) FILTER (WHERE stage = 'deploy' AND outcome =
+      // 'ok')` over the whole table, so every prebuilt app has read as never
+      // having gone live since the metric was written, and the query could not
+      // fail to say so: a missing row is a well-formed null.
+      //
+      // Around the publish rather than after it, so `ended_at` is the moment the
+      // app was actually reachable — which is what the metric means. The inner
+      // stages nest inside this one, which `coveredMs` already handles by unioning
+      // intervals rather than summing them.
+      await stages.around(ACTIVATION_STAGE, async () => {
+        await publishPrebuilt({ dir, archive, slug, hash: prebuiltHash, log, send, stages });
+        setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
+        if (ownerId && ownerWorkspace) {
+          const staticUrl = (await staticServiceUrl()) ?? "";
+          await markAppLive(slug, staticUrl, prebuiltHash || null);
+          void requestThumbnail(slug, staticUrl);
+        }
+      });
       send({ type: "done", slug, url: `https://${slug}.supersonic.cv` });
       return;
     }
@@ -1592,25 +1608,111 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // to edit — and it then takes the container lane, which already knows how to
     // build an image with a layer cache and deploy it. No new lane, no new
     // failure modes; the app simply stops being told what it may run on.
+    /**
+     * Which BUILD IMPLEMENTATION this deploy uses — not which lane string it gets.
+     *
+     * `RUNNER_ENABLED` was the two-week rollback in every draft of the plan, and
+     * as it stood it could not be: `resolve.ts:211` is the whole of what it did —
+     * `wantsRunner ? (runnerAllowed ? "runner" : (dockerfile ? "container" :
+     * "buildpack"))`. So `RUNNER=0` did not mean "use the new path", it meant "use
+     * the BUILDPACK lane", which the collapse deletes. Flipping it to roll back
+     * would have selected a path that no longer existed.
+     *
+     * Re-scoped here to the question it should always have asked. `RUNNER=1` is
+     * what production runs today and changes nothing; `RUNNER=0` routes every app
+     * that has no Dockerfile of its own through a generated one. That makes the
+     * cutover a single environment variable in both directions, and it lets this
+     * code land while production is still on the old path.
+     */
+    const generatedBuild = !RUNNER_ENABLED;
     let generatedDockerfile = false;
-    if (runtimePinned && pinned && !existsSync(join(dir, "Dockerfile"))) {
+    // Held so the file can be RE-rendered once the build's secrets are known.
+    //
+    // Moving this whole block to after provisioning is what Part 4 restructures
+    // for, and it is not a small move: the Dockerfile's EXISTENCE is read off the
+    // disk three separate times after this point — `hasDockerfile` at :1639, which
+    // feeds the lane; the `isNextApp` arm below; and `useDockerBuild` at the build
+    // site — so the file has to be there from here on or the lane changes under
+    // the deploy. Re-rendering the same path costs one write and moves nothing.
+    let renderInput: DockerfileInput | null = null;
+    // A site whose build produces files and nothing to run keeps its own lane, and
+    // that is Part 1's "(unchanged)". Containerising it around an entrypoint the
+    // build never emits is the regression the three conditional framework rows in
+    // detect.ts exist to avoid.
+    const servesStatic = s.serve?.mode === "static";
+    if ((runtimePinned || generatedBuild) && !servesStatic && !existsSync(join(dir, "Dockerfile"))) {
       const runCommand = runCmd || s.startCommand || "";
+      // What the REPOSITORY says, read by code rather than by a model. `pinned`
+      // answered only "python or node, at the version a file named" and only for
+      // the repos the runner could not serve; this answers install, build, start,
+      // apt packages and every toolchain the repo declares, for all seven
+      // languages, and it resolves the version to a tag rather than passing a
+      // range through to `FROM`.
+      const spec = detect(dir, { run: runCmd, config: appConfig ? primaryService(appConfig) : undefined });
+
+      // The detector's and the planner's answers still win where they have one:
+      // they are what deploys apps today, and this step replaces the ROUTING, not
+      // their opinions. Applied to the serving toolchain rather than alongside it,
+      // because `generateDockerfile` reads `toolchains` in preference to the flat
+      // fields — so setting both would silently drop one of them.
+      const override = { install: runnerInstall ?? s.installCommand ?? undefined, build: runnerBuild ?? s.buildCommand ?? undefined };
+      const toolchains = spec.toolchains.map((t, i) => (i === 0
+        ? { ...t, install: override.install ?? t.install, build: override.build ?? t.build }
+        : t));
+      const primary = toolchains[0];
       try {
-        if (!runCommand.trim()) throw new DockerfileError("nothing to run — the plan produced no start command");
-        writeFileSync(join(dir, "Dockerfile"), generateDockerfile({
-          language: pinned.language,
-          version: pinned.spec,
-          install: runnerInstall ?? s.installCommand ?? undefined,
-          build: runnerBuild ?? s.buildCommand ?? undefined,
-          command: runCommand,
-        }));
+        if (!runCommand.trim() && !spec.command) {
+          throw new DockerfileError("nothing to run — neither the repository nor the plan named a start command");
+        }
+        renderInput = {
+          language: primary?.language ?? pinned?.language ?? String(s.runtime || "node"),
+          version: primary?.version ?? pinned?.spec,
+          install: primary ? undefined : override.install,
+          build: primary ? undefined : override.build,
+          // A repo declaring no manifest we know has no toolchain, and the flat
+          // fields above carry it instead.
+          toolchains: toolchains.length ? toolchains : undefined,
+          needs: spec.needs,
+          command: runCommand || spec.command!,
+          // Resolved against the disk, so only files that exist are named. The
+          // glob this replaces was a hard build failure on zero matches, which is
+          // every Maven, Gradle, .NET and bare-`index.php` repository.
+          manifests: manifestPaths(dir),
+          // Declared here so the `--build-arg` the build config passes has
+          // somewhere to land: an arg a Dockerfile never declares is dropped, and
+          // the bundler runs without it while everything reports success.
+          //
+          // `buildSecrets` cannot be filled in yet — the secret references do not
+          // exist until Secret Manager has been written, ~370 lines below — so
+          // this render is the one that satisfies every existence check, and the
+          // build site re-renders it with the mounts once it knows them.
+          buildArgs: Object.keys((appConfig ? primaryService(appConfig) : undefined)?.buildEnv ?? {}),
+          // `--depends-on` orders container START, not port readiness: Cloud Run
+          // starts the proxy first and then this container, and the proxy still
+          // has to reach Cloud SQL and bind. An app that connects at import time
+          // can lose that race and die on "connection refused" against a proxy
+          // that was listening 200ms later — a failure indistinguishable from a
+          // database that does not exist. Workers, crons and release jobs already
+          // carry this prefix; the web process is the one that never did.
+          waitFor: (s.database?.engine || appConfig?.resources?.database) ? proxyWait() : undefined,
+        };
+        writeFileSync(join(dir, "Dockerfile"), generateDockerfile(renderInput));
         writeFileSync(join(dir, ".dockerignore"), dockerignore());
         generatedDockerfile = true;
-        log(`Building an image on ${pinned.language} ${pinned.spec} — the version ${pinned.from} asked for.`);
+        // Says where the version came from, not just what it is. `versionFrom` is
+        // ".python-version", or "pyproject.toml requires-python >=3.11,<3.13 →
+        // 3.12", or "platform default" — and the last one is the case an owner
+        // most needs to see, because it is the only one they did not choose.
+        log(`Building an image on ${primary?.language ?? renderInput.language} ${primary?.version ?? renderInput.version ?? ""}`
+          + ` — ${primary?.versionFrom ?? pinned?.from ?? "platform default"}.`);
       } catch (e) {
-        // Never fatal: the app still deploys the way it would have, on the version
-        // the platform holds, and the log says which one and why.
-        log(`! could not build for ${pinned.language} ${pinned.spec} (${e instanceof Error ? e.message : String(e)}) — using the platform's version instead`);
+        // Never fatal: the app still deploys the way it would have, and the log
+        // says why it is not getting an image of its own. With the runner gone
+        // there is nothing left to fall back TO, which is what makes this a
+        // temporary kindness rather than a permanent one — see Part 4.
+        renderInput = null;
+        log(`! could not generate a Dockerfile (${e instanceof Error ? e.message : String(e)})`
+          + ` — deploying the way this app would have been deployed before.`);
       }
     }
     const hasDockerfile = existsSync(join(dir, "Dockerfile"));
@@ -2118,8 +2220,79 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // need to.
       : lane === "container" || serviceless ? `${IMAGE}:latest` : undefined;
     const useDockerBuild = existsSync(join(dir, "Dockerfile"));
-    const builder = selectedBuilder();
-    if (useDockerBuild) writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder, slug));
+    // Slug-aware, so `BUILDKIT_APPS=<slug>` can prove the registry auth on one
+    // app before the default moves. Without the slug this reads the global
+    // `BUILDER` exactly as it did.
+    const builder = selectedBuilder(process.env, slug);
+    if (useDockerBuild) {
+      // Build-time secrets, on the lane that never had them.
+      //
+      // `runnerPrepareConfig` is the only build config in the repo that has ever
+      // mounted one, and it is being deleted. The reason it cannot simply go is
+      // written at its own definition: Prisma 7 evaluates `env('DATABASE_URL')`
+      // while loading prisma.config.js on EVERY cli command, so `prisma generate`
+      // died on an app whose database the platform had just provisioned.
+      //
+      // Not offered under kaniko, and not silently: kaniko has no
+      // `--mount=type=secret`, so its only channel is `--build-arg`, whose values
+      // are readable in the history of an image that is pushed to a SHARED
+      // repository and deleted by nothing. `cachedBuildConfig` would switch this
+      // build to buildkit to make it work, and doing that on its own initiative
+      // would move every container app onto a builder whose registry `--push`
+      // auth docs/CUTOVER.md records as unverified — "total failure of the lane,
+      // not a degraded cache". So this waits for BUILDER=buildkit rather than
+      // deciding for the operator, and says so when it is skipping something.
+      const wanted = buildSecrets(secretRefs);
+      const mountable = builder === "buildkit" ? wanted : [];
+      if (wanted.length && !mountable.length) {
+        log(`! ${wanted.map((r) => r.key).join(", ")} will not be readable during the build — `
+          + `the current builder cannot mount a secret without baking it into the image. Set BUILDER=buildkit.`);
+      }
+      if (mountable.length) {
+        // Was called from inside the runner branch only, which is why the
+        // container lane could not read a secret even where the builder could.
+        await grantBuildAccess(mountable, BUILD_SA, log);
+        log(`Build may read ${mountable.map((r) => r.key).join(", ")}`);
+
+        // The second half of the render, and the only place it can happen: the
+        // generated Dockerfile has to declare `RUN --mount=type=secret` for each
+        // of these, and until this line nothing knew their names. Rendering the
+        // same path again is deliberate — the file's EXISTENCE was already read
+        // off the disk to decide the lane, so it must not disappear and reappear;
+        // only its contents change.
+        //
+        // A repo's OWN Dockerfile is left alone. It is the author's file, the
+        // build config already offers the secrets to it, and rewriting somebody's
+        // committed Dockerfile is what this whole path exists not to do.
+        if (renderInput) {
+          try {
+            writeFileSync(join(dir, "Dockerfile"), generateDockerfile({
+              ...renderInput,
+              buildSecrets: mountable.map((r) => r.key),
+            }));
+          } catch (e) {
+            // Never fatal, for the same reason the first render is not: the app
+            // still builds on the Dockerfile already written, without the mounts.
+            log(`! could not offer ${mountable.map((r) => r.key).join(", ")} to the build `
+              + `(${e instanceof Error ? e.message : String(e)}) — building without them`);
+          }
+        }
+      }
+      // `buildEnv` — accepted by the schema, validated, listed in the lane's
+      // consumes-list, printed back by `supersonic check` and asked about by
+      // `supersonic init`, and until now read by NO build path. That is the
+      // declared-but-not-reflected defect this codebase is named after, in its
+      // sixth documented instance. A `NEXT_PUBLIC_*` set here and not passed to
+      // the build is worse than one that was rejected: the bundler bakes the
+      // wrong value into the shipped JavaScript and everything reports success.
+      //
+      // An arg and not a secret, deliberately. Its values are readable in image
+      // history forever, which is correct for the public build-time constants it
+      // is for and is why anything sensitive belongs in `secrets`.
+      const buildArgs = Object.entries(primaryConfigService?.buildEnv ?? {}).map(([key, value]) => ({ key, value }));
+      if (buildArgs.length) log(`Build args: ${buildArgs.map((a) => a.key).join(", ")}`);
+      writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder, slug, { secretEnv: mountable, buildArgs }));
+    }
     // Which Cloud Build is ours. Every command below that can start one feeds
     // its raw output through builds.note(), so a failure is read back from the
     // build this deploy started rather than from whatever built most recently.
@@ -2358,12 +2531,35 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const plan = planFromConfig({ services: [svc] }, svc, planSource);
       const lang: "node" | "python" | null =
         plan.language === "node" ? "node" : plan.language === "python" ? "python" : null;
-      if (!lang) {
+      // The refusal that made siblings node-or-python. It was never a statement
+      // about siblings — it was a statement about the RUNNER, which has two images
+      // because someone built two Dockerfiles. A generated image has no such
+      // limit, so a sibling can be Go, and this line only applies while the runner
+      // is the thing building it.
+      if (!generatedBuild && !lang) {
         return { ok: false, name, error: `service "${label}" is ${plan.language}; a second service must be node or python` };
       }
       if (!plan.run) return { ok: false, name, error: `service "${label}" has no start command` };
 
-      const image = lang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE;
+      const siblingLane: Lane = generatedBuild ? "container" : "runner";
+      /**
+       * A sibling builds from its OWN directory, into its OWN image.
+       *
+       * Five things were shared or hardcoded, and each one is a collision rather
+       * than an inconvenience: one `${IMAGE}` for the whole app, `--dockerfile=
+       * Dockerfile` fixed in the build config, `${image}-cache` derived from that
+       * one image so two siblings would overwrite each other's layer cache, a
+       * build context rooted at the repository root, and `join(dir,
+       * "cloudbuild.yaml")` — the same path the primary writes.
+       *
+       * Rooting the context at the service's own directory settles four of them at
+       * once: `Dockerfile` and `cloudbuild.yaml` are unambiguous inside it, and the
+       * image name carries the service name, so the cache repo does too.
+       */
+      const contextDir = join(dir, svc.dir && svc.dir !== "." ? svc.dir : ".");
+      const image = generatedBuild
+        ? `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${name}`
+        : (lang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE);
       const release = `${label}-${releaseId()}`;
       const key = randomBytes(32).toString("hex");
       // A sibling gets its own release job, for the same reason and by the same
@@ -2372,22 +2568,56 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const siblingRelease = plan.preRun?.filter(Boolean).join(" && ") ?? "";
 
       try {
-        await stages.around("prepare", async () => {
-          log(`Preparing ${label} on the ${lang} runner…`);
-          if (secretRefs.length) await grantBuildAccess(secretRefs, BUILD_SA, log);
-          writeFileSync(join(dir, "cloudbuild.yaml"), runnerPrepareConfig({
-            image, bucket: ASSETS_BUCKET, slug, release, codeKey: key,
-            build: plan.build, install: plan.install, language: lang, secretEnv: buildSecrets(secretRefs),
-          }));
-          const hb = setInterval(() => log(`preparing ${label}…`), 8000);
+        await stages.around(generatedBuild ? "build" : "prepare", async () => {
+          const mountable = builder === "buildkit" ? buildSecrets(secretRefs) : [];
+          if (generatedBuild) {
+            log(`Building ${label} from ${svc.dir ?? "."}…`);
+            // Its own detection, rooted at its own directory — which is the
+            // difference `inferAppConfig` was written for: the same detector
+            // pointed at `frontend/` and `backend/` returns 95% and 90%, and
+            // pointed at their parent returns "Static site, 80%" and is wrong.
+            const spec = detect(contextDir, { run: plan.run, config: svc }, svc.dir ?? ".");
+            const primary = spec.toolchains[0];
+            writeFileSync(join(contextDir, "Dockerfile"), generateDockerfile({
+              language: primary?.language ?? plan.language ?? "node",
+              version: primary?.version,
+              install: primary ? undefined : plan.install,
+              build: primary ? undefined : plan.build,
+              toolchains: spec.toolchains.length ? spec.toolchains : undefined,
+              needs: spec.needs,
+              command: plan.run!,
+              // Relative to THIS context, so a sibling's manifests are named the
+              // way its own build will look for them.
+              manifests: manifestPaths(contextDir),
+              buildSecrets: mountable.map((r) => r.key),
+              buildArgs: Object.keys(svc.buildEnv ?? {}),
+              waitFor: (s.database?.engine || appConfig?.resources?.database) ? proxyWait() : undefined,
+            }));
+            writeFileSync(join(contextDir, ".dockerignore"), dockerignore());
+            writeFileSync(join(contextDir, "cloudbuild.yaml"), cachedBuildConfig(image, builder, name, {
+              secretEnv: mountable,
+              buildArgs: Object.entries(svc.buildEnv ?? {}).map(([key, value]) => ({ key, value })),
+            }));
+          } else {
+            log(`Preparing ${label} on the ${lang} runner…`);
+            writeFileSync(join(contextDir, "cloudbuild.yaml"), runnerPrepareConfig({
+              image, bucket: ASSETS_BUCKET, slug, release, codeKey: key,
+              build: plan.build, install: plan.install, language: lang!, secretEnv: buildSecrets(secretRefs),
+            }));
+          }
+          if (mountable.length || (!generatedBuild && secretRefs.length)) {
+            await grantBuildAccess(generatedBuild ? mountable : secretRefs, BUILD_SA, log);
+          }
+          const hb = setInterval(() => log(`${generatedBuild ? "building" : "preparing"} ${label}…`), 8000);
           builds.reset();
           try {
-            await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
+            await run("gcloud", ["builds", "submit", contextDir, "--region", REGION, "--project", PROJECT, "--config", join(contextDir, "cloudbuild.yaml")], buildLine);
           } finally { clearInterval(hb); }
         });
       } catch (e) {
         const buildLog = await builds.error();
-        return { ok: false, name, error: `Preparing ${label} failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
+        const what = generatedBuild ? "Building" : "Preparing";
+        return { ok: false, name, error: `${what} ${label} failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
       }
 
       // Its own environment: the shared app env, plus the pointers to ITS bundle.
@@ -2413,9 +2643,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // …and its own.
         ...configEnv(svc.env, Object.keys(secrets)).env,
         ...Object.entries(siblingDeployment).map(([k, v]) => `${k}=${v}`),
-        `SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`,
-        `SUPERSONIC_CODE_OBJECT=ready/${slug}/${release}.tgz`,
-        `SUPERSONIC_RUN=${startCmd}`,
+        // The bundle plumbing is the runner's, and only the runner's. A generated
+        // image already contains the code and already has the command as its CMD,
+        // so pointing it at a tarball would name an object that was never written
+        // — and `SUPERSONIC_RUN` would be a start command the image does not read.
+        ...(generatedBuild ? [] : [
+          `SUPERSONIC_CODE_BUCKET=${ASSETS_BUCKET}`,
+          `SUPERSONIC_CODE_OBJECT=ready/${slug}/${release}.tgz`,
+          `SUPERSONIC_RUN=${startCmd}`,
+        ]),
       ];
       // Service-level flags only; the argv builder scopes the rest to the app
       // container and appends the proxy. A sibling shares the app's database,
@@ -2430,7 +2666,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // primary's does — it is the key to that sibling's source, and a revision
       // spec is a place people read. Its own secret, because its own bundle:
       // sharing the primary's would mean either key decrypts either bundle.
-      const siblingKeySecret = await putAppSecrets(name, { SUPERSONIC_CODE_KEY: key }, APP_RUNTIME_SA, log);
+      // Minted only when there is a bundle to encrypt. With a generated image the
+      // code is inside the image, so a per-bundle key protects nothing and would
+      // be one more secret to store, grant and eventually leak. What replaces it
+      // is registry scoping — which does not exist yet, and is Part 9's row 6.
+      const siblingKeySecret = generatedBuild
+        ? { stored: [] as SecretRef[], skipped: [] as string[] }
+        : await putAppSecrets(name, { SUPERSONIC_CODE_KEY: key }, APP_RUNTIME_SA, log);
       const siblingRefs = [...secretRefs.filter((r) => r.key !== "SUPERSONIC_CODE_KEY"), ...siblingKeySecret.stored];
       // Anything Secret Manager refused falls back to a literal, which is the
       // old behaviour and no worse — but it is said out loud rather than assumed.
@@ -2440,12 +2682,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       if (siblingRefs.length) siblingApp.push(`--update-secrets=${setSecretsFlag(siblingRefs)}`);
       siblingApp.push(`--update-env-vars=^~~^${env.join("~~")}`);
 
-      const relS = await runRelease({ lane: "runner", service: name, image, env, release: siblingRelease });
+      const relS = await runRelease({ lane: siblingLane, service: name, image, env, release: siblingRelease });
       if (!relS.ok) return { ok: false, name, error: relS.error };
-      log(`Deploying ${label} on the prebuilt ${lang} runner…`);
+      log(generatedBuild ? `Deploying ${label} from its own image…` : `Deploying ${label} on the prebuilt ${lang} runner…`);
       try {
         const args = deployArgs({
-          lane: "runner", service: name, serviceFlags: siblingFlags, appFlags: siblingApp,
+          lane: siblingLane, service: name, serviceFlags: siblingFlags, appFlags: siblingApp,
           // Its OWN envelope, for the same reason it gets its own env and its own
           // facts: `scale` is per service in the schema, and a Django API beside
           // a Next frontend is not the same size as the frontend.
@@ -2603,7 +2845,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     };
 
     log(`Deploying ${slug} to Cloud Run…`);
-    const firstAttempt = stages.start("deploy");
+    const firstAttempt = stages.start(ACTIVATION_STAGE);
     let result = await runDeploy();
     await stages.end(firstAttempt, result.ok ? "ok" : "failed");
 

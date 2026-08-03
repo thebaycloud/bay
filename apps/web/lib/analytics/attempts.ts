@@ -30,6 +30,8 @@
  *    generic.
  */
 
+import { ATTEMPT_START_STAGE, HANDOFF_STAGES, PRE_LANE_STAGES } from "../stage-names";
+
 export type StageOutcome = "ok" | "failed" | "skipped";
 
 /** A row of `deploy_stages`, as the analytics queries read it. */
@@ -51,22 +53,21 @@ export interface RawStage {
  *
  * The four handoff stages are written by `route.ts` and `scripts/deploy-job.ts`
  * with "generic" hardcoded, before a lane exists at all. `clone`, `detect` and
- * `infer-services` run inside the pipeline before line 1216 replaces the
- * recorder. Everything else — `build`, `prepare`, `upload`, `verify`, `unpack`,
- * `deploy`, `repair-agent` — is recorded by a recorder that knows the lane.
+ * `infer-services` run inside the pipeline before the recorder is replaced with
+ * one that knows the lane.
+ *
+ * DERIVED, not restated. This was seven hand-written strings in a file whose own
+ * header is about a vocabulary that drifted from the one the pipeline used — the
+ * same list written twice is how that happened. `lib/stages.ts` names them once;
+ * the membership here is byte-identical to what was written by hand, and
+ * `test/stages.test.ts` pins that it stays a subset of the emitted vocabulary.
  */
-export const LANE_BLIND_STAGES: ReadonlySet<string> = new Set([
-  "run-record",
-  "job-dispatch",
-  "job-cold-start",
-  "run-fetch",
-  "clone",
-  "detect",
-  "infer-services",
+export const LANE_BLIND_STAGES: ReadonlySet<string> = new Set<string>([
+  ...HANDOFF_STAGES,
+  ...PRE_LANE_STAGES,
 ]);
 
-/** The stage whose presence means a new deploy began. */
-export const ATTEMPT_START_STAGE = "run-record";
+export { ATTEMPT_START_STAGE };
 
 /**
  * Stages that happen *inside* another stage, so their time is already counted.

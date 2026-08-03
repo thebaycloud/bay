@@ -109,16 +109,44 @@ test("a directory that is not there is one problem, not six", async () => {
   assert.match(problems[0], /directory "nowhere" does not exist/);
 });
 
-test("a runtime the platform does not have fails here, not forty lines into a pip log", async () => {
-  // The pipeline already refuses this at deploy-pipeline.ts:1026. Without it here,
-  // check would pass a repo the deploy refuses — the one outcome that makes a dry
-  // run worth less than nothing.
+test("a version the platform used not to have is now just the version it builds", async () => {
+  // This test used to assert the opposite, and the assertion was right until the
+  // platform stopped having one Python and one Node. `runtimeMismatch` refused
+  // `requires-python >= 3.15` because "the runner has 3.14" — a sentence about
+  // the RUNNER, not about the app. The deploy now writes a Dockerfile whose FROM
+  // is whatever the repository asked for, so keeping the gate would have `check`
+  // refusing, locally, a deploy the server completes: the one-rule-two-readers
+  // failure this tool exists to catch, committed by the tool itself.
   const dir = repo(
     { services: [{ name: "api", language: "python", runtime: "python3.15", start: "uvicorn main:app --port $PORT" }] },
     { "main.py": "", "pyproject.toml": '[project]\nrequires-python = ">=3.15,<4.0"\n' },
   );
   const { problems } = await checkApp(dir, deps);
-  assert.match(problems.join("\n"), /needs Python >=3\.15,<4\.0 and the runner has 3\.14/);
+  assert.doesNotMatch(problems.join("\n"), /the runner has/, "the runner's version is no longer a limit on the app's");
+});
+
+test("check says which version it will build on, and which file chose it", async () => {
+  // The question that replaced it. "platform default" is the case worth printing,
+  // because it is the only one the author did not pick — and the only one that
+  // moves when the platform moves it.
+  const dir = repo(
+    { services: [{ name: "api", language: "python", start: "uvicorn main:app --port $PORT" }] },
+    { "main.py": "", "requirements.txt": "fastapi\n", ".python-version": "3.11\n" },
+  );
+  const { app } = await checkApp(dir, deps);
+  const built = app.services[0].built;
+  assert.equal(built.language, "python");
+  assert.equal(built.version, "3.11");
+  assert.equal(built.versionFrom, ".python-version");
+});
+
+test("a version file that is not a version is named here, not in a build log", async () => {
+  const dir = repo(
+    { services: [{ name: "api", language: "python", start: "uvicorn main:app --port $PORT" }] },
+    { "main.py": "", "requirements.txt": "fastapi\n", ".python-version": "3.12 <-- fix me\n" },
+  );
+  const { problems } = await checkApp(dir, deps);
+  assert.match(problems.join("\n"), /\.python-version/);
 });
 
 test("a malformed config is a hard stop that names the file", async () => {

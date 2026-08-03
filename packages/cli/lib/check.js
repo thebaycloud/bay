@@ -95,11 +95,37 @@ async function checkApp(dir, { resolver: r, detect }) {
       s.notes = [];
       problems.push(`✕ service "${s.name}": ${e && e.message ? e.message : String(e)}`);
     }
-    const mismatch = r.runtimeMismatch({
-      pyproject: readOr(path.join(abs, "pyproject.toml"), null),
-      packageJson: jsonOr(path.join(abs, "package.json"), null),
-    });
-    if (mismatch) problems.push(`✕ service "${s.name}": ${mismatch}`);
+    // `runtimeMismatch` used to run here and exit 1 on "this app needs Python
+    // 3.14 and the runner has 3.12". That sentence stopped being true: the deploy
+    // writes a Dockerfile whose `FROM` is the version the repository asked for, so
+    // the platform no longer has one Python and one Node to be mismatched against.
+    // Keeping the gate would have `check` refusing, locally, deploys the server
+    // builds fine — which is the one-rule-two-readers failure this tool exists to
+    // catch, committed by the tool itself.
+    //
+    // What replaces it is the question that IS still worth asking locally: which
+    // version will this be built on, and which file said so. Read through the same
+    // function the deploy reads it through, so the two cannot disagree.
+    try {
+      const spec = r.detect(abs, {});
+      const primary = spec.toolchains[0];
+      if (primary) {
+        s.built = {
+          language: primary.language,
+          version: primary.version,
+          versionFrom: primary.versionFrom,
+          extra: spec.toolchains.slice(1).map((t) => `${t.language} in ${t.dir}`),
+        };
+      }
+      if (spec.confidence === "guessed" && !s.start && !s.outputDir) {
+        warnings.push(`service "${s.name}": nothing in the repo says how to start it — pass --run "<command>" or add a Procfile`);
+      }
+    } catch (e) {
+      // A malformed version file is exactly what a local dry run is for: the
+      // message names the file, which `invalid reference format` in a build log
+      // forty lines deep does not.
+      problems.push(`✕ service "${s.name}": ${e && e.message ? e.message : String(e)}`);
+    }
   }
 
   return { app, problems, warnings };
@@ -154,6 +180,13 @@ function describeProcess(p) {
 function renderService(s) {
   const lines = [`  ${s.name}  ·  ${s.lane} lane  ·  ${s.path}`];
   if (s.runtime) lines.push(phase("runtime", s.runtime));
+  // The version the image will actually be built on, and which file chose it.
+  // "platform default" is the case worth seeing, because it is the only one the
+  // author did not pick — and the only one that moves when we move it.
+  if (s.built) {
+    lines.push(phase("base", `${s.built.language}:${s.built.version}  ·  ${s.built.versionFrom}`));
+    if (s.built.extra.length) lines.push(phase("also", s.built.extra.join(", ")));
+  }
   if (s.dockerfile) lines.push(phase("image", `${s.dockerfile}  (context ${s.context})`));
   if (s.install) lines.push(phase("install", s.install));
   if (s.build) lines.push(phase("build", s.build));

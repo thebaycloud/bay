@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "db:migrate": "node --import tsx db/migrate.ts",
-    "test": "node --import tsx --test 'test/**/*.test.ts'"
+    "test": "node --experimental-test-module-mocks --import tsx --test 'test/**/*.test.ts'",
+    "test:collapse": "RUNNER=0 node --experimental-test-module-mocks --import tsx --test test/deploy-pipeline.test.ts"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",

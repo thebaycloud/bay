@@ -18,6 +18,101 @@ function assertNoBareDollar(yaml: string, what: string) {
   assert.equal(/(?<!\$)\$(?!\$)/.test(yaml), false, `${what} contains a bare single "$" — Cloud Build will reject it`);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Build-time secrets — the thing only the runner could do                     */
+/* -------------------------------------------------------------------------- */
+
+const DB = [{ key: "DATABASE_URL", name: "app-demo-DATABASE_URL" }];
+
+test("kaniko refuses a build secret instead of baking it into the image", () => {
+  // Its only channel is `--build-arg`, and an arg's value is readable in image
+  // history — in an image pushed to a SHARED repository, exported to a mode=max
+  // cache holding more layers than the image, and deleted by nothing. Passing it
+  // anyway and saying nothing is how a database password becomes readable by
+  // anyone who can pull the repo.
+  assert.throws(
+    () => kanikoBuildConfig(IMAGE, "demo", { secretEnv: DB }),
+    (e: unknown) => e instanceof Error
+      && /DATABASE_URL/.test(e.message)
+      && /readable in the image's history/.test(e.message)
+      && /BUILDER=buildkit/.test(e.message),   // the refusal names the one-line fix
+  );
+});
+
+test("a build that needs a secret takes buildkit whatever BUILDER says", () => {
+  // Narrow and stated: the alternative is refusing every deploy of every app that
+  // reads its environment during the build, until the default flips.
+  const yaml = cachedBuildConfig(IMAGE, "kaniko", "demo", { secretEnv: DB });
+  assert.match(yaml, /docker buildx build/);
+  assert.doesNotMatch(yaml, /kaniko/);
+  // …and with nothing to mount, the default is byte-identical to today's.
+  assert.equal(cachedBuildConfig(IMAGE, "kaniko", "demo", {}), kanikoBuildConfig(IMAGE, "demo"));
+});
+
+test("buildkit mounts the secret and never puts it on the command line", () => {
+  const yaml = buildkitBuildConfig(IMAGE, null, "demo", { secretEnv: DB });
+
+  // Cloud Build has to be told the step may see it at all…
+  assert.match(yaml, /^availableSecrets:$/m);
+  assert.match(yaml, /versionName: projects\/supersonic-deploy-prod\/secrets\/app-demo-DATABASE_URL\/versions\/latest/);
+  assert.match(yaml, /^ {4}secretEnv: \["DATABASE_URL"\]$/m);
+  // …and buildx reads it from a file, because `--secret id=K,env=K` needs buildx
+  // 0.12 and this project has captured runs on 0.8.2.
+  assert.match(yaml, /--secret id=DATABASE_URL,src=\/tmp\/ss-secret-DATABASE_URL/);
+  assert.match(yaml, /printf '%s' \\"\$\$DATABASE_URL\\" > \/tmp\/ss-secret-DATABASE_URL/);
+
+  // /tmp and NOT /workspace: /workspace is the build context, so a secret staged
+  // there is a candidate for `COPY . .`, and it persists between steps.
+  assert.doesNotMatch(yaml, /\/workspace\/ss-secret/);
+  // The value itself is never in the YAML — only the name of the secret to fetch.
+  assert.doesNotMatch(yaml, /postgres:\/\//);
+  assertNoBareDollar(yaml, "buildkitBuildConfig with a secret");
+});
+
+test("a public build value is an arg, and its dollars are escaped", () => {
+  // `NEXT_PUBLIC_*` has to be present when the bundler runs or the value never
+  // reaches the shipped JavaScript. It is not secret, so an arg is right — and it
+  // still has to survive Cloud Build's substitution pass.
+  const args = [{ key: "PUBLIC_API", value: "https://api.example.com/$path" }];
+  const kaniko = kanikoBuildConfig(IMAGE, "demo", { buildArgs: args });
+  assert.match(kaniko, /--build-arg=PUBLIC_API=https:\/\/api\.example\.com\/\$\$path/);
+  assertNoBareDollar(kaniko, "kaniko with a build arg");
+
+  const buildkit = buildkitBuildConfig(IMAGE, null, "demo", { buildArgs: args });
+  assert.match(buildkit, /--build-arg PUBLIC_API=/);
+  assertNoBareDollar(buildkit, "buildkit with a build arg");
+});
+
+test("a build variable name that is not a name is refused, not interpolated", () => {
+  // These strings land inside a shell line in a YAML document.
+  for (const key of ["A B", "A;rm -rf /", "$(id)", "", "1BAD"]) {
+    assert.throws(() => buildkitBuildConfig(IMAGE, null, "demo", { secretEnv: [{ key, name: "x" }] }), /not a usable name/);
+    assert.throws(() => kanikoBuildConfig(IMAGE, "demo", { buildArgs: [{ key, value: "x" }] }), /not a usable name/);
+  }
+});
+
+test("one app can take buildkit without every app taking it", () => {
+  // docs/CUTOVER.md:369-378: registry auth for `--push` is unverified, and if it
+  // fails "every Dockerfile deploy fails with `denied` … total failure of the
+  // lane". `BUILDER` lives in the deploy JOB's environment, which every deploy
+  // shares — so testing the change on one app by setting it would first apply it
+  // to all of them. A canary that cannot be scoped is the rollout with a smaller
+  // word.
+  const env = { BUILDKIT_APPS: "demo,other" };
+  assert.equal(selectedBuilder(env, "demo"), "buildkit");
+  assert.equal(selectedBuilder(env, "other"), "buildkit");
+  assert.equal(selectedBuilder(env, "someone-else"), "kaniko");
+  assert.equal(selectedBuilder(env), "kaniko", "no slug means no canary, not every canary");
+
+  // Whitespace and empties, because this is set by hand on a Cloud Run job.
+  assert.equal(selectedBuilder({ BUILDKIT_APPS: " demo , " }, "demo"), "buildkit");
+  assert.equal(selectedBuilder({ BUILDKIT_APPS: "" }, "demo"), "kaniko");
+  assert.equal(selectedBuilder({}, "demo"), "kaniko");
+
+  // The global switch still wins for everyone, so the canary is additive.
+  assert.equal(selectedBuilder({ BUILDER: "buildkit" }, "anything"), "buildkit");
+});
+
 test("BUILDER defaults to kaniko and only 'buildkit' switches it", () => {
   assert.equal(selectedBuilder({}), "kaniko");
   assert.equal(selectedBuilder({ BUILDER: "" }), "kaniko");

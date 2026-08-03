@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 1d9994dc6c792110
+// supersonic-vendor-stamp 8c41a84e3b2cceea
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -35,6 +35,7 @@ __export(resolver_entry_exports, {
   declaredLanguages: () => declaredLanguages,
   deployableParts: () => deployableParts,
   deriveLane: () => deriveLane,
+  detect: () => detect,
   inferAppConfig: () => inferAppConfig,
   isDeployablePart: () => isDeployablePart,
   isServiceless: () => isServiceless,
@@ -50,10 +51,11 @@ __export(resolver_entry_exports, {
   readAppConfig: () => readAppConfig,
   readProcfile: () => readProcfile,
   readRepoFacts: () => readRepoFacts,
-  resolve: () => resolve,
+  resolve: () => resolve2,
   resolveProcesses: () => resolveProcesses,
   runtimeMismatch: () => runtimeMismatch,
   serviceFor: () => serviceFor,
+  serviceLanguage: () => serviceLanguage,
   servicePath: () => servicePath,
   unemittable: () => unemittable,
   validate: () => validate
@@ -61,8 +63,8 @@ __export(resolver_entry_exports, {
 module.exports = __toCommonJS(resolver_entry_exports);
 
 // lib/resolve.ts
-var import_node_fs4 = require("node:fs");
-var import_node_path4 = require("node:path");
+var import_node_fs7 = require("node:fs");
+var import_node_path7 = require("node:path");
 
 // lib/app-config.ts
 var import_node_fs = require("node:fs");
@@ -421,8 +423,8 @@ function readAppConfig(dir) {
 }
 
 // lib/infer-services.ts
-var import_node_fs3 = require("node:fs");
-var import_node_path3 = require("node:path");
+var import_node_fs6 = require("node:fs");
+var import_node_path6 = require("node:path");
 
 // lib/repo-facts.ts
 var import_node_fs2 = require("node:fs");
@@ -508,142 +510,51 @@ function normalizeLanguage(runtime) {
   return null;
 }
 
-// lib/infer-services.ts
-var BROWSER_FACING = /next\.?js|nuxt|remix|sveltekit|astro|vite|create react app|static/i;
-var PYTHON_ENTRIES = ["main.py", "app/main.py", "src/main.py", "app.py", "api/main.py", "src/app.py"];
-var NOT_AN_APP = /* @__PURE__ */ new Set([
-  "e2e",
-  "test",
-  "tests",
-  "spec",
-  "specs",
-  "docs",
-  "doc",
-  "examples",
-  "example",
-  "fixtures",
-  "scripts",
-  "tools",
-  "infra",
-  "terraform",
-  "deploy",
-  "deployment",
-  "ci",
-  "benchmark",
-  "benchmarks",
-  "bench",
-  "migrations",
-  "seeds"
-]);
-var NODE_FRAMEWORK = /^(next|nuxt|astro|vite|@remix-run\/|@sveltejs\/kit|@nestjs\/core|express|fastify|koa|hono)/;
-var PYTHON_RUNNABLE = [...PYTHON_ENTRIES, "manage.py", "wsgi.py", "asgi.py"];
-function dirOf(manifestPath) {
-  const i = manifestPath.lastIndexOf("/");
-  return i === -1 ? "." : manifestPath.slice(0, i);
-}
-function isWorkspaceRoot(repoDir) {
-  const p = (0, import_node_path3.join)(repoDir, "package.json");
-  if (!(0, import_node_fs3.existsSync)(p)) return false;
-  try {
-    return Boolean(JSON.parse((0, import_node_fs3.readFileSync)(p, "utf8")).workspaces);
-  } catch {
-    return false;
-  }
-}
-function isDeployablePart(absoluteDir, relDir) {
-  if (relDir.split("/").some((seg) => NOT_AN_APP.has(seg.toLowerCase()))) return false;
-  const pkgPath = (0, import_node_path3.join)(absoluteDir, "package.json");
-  if ((0, import_node_fs3.existsSync)(pkgPath)) {
-    try {
-      const pkg = JSON.parse((0, import_node_fs3.readFileSync)(pkgPath, "utf8"));
-      const scripts = pkg.scripts ?? {};
-      if (scripts.build || scripts.start) return true;
-      const deps = Object.keys({ ...pkg.dependencies ?? {}, ...pkg.devDependencies ?? {} });
-      return deps.some((d) => NODE_FRAMEWORK.test(d));
-    } catch {
-      return false;
+// lib/detect.ts
+var import_node_fs5 = require("node:fs");
+var import_node_path5 = require("node:path");
+
+// lib/procfile.ts
+var import_node_fs3 = require("node:fs");
+var import_node_path3 = require("node:path");
+var PROCFILE = "Procfile";
+var ENTRY = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/;
+var ProcfileError = class extends Error {
+};
+function parseProcfile(text) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Map();
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = i + 1;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith("#")) return;
+    const m = ENTRY.exec(trimmed);
+    if (!m) {
+      throw new ProcfileError(
+        `${PROCFILE} line ${line}: expected "name: command", got ${JSON.stringify(trimmed)}`
+      );
     }
-  }
-  return PYTHON_RUNNABLE.some((entry) => (0, import_node_fs3.existsSync)((0, import_node_path3.join)(absoluteDir, entry)));
-}
-function bindToPort(cmd) {
-  return cmd.replace(/(--port[= ])\d+/g, "$1$PORT").replace(/(--bind[= ]\S*?:)\d+/g, "$1$PORT").replace(/(-b\s+\S*?:)\d+/g, "$1$PORT").replace(/(-p\s+)\d+/g, "$1$PORT");
-}
-function pythonModule(serviceDir) {
-  for (const entry of PYTHON_ENTRIES) {
-    if ((0, import_node_fs3.existsSync)((0, import_node_path3.join)(serviceDir, entry))) return entry.replace(/\.py$/, "").split("/").join(".");
-  }
-  return null;
-}
-function startFor(stack, absoluteDir) {
-  const bound = bindToPort(stack.startCommand);
-  if (!/^python/i.test(stack.language)) return bound;
-  const mod = pythonModule(absoluteDir);
-  if (!mod) return bound;
-  return bound.replace(/\b(?:main|app)(?=:app\b)/, mod);
-}
-function pythonInstall(serviceDir, detected) {
-  if ((0, import_node_fs3.existsSync)((0, import_node_path3.join)(serviceDir, "requirements.txt"))) return detected ?? "pip install --no-cache-dir -r requirements.txt";
-  if ((0, import_node_fs3.existsSync)((0, import_node_path3.join)(serviceDir, "pyproject.toml"))) return "pip install --no-cache-dir .";
-  return void 0;
-}
-function languageOf(stack) {
-  if (stack.serve.mode === "static") return "static";
-  if (/^python/i.test(stack.language)) return "python";
-  if (/^(java)?script|^typescript/i.test(stack.language)) return "node";
-  return "other";
-}
-function serviceFor(relDir, stack, absoluteDir) {
-  const language = languageOf(stack);
-  const name = relDir === "." ? "app" : import_node_path3.posix.basename(relDir);
-  const base = {
-    name,
-    dir: relDir,
-    language,
-    install: language === "python" ? pythonInstall(absoluteDir, stack.installCommand) : stack.installCommand ?? void 0,
-    build: stack.buildCommand ?? void 0,
-    needsDB: stack.database?.engine ? true : void 0
-  };
-  if (language === "static") {
-    return { ...base, outputDir: stack.serve.mode === "static" ? stack.serve.outputDir : "dist" };
-  }
-  return { ...base, start: startFor(stack, absoluteDir) };
-}
-function deployableParts(repoDir, facts) {
-  const dirs = [];
-  for (const d of facts.declarations) {
-    const dir = dirOf(d.from);
-    if (dirs.includes(dir)) continue;
-    if (!isDeployablePart(dir === "." ? repoDir : (0, import_node_path3.join)(repoDir, dir), dir)) continue;
-    dirs.push(dir);
-  }
-  const nested = dirs.filter((d) => d !== ".");
-  return nested.length >= 2 || dirs.includes(".") && isWorkspaceRoot(repoDir) ? nested : dirs;
-}
-async function inferAppConfig(repoDir, detect) {
-  const facts = readRepoFacts(repoDir);
-  if (!facts.declarations.length) return null;
-  if (facts.dockerfiles.includes("Dockerfile")) return null;
-  const parts = deployableParts(repoDir, facts);
-  if (parts.length < 2) return null;
-  let detected;
-  try {
-    detected = await Promise.all(parts.map(async (rel) => {
-      const abs = rel === "." ? repoDir : (0, import_node_path3.join)(repoDir, rel);
-      return { rel, abs, stack: await detect(abs) };
-    }));
-  } catch {
-    return null;
-  }
-  const primaryIdx = Math.max(0, detected.findIndex((p) => BROWSER_FACING.test(p.stack.framework)));
-  const ordered = [detected[primaryIdx], ...detected.filter((_, i) => i !== primaryIdx)];
-  const services = ordered.map((p, i) => {
-    const svc = serviceFor(p.rel, p.stack, p.abs);
-    if (i === 0) return { ...svc, path: "/" };
-    return { ...svc, path: ordered.length === 2 ? "/api" : `/${svc.name}` };
+    const name = m[1].toLowerCase();
+    const command = m[2].trim();
+    if (!command) throw new ProcfileError(`${PROCFILE} line ${line}: "${name}" has no command`);
+    const first = seen.get(name);
+    if (first !== void 0) {
+      throw new ProcfileError(`${PROCFILE}: "${name}" is declared twice, on lines ${first} and ${line}`);
+    }
+    seen.set(name, line);
+    out.push({ name, command, line });
   });
-  return { version: 1, services };
+  return out;
 }
+function readProcfile(dir) {
+  const path = (0, import_node_path3.join)(dir, PROCFILE);
+  if (!(0, import_node_fs3.existsSync)(path)) return null;
+  return parseProcfile((0, import_node_fs3.readFileSync)(path, "utf8"));
+}
+
+// lib/repo-runtime.ts
+var import_node_fs4 = require("node:fs");
+var import_node_path4 = require("node:path");
 
 // lib/plan-deps.ts
 var RUNTIME_VERSIONS = { python: "3.14", node: "24" };
@@ -675,6 +586,369 @@ function runtimeMismatch(manifests) {
 }
 
 // lib/repo-runtime.ts
+var RUNTIME_LANGUAGES = ["python", "node", "go", "rust", "ruby", "php", "java"];
+var NO_PIN = /^(system|latest|current|lts|stable|nightly|beta|node|default|\*)$|^(ref|path|pypy|graalvm|truffleruby|jruby|conda|miniconda|anaconda|mamba)[:@-]?/i;
+var PLATFORM_DEFAULT_VERSION = {
+  python: "3.14",
+  node: "24",
+  go: "1.24",
+  rust: "1.85",
+  ruby: "3.4",
+  php: "8.4",
+  java: "21"
+};
+var KNOWN_VERSIONS = {
+  python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"],
+  // Even majors are the LTS lines, which is what `lts/*` and `lts/<codename>` mean.
+  node: ["18", "20", "22", "24"],
+  go: ["1.21", "1.22", "1.23", "1.24"],
+  rust: ["1.78", "1.79", "1.80", "1.81", "1.82", "1.83", "1.84", "1.85"],
+  ruby: ["3.0", "3.1", "3.2", "3.3", "3.4"],
+  php: ["8.0", "8.1", "8.2", "8.3", "8.4"],
+  // eclipse-temurin publishes majors and full builds; only the majors are stable
+  // names. See `javaTag` for why every Java answer is reduced to one.
+  java: ["8", "11", "17", "21", "24", "25"]
+};
+var NODE_LTS_CODENAMES = {
+  argon: "4",
+  boron: "6",
+  carbon: "8",
+  dubnium: "10",
+  erbium: "12",
+  fermium: "14",
+  gallium: "16",
+  hydrogen: "18",
+  iron: "20",
+  jod: "22",
+  krypton: "24"
+};
+var NEWEST_NODE_LTS = KNOWN_VERSIONS.node.filter((v) => Number(v) % 2 === 0).at(-1);
+var TOOL_ALIASES = {
+  python: "python",
+  nodejs: "node",
+  node: "node",
+  golang: "go",
+  go: "go",
+  rust: "rust",
+  ruby: "ruby",
+  php: "php",
+  java: "java"
+};
+var RuntimeVersionError = class extends Error {
+};
+var ZERO = [0, 0, 0];
+function parts(v) {
+  const m = v.trim().match(/^v?(\d+(?:\.\d+)*)$/);
+  return m ? m[1].split(".").map(Number) : null;
+}
+function ver(p) {
+  return [p[0] ?? 0, p[1] ?? 0, p[2] ?? 0];
+}
+function cmp(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  return 0;
+}
+function bump(p, at) {
+  const next = p.slice(0, at + 1);
+  next[at] = (next[at] ?? 0) + 1;
+  return ver(next);
+}
+function familySpan(v) {
+  const p = parts(v);
+  if (!p) return null;
+  return { lo: ver(p), loInc: true, hi: bump(p, p.length - 1), hiInc: false };
+}
+function overlaps(a, b) {
+  if (b.hi) {
+    const c = cmp(a.lo, b.hi);
+    if (c > 0 || c === 0 && !(a.loInc && b.hiInc)) return false;
+  }
+  if (a.hi) {
+    const c = cmp(b.lo, a.hi);
+    if (c > 0 || c === 0 && !(b.loInc && a.hiInc)) return false;
+  }
+  return true;
+}
+function clauseSpan(clause) {
+  const c = clause.trim();
+  if (!c) return null;
+  const wild = c.match(/^(>=|<=|==|!=|~=|~>|\^|~|=|>|<)?\s*v?(\d+(?:\.\d+)*)\.(?:\*|x)$/i);
+  if (wild) {
+    const span = familySpan(wild[2]);
+    if (!span) return null;
+    return wild[1] === "!=" ? { exclude: span } : span;
+  }
+  const m = c.match(/^(>=|<=|==|!=|~=|~>|\^|~|=|>|<)?\s*v?(\d+(?:\.\d+)*)$/);
+  if (!m) return null;
+  const op = m[1] ?? "=";
+  const p = parts(m[2]);
+  const lo = ver(p);
+  switch (op) {
+    case ">=":
+      return { lo, loInc: true, hi: null, hiInc: false };
+    case ">":
+      return { lo, loInc: false, hi: null, hiInc: false };
+    case "<":
+      return { lo: ZERO, loInc: true, hi: lo, hiInc: false };
+    case "<=":
+      return { lo: ZERO, loInc: true, hi: lo, hiInc: true };
+    case "=":
+    case "==":
+      return familySpan(m[2]);
+    case "!=": {
+      const span = familySpan(m[2]);
+      return span ? { exclude: span } : null;
+    }
+    // npm: `^1.2.3` → <2.0.0, but `^0.2.3` → <0.3.0. Nobody pins a runtime below
+    // 1.0, and the rule is cheap enough to get right rather than to assume.
+    case "^": {
+      const at = p[0] === 0 ? p[1] === 0 ? 2 : 1 : 0;
+      return { lo, loInc: true, hi: bump(p, Math.min(at, p.length - 1)), hiInc: false };
+    }
+    // npm tilde: `~1.2.3` and `~1.2` both stop at 1.3.0; `~1` stops at 2.0.0.
+    case "~":
+      return { lo, loInc: true, hi: bump(p, p.length >= 2 ? 1 : 0), hiInc: false };
+    // PEP 440 `~=` and Ruby's pessimistic `~>` are the same rule: drop the last
+    // component that was written, and bump the one before it.
+    case "~=":
+    case "~>":
+      return { lo, loInc: true, hi: bump(p, Math.max(0, p.length - 2)), hiInc: false };
+    default:
+      return null;
+  }
+}
+function satisfying(language, spec) {
+  const alternatives = spec.split("||").map((s) => s.trim()).filter(Boolean);
+  if (!alternatives.length) return null;
+  const accepted = /* @__PURE__ */ new Set();
+  for (const alt of alternatives) {
+    const clauses = alt.split(/\s*,\s*|\s+/).filter(Boolean);
+    const spans = [];
+    const excluded = [];
+    for (const clause of clauses) {
+      const parsed = clauseSpan(clause);
+      if (!parsed) return null;
+      if ("exclude" in parsed) excluded.push(parsed.exclude);
+      else spans.push(parsed);
+    }
+    if (!spans.length && !excluded.length) return null;
+    for (const known of KNOWN_VERSIONS[language]) {
+      const fam = familySpan(known);
+      if (!spans.every((s) => overlaps(fam, s))) continue;
+      if (excluded.some((e) => cmp(e.lo, fam.lo) <= 0 && e.hi && fam.hi && cmp(fam.hi, e.hi) <= 0)) continue;
+      accepted.add(known);
+    }
+  }
+  return KNOWN_VERSIONS[language].filter((v) => accepted.has(v));
+}
+function isExact(spec) {
+  return /^v?\d+(\.\d+)*$/.test(spec.trim());
+}
+var FILE_READS = [
+  ["toolVersions", [".tool-versions"]],
+  ["miseToml", ["mise.toml", ".mise.toml"]],
+  ["pythonVersion", [".python-version"]],
+  ["runtimeTxt", ["runtime.txt"]],
+  ["pyproject", ["pyproject.toml"]],
+  ["nvmrc", [".nvmrc"]],
+  ["nodeVersion", [".node-version"]],
+  ["goMod", ["go.mod"]],
+  ["rustToolchainToml", ["rust-toolchain.toml"]],
+  ["rustToolchain", ["rust-toolchain"]],
+  ["rubyVersion", [".ruby-version"]],
+  ["gemfile", ["Gemfile"]],
+  ["sdkmanrc", [".sdkmanrc"]],
+  ["pomXml", ["pom.xml"]],
+  ["buildGradle", ["build.gradle", "build.gradle.kts"]]
+];
+function readRuntimeFiles(dir) {
+  const text = (names2) => {
+    for (const n of names2) {
+      const p = (0, import_node_path4.join)(dir, n);
+      try {
+        if ((0, import_node_fs4.existsSync)(p)) return (0, import_node_fs4.readFileSync)(p, "utf8");
+      } catch {
+      }
+    }
+    return null;
+  };
+  const json = (name) => {
+    try {
+      return JSON.parse((0, import_node_fs4.readFileSync)((0, import_node_path4.join)(dir, name), "utf8"));
+    } catch {
+      return null;
+    }
+  };
+  const files = {};
+  for (const [key, names2] of FILE_READS) files[key] = text(names2);
+  files.packageJson = json("package.json");
+  files.composerJson = json("composer.json");
+  return files;
+}
+var firstLine = (v) => (v ?? "").trim().split("\n")[0].trim();
+function parseToolVersions(text) {
+  const out = /* @__PURE__ */ new Map();
+  for (const raw of (text ?? "").split("\n")) {
+    const line = raw.split("#")[0].trim();
+    if (!line) continue;
+    const [tool, ...rest] = line.split(/\s+/);
+    const language = TOOL_ALIASES[tool?.toLowerCase()];
+    const value = rest[0];
+    if (language && value && !out.has(language)) out.set(language, value);
+  }
+  return out;
+}
+function parseMiseTools(text) {
+  const out = /* @__PURE__ */ new Map();
+  const body = text ?? "";
+  const start = body.search(/^\s*\[tools\]\s*$/m);
+  if (start === -1) return out;
+  const rest = body.slice(start).split("\n").slice(1);
+  for (const raw of rest) {
+    const line = raw.split("#")[0].trim();
+    if (/^\[/.test(line)) break;
+    if (!line) continue;
+    const m = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/);
+    if (!m) continue;
+    const language = TOOL_ALIASES[m[1].toLowerCase()];
+    if (!language || out.has(language)) continue;
+    const value = m[2].match(/["']([^"']+)["']/)?.[1];
+    if (value) out.set(language, value);
+  }
+  return out;
+}
+function javaMajor(raw) {
+  let v = raw.trim();
+  v = v.replace(/^(?:temurin|openjdk|adoptopenjdk|graalvm|corretto|zulu|liberica|oracle|sapmachine|semeru)[-@]/i, "");
+  v = v.replace(/-(?:tem|open|amzn|zulu|librca|ms|sem|graal|oracle|sapmchn)$/i, "");
+  v = v.replace(/^JavaVersion\.VERSION_/i, "").replace(/^VERSION_/i, "");
+  v = v.replace(/_/g, ".");
+  const p = parts(v);
+  if (!p) return null;
+  const major = p[0] === 1 && p.length > 1 ? p[1] : p[0];
+  return String(major);
+}
+var RUST_CHANNEL = /^(stable|beta|nightly)(-\d{4}-\d{2}-\d{2})?$/i;
+function runtimePins(f) {
+  const pins = [];
+  const add = (language, raw, spec, from, kind = "exact") => {
+    const trimmed = spec.trim();
+    if (!trimmed || NO_PIN.test(trimmed)) return;
+    pins.push({ language, raw, spec: trimmed, from, kind });
+  };
+  const addFromVersionManager = (tools, from) => {
+    for (const [language, value] of tools) {
+      if (language === "rust" && RUST_CHANNEL.test(value)) continue;
+      const spec = language === "java" ? javaMajor(value) : value.replace(/^v/, "");
+      if (spec) add(language, value, spec, from);
+    }
+  };
+  addFromVersionManager(parseToolVersions(f.toolVersions), ".tool-versions");
+  addFromVersionManager(parseMiseTools(f.miseToml), "mise.toml");
+  const pv = firstLine(f.pythonVersion);
+  if (pv) add("python", pv, pv, ".python-version");
+  const rt = firstLine(f.runtimeTxt);
+  if (/^python-/i.test(rt)) add("python", rt, rt.replace(/^python-/i, ""), "runtime.txt");
+  const requiresPython = f.pyproject?.match(/^\s*requires-python\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (requiresPython) add("python", requiresPython, requiresPython, "pyproject.toml requires-python", "range");
+  const nvm = firstLine(f.nvmrc);
+  if (nvm) {
+    const codename = nvm.toLowerCase().match(/^lts\/(.+)$/)?.[1];
+    const lts = codename === "*" ? NEWEST_NODE_LTS : codename ? NODE_LTS_CODENAMES[codename] : null;
+    if (codename) {
+      if (lts) add("node", nvm, lts, ".nvmrc");
+    } else add("node", nvm, nvm.replace(/^v/, ""), ".nvmrc");
+  }
+  const nodeVersion = firstLine(f.nodeVersion);
+  if (nodeVersion) add("node", nodeVersion, nodeVersion.replace(/^v/, ""), ".node-version");
+  const pkg = f.packageJson ?? null;
+  if (pkg?.volta?.node) add("node", pkg.volta.node, pkg.volta.node.replace(/^v/, ""), "package.json volta.node");
+  if (pkg?.engines?.node) add("node", pkg.engines.node, pkg.engines.node, "package.json engines.node", "range");
+  const toolchain = f.goMod?.match(/^\s*toolchain\s+go?([0-9][^\s]*)/m)?.[1];
+  if (toolchain) add("go", `go${toolchain}`, toolchain, "go.mod toolchain");
+  const goLine = f.goMod?.match(/^\s*go\s+([0-9][^\s]*)/m)?.[1];
+  if (goLine) add("go", goLine, goLine, "go.mod");
+  const channel = f.rustToolchainToml?.match(/^\s*channel\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (channel && !RUST_CHANNEL.test(channel.trim())) add("rust", channel, channel, "rust-toolchain.toml");
+  const bare = firstLine(f.rustToolchain);
+  if (bare && !RUST_CHANNEL.test(bare)) add("rust", bare, bare, "rust-toolchain");
+  const rubyVersion = firstLine(f.rubyVersion);
+  if (rubyVersion) add("ruby", rubyVersion, rubyVersion.replace(/^ruby-/i, ""), ".ruby-version");
+  const gemfileRuby = f.gemfile?.match(/^\s*ruby\s+["']([^"']+)["']/m)?.[1];
+  if (gemfileRuby) add("ruby", gemfileRuby, gemfileRuby, "Gemfile", "range");
+  const composer = f.composerJson ?? null;
+  const platformPhp = composer?.config?.platform?.php;
+  if (platformPhp) add("php", platformPhp, platformPhp, "composer.json config.platform.php");
+  const requirePhp = composer?.require?.php;
+  if (requirePhp) add("php", requirePhp, requirePhp, "composer.json require.php", "range");
+  const sdkman = f.sdkmanrc?.match(/^\s*java\s*=\s*(.+)$/m)?.[1];
+  if (sdkman) {
+    const major = javaMajor(sdkman);
+    if (major) add("java", sdkman.trim(), major, ".sdkmanrc");
+  }
+  for (const field of ["maven.compiler.release", "java.version", "maven.compiler.source", "maven.compiler.target"]) {
+    const found = f.pomXml?.match(new RegExp(`<${field.replace(/\./g, "\\.")}>([^<]+)<`))?.[1];
+    if (!found) continue;
+    const major = javaMajor(found);
+    if (major) {
+      add("java", found.trim(), major, `pom.xml ${field}`);
+      break;
+    }
+  }
+  const gradle = f.buildGradle?.match(/JavaLanguageVersion\.of\((\d+)\)/)?.[1] ?? f.buildGradle?.match(/jvmToolchain\((\d+)\)/)?.[1] ?? f.buildGradle?.match(/(?:source|target)Compatibility\s*=?\s*["']?([A-Za-z0-9_.]+)["']?/)?.[1];
+  if (gradle) {
+    const major = javaMajor(gradle);
+    if (major) add("java", gradle.trim(), major, "build.gradle");
+  }
+  return pins;
+}
+function pinFor(pins, language) {
+  return pins.find((p) => p.language === language) ?? null;
+}
+function assertValidTag(tag, where) {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/.test(tag)) {
+    throw new RuntimeVersionError(
+      `${where} asks for "${tag}", which is not a version an image can be pulled by.
+  Write a concrete version there (like "3.12"), or set "build": { "image": "\u2026" } in supersonic.json to choose the base image yourself.`
+    );
+  }
+}
+function resolveRuntime(language, pin) {
+  const fallback = (why) => ({
+    language,
+    version: PLATFORM_DEFAULT_VERSION[language],
+    versionFrom: why
+  });
+  if (!pin) return fallback("platform default");
+  const spec = pin.spec.trim();
+  if (pin.kind === "exact" && !isExact(spec)) {
+    throw new RuntimeVersionError(
+      `${pin.from} says "${pin.raw.trim()}", which is not a version.
+  Write a plain version there (like "${PLATFORM_DEFAULT_VERSION[language]}"), or set "build": { "image": "\u2026" } in supersonic.json to choose the base image yourself.`
+    );
+  }
+  if (isExact(spec)) {
+    const version = spec.replace(/^v/, "");
+    assertValidTag(version, pin.from);
+    return {
+      language,
+      version,
+      versionFrom: version === pin.raw.trim() ? pin.from : `${pin.from} ${pin.raw.trim()} \u2192 ${version}`
+    };
+  }
+  const options = satisfying(language, spec);
+  if (!options) {
+    return fallback(`platform default \u2014 ${pin.from} says "${pin.raw.trim()}", which is not a version range we read`);
+  }
+  const chosen = options.at(-1);
+  if (!chosen) {
+    return fallback(
+      `platform default \u2014 ${pin.from} asks for "${pin.raw.trim()}" and no ${language} we know of satisfies it`
+    );
+  }
+  assertValidTag(chosen, pin.from);
+  return { language, version: chosen, versionFrom: `${pin.from} ${pin.raw.trim()} \u2192 ${chosen}` };
+}
 var trim = (v) => (v ?? "").trim().split("\n")[0].trim();
 function repoRuntime(f) {
   const pv = trim(f.pythonVersion);
@@ -748,6 +1022,607 @@ function declaredRuntime(runtime) {
   const m = (runtime ?? "").trim().match(/^(python|node)\s*v?(\d+(?:\.\d+)*)$/i);
   if (!m) return null;
   return { language: m[1].toLowerCase(), spec: m[2], from: "supersonic.json" };
+}
+
+// lib/detect.ts
+var PACKAGE_RULES = {
+  python: [
+    // `uv sync` builds the local project, and the cached layer runs before the
+    // source is copied. `--no-install-project` is what lets it be cached at all.
+    {
+      file: "uv.lock",
+      manager: "uv",
+      install: "pip install --no-cache-dir uv && uv sync --frozen --no-dev --no-install-project",
+      installProject: "uv sync --frozen --no-dev"
+    },
+    {
+      file: "poetry.lock",
+      manager: "poetry",
+      install: "pip install --no-cache-dir poetry && poetry install --no-root --only main"
+    },
+    {
+      file: "Pipfile.lock",
+      manager: "pipenv",
+      install: "pip install --no-cache-dir pipenv && pipenv install --deploy --system"
+    },
+    {
+      file: "requirements.txt",
+      manager: "pip",
+      install: "pip install --no-cache-dir -r requirements.txt"
+    },
+    // No `--no-install-project` equivalent exists for `pip install .`, so this one
+    // installs after `COPY . .` and forgoes the cached layer. Stated rather than
+    // emitted as a Dockerfile that cannot build.
+    { file: "pyproject.toml", manager: "pip", installProject: "pip install --no-cache-dir ." }
+  ],
+  node: [
+    { file: "pnpm-lock.yaml", manager: "pnpm", install: "corepack enable && pnpm install --frozen-lockfile" },
+    { file: "yarn.lock", manager: "yarn", install: "corepack enable && yarn install --immutable" },
+    // bun >= 1.2 writes a TEXT lockfile. Listing only `bun.lockb` drops every
+    // modern bun repo to `npm install`, which cannot install a bun workspace.
+    { file: "bun.lock", manager: "bun", install: "bun install --frozen-lockfile" },
+    { file: "bun.lockb", manager: "bun", install: "bun install --frozen-lockfile" },
+    { file: "package-lock.json", manager: "npm", install: "npm ci" },
+    // `npm ci` refuses to run without a lockfile, and a lockfile-less project is
+    // the common case for the people this platform is for.
+    { file: "package.json", manager: "npm", install: "npm install" }
+  ],
+  go: [
+    { file: "go.sum", manager: "go", install: "go mod download" },
+    { file: "go.mod", manager: "go", install: "go mod download" }
+  ],
+  rust: [
+    // cargo resolves and compiles in one step; there is no install to cache apart
+    // from the build itself.
+    { file: "Cargo.lock", manager: "cargo" },
+    { file: "Cargo.toml", manager: "cargo" }
+  ],
+  ruby: [
+    { file: "Gemfile.lock", manager: "bundler", install: "bundle install --without development test" },
+    { file: "Gemfile", manager: "bundler", install: "bundle install --without development test" }
+  ],
+  php: [
+    { file: "composer.lock", manager: "composer", install: "composer install --no-dev --optimize-autoloader" },
+    { file: "composer.json", manager: "composer", install: "composer install --no-dev --optimize-autoloader" }
+  ],
+  // Java is the row docs/MAKE-DEPLOYS-WORK.md Part 8 names as missing: the
+  // manifest COPY has no `pom.xml` or `build.gradle*` either, so "now covers Go,
+  // Ruby, Java and PHP" was false for Java out of the box. Both halves are here.
+  java: [
+    { file: "pom.xml", manager: "maven", install: "mvn -B -q -DskipTests dependency:go-offline" },
+    { file: "build.gradle.kts", manager: "gradle" },
+    { file: "build.gradle", manager: "gradle" }
+  ]
+};
+var PACKAGE_MANIFESTS = [
+  ...new Set(RUNTIME_LANGUAGES.flatMap((l) => PACKAGE_RULES[l].map((r) => r.file)))
+];
+var readText = (dir, file) => {
+  try {
+    const p = (0, import_node_path5.join)(dir, file);
+    return (0, import_node_fs5.existsSync)(p) ? (0, import_node_fs5.readFileSync)(p, "utf8") : null;
+  } catch {
+    return null;
+  }
+};
+var readJson = (dir, file) => {
+  const raw = readText(dir, file);
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === "object" ? v : null;
+  } catch {
+    return null;
+  }
+};
+var hasFile = (dir, file) => {
+  try {
+    return (0, import_node_fs5.existsSync)((0, import_node_path5.join)(dir, file));
+  } catch {
+    return false;
+  }
+};
+function nodeDeps(pkg) {
+  const p = pkg ?? {};
+  return /* @__PURE__ */ new Set([...Object.keys(p.dependencies ?? {}), ...Object.keys(p.devDependencies ?? {})]);
+}
+function pythonDepsText(dir) {
+  return [
+    readText(dir, "requirements.txt") ?? "",
+    readText(dir, "pyproject.toml") ?? "",
+    readText(dir, "Pipfile") ?? ""
+  ].join("\n").toLowerCase();
+}
+var CONFIGS = {
+  next: ["next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts"],
+  astro: ["astro.config.mjs", "astro.config.js", "astro.config.cjs", "astro.config.ts"],
+  svelte: ["svelte.config.js", "svelte.config.mjs", "svelte.config.ts"]
+};
+function dirFacts(dir, rel) {
+  const pkg = readJson(dir, "package.json");
+  const readFirst = (names2) => {
+    for (const n of names2) {
+      const s = readText(dir, n);
+      if (s) return s;
+    }
+    return null;
+  };
+  return {
+    dir,
+    rel,
+    pkg,
+    deps: nodeDeps(pkg),
+    pythonText: pythonDepsText(dir),
+    nextConfig: readFirst(CONFIGS.next),
+    astroConfig: readFirst(CONFIGS.astro),
+    svelteConfig: readFirst(CONFIGS.svelte),
+    gemfile: readText(dir, "Gemfile"),
+    composer: readJson(dir, "composer.json"),
+    cargo: readText(dir, "Cargo.toml")
+  };
+}
+function astroHasAdapter(src) {
+  const s = src ?? "";
+  return /adapter\s*:/.test(s) || /@astrojs\/(node|vercel|netlify|cloudflare|deno)/.test(s);
+}
+function nextIsExport(src) {
+  return /output\s*:\s*["'`]export["'`]/.test(src ?? "");
+}
+function svelteHasNodeAdapter(f) {
+  return f.deps.has("@sveltejs/adapter-node") || /@sveltejs\/adapter-node/.test(f.svelteConfig ?? "");
+}
+function djangoPackage(dir) {
+  const manage = readText(dir, "manage.py") ?? "";
+  const declared = manage.match(/DJANGO_SETTINGS_MODULE["']\s*,\s*["']([\w.]+)["']/)?.[1];
+  if (declared) return declared.split(".")[0];
+  try {
+    for (const e of (0, import_node_fs5.readdirSync)(dir, { withFileTypes: true })) {
+      if (e.isDirectory() && (0, import_node_fs5.existsSync)((0, import_node_path5.join)(dir, e.name, "wsgi.py"))) return e.name;
+    }
+  } catch {
+  }
+  return null;
+}
+function cargoBinary(src) {
+  const pkgSection = (src ?? "").split(/^\s*\[/m).find((s) => s.startsWith("package]"));
+  return pkgSection?.match(/^\s*name\s*=\s*["']([^"']+)["']/m)?.[1] ?? null;
+}
+var FRAMEWORK_START = [
+  {
+    when: (f) => f.deps.has("next") || Boolean(f.nextConfig),
+    start: (f) => nextIsExport(f.nextConfig) ? null : "next start -p $PORT",
+    token: "next"
+  },
+  {
+    when: (f) => f.deps.has("nuxt") || hasFile(f.dir, "nuxt.config.ts") || hasFile(f.dir, "nuxt.config.js"),
+    start: () => "node .output/server/index.mjs",
+    token: "nuxt"
+  },
+  // React Router 7 is Remix; the framework kept the deploy shape and changed the
+  // name, and both spellings are in the wild.
+  {
+    when: (f) => f.deps.has("@react-router/serve") || f.deps.has("@react-router/node") || f.deps.has("@remix-run/serve") || f.deps.has("@remix-run/node"),
+    start: () => "react-router-serve ./build/server/index.js",
+    token: "remix"
+  },
+  {
+    when: (f) => f.deps.has("astro") || Boolean(f.astroConfig),
+    start: (f) => astroHasAdapter(f.astroConfig) ? "node ./dist/server/entry.mjs" : null,
+    token: "astro"
+  },
+  {
+    when: (f) => f.deps.has("@sveltejs/kit") || Boolean(f.svelteConfig),
+    start: (f) => svelteHasNodeAdapter(f) ? "node build" : null,
+    token: "svelte"
+  },
+  { when: (f) => f.deps.has("@nestjs/core"), start: () => "node dist/main.js", token: "nest" },
+  {
+    when: (f) => hasFile(f.dir, "manage.py"),
+    start: (f) => `gunicorn ${djangoPackage(f.dir) ?? "config"}.wsgi:application -b :$PORT`,
+    extra: "gunicorn",
+    token: "django"
+  },
+  {
+    when: (f) => hasFile(f.dir, "main.py") && /fastapi/.test(f.pythonText),
+    start: () => "uvicorn main:app --host 0.0.0.0 --port $PORT",
+    extra: "uvicorn",
+    token: "fastapi"
+  },
+  {
+    when: (f) => hasFile(f.dir, "app/main.py") && /fastapi/.test(f.pythonText),
+    start: () => "uvicorn app.main:app --host 0.0.0.0 --port $PORT",
+    extra: "uvicorn",
+    token: "fastapi"
+  },
+  {
+    when: (f) => hasFile(f.dir, "app.py") && /flask/.test(f.pythonText),
+    start: () => "gunicorn app:app -b :$PORT",
+    extra: "gunicorn",
+    token: "flask"
+  },
+  { when: (f) => hasFile(f.dir, "wsgi.py"), start: () => "gunicorn wsgi:app -b :$PORT", extra: "gunicorn" },
+  {
+    when: (f) => Boolean(f.gemfile) && /rails/i.test(f.gemfile ?? ""),
+    start: () => "bundle exec rails s -b 0.0.0.0 -p $PORT",
+    token: "rails"
+  },
+  { when: (f) => hasFile(f.dir, "config.ru"), start: () => "bundle exec rackup -p $PORT -o 0.0.0.0" },
+  { when: (f) => hasFile(f.dir, "go.mod"), start: () => "/app/server" },
+  {
+    when: (f) => Boolean(f.cargo),
+    start: (f) => `/app/target/release/${cargoBinary(f.cargo) ?? "app"}`
+  },
+  // The two PHP rows are DEVELOPMENT servers. `php -S` and `php artisan serve` are
+  // single-threaded and serialise requests, and Cloud Run's default concurrency is
+  // 80 — so a burst of 80 requests queues behind one worker and the app looks
+  // hung. They are here as a first-deploy default on the explicit condition that
+  // `phpConcurrency` below pins concurrency to 1 for them; replacing them with
+  // frankenphp or php-fpm+nginx is the real fix and is not this step's work.
+  {
+    when: (f) => hasFile(f.dir, "artisan"),
+    start: () => "php artisan serve --host 0.0.0.0 --port $PORT",
+    token: "laravel"
+  },
+  { when: (f) => hasFile(f.dir, "index.php"), start: () => "php -S 0.0.0.0:$PORT" }
+];
+var PYTHON_ENTRIES = ["main.py", "app/main.py", "src/main.py", "app.py", "api/main.py", "src/app.py"];
+var PYTHON_RUNNABLE = [...PYTHON_ENTRIES, "manage.py", "wsgi.py", "asgi.py"];
+function bindToPort(cmd) {
+  return cmd.replace(/(--port[= ])\d+/g, "$1$PORT").replace(/(--bind[= ]\S*?:)\d+/g, "$1$PORT").replace(/(-b\s+\S*?:)\d+/g, "$1$PORT").replace(/(-p\s+)\d+/g, "$1$PORT");
+}
+function pythonModule(serviceDir) {
+  for (const entry of PYTHON_ENTRIES) {
+    if ((0, import_node_fs5.existsSync)((0, import_node_path5.join)(serviceDir, entry))) return entry.replace(/\.py$/, "").split("/").join(".");
+  }
+  return null;
+}
+function pythonInstall(serviceDir, detected) {
+  if ((0, import_node_fs5.existsSync)((0, import_node_path5.join)(serviceDir, "requirements.txt"))) return detected ?? "pip install --no-cache-dir -r requirements.txt";
+  if ((0, import_node_fs5.existsSync)((0, import_node_path5.join)(serviceDir, "pyproject.toml"))) return "pip install --no-cache-dir .";
+  return void 0;
+}
+function serviceLanguage(language, isStatic = false) {
+  if (isStatic) return "static";
+  const l = (language ?? "").toLowerCase();
+  if (l.startsWith("python")) return "python";
+  if (l === "node" || /^(java)?script|^typescript/.test(l)) return "node";
+  if (l === "static") return "static";
+  return "other";
+}
+var NEEDS = [
+  { when: (f) => f.deps.has("canvas"), packages: ["libcairo2-dev", "libpango1.0-dev", "libjpeg-dev"] },
+  { when: (f) => /(^|\n|\s)mysqlclient/.test(f.pythonText), packages: ["default-libmysqlclient-dev", "pkg-config"] },
+  { when: (f) => /(^|\n|\s)weasyprint/.test(f.pythonText), packages: ["libpango-1.0-0", "libpangoft2-1.0-0"] }
+];
+function detectDatabase(f) {
+  const dep = (n) => f.deps.has(n);
+  const py = (n) => new RegExp(`(^|[^\\w-])${n}`, "i").test(f.pythonText);
+  if (dep("@prisma/client") || dep("prisma") || hasFile(f.dir, "prisma/schema.prisma")) {
+    const provider = readText(f.dir, "prisma/schema.prisma")?.match(/provider\s*=\s*"(\w+)"/)?.[1];
+    const engine = provider === "mysql" ? "mysql" : provider === "sqlite" ? "sqlite" : provider === "mongodb" ? "mongodb" : "postgres";
+    return { engine, via: "Prisma" };
+  }
+  if (dep("drizzle-orm")) {
+    return { engine: dep("mysql2") ? "mysql" : dep("better-sqlite3") ? "sqlite" : "postgres", via: "Drizzle" };
+  }
+  if (dep("mongoose")) return { engine: "mongodb", via: "Mongoose" };
+  if (dep("typeorm")) return { engine: dep("mysql2") || dep("mysql") ? "mysql" : "postgres", via: "TypeORM" };
+  if (dep("sequelize")) return { engine: dep("mysql2") || dep("mysql") ? "mysql" : "postgres", via: "Sequelize" };
+  if (dep("pg") || dep("postgres")) return { engine: "postgres", via: "pg" };
+  if (dep("mysql2") || dep("mysql")) return { engine: "mysql", via: "mysql" };
+  if (py("psycopg2")) return { engine: "postgres", via: "psycopg2" };
+  if (py("psycopg")) return { engine: "postgres", via: "psycopg" };
+  if (py("asyncpg")) return { engine: "postgres", via: "asyncpg" };
+  if (py("django")) return { engine: "postgres", via: "Django ORM" };
+  if (py("sqlalchemy")) return { engine: "postgres", via: "SQLAlchemy" };
+  if (py("pymysql") || py("mysqlclient")) return { engine: "mysql", via: "mysql" };
+  if (py("pymongo")) return { engine: "mongodb", via: "pymongo" };
+  const gem = f.gemfile ?? "";
+  if (/^\s*gem\s+["']pg["']/m.test(gem)) return { engine: "postgres", via: "pg" };
+  if (/^\s*gem\s+["']mysql2["']/m.test(gem)) return { engine: "mysql", via: "mysql2" };
+  const goMod = readText(f.dir, "go.mod") ?? "";
+  if (/github\.com\/lib\/pq|github\.com\/jackc\/pgx/.test(goMod)) return { engine: "postgres", via: "pgx" };
+  if (/github\.com\/go-sql-driver\/mysql/.test(goMod)) return { engine: "mysql", via: "go-sql-driver" };
+  const require2 = f.composer?.require ?? {};
+  if ("laravel/framework" in require2) return { engine: "mysql", via: "Eloquent" };
+  return void 0;
+}
+function detectRelease(f, procfile, config) {
+  const declared = config?.release ?? config?.preDeploy ?? config?.processes?.release?.command;
+  if (declared?.trim()) return declared.trim();
+  const fromProcfile = procfile?.find((e) => e.name === "release")?.command;
+  if (fromProcfile?.trim()) return fromProcfile.trim();
+  if (hasFile(f.dir, "manage.py")) return "python manage.py migrate --noinput";
+  if (hasFile(f.dir, "alembic.ini")) return "alembic upgrade head";
+  if (hasFile(f.dir, "prisma/schema.prisma")) return "npx --no-install prisma migrate deploy";
+  if (f.gemfile && /rails/i.test(f.gemfile)) return "bundle exec rails db:migrate";
+  return void 0;
+}
+function goMainPackage(dir) {
+  const mains = [];
+  const walk = (abs, rel, depth) => {
+    if (depth > 3 || mains.length > 8) return;
+    let entries;
+    try {
+      entries = (0, import_node_fs5.readdirSync)(abs, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    let isMain = false;
+    for (const e of entries) {
+      if (e.isFile() && e.name.endsWith(".go") && !e.name.endsWith("_test.go")) {
+        const src = readText(abs, e.name) ?? "";
+        if (/^\s*package\s+main\s*$/m.test(src)) isMain = true;
+      }
+    }
+    if (isMain) mains.push(rel);
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name.startsWith(".") || e.name === "vendor" || e.name === "node_modules") continue;
+      walk((0, import_node_path5.join)(abs, e.name), rel === "." ? `./${e.name}` : `${rel}/${e.name}`, depth + 1);
+    }
+  };
+  walk(dir, ".", 0);
+  if (mains.length === 1) return { pattern: mains[0], sure: true };
+  if (mains.includes(".")) return { pattern: ".", sure: true };
+  const underCmd = mains.filter((m) => m.startsWith("./cmd/"));
+  if (underCmd.length === 1) return { pattern: underCmd[0], sure: true };
+  return { pattern: "./...", sure: false };
+}
+function buildFor(language, manager, f) {
+  if (language === "node") {
+    const scripts = f.pkg?.scripts ?? {};
+    return { build: scripts.build ? `${manager === "bun" ? "bun" : manager} run build` : void 0, sure: true };
+  }
+  if (language === "go") {
+    const main = goMainPackage(f.dir);
+    return { build: `go build -o /app/server ${main.pattern}`, sure: main.sure };
+  }
+  if (language === "rust") return { build: "cargo build --release", sure: true };
+  if (language === "java") {
+    return manager === "maven" ? { build: "mvn -B -DskipTests package", sure: true } : { build: `${hasFile(f.dir, "gradlew") ? "./gradlew" : "gradle"} --no-daemon build -x test`, sure: true };
+  }
+  if (language === "ruby" && f.gemfile && /rails/i.test(f.gemfile)) {
+    return { build: "bundle exec rails assets:precompile", sure: true };
+  }
+  return { sure: true };
+}
+function staticOutputDir(f) {
+  if (f.deps.has("next")) return nextIsExport(f.nextConfig) ? "out" : void 0;
+  if (f.deps.has("astro") || f.astroConfig) return astroHasAdapter(f.astroConfig) ? void 0 : "dist";
+  if (f.deps.has("@sveltejs/kit") || f.svelteConfig) return svelteHasNodeAdapter(f) ? void 0 : "build";
+  if (f.deps.has("react-scripts")) return "build";
+  if (f.deps.has("vite")) return "dist";
+  if (hasFile(f.dir, "index.html")) return ".";
+  return void 0;
+}
+function languagesIn(dir) {
+  return RUNTIME_LANGUAGES.filter((l) => PACKAGE_RULES[l].some((r) => hasFile(dir, r.file)));
+}
+function toolchainFor(language, f, rel, repoRoot) {
+  const rule = PACKAGE_RULES[language].find((r) => hasFile(f.dir, r.file));
+  if (!rule) return null;
+  const { build, sure } = buildFor(language, rule.manager, f);
+  const own = pinFor(runtimePins(readRuntimeFiles(f.dir)), language);
+  const inherited = !own && repoRoot !== f.dir ? pinFor(runtimePins(readRuntimeFiles(repoRoot)), language) : null;
+  const runtime = resolveRuntime(
+    language,
+    own ?? (inherited ? { ...inherited, from: `${inherited.from} (repo root)` } : null)
+  );
+  return {
+    tc: {
+      language,
+      version: runtime.version,
+      versionFrom: runtime.versionFrom,
+      packageManager: rule.manager,
+      install: rule.install,
+      installProject: rule.installProject,
+      build,
+      dir: rel
+    },
+    sure
+  };
+}
+function detect(dir, options = {}, rel = ".") {
+  const { run, config } = options;
+  const f = dirFacts(dir, rel);
+  const repoRoot = options.repoRoot ?? (rel === "." ? dir : (0, import_node_path5.resolve)(dir, ...rel.split("/").filter((s) => s && s !== ".").map(() => "..")));
+  const present = languagesIn(dir);
+  const built = present.map((l) => toolchainFor(l, f, rel, repoRoot)).filter((t) => t !== null);
+  let command;
+  let framework;
+  let extra;
+  let confidence = "certain";
+  let procfile = null;
+  try {
+    procfile = readProcfile(dir);
+  } catch {
+    procfile = null;
+  }
+  const configWeb = config?.processes?.web?.command ?? config?.start;
+  const procfileWeb = procfile?.find((e) => e.name === "web")?.command;
+  const pkgScripts = f.pkg?.scripts ?? {};
+  const nodeManager = built.find((b) => b.tc.language === "node")?.tc.packageManager ?? "npm";
+  const staticDir = staticOutputDir(f);
+  const scriptStart = pkgScripts.start && !staticDir ? `${nodeManager} start` : void 0;
+  const declared = run?.trim() || configWeb?.trim() || procfileWeb?.trim() || scriptStart;
+  if (declared) {
+    command = declared;
+    framework = FRAMEWORK_START.find((r) => r.when(f))?.token;
+  } else {
+    const row = FRAMEWORK_START.find((r) => r.when(f));
+    const started = row?.start(f) ?? null;
+    if (row && started) {
+      command = started;
+      framework = row.token;
+      extra = row.extra;
+      confidence = "inferred";
+    } else {
+      framework = row?.token;
+    }
+  }
+  if (command) command = bindToPort(command);
+  const outputDir = command ? void 0 : staticDir;
+  if (!command && !outputDir) confidence = "guessed";
+  if (extra) {
+    const python = built.find((b) => b.tc.language === "python");
+    if (python && !new RegExp(`(^|[^\\w-])${extra}`, "i").test(f.pythonText)) {
+      python.tc.install = python.tc.install ? `${python.tc.install} && pip install --no-cache-dir ${extra}` : `pip install --no-cache-dir ${extra}`;
+    }
+  }
+  const needs = [...new Set(NEEDS.filter((n) => n.when(f)).flatMap((n) => n.packages))];
+  if (built.some((b) => !b.sure) && confidence === "certain") confidence = "inferred";
+  const toolchains = orderToolchains(built.map((b) => b.tc), framework, command);
+  return {
+    toolchains,
+    language: toolchains[0]?.language ?? "static",
+    framework,
+    command,
+    release: detectRelease(f, procfile, config),
+    outputDir,
+    database: detectDatabase(f),
+    needs,
+    confidence
+  };
+}
+function orderToolchains(toolchains, framework, command) {
+  if (toolchains.length < 2) return toolchains;
+  const cmd = command ?? "";
+  const serves = (t) => {
+    if (t.language === "python") return /\b(gunicorn|uvicorn|hypercorn|daphne|granian|waitress|python3?)\b/.test(cmd);
+    if (t.language === "node") return /\b(node|npm|pnpm|yarn|bun|next|nuxt|react-router-serve)\b/.test(cmd);
+    if (t.language === "ruby") return /\b(bundle|ruby|rackup|rails)\b/.test(cmd);
+    if (t.language === "php") return /\bphp\b/.test(cmd);
+    if (t.language === "go") return /\/app\/server\b/.test(cmd);
+    if (t.language === "rust") return /\/app\/target\/release\//.test(cmd);
+    if (t.language === "java") return /\bjava\b/.test(cmd);
+    return false;
+  };
+  const first = toolchains.findIndex(serves);
+  if (first > 0) return [toolchains[first], ...toolchains.filter((_, i) => i !== first)];
+  if (first === -1 && framework) {
+    const byFramework = toolchains.findIndex((t) => t.language === (["django", "fastapi", "flask"].includes(framework) ? "python" : ["rails"].includes(framework) ? "ruby" : ["laravel"].includes(framework) ? "php" : "node"));
+    if (byFramework > 0) return [toolchains[byFramework], ...toolchains.filter((_, i) => i !== byFramework)];
+  }
+  return toolchains;
+}
+
+// lib/infer-services.ts
+var BROWSER_FACING = /next|nuxt|remix|svelte|astro|vite|create react app|static/i;
+var NOT_AN_APP = /* @__PURE__ */ new Set([
+  "e2e",
+  "test",
+  "tests",
+  "spec",
+  "specs",
+  "docs",
+  "doc",
+  "examples",
+  "example",
+  "fixtures",
+  "scripts",
+  "tools",
+  "infra",
+  "terraform",
+  "deploy",
+  "deployment",
+  "ci",
+  "benchmark",
+  "benchmarks",
+  "bench",
+  "migrations",
+  "seeds"
+]);
+var NODE_FRAMEWORK = /^(next|nuxt|astro|vite|@remix-run\/|@sveltejs\/kit|@nestjs\/core|express|fastify|koa|hono)/;
+function dirOf(manifestPath) {
+  const i = manifestPath.lastIndexOf("/");
+  return i === -1 ? "." : manifestPath.slice(0, i);
+}
+function isWorkspaceRoot(repoDir) {
+  const p = (0, import_node_path6.join)(repoDir, "package.json");
+  if (!(0, import_node_fs6.existsSync)(p)) return false;
+  try {
+    return Boolean(JSON.parse((0, import_node_fs6.readFileSync)(p, "utf8")).workspaces);
+  } catch {
+    return false;
+  }
+}
+function isDeployablePart(absoluteDir, relDir) {
+  if (relDir.split("/").some((seg) => NOT_AN_APP.has(seg.toLowerCase()))) return false;
+  const pkgPath = (0, import_node_path6.join)(absoluteDir, "package.json");
+  if ((0, import_node_fs6.existsSync)(pkgPath)) {
+    try {
+      const pkg = JSON.parse((0, import_node_fs6.readFileSync)(pkgPath, "utf8"));
+      const scripts = pkg.scripts ?? {};
+      if (scripts.build || scripts.start) return true;
+      const deps = Object.keys({ ...pkg.dependencies ?? {}, ...pkg.devDependencies ?? {} });
+      return deps.some((d) => NODE_FRAMEWORK.test(d));
+    } catch {
+      return false;
+    }
+  }
+  return PYTHON_RUNNABLE.some((entry) => (0, import_node_fs6.existsSync)((0, import_node_path6.join)(absoluteDir, entry)));
+}
+function startFor(stack, absoluteDir) {
+  const bound = bindToPort(stack.startCommand);
+  if (!/^python/i.test(stack.language)) return bound;
+  const mod = pythonModule(absoluteDir);
+  if (!mod) return bound;
+  return bound.replace(/[\w.]+(?=:app\b)/, mod);
+}
+function languageOf(stack) {
+  return serviceLanguage(stack.language, stack.serve.mode === "static");
+}
+function serviceFor(relDir, stack, absoluteDir) {
+  const language = languageOf(stack);
+  const name = relDir === "." ? "app" : import_node_path6.posix.basename(relDir);
+  const base = {
+    name,
+    dir: relDir,
+    language,
+    install: language === "python" ? pythonInstall(absoluteDir, stack.installCommand) : stack.installCommand ?? void 0,
+    build: stack.buildCommand ?? void 0,
+    needsDB: stack.database?.engine ? true : void 0
+  };
+  if (language === "static") {
+    return { ...base, outputDir: stack.serve.mode === "static" ? stack.serve.outputDir : "dist" };
+  }
+  return { ...base, start: startFor(stack, absoluteDir) };
+}
+function deployableParts(repoDir, facts) {
+  const dirs = [];
+  for (const d of facts.declarations) {
+    const dir = dirOf(d.from);
+    if (dirs.includes(dir)) continue;
+    if (!isDeployablePart(dir === "." ? repoDir : (0, import_node_path6.join)(repoDir, dir), dir)) continue;
+    dirs.push(dir);
+  }
+  const nested = dirs.filter((d) => d !== ".");
+  return nested.length >= 2 || dirs.includes(".") && isWorkspaceRoot(repoDir) ? nested : dirs;
+}
+async function inferAppConfig(repoDir, detect2) {
+  const facts = readRepoFacts(repoDir);
+  if (!facts.declarations.length) return null;
+  if (facts.dockerfiles.includes("Dockerfile")) return null;
+  const parts2 = deployableParts(repoDir, facts);
+  if (parts2.length < 2) return null;
+  let detected;
+  try {
+    detected = await Promise.all(parts2.map(async (rel) => {
+      const abs = rel === "." ? repoDir : (0, import_node_path6.join)(repoDir, rel);
+      return { rel, abs, stack: await detect2(abs) };
+    }));
+  } catch {
+    return null;
+  }
+  const primaryIdx = Math.max(0, detected.findIndex((p) => BROWSER_FACING.test(p.stack.framework)));
+  const ordered = [detected[primaryIdx], ...detected.filter((_, i) => i !== primaryIdx)];
+  const services = ordered.map((p, i) => {
+    const svc = serviceFor(p.rel, p.stack, p.abs);
+    if (i === 0) return { ...svc, path: "/" };
+    return { ...svc, path: ordered.length === 2 ? "/api" : `/${svc.name}` };
+  });
+  return { version: 1, services };
 }
 
 // lib/resolve.ts
@@ -858,13 +1733,13 @@ function resolveService(s, index, runtimePinned = false) {
     declared: declaredFields(s)
   };
 }
-async function resolve(dir, detect) {
+async function resolve2(dir, detect2) {
   let config = null;
   let source = "config";
   config = readAppConfig(dir);
   if (!config) {
-    if (!detect) throw new ResolveError(`${dir} has no ${CONFIG_FILENAME} and no detector was supplied \u2014 run \`supersonic init\``);
-    config = await inferAppConfig(dir, detect);
+    if (!detect2) throw new ResolveError(`${dir} has no ${CONFIG_FILENAME} and no detector was supplied \u2014 run \`supersonic init\``);
+    config = await inferAppConfig(dir, detect2);
     source = "inferred";
   }
   if (!config) {
@@ -878,7 +1753,7 @@ async function resolve(dir, detect) {
 function repoPinsRuntime(dir) {
   const read = (f) => {
     try {
-      return (0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, f)) ? (0, import_node_fs4.readFileSync)((0, import_node_path4.join)(dir, f), "utf8") : null;
+      return (0, import_node_fs7.existsSync)((0, import_node_path7.join)(dir, f)) ? (0, import_node_fs7.readFileSync)((0, import_node_path7.join)(dir, f), "utf8") : null;
     } catch {
       return null;
     }
@@ -920,8 +1795,8 @@ function validate(app, dir) {
     const where = `service "${s.name}"`;
     if (paths.has(s.path)) problems.push(`${where}: two services both serve ${s.path}`);
     paths.add(s.path);
-    const abs = (0, import_node_path4.join)(dir, s.dir);
-    if (!(0, import_node_fs4.existsSync)(abs)) {
+    const abs = (0, import_node_path7.join)(dir, s.dir);
+    if (!(0, import_node_fs7.existsSync)(abs)) {
       problems.push(`${where}: directory "${s.dir}" does not exist`);
       continue;
     }
@@ -929,7 +1804,7 @@ function validate(app, dir) {
       if (s.build && !s.declared.includes("outputDir")) {
         problems.push(`${where}: has a build command but no outputDir \u2014 what should be published?`);
       }
-      if (!s.build && s.outputDir && !(0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, s.outputDir))) {
+      if (!s.build && s.outputDir && !(0, import_node_fs7.existsSync)((0, import_node_path7.join)(dir, s.outputDir))) {
         problems.push(`${where}: outputDir "${s.outputDir}" does not exist and no build command would create it`);
       }
     } else if (s.lane !== "container" && !s.start && !s.processes.length) {
@@ -939,10 +1814,10 @@ function validate(app, dir) {
       );
     }
     if (s.dockerfile) {
-      if (!(0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, s.dockerfile))) {
+      if (!(0, import_node_fs7.existsSync)((0, import_node_path7.join)(dir, s.dockerfile))) {
         problems.push(`${where}: dockerfile "${s.dockerfile}" does not exist`);
       }
-      if (s.context && !(0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, s.context))) {
+      if (s.context && !(0, import_node_fs7.existsSync)((0, import_node_path7.join)(dir, s.context))) {
         problems.push(`${where}: build context "${s.context}" does not exist`);
       }
     }
@@ -962,44 +1837,6 @@ function missingSecrets(app, available) {
   const db = app.resources.database;
   if (db?.provider === "external") want.add(db.urlFrom);
   return [...want].filter((n) => !have.has(n)).sort();
-}
-
-// lib/procfile.ts
-var import_node_fs5 = require("node:fs");
-var import_node_path5 = require("node:path");
-var PROCFILE = "Procfile";
-var ENTRY = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/;
-var ProcfileError = class extends Error {
-};
-function parseProcfile(text) {
-  const out = [];
-  const seen = /* @__PURE__ */ new Map();
-  text.split(/\r?\n/).forEach((raw, i) => {
-    const line = i + 1;
-    const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith("#")) return;
-    const m = ENTRY.exec(trimmed);
-    if (!m) {
-      throw new ProcfileError(
-        `${PROCFILE} line ${line}: expected "name: command", got ${JSON.stringify(trimmed)}`
-      );
-    }
-    const name = m[1].toLowerCase();
-    const command = m[2].trim();
-    if (!command) throw new ProcfileError(`${PROCFILE} line ${line}: "${name}" has no command`);
-    const first = seen.get(name);
-    if (first !== void 0) {
-      throw new ProcfileError(`${PROCFILE}: "${name}" is declared twice, on lines ${first} and ${line}`);
-    }
-    seen.set(name, line);
-    out.push({ name, command, line });
-  });
-  return out;
-}
-function readProcfile(dir) {
-  const path = (0, import_node_path5.join)(dir, PROCFILE);
-  if (!(0, import_node_fs5.existsSync)(path)) return null;
-  return parseProcfile((0, import_node_fs5.readFileSync)(path, "utf8"));
 }
 
 // lib/release-job.ts
@@ -1169,6 +2006,7 @@ function isServiceless(declared) {
   declaredLanguages,
   deployableParts,
   deriveLane,
+  detect,
   inferAppConfig,
   isDeployablePart,
   isServiceless,
@@ -1188,6 +2026,7 @@ function isServiceless(declared) {
   resolveProcesses,
   runtimeMismatch,
   serviceFor,
+  serviceLanguage,
   servicePath,
   unemittable,
   validate

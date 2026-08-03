@@ -1,7 +1,23 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { readRepoFacts, type RepoFacts } from "./repo-facts";
+import {
+  PYTHON_ENTRIES, PYTHON_RUNNABLE, bindToPort, detect, pythonInstall, pythonModule,
+  serviceLanguage, type BuildSpec,
+} from "./detect";
 import type { AppConfig, ServiceConfig } from "./app-config";
+
+/**
+ * Re-exported, not re-implemented.
+ *
+ * These five moved into `detect.ts`, which is where the rules they encode now
+ * live. They stay visible from here because `packages/cli/src/resolver.entry.ts`
+ * imports them from this path and esbuild resolves that at bundle time — so
+ * moving them without this line breaks `npm run bundle`, which `prepublishOnly`
+ * runs, which is the CLI's publish gate. One implementation, two import paths, no
+ * copy.
+ */
+export { PYTHON_ENTRIES, PYTHON_RUNNABLE, bindToPort, pythonInstall, pythonModule };
 
 /**
  * Working out that a repository is more than one app.
@@ -49,11 +65,16 @@ export type Detect = (absoluteDir: string) => Promise<DetectedStack>;
 /**
  * Frameworks whose job is to answer a browser. One of these owns `/`, because
  * putting the API there instead means the app's own address serves JSON.
+ *
+ * Matched on substrings rather than on product names: the detector subprocess
+ * spells them `"Next.js"` and `"SvelteKit"`, and `detect()` spells them `"next"`
+ * and `"svelte"` because those are the tokens `frameworkEnv` routes on. The old
+ * `next\.?js` and `sveltekit` alternatives matched only the first vocabulary, so
+ * a repo whose frontend `detect()` identified would have lost the primary slot to
+ * whichever directory happened to declare first — putting the API on the app's
+ * own address, which is exactly what the comment below exists to prevent.
  */
-const BROWSER_FACING = /next\.?js|nuxt|remix|sveltekit|astro|vite|create react app|static/i;
-
-/** Where a Python ASGI/WSGI app's module usually sits, relative to its service dir. */
-const PYTHON_ENTRIES = ["main.py", "app/main.py", "src/main.py", "app.py", "api/main.py", "src/app.py"];
+const BROWSER_FACING = /next|nuxt|remix|svelte|astro|vite|create react app|static/i;
 
 /**
  * Directory names that hold a manifest but never an app.
@@ -72,9 +93,6 @@ const NOT_AN_APP = new Set([
 
 /** Node frameworks that are an app even when the scripts are unconventional. */
 const NODE_FRAMEWORK = /^(next|nuxt|astro|vite|@remix-run\/|@sveltejs\/kit|@nestjs\/core|express|fastify|koa|hono)/;
-
-/** Python entry points that mean something can be started here. */
-const PYTHON_RUNNABLE = [...PYTHON_ENTRIES, "manage.py", "wsgi.py", "asgi.py"];
 
 /** The directory a manifest sits in, repo-relative. `"."` for the root. */
 function dirOf(manifestPath: string): string {
@@ -128,38 +146,19 @@ export function isDeployablePart(absoluteDir: string, relDir: string): boolean {
 }
 
 /**
- * Rewrite a hardcoded port to `$PORT`.
+ * The production start command for one detected part, always bound to `$PORT`.
  *
- * Cloud Run routes to `$PORT` and nothing else, while every one of the
- * detector's Python start commands names a literal port — `uvicorn … --port
- * 8000`, `gunicorn … --bind 0.0.0.0:8000`. A container that binds the literal
- * one never passes a health check, which surfaces to the user as the least
- * useful sentence the platform has: "didn't start on $PORT".
- */
-export function bindToPort(cmd: string): string {
-  return cmd
-    .replace(/(--port[= ])\d+/g, "$1$PORT")
-    .replace(/(--bind[= ]\S*?:)\d+/g, "$1$PORT")
-    .replace(/(-b\s+\S*?:)\d+/g, "$1$PORT")
-    .replace(/(-p\s+)\d+/g, "$1$PORT");
-}
-
-/**
- * The dotted module path of a Python app's entry point.
+ * The module correction must be IDEMPOTENT, and it was not. It replaced the last
+ * segment before `:app` — written when the only producer was the detector
+ * subprocess, which answers a bare `main:app` for every Python project whatever
+ * the layout. `detect()` answers `app.main:app` for a `backend/app/main.py`
+ * because it looked, and running the old rule over that produced
+ * `uvicorn app.app.main:app` — a module that does not exist, from two corrections
+ * that were each individually right.
  *
- * The detector answers `main:app` for every Python project, because at the root
- * of a single-app repo it usually is. In a `backend/` whose code lives in
- * `backend/app/main.py` it is `app.main:app`, and the difference is the whole
- * deploy: uvicorn exits immediately on a module it cannot import.
+ * So the whole dotted path is replaced rather than its tail, which makes the
+ * second application a no-op and leaves the first behaving exactly as it did.
  */
-export function pythonModule(serviceDir: string): string | null {
-  for (const entry of PYTHON_ENTRIES) {
-    if (existsSync(join(serviceDir, entry))) return entry.replace(/\.py$/, "").split("/").join(".");
-  }
-  return null;
-}
-
-/** The production start command for one detected part, always bound to `$PORT`. */
 function startFor(stack: DetectedStack, absoluteDir: string): string {
   const bound = bindToPort(stack.startCommand);
   if (!/^python/i.test(stack.language)) return bound;
@@ -167,35 +166,23 @@ function startFor(stack: DetectedStack, absoluteDir: string): string {
   // No recognisable entry point: the detector's guess, at least bound to the
   // right port. Wrong-but-honest beats inventing a module name.
   if (!mod) return bound;
-  return bound.replace(/\b(?:main|app)(?=:app\b)/, mod);
+  // `:app\b` and not `:app`, so `gunicorn myproj.wsgi:application` is untouched.
+  return bound.replace(/[\w.]+(?=:app\b)/, mod);
 }
 
 /**
- * How to install a Python service's dependencies, from what it actually ships.
+ * `ServiceConfig.language` for one detected part.
  *
- * The detector answers `pip install -r requirements.txt` for every Python
- * project, whether or not there is one — right at the root of a single-app repo
- * often enough, and wrong for the FastAPI template's backend, which is
- * pyproject.toml + uv.lock with no requirements.txt anywhere. That matters more
- * here than it looks: the runner has its own correct convention
- * (`[ -f pyproject.toml ] && pip install .`), and a plan-supplied install
- * OVERRIDES it. Inferring the detector's answer verbatim would replace a working
- * default with a command that cannot run.
- *
- * Returning undefined hands the decision back to that convention, which is the
- * right answer when neither manifest is present.
+ * The mapping moved to `detect.ts` because there are now two vocabularies to
+ * satisfy: the detector subprocess's display names (`"TypeScript"`, `"Python"`)
+ * and `detect()`'s toolchain names (`"node"`, `"python"`, `"go"`, …). The rule
+ * that only knew the first turned every `detect()`-produced Node service into
+ * `"other"`, which `laneFor` reads as "not one of the runner's two languages" —
+ * so an inferred Node app would have been routed off the runner by a string
+ * comparison nobody would have thought to look at.
  */
-export function pythonInstall(serviceDir: string, detected: string | null): string | undefined {
-  if (existsSync(join(serviceDir, "requirements.txt"))) return detected ?? "pip install --no-cache-dir -r requirements.txt";
-  if (existsSync(join(serviceDir, "pyproject.toml"))) return "pip install --no-cache-dir .";
-  return undefined;
-}
-
 function languageOf(stack: DetectedStack): ServiceConfig["language"] {
-  if (stack.serve.mode === "static") return "static";
-  if (/^python/i.test(stack.language)) return "python";
-  if (/^(java)?script|^typescript/i.test(stack.language)) return "node";
-  return "other";
+  return serviceLanguage(stack.language, stack.serve.mode === "static");
 }
 
 /**
@@ -255,11 +242,75 @@ export function deployableParts(repoDir: string, facts: RepoFacts): string[] {
 }
 
 /**
+ * A `BuildSpec` in the shape `serviceFor` and `inferAppConfig` already read.
+ *
+ * The doc says `serviceFor`/`isDeployablePart` "rewire onto `detect()`". Half of
+ * that is right and half of it cannot be done, so this is the half that can.
+ *
+ * `isDeployablePart` does NOT rewire: `detect()` has no way to answer "this
+ * directory is not an app". `BuildSpec` has no negative, and pointed at `e2e/` or
+ * `fixtures/` it returns a perfectly valid static answer — which is precisely the
+ * false positive `NOT_AN_APP` exists to catch and that two tests pin to null.
+ * That question stays here, where its two tables live.
+ *
+ * `serviceFor` does rewire, through this adapter, and the adapter is where four
+ * contracts a direct swap would have broken are kept:
+ *
+ * - `startCommand` is a REQUIRED string here and optional on a BuildSpec.
+ *   `serviceFor` → `startFor` → `bindToPort` dereferences it unconditionally, and
+ *   it runs OUTSIDE `inferAppConfig`'s try/catch — so a repo that declines
+ *   cleanly today would have failed the deploy instead.
+ * - `framework` is optional on a BuildSpec and is the SOLE input to primary-
+ *   service selection. Absent, `findIndex` returns -1, `Math.max(0, -1)` picks
+ *   index 0, and the first declared directory silently owns `/`.
+ * - `serve.mode` is what decides static-ness downstream, not `outputDir`; the
+ *   dependency is inverted here rather than at every reader.
+ * - `database` keeps its engine and via. `serviceFor` reduces it to `needsDB`,
+ *   but Part 3 needs the engine to decide the `proxyWait` prefix, so it must
+ *   survive the trip even though `ServiceConfig` has nowhere to put it.
+ */
+export function stackFromSpec(spec: BuildSpec): DetectedStack {
+  const primary = spec.toolchains[0];
+  const isStatic = spec.command === undefined && spec.outputDir !== undefined;
+  return {
+    language: primary?.language ?? "static",
+    // Never empty: a missing token hands `/` to whichever directory declared
+    // first. "Static site" is what the detector answers for the same shape, and
+    // BROWSER_FACING matches it.
+    framework: spec.framework ?? (isStatic ? "static site" : primary?.language ?? "unknown"),
+    installCommand: [primary?.install, primary?.installProject].filter(Boolean).join(" && ") || null,
+    buildCommand: primary?.build ?? null,
+    // `bindToPort` is applied inside detect(); an empty string here means "we did
+    // not work it out", which `serviceFor` turns into a service with no start —
+    // the same thing `confidence: "guessed"` says.
+    startCommand: spec.command ?? "",
+    serve: isStatic ? { mode: "static", outputDir: spec.outputDir ?? "." } : { mode: "container" },
+    database: spec.database ? { engine: spec.database.engine, via: spec.database.via } : undefined,
+  };
+}
+
+/**
+ * `detect()` as the injectable `Detect`, with no subprocess and no model.
+ *
+ * Async only to satisfy the type: everything inside is a file read. The signature
+ * stays a promise because `inferAppConfig`'s callers already await it and because
+ * the deploy-agent subprocess is still a legal `Detect` during the migration —
+ * two implementations of the same interface is the point of the interface.
+ */
+export function detectorFromFiles(repoRoot: string): Detect {
+  return async (absoluteDir: string) => {
+    const rel = absoluteDir === repoRoot ? "." : posix.relative(repoRoot, absoluteDir);
+    return stackFromSpec(detect(absoluteDir, { repoRoot }, rel || "."));
+  };
+}
+
+/**
  * The repository's apps, or null when there is only one.
  *
  * `detect` is injected rather than imported: the detector runs as a subprocess
  * out of `services/deploy-agent`, and a module that spawns one is a module that
- * cannot be tested without spawning four.
+ * cannot be tested without spawning four. `detectorFromFiles` above is the
+ * deterministic implementation of the same interface.
  */
 export async function inferAppConfig(repoDir: string, detect: Detect): Promise<AppConfig | null> {
   const facts = readRepoFacts(repoDir);

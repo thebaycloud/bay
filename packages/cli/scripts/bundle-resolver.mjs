@@ -9,39 +9,57 @@
  * indistinguishable from the platform being broken.
  *
  * Wired to prepublishOnly so a publish cannot ship a stale copy, and stamped so a
- * working copy cannot run one.
+ * working copy cannot run one. The stamp now covers whatever esbuild actually
+ * pulled in rather than a list somebody kept up to date by hand; see stamp.mjs.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { BUNDLES, STAMP_PREFIX, stampSources } from "./stamp.mjs";
+import { INPUTS_PATH, prependStamp, repoInputs, stampSources, writeInputs } from "./stamp.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cliRoot = resolve(here, "..");
 const repoRoot = resolve(cliRoot, "../..");
 const entry = join(cliRoot, "src", "resolver.entry.ts");
 const out = join(cliRoot, "vendor", "resolve.js");
+const esbuildCwd = join(repoRoot, "apps/web");
 
-const stamp = stampSources(repoRoot, BUNDLES["resolve.js"]);
 mkdirSync(dirname(out), { recursive: true });
+const scratch = mkdtempSync(join(tmpdir(), "supersonic-bundle-"));
+const metaPath = join(scratch, "resolve.meta.json");
 
 // esbuild comes with tsx, which apps/web and services/deploy-agent both already
 // depend on. CommonJS because the CLI is CommonJS and require() has to work out
 // of a published tarball with no build step.
-execFileSync(
-  "npx",
-  [
-    "--yes", "esbuild", entry,
-    "--bundle", "--platform=node", "--format=cjs", "--target=node20",
-    "--legal-comments=none", `--banner:js=${STAMP_PREFIX}${stamp}`, `--outfile=${out}`,
-  ],
-  { stdio: "inherit", cwd: join(repoRoot, "apps/web") },
-);
+//
+// The stamp cannot be a `--banner:js` any more: it is computed FROM this run's
+// metafile, so it does not exist until the run is over. It is prepended below.
+try {
+  execFileSync(
+    "npx",
+    [
+      "--yes", "esbuild", entry,
+      "--bundle", "--platform=node", "--format=cjs", "--target=node20",
+      "--legal-comments=none", `--metafile=${metaPath}`, `--outfile=${out}`,
+    ],
+    { stdio: "inherit", cwd: esbuildCwd },
+  );
 
-writeFileSync(join(cliRoot, "vendor", "README.md"),
-  "Generated. Do not edit — `npm run bundle` rebuilds both.\n\n" +
-  "- detector.js — scripts/bundle-detector.mjs, from services/deploy-agent\n" +
-  "- resolve.js  — scripts/bundle-resolver.mjs, from apps/web/lib (inputs listed in scripts/stamp.mjs)\n");
+  const sources = repoInputs(JSON.parse(readFileSync(metaPath, "utf8")), esbuildCwd, repoRoot);
+  const stamp = stampSources(repoRoot, sources);
+  writeInputs(cliRoot, "resolve.js", sources);
+  prependStamp(out, stamp);
 
-console.log(`resolver bundled -> ${relative(repoRoot, out)}  (stamp ${stamp})`);
+  writeFileSync(join(cliRoot, "vendor", "README.md"),
+    "Generated. Do not edit — `npm run bundle` rebuilds all of it.\n\n" +
+    "- detector.js — scripts/bundle-detector.mjs, from services/deploy-agent\n" +
+    "- resolve.js  — scripts/bundle-resolver.mjs, from apps/web/lib\n" +
+    "- inputs.json — every repository file esbuild inlined into each bundle, from its metafile.\n" +
+    "                test/vendor.test.js hashes these to prove the bundles are not stale.\n");
+
+  console.log(`resolver bundled -> ${relative(repoRoot, out)}  (stamp ${stamp}, ${sources.length} inputs -> ${INPUTS_PATH})`);
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}
