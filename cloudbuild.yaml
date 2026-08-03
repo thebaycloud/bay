@@ -106,7 +106,7 @@ steps:
       #
       # Roll back with --update-env-vars=BUILDER=kaniko. The mirror and the
       # daemon image are safe to leave either way.
-      - --update-env-vars=RUNNER=1,PLANNER=1,SEAL_APPS=1,DEPLOY_ENGINE=opencode,DEPLOY_JOB=1,BUILDER=buildkit,BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1,DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub
+      - --update-env-vars=RUNNER=1,PLANNER=1,SEAL_APPS=1,DEPLOY_ENGINE=opencode,DEPLOY_JOB=1,BUILDER=buildkit,BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1,DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub,CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
       - --quiet
 
   # The deploy job runs the SAME image with a different command, so it has to move

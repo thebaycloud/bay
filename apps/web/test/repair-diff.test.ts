@@ -100,3 +100,48 @@ test("a directory git cannot touch reports failure instead of throwing", async (
   assert.equal(await snapshotSources(missing), false);
   assert.equal(await repairPatch(missing), null);
 });
+
+test("the patch carries the author's files and not the platform's", async () => {
+  // The bug this closes was invisible and total. `snapshotSources` commits the
+  // scratch directory AFTER the pipeline has written Dockerfile, .dockerignore
+  // and cloudbuild.yaml into it, so an agent that edited the Dockerfile produced
+  // a normal `--- a/Dockerfile` hunk — against a repository that has no
+  // Dockerfile, because ours is written into OUR copy and never the author's.
+  // `git apply` validates every hunk before applying any, so the whole patch
+  // aborted and took the real one-line fix with it, at the command the failure
+  // email advertises by name.
+  const dir = mkdtempSync(join(tmpdir(), "repair-platform-"));
+  writeFileSync(join(dir, "requirements.txt"), "flask\n");
+  writeFileSync(join(dir, "Dockerfile"), "FROM python:3.12\n");
+  writeFileSync(join(dir, "cloudbuild.yaml"), "steps: []\n");
+  mkdirSync(join(dir, "api"), { recursive: true });
+  writeFileSync(join(dir, "api", "Dockerfile"), "FROM golang:1.23\n");
+
+  assert.equal(await snapshotSources(dir), true);
+
+  // The agent fixes the app AND edits the platform's files, which is what it does.
+  writeFileSync(join(dir, "requirements.txt"), "flask\ngunicorn\n");
+  writeFileSync(join(dir, "Dockerfile"), "FROM python:3.12\nRUN apt-get install -y libpq-dev\n");
+  writeFileSync(join(dir, "cloudbuild.yaml"), "steps: [changed]\n");
+  writeFileSync(join(dir, "api", "Dockerfile"), "FROM golang:1.24\n");
+
+  const patch = await repairPatch(dir);
+  assert.ok(patch, "the app fix must still be in the patch");
+  assert.match(patch!, /requirements\.txt/);
+  assert.match(patch!, /\+gunicorn/);
+  // …and nothing the platform owns, at any depth.
+  assert.doesNotMatch(patch!, /Dockerfile/);
+  assert.doesNotMatch(patch!, /cloudbuild\.yaml/);
+});
+
+test("a run that changed only platform files produces no patch at all", async () => {
+  // Rather than a patch that is guaranteed to abort. "Nothing to apply" is a
+  // truthful answer; a patch the advertised command rejects is not.
+  const dir = mkdtempSync(join(tmpdir(), "repair-only-platform-"));
+  writeFileSync(join(dir, "app.py"), "x = 1\n");
+  writeFileSync(join(dir, "Dockerfile"), "FROM python:3.12\n");
+  assert.equal(await snapshotSources(dir), true);
+
+  writeFileSync(join(dir, "Dockerfile"), "FROM python:3.13\n");
+  assert.equal(await repairPatch(dir), null);
+});

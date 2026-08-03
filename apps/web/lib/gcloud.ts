@@ -198,6 +198,30 @@ export async function resolveSlug(ownerId: string, friendlyName: string): Promis
     }
   } catch { /* listing failed — hand back a fresh random slug */ }
   if (existing) return existing;
+
+  // Also what the REGISTRY remembers.
+  //
+  // The taken-set was live Cloud Run services alone, so a slug freed by a delete
+  // was immediately re-issuable — which this file already states the consequence
+  // of, about databases: "the slug space is five characters, so a name WILL
+  // eventually be reused, and the new app would have inherited a stranger's
+  // tables". `deleteApp` now removes the images too, so this is belt and braces
+  // for the case that matters most: a delete that half-failed leaves
+  // `<slug>-cache` behind, buildkit reads it through `--cache-from` before it
+  // builds anything, and the new tenant's first build starts from a stranger's
+  // layers.
+  //
+  // Best-effort, and deliberately after the live-service check: an unreachable
+  // registry must narrow the choice of names, never fail the deploy.
+  try {
+    const packages = await capture(["artifacts", "packages", "list",
+      "--repository", IMAGE_REPO, "--location", REGION, "--project", PROJECT, "--format=value(name)"]);
+    for (const line of packages.split("\n")) {
+      const pkg = line.trim().split("/").pop();
+      if (pkg) taken.add(pkg.replace(/-cache$/, ""));
+    }
+  } catch { /* registry unreachable — the live-service set still applies */ }
+
   let slug = randomSlug();
   for (let i = 0; taken.has(slug) && i < 10; i++) slug = randomSlug();
   return slug;
@@ -381,6 +405,32 @@ export async function rollback(slug: string): Promise<string> {
  * Every step is best-effort and independent: most apps have never had most of
  * these, and a missing piece must never stop the rest from being cleaned up.
  */
+/** The one Artifact Registry repository every app's image is pushed to. */
+export const IMAGE_REPO = "cloud-run-source-deploy";
+
+/**
+ * Which package names in the registry belong to this app.
+ *
+ * Prefix-matched on purpose rather than assumed: an app owns `<slug>`,
+ * `<slug>-cache`, and one pair per sibling (`<slug>-api`, `<slug>-api-cache`),
+ * and listing is the only way to know which siblings ever existed — the config
+ * that named them is gone by the time anything deletes the app.
+ *
+ * Anchored with the boundary check so `<slug>` never matches a longer slug that
+ * merely starts with the same five characters. The slug space is small; treating
+ * `ab12x` as a prefix of `ab12xy` would delete a live app's images.
+ */
+export async function appPackages(slug: string): Promise<string[]> {
+  try {
+    const out = await capture(["artifacts", "packages", "list",
+      "--repository", IMAGE_REPO, "--location", REGION, "--project", PROJECT, "--format=value(name)"]);
+    return out.split("\n").map((l) => l.trim().split("/").pop() ?? "").filter(Boolean)
+      .filter((p) => p === slug || p.startsWith(`${slug}-`));
+  } catch {
+    return [];   // nothing to clean, or the registry is unreachable — never a reason to fail a delete
+  }
+}
+
 export async function deleteApp(slug: string): Promise<void> {
   // Two serving lanes, either of which may be absent:
   //  - container: its own Cloud Run service + optional per-app bucket
@@ -416,6 +466,34 @@ export async function deleteApp(slug: string): Promise<void> {
   // that no longer exists, and the slug space is small enough that the name will
   // eventually be handed to somebody else.
   await deleteAppSecrets(slug);
+
+  // Its images, and its layer cache.
+  //
+  // Nothing deleted these, ever. This function's own docstring claims it removes
+  // "everything a deploy of it created" and it enumerated eleven things, none of
+  // them in Artifact Registry — invisible while only a Dockerfile-shipping repo
+  // reached that path, and now true of every app.
+  //
+  // Two reasons it is not merely untidy. Storage grows with DEPLOYS rather than
+  // apps: each one pushes a full image plus a `mode=max` cache, which by
+  // construction holds MORE layers than the image, and every repair retry pushes
+  // another. And a deleted app's complete source stays readable forever.
+  //
+  // Sharper still, it is the slug-reuse hazard. `randomSlug` is one letter and
+  // four alphanumerics and `resolveSlug` builds its taken-set from LIVE services,
+  // so a freed slug is immediately re-issuable — this file already says so about
+  // databases: "the slug space is five characters, so a name WILL eventually be
+  // reused, and the new app would have inherited a stranger's tables". The image
+  // path derives from that same slug. A new tenant would inherit `<slug>:latest`
+  // and, more sharply, `<slug>-cache`, which buildkit reads through
+  // `--cache-from` BEFORE it builds anything.
+  //
+  // Sibling packages go too: a sibling's image is named for the service, which is
+  // `<slug>-<label>`, so they share the prefix by construction.
+  for (const pkg of await appPackages(slug)) {
+    await capture(["artifacts", "packages", "delete", pkg,
+      "--repository", IMAGE_REPO, "--location", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
+  }
 
   // And any deploy still running for it.
   //

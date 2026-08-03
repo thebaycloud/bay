@@ -57,14 +57,43 @@ export async function snapshotSources(dir: string): Promise<boolean> {
 }
 
 /**
+ * Files the PLATFORM writes into the build copy, which are not the author's.
+ *
+ * The reason this list exists is that the patch was unappliable, always, and
+ * looked fine. `snapshotSources` commits the scratch directory AFTER the pipeline
+ * has written `Dockerfile`, `.dockerignore` and `cloudbuild.yaml` into it, so an
+ * agent that edited the Dockerfile produced a normal `--- a/Dockerfile` hunk. The
+ * user's repository has no Dockerfile — dockerfile.ts:157 says so in as many
+ * words, "Written into OUR copy of the repo, never the author's" — and `git
+ * apply` validates every hunk before applying any. So the whole patch aborted,
+ * taking the one-line requirements.txt fix with it, at a command the failure
+ * email advertises by name.
+ *
+ * This was reproducible on the SPA and Next paths already. The collapse made it
+ * universal: every app now has a generated Dockerfile in that directory.
+ *
+ * Both spellings of each name, because a sibling writes its own into its own
+ * subdirectory — `glob` magic is what makes `**` mean "at any depth" rather than
+ * a literal two asterisks.
+ */
+const PLATFORM_OWNED = ["Dockerfile", ".dockerignore", "cloudbuild.yaml"];
+
+const excludePlatformFiles = (): string[] =>
+  PLATFORM_OWNED.flatMap((f) => [`:(exclude)${f}`, `:(exclude,glob)**/${f}`]);
+
+/**
  * The patch the repair agent produced, or null when there is nothing to show.
  *
  * Capped, because this is going into a log somebody reads in a terminal. An
  * agent that rewrote a lockfile would otherwise bury its own one-line fix under
  * ten thousand lines of noise.
+ *
+ * Scoped to the author's own files. What the agent changed about the Dockerfile
+ * is real and worth keeping — it just cannot travel through `git apply`, because
+ * the file it patches does not exist where the patch will be applied.
  */
 export async function repairPatch(dir: string, maxBytes = 24_000): Promise<string | null> {
-  const out = await git(dir, ["diff", "--", "."], 60_000);
+  const out = await git(dir, ["diff", "--", ".", ...excludePlatformFiles()], 60_000);
   if (out === null) return null;
   const patch = out.trim();
   if (!patch) return null;

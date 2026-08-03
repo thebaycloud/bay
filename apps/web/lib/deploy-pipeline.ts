@@ -72,7 +72,37 @@ const SEAL_APPS = process.env.SEAL_APPS === "1";
 // run as the project's DEFAULT COMPUTE account. Guessing cost a deploy that
 // failed with "Permission 'secretmanager.versions.access' denied" on a secret
 // that existed and was granted — to somebody else.
-const BUILD_SA = process.env.CLOUD_BUILD_SERVICE_ACCOUNT || "540236122367-compute@developer.gserviceaccount.com";
+// `CLOUD_BUILD_RUN_AS` first, because a secret has to be granted to whoever the
+// build actually runs as. Granting the default compute account while the build
+// runs as somebody else is the same failure this comment was written for, with
+// the two identities swapped.
+const BUILD_SA = process.env.CLOUD_BUILD_RUN_AS
+  || process.env.CLOUD_BUILD_SERVICE_ACCOUNT
+  || "540236122367-compute@developer.gserviceaccount.com";
+
+/**
+ * The identity a build RUNS as, when we are willing to name one.
+ *
+ * `RUN <install>` is customer code. `npm ci` runs `postinstall`, and `needs` adds
+ * `apt-get` as an expected instruction — and until now every build ran as the
+ * project's default compute account, whose danger this file already describes
+ * 2,000 lines below about the RUNTIME container: it "carries run.admin,
+ * storage.admin and artifactregistry.writer. That gives every customer's code —
+ * arbitrary code we agreed to run — the ability to delete the control plane, read
+ * every other customer's source out of the build bucket, and overwrite another
+ * app's image."
+ *
+ * That was true of the runner prepare, the buildpack lane and static. The
+ * collapse makes it the single path for 100% of apps, which is what turns a
+ * standing exposure into the obvious next thing to fix.
+ *
+ * Empty means "say nothing and inherit the default", which is exactly today's
+ * behaviour — so this is additive, and revertible by unsetting one variable.
+ */
+const BUILD_RUN_AS = process.env.CLOUD_BUILD_RUN_AS ?? "";
+/** `--service-account` for `builds submit`, or nothing at all. */
+const buildIdentityArgs = (): string[] =>
+  (BUILD_RUN_AS ? [`--service-account=projects/${PROJECT}/serviceAccounts/${BUILD_RUN_AS}`] : []);
 /** Runtime identity for the apps we host. Empty = inherit the project default. */
 const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
 /** The one Cloud Run service that fronts every static app. */
@@ -2453,7 +2483,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             }));
             builds.reset();
             try {
-              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
+              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()], buildLine);
             } finally { clearInterval(hb); }
           });
         } else {
@@ -2611,7 +2641,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           const hb = setInterval(() => log(`${generatedBuild ? "building" : "preparing"} ${label}…`), 8000);
           builds.reset();
           try {
-            await run("gcloud", ["builds", "submit", contextDir, "--region", REGION, "--project", PROJECT, "--config", join(contextDir, "cloudbuild.yaml")], buildLine);
+            await run("gcloud", ["builds", "submit", contextDir, "--region", REGION, "--project", PROJECT, "--config", join(contextDir, "cloudbuild.yaml"), ...buildIdentityArgs()], buildLine);
           } finally { clearInterval(hb); }
         });
       } catch (e) {
@@ -2751,7 +2781,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             const hb = setInterval(() => log("preparing…"), 8000);
             builds.reset();
             try {
-              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], buildLine);
+              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()], buildLine);
             } finally { clearInterval(hb); }
           });
         } catch (e) {
@@ -2778,7 +2808,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
         builds.reset();
         try {
-          await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml")], onBuild);
+          await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()], onBuild);
         } catch {
           clearInterval(hb);
           const buildLog = await builds.error();
@@ -2810,7 +2840,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             const hb = setInterval(() => log("building…"), 8000);
             builds.reset();
             try {
-              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`], buildLine);
+              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`, ...buildIdentityArgs()], buildLine);
             } finally { clearInterval(hb); }
           });
         } catch (e) {
