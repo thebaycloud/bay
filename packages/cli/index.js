@@ -48,6 +48,46 @@ function info(s) {
 }
 function print(s) { process.stdout.write(s + "\n"); }         // data -> stdout
 function die(s, code = 1) { process.stderr.write(red("✗ ") + s + "\n"); process.exit(code); }
+
+/** What the last green deploy decided, written beside the project. */
+const LOCKFILE = "supersonic.lock.json";
+
+/**
+ * Record the decisions a successful deploy made.
+ *
+ * Written HERE and not by the server, because the server has a clone and the
+ * clone is not your folder. That is also why a `--github` deploy gets nothing:
+ * there is no working tree on this machine to write into, and inventing one
+ * would put a file in whatever directory the command happened to run from.
+ *
+ * A lockfile, not a form. A first deploy on a bare folder still requires nothing;
+ * this appears only after something has worked, and it says what was chosen —
+ * which for `versionFrom: "platform default"` is the only line the author did not
+ * choose and the only one that can move under them.
+ *
+ * A SIDECAR rather than fields in supersonic.json: `parseAppConfig` has a fixed
+ * key list and silently drops what it does not know, so writing there would be
+ * committing the accepted-and-ignored defect while claiming to document against
+ * it.
+ *
+ * Best-effort throughout. A read-only directory, a permissions error, a
+ * `--prebuilt` deploy with nothing to record: none of them is a reason to turn a
+ * successful deploy into a failure at the very last step.
+ */
+function writeLockfile(decided, slug) {
+  if (!decided || typeof decided !== "object") return;
+  try {
+    const body = JSON.stringify({
+      $comment: "Written by supersonic after a successful deploy. Safe to commit, safe to delete.",
+      slug: slug || undefined,
+      decided,
+    }, null, 2) + "\n";
+    const path = require("node:path").join(process.cwd(), LOCKFILE);
+    if (require("node:fs").existsSync(path) && require("node:fs").readFileSync(path, "utf8") === body) return;
+    require("node:fs").writeFileSync(path, body);
+    info(dim(`  wrote ${LOCKFILE} — what this deploy decided, so you can see it and change it`));
+  } catch { /* never fail a green deploy over a note about it */ }
+}
 function json(o) { print(JSON.stringify(o, null, 2)); }
 
 // ---------- config ----------
@@ -911,7 +951,7 @@ async function consumeDeploy(res, args, knownSlug) {
       if (ev.slug) slug = ev.slug;
       if (ev.type === "log") info("  " + dim(ev.line));
       else if (ev.type === "detected") info("  " + cyan(`detected ${ev.stack?.framework || "app"}`));
-      else if (ev.type === "done") { if (args.json) json({ ok: true, slug: ev.slug, url: ev.url }); else print(green("✓ live: ") + ev.url); process.exit(0); }
+      else if (ev.type === "done") { writeLockfile(ev.decided, ev.slug); if (args.json) json({ ok: true, slug: ev.slug, url: ev.url }); else print(green("✓ live: ") + ev.url); process.exit(0); }
       else if (ev.type === "error") { if (args.json) json({ ok: false, error: ev.message }); die(ev.message); }
     }
   }

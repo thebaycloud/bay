@@ -57,6 +57,15 @@ export interface DockerfileToolchain {
   language: string;
   /** A concrete tag, already resolved and validated. See repo-runtime.ts. */
   version?: string;
+  /**
+   * Which file chose that version, or "platform default".
+   *
+   * Carried through so the generated file can say it. A person reading a
+   * Dockerfile they did not write asks "why this version" first, and "platform
+   * default" is the only answer they did not choose — and therefore the only one
+   * that can move under them.
+   */
+  versionFrom?: string;
   /** The install that can run before the source is copied, so the layer caches. */
   install?: string;
   /** The part of the install that needs the source present. Runs after `COPY . .`. */
@@ -521,6 +530,7 @@ export function generateDockerfile(i: DockerfileInput): string {
 
   lines.push(
     ``,
+    ...(primary.versionFrom ? [`# ${primary.language} ${primary.version ?? ""} — ${primary.versionFrom}`] : []),
     `FROM ${baseImage({ language: primary.language, version: primary.version, image: i.image })}`,
     ``,
     `WORKDIR /app`,

@@ -3192,6 +3192,36 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     send({
       type: "done", slug,
       url: serviceless ? undefined : SEAL_APPS || staticServe ? `https://${slug}.supersonic.cv` : result.url,
+      // Every decision this deploy made, so the next one is not a fresh guess and
+      // the author can see what was chosen FOR them.
+      //
+      // A lockfile, not a form: a first deploy on a bare folder still requires
+      // nothing, and this appears only after a green one. It inverts `supersonic
+      // init`, which writes "a DRAFT for an agent to correct" before anything has
+      // been proven.
+      //
+      // A SIDECAR rather than fields in supersonic.json. The no-new-schema rule is
+      // in force until deploys work, and `parseAppConfig` has a fixed key list
+      // that silently drops what it does not know — which is the exact defect that
+      // rule exists to stop, and adding to it here would be committing it while
+      // citing it. The CLI writes the file; the server has a clone, not the user's
+      // folder, so a git deploy gets nothing until there is a PR-opening step.
+      decided: renderInput ? {
+        language: renderInput.language,
+        version: renderInput.version ?? null,
+        // Where the version came from is the half that matters. "platform
+        // default" is the only answer the author did not choose, and therefore the
+        // only one that can move under them.
+        versionFrom: renderInput.toolchains?.[0]?.versionFrom ?? pinned?.from ?? "platform default",
+        image: renderInput.image ?? null,
+        install: renderInput.toolchains?.[0]?.install ?? renderInput.install ?? null,
+        build: renderInput.toolchains?.[0]?.build ?? renderInput.build ?? null,
+        start: renderInput.command,
+        needs: renderInput.needs ?? [],
+        toolchains: (renderInput.toolchains ?? []).map((t) => ({ language: t.language, version: t.version ?? null, dir: t.dir })),
+        release: releaseCmd || null,
+        database: s.database?.engine ?? null,
+      } : undefined,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
