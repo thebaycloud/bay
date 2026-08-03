@@ -8,6 +8,7 @@ import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps, RUNTIME_UNSUPPORTED, RUNTIME_VERSIONS } from "@/lib/plan-deps";
 import { repoRuntime, runnerServes, runtimeRouting } from "@/lib/repo-runtime";
+import { generateDockerfile, dockerignore, DockerfileError } from "@/lib/dockerfile";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
@@ -471,7 +472,21 @@ async function deployProcesses(o: {
       }
       log(`${step.label} is running`);
     } catch (e) {
-      const why = e instanceof Error ? e.message : String(e);
+      const raw = e instanceof Error ? e.message : String(e);
+      // A missing role is not the app's problem and must never reach the repair
+      // agent — the same rule IAM_FAILURE already encodes for the invoker binding.
+      //
+      // Not hypothetical: the first CRM to reach this step created its Cloud Run
+      // job and then could not create the schedule that triggers it, because the
+      // deploy identity carries run.admin, cloudsql.admin, secretmanager.admin and
+      // storage.admin and no cloudscheduler role at all. The app was correct, the
+      // argv was correct, and a one-line permission gap surfaced as a generic
+      // failure with nothing pointing at the fix.
+      const denied = /PERMISSION_DENIED|does not have permission|forbidden|\b403\b/i.test(raw);
+      const why = denied && step.kind === "cron"
+        ? `${IAM_FAILURE}: the deploy identity cannot manage Cloud Scheduler. `
+          + `Grant roles/cloudscheduler.admin to ${SCHEDULER_SA} — nothing in the app can fix this.`
+        : raw;
       log(`! ${step.label} did not deploy: ${why}`);
       await setDeploy(slug, { stage: `${step.label} did not deploy — ${why}` });
       failed.push(step.label);
@@ -1562,6 +1577,42 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
     // A project that ships its own Dockerfile always takes a container lane,
     // whatever the detector concluded. The author was explicit.
+    // A pinned runtime we cannot otherwise provide gets a Dockerfile written for it.
+    //
+    // This is what makes "any language, any version" true rather than aspirational.
+    // Both limits the platform had come from the same place — every build path we
+    // had needs a runtime somebody prepared in advance. The runner has two images
+    // because someone built two Dockerfiles. Google's builder has no Rust, Elixir,
+    // Deno or Bun, and its Python is 3.13 and 3.14 only, which is how an app
+    // pinning 3.12 failed AFTER being routed to it correctly.
+    //
+    // Docker Hub already holds an official image for every language at every
+    // version any of them published, so `FROM python:3.12` needs nobody to prepare
+    // anything. Written into OUR copy of the repo — the author's tree is not ours
+    // to edit — and it then takes the container lane, which already knows how to
+    // build an image with a layer cache and deploy it. No new lane, no new
+    // failure modes; the app simply stops being told what it may run on.
+    let generatedDockerfile = false;
+    if (runtimePinned && pinned && !existsSync(join(dir, "Dockerfile"))) {
+      const runCommand = runCmd || s.startCommand || "";
+      try {
+        if (!runCommand.trim()) throw new DockerfileError("nothing to run — the plan produced no start command");
+        writeFileSync(join(dir, "Dockerfile"), generateDockerfile({
+          language: pinned.language,
+          version: pinned.spec,
+          install: runnerInstall ?? s.installCommand ?? undefined,
+          build: runnerBuild ?? s.buildCommand ?? undefined,
+          command: runCommand,
+        }));
+        writeFileSync(join(dir, ".dockerignore"), dockerignore());
+        generatedDockerfile = true;
+        log(`Building an image on ${pinned.language} ${pinned.spec} — the version ${pinned.from} asked for.`);
+      } catch (e) {
+        // Never fatal: the app still deploys the way it would have, on the version
+        // the platform holds, and the log says which one and why.
+        log(`! could not build for ${pinned.language} ${pinned.spec} (${e instanceof Error ? e.message : String(e)}) — using the platform's version instead`);
+      }
+    }
     const hasDockerfile = existsSync(join(dir, "Dockerfile"));
 
     // When the planner gave up, the fallback is the detector — which is the
