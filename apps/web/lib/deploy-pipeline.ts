@@ -3214,8 +3214,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // only one that can move under them.
         versionFrom: renderInput.toolchains?.[0]?.versionFrom ?? pinned?.from ?? "platform default",
         image: renderInput.image ?? null,
-        install: renderInput.toolchains?.[0]?.install ?? renderInput.install ?? null,
-        build: renderInput.toolchains?.[0]?.build ?? renderInput.build ?? null,
+        // `|| null`, not `?? null`: `inDir` returns "" for a command that is
+        // present and empty, and `"build": ""` in a lockfile reads as "it builds
+        // with nothing" rather than "there is no build step".
+        install: (renderInput.toolchains?.[0]?.install ?? renderInput.install) || null,
+        build: (renderInput.toolchains?.[0]?.build ?? renderInput.build) || null,
         start: renderInput.command,
         needs: renderInput.needs ?? [],
         toolchains: (renderInput.toolchains ?? []).map((t) => ({ language: t.language, version: t.version ?? null, dir: t.dir })),
