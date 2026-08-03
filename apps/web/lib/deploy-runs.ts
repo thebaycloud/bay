@@ -285,3 +285,44 @@ export function startDeployJob(runId: string, region: string, job: string): Prom
     "--async", "--quiet",
   ]);
 }
+
+/**
+ * How many deploys this owner already has in flight.
+ *
+ * Counted from `deploy_runs`, whose rows exist for exactly the window that
+ * matters: `createRun` writes one and `finishRun` deletes it once the job has
+ * read it. No migration — `request` is jsonb and already carries `ownerId`, and
+ * the no-new-schema rule is in force until deploys work.
+ *
+ * WHY THERE HAS TO BE A CAP AT ALL
+ *
+ * Build-seconds per deploy went up 3-6x when every app started building an image,
+ * and up to 24x on a deploy the repair agent retries. Nothing throttles: `LIMITS`
+ * gates how many apps an owner may HAVE, never how many may be building at once,
+ * dispatch is fire-and-forget `--async`, and every deploy also holds a Cloud Run
+ * Job task at 4Gi/2cpu for the whole build. No private pool is configured, so
+ * this lands on the shared default pool and its per-project concurrent-build
+ * quota — and a queued build is indistinguishable from a slow app in the CLI.
+ *
+ * BOUNDED BY TIME, deliberately. A run whose job died without calling
+ * `finishRun` would otherwise count against its owner until `pruneRuns` catches
+ * it six hours later, and "you have too many deploys running" about deploys that
+ * are not running is worse than no cap. One hour is past `BUILD_TIMEOUT` (1200s)
+ * and past any real deploy, so a row older than that is wreckage rather than work.
+ */
+export async function inFlightForOwner(ownerId: string): Promise<number> {
+  if (!ownerId) return 0;
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      `SELECT count(*)::int AS n FROM deploy_runs
+        WHERE request->>'ownerId' = $1 AND created_at > now() - interval '1 hour'`,
+      [ownerId],
+    );
+    return r.rows[0]?.n ?? 0;
+  } catch {
+    // The cap is a courtesy, not a correctness property. A database that cannot
+    // answer must not be the reason somebody cannot deploy.
+    return 0;
+  }
+}

@@ -147,7 +147,26 @@ async function install() {
 
   // Secret Manager, object storage, the model, and the side effects.
   mock.module("@/lib/app-secrets", { namedExports: { putAppSecrets: async () => ({ stored: [], skipped: [] }), setSecretsFlag: () => "", grantBuildAccess: asyncNoop, readAppSecret: async () => null, allAppSecrets: async () => [] } });
-  mock.module("@/lib/gcp-rest", { namedExports: { listObjectNames: async () => [], readObjectText: async () => null, writeObject: asyncNoop, describeServiceRest: async () => null } });
+  // Spread the real module, then override the parts that reach the network.
+  //
+  // Replacing it wholesale is how this file failed the moment `resolveImageDigest`
+  // was added: the export simply became `undefined`, the render threw, no
+  // Dockerfile was written, and the app silently fell back to the buildpack lane.
+  // The harness caught it, but as a routing failure rather than as "your mock is
+  // stale" — so the mock is now additive and a new export costs nothing.
+  const gcpRest = await import("@/lib/gcp-rest");
+  mock.module("@/lib/gcp-rest", {
+    namedExports: {
+      ...gcpRest,
+      listObjectNames: async () => [],
+      readObjectText: async () => null,
+      writeObject: asyncNoop,
+      describeServiceRest: async () => null,
+      // Never a real registry call from a test; null is the "could not resolve"
+      // answer the pipeline is built to tolerate.
+      resolveImageDigest: async () => null,
+    },
+  });
   mock.module("@/lib/thumbnail", { namedExports: { requestThumbnail: noop } });
   mock.module("@/lib/deploy-notify", { namedExports: { notifyDeployFinished: asyncNoop } });
   mock.module("@/lib/clone-cache", { namedExports: { take: () => null } });

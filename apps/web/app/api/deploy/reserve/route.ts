@@ -16,6 +16,7 @@ import { cloudRunName } from "@/lib/slug";
 import { getPool } from "@/lib/db";
 import { setDeploy } from "@/lib/deploys";
 import { entitlement, countOwnerApps } from "@/lib/entitlements";
+import { inFlightForOwner, runIdsForSlug } from "@/lib/deploy-runs";
 
 export async function POST(req: Request) {
   const uid = await currentUserId();
@@ -46,6 +47,32 @@ export async function POST(req: Request) {
         upgrade: true,
       },
       { status: 402 }
+    );
+  }
+
+  // Refused visibly, rather than experienced as a hang.
+  //
+  // This is the endpoint that already turns away an over-limit deploy before the
+  // CLI promises anything, which is the whole reason the cap belongs here: past
+  // this point dispatch is fire-and-forget `--async`, and a queued build is
+  // indistinguishable from a slow app in the CLI. Worse, `deploy-errors.ts`
+  // classifies `quota|rate limit|resource exhausted` as platform blame, so a
+  // deploy that lost a race for the shared build pool would never reach repair
+  // and the user would see a generic stall.
+  //
+  // A redeploy of the SAME app is exempt: `supersedeRunsFor` cancels the previous
+  // one, so pushing twice in a row is one deploy replacing another rather than
+  // two competing, and counting it would refuse the most ordinary thing a person
+  // does after a failed build.
+  const inFlight = await inFlightForOwner(uid);
+  const mine = (await runIdsForSlug(slug)).length;
+  if (Number.isFinite(ent.limits.maxConcurrentDeploys) && inFlight - mine >= ent.limits.maxConcurrentDeploys) {
+    return Response.json(
+      {
+        error: `You already have ${inFlight - mine} deploys building. `
+          + `Wait for one to finish — they are queued behind a shared build pool, and starting more makes all of them slower.`,
+      },
+      { status: 429 },
     );
   }
 

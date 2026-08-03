@@ -471,3 +471,60 @@ export async function listServicesRest(): Promise<any[] | null> {
   }
   return null; // absurd number of pages — hand it back to gcloud
 }
+
+/**
+ * The digest an image tag currently points at, or null if it cannot be resolved.
+ *
+ * WHY A TAG IS NOT ENOUGH
+ *
+ * `baseImage()` emits `FROM python:3.12`, and that tag moves. Every rebuild of
+ * the same commit can land on a different interpreter — which reproduces, one
+ * level up, the exact `:latest` defect the version resolver exists to fix: a
+ * runtime that changes under the customer with no deploy of theirs. It also makes
+ * the Dockerfile cache's byte-identical-reuse claim untrue across a base refresh,
+ * because the same key would describe two different builds.
+ *
+ * Resolved through the registry's own API rather than `gcloud artifacts docker
+ * images describe`, which reads the Artifact Registry CATALOG — and a remote
+ * repository's catalog is EMPTY until something has pulled through it, so
+ * describe answers "Image not found" for a tag that resolves perfectly well.
+ * Verified the hard way.
+ *
+ * Best-effort by design: a registry that will not answer costs us reproducibility
+ * for that build, and must never cost the deploy. The caller falls back to the
+ * tag, which is what shipped before this existed.
+ */
+export async function resolveImageDigest(ref: string): Promise<string | null> {
+  const m = ref.match(/^([^/]+)\/(.+):([^:/]+)$/);
+  if (!m) return null;
+  const [, host, path, tag] = m;
+  // Only registries we authenticate to with a Google token. A Docker Hub ref
+  // needs an anonymous bearer dance this does not do, and guessing would send a
+  // GCP access token to a third party.
+  if (!/\.pkg\.dev$/.test(host) && !/^gcr\.io$/.test(host)) return null;
+
+  try {
+    const token = await accessToken();
+    if (!token) return null;
+    const res = await fetch(`https://${host}/v2/${path}/manifests/${tag}`, {
+      method: "HEAD",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        // Multi-arch bases are an index, not a manifest. Omitting the index types
+        // makes the registry answer with a single platform's manifest, whose
+        // digest would pin the image to one architecture.
+        Accept: [
+          "application/vnd.oci.image.index.v1+json",
+          "application/vnd.docker.distribution.manifest.list.v2+json",
+          "application/vnd.oci.image.manifest.v1+json",
+          "application/vnd.docker.distribution.manifest.v2+json",
+        ].join(","),
+      },
+    });
+    if (!res.ok) return null;
+    const digest = res.headers.get("docker-content-digest");
+    return digest && /^sha256:[0-9a-f]{64}$/.test(digest) ? digest : null;
+  } catch {
+    return null;
+  }
+}

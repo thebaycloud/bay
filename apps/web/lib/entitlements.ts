@@ -19,11 +19,26 @@ export interface Limits {
   autoFix: boolean;
   /** Whether the "Runs on Supersonic" badge can be removed. */
   canRemoveBadge: boolean;
+  /**
+   * How many of this owner's deploys may be building at once.
+   *
+   * The only limit here that is about capacity rather than about a plan. Build
+   * cost per deploy rose 3-6x when every app started building an image, and up
+   * to 24x on one the repair agent retries — and nothing throttled, so the first
+   * busy hour would have been experienced as every deploy hanging.
+   */
+  maxConcurrentDeploys: number;
 }
 
 export const LIMITS: Record<Plan, Limits> = {
-  basic: { maxApps: 1, maxGrants: 3, autoFix: false, canRemoveBadge: false },
-  pro: { maxApps: Infinity, maxGrants: Infinity, autoFix: true, canRemoveBadge: true },
+  basic: { maxApps: 1, maxGrants: 3, autoFix: false, canRemoveBadge: false, maxConcurrentDeploys: 2 },
+  // Not Infinity, unlike the other two. Every other limit here is commercial —
+  // what a plan includes — and this one is physical: each concurrent deploy holds
+  // a Cloud Run Job task at 4Gi/2cpu for the whole build and a slot in the
+  // project's shared Cloud Build quota. An unlimited Pro plan would let one
+  // account exhaust the pool for everybody, and the symptom would be other
+  // people's deploys queueing invisibly.
+  pro: { maxApps: Infinity, maxGrants: Infinity, autoFix: true, canRemoveBadge: true, maxConcurrentDeploys: 5 },
 };
 
 /** The plan we enforce against. When gating is disabled, that is always pro. */

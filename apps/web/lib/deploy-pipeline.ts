@@ -8,7 +8,7 @@ import { repairDeploy } from "@/lib/agent";
 import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
 import { checkPlanDeps, RUNTIME_UNSUPPORTED, RUNTIME_VERSIONS } from "@/lib/plan-deps";
 import { repoRuntime, runnerServes, runtimeRouting } from "@/lib/repo-runtime";
-import { generateDockerfile, dockerignore, manifestPaths, DockerfileError, type DockerfileInput } from "@/lib/dockerfile";
+import { generateDockerfile, baseImage, dockerignore, manifestPaths, DockerfileError, type DockerfileInput } from "@/lib/dockerfile";
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { detect } from "@/lib/detect";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
@@ -25,7 +25,7 @@ import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
 import { notifyDeployFinished } from "@/lib/deploy-notify";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
-import { listObjectNames, readObjectText, writeObject, describeServiceRest } from "@/lib/gcp-rest";
+import { listObjectNames, readObjectText, writeObject, describeServiceRest, resolveImageDigest } from "@/lib/gcp-rest";
 import { take as takeClone } from "@/lib/clone-cache";
 import { staticBuildConfig } from "@/lib/static-build";
 import { verifyRelease } from "@/lib/verify-release";
@@ -1726,6 +1726,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // carry this prefix; the web process is the one that never did.
           waitFor: (s.database?.engine || appConfig?.resources?.database) ? proxyWait() : undefined,
         };
+        // Pin the base by digest, so a rebuild of this commit is the same build.
+        //
+        // The tag is what the repository asked for and stays in the log; the
+        // digest is what it meant at this moment. Without it every rebuild can
+        // land on a different interpreter — the `:latest` defect the version
+        // resolver exists to kill, one level up and with nobody's name on it.
+        //
+        // Only for registries we authenticate to, and never fatal: an
+        // unresolvable digest leaves the tag in place, which is what shipped
+        // before this line existed.
+        const tagged = baseImage(renderInput);
+        const digest = await resolveImageDigest(tagged);
+        if (digest) {
+          renderInput = { ...renderInput, image: `${tagged.split(":")[0]}@${digest}` };
+          log(`Base pinned to ${tagged} @ ${digest.slice(0, 19)}… so a rebuild is the same build.`);
+        }
         writeFileSync(join(dir, "Dockerfile"), generateDockerfile(renderInput));
         writeFileSync(join(dir, ".dockerignore"), dockerignore());
         generatedDockerfile = true;
