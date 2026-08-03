@@ -44,6 +44,9 @@ const (
 	runscBin       = "/usr/local/bin/runsc"
 	runscRoot      = "/run/supersonic/runsc"
 	bundleRoot     = "/srv/state/bundles"
+	// Where app secrets live. The placement spec carries bare secret ids so it
+	// stays portable across projects; this is the one place the project appears.
+	gcpProject = "supersonic-deploy-prod"
 )
 
 type Runtime struct {
@@ -181,7 +184,13 @@ func (r *Runtime) imageConfig(img client.Image) (entrypoint, cmd, env []string, 
 }
 
 // writeSpec generates the OCI runtime spec for one app.
-func writeSpec(bundle string, app App, net *SandboxNet, imgEnv []string, argv []string, cwd string) error {
+//
+// Precedence, lowest first: the image's own ENV, then PORT, then the app's
+// declared env, then resolved secrets. Secrets win because a secret and a plain
+// variable with the same name means someone promoted a value to a secret and the
+// plain one is the stale copy.
+func writeSpec(bundle string, app App, net *SandboxNet, imgEnv []string, argv []string, cwd string,
+	secrets map[string]string) error {
 	if cwd == "" {
 		cwd = "/"
 	}
@@ -189,6 +198,9 @@ func writeSpec(bundle string, app App, net *SandboxNet, imgEnv []string, argv []
 	env := append([]string{}, imgEnv...)
 	env = append(env, fmt.Sprintf("PORT=%d", app.Port))
 	for k, v := range app.Env {
+		env = append(env, k+"="+v)
+	}
+	for k, v := range secrets {
 		env = append(env, k+"="+v)
 	}
 
@@ -375,12 +387,21 @@ func (r *Runtime) Start(app App, index int) (*SandboxNet, error) {
 		return nil, fmt.Errorf("%s: image declares no entrypoint or cmd and the app declares no command", id)
 	}
 
+	// Resolve secrets BEFORE the namespace exists, so a missing binding fails
+	// cheaply and leaves nothing to clean up. An app whose DATABASE_URL cannot be
+	// read must not start: it would come up, fail every request, and still pass a
+	// health check on "/".
+	resolved, err := resolveAll(gcpProject, app.Secrets)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", id, err)
+	}
+
 	net, err := SetupSandboxNet(app.Slug, index)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := writeSpec(bundle, app, net, imgEnv, argv, cwd); err != nil {
+	if err := writeSpec(bundle, app, net, imgEnv, argv, cwd, resolved); err != nil {
 		TeardownSandboxNet(app.Slug)
 		return nil, err
 	}

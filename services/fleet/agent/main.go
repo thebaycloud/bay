@@ -46,6 +46,9 @@ type App struct {
 	Image       string            `json:"image"`
 	Command     []string          `json:"command,omitempty"`
 	Env         map[string]string `json:"env,omitempty"`
+	// Secrets maps an environment variable name to a Secret Manager secret id.
+	// Resolved at start; the values never touch node disk or config.json.
+	Secrets     map[string]string `json:"secrets,omitempty"`
 	Port        int               `json:"port"`
 	MemoryBytes int64             `json:"memoryBytes"`
 	CPUShares   uint64            `json:"cpuShares"`
