@@ -129,6 +129,11 @@ func (r *Runtime) prepareRootfs(id string, img client.Image, bundle string) erro
 	parent := identityChainID(diffIDs)
 
 	rootfs := filepath.Join(bundle, "rootfs")
+	// A previous sandbox's mount can survive an ungraceful stop. Mounting the new
+	// snapshot on top of it stacks mounts, and runsc then fails with "failed to
+	// create filestore file inside <rootfs>: no such file or directory" — which
+	// reads like a missing directory rather than like one directory too many.
+	runOK("umount", "-l", rootfs)
 	if err := os.MkdirAll(rootfs, 0o755); err != nil {
 		return err
 	}
@@ -407,8 +412,12 @@ func (r *Runtime) Stop(slug string) {
 	_, _ = runsc("delete", "--force", slug)
 	TeardownSandboxNet(slug)
 
+	// Lazy umount: a gofer that has not finished dying still holds the mount, and
+	// a plain umount fails with EBUSY. Lazy detaches now and lets the kernel
+	// finish when the last reference goes, which is what makes the subsequent
+	// RemoveAll actually remove something.
 	bundle := filepath.Join(bundleRoot, slug)
-	runOK("umount", filepath.Join(bundle, "rootfs"))
+	runOK("umount", "-l", filepath.Join(bundle, "rootfs"))
 	_ = os.RemoveAll(bundle)
 
 	ctx := r.ctx()

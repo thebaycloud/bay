@@ -307,7 +307,44 @@ PG_INSTANCE=supersonic-deploy-prod:us-central1:supersonic-shared-pg
 EOF
 fi
 
+# ---------------------------------------------------------------------------
+# 7b. The agent
+#
+# A node that reboots must come back serving without anyone logging in. Local
+# SSD survives live migration but not a stop, so on a cold boot /srv may be empty
+# and every app has to be re-placed from desired state — which is exactly what
+# the reconcile loop does on its first pass, so the unit needs no special
+# handling for it.
+# ---------------------------------------------------------------------------
+
+cat > /etc/systemd/system/supersonicd.service <<'EOF'
+[Unit]
+Description=Supersonic fleet agent
+After=containerd.service network-online.target
+Wants=network-online.target
+Requires=containerd.service
+
+[Service]
+Type=simple
+# Root, because it creates network namespaces, mounts snapshots and drives
+# runsc. The tenant boundary is the sandbox, not this process.
+User=root
+ExecStart=/opt/agent/supersonicd -interval 10s
+Restart=always
+RestartSec=5
+# The agent supervises sandboxes; killing its children on restart would take
+# every app on the node down with it for no reason.
+KillMode=process
+LimitNOFILE=1048576
+StandardOutput=append:/var/log/supersonicd.log
+StandardError=append:/var/log/supersonicd.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
+systemctl enable supersonicd >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # 8. Kernel and cgroup posture

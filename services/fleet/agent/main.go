@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -77,17 +78,24 @@ type live struct {
 }
 
 type Agent struct {
-	rt      *Runtime
-	mu      sync.Mutex
-	live    map[string]*live
+	rt   *Runtime
+	mu   sync.Mutex
+	live map[string]*live
+	// writeMu serialises publishing the routing table. Starts run concurrently
+	// and each publishes on completion, so without this two goroutines share one
+	// temp path and the rename can land a half-written file — a node briefly
+	// serving 502s for every app it holds.
+	writeMu sync.Mutex
 	slots   map[int]string
 	desired Desired
 }
 
 func main() {
 	var (
-		addr     = flag.String("addr", "127.0.0.1:9900", "status and control API address")
-		interval = flag.Duration("interval", 10*time.Second, "reconcile interval")
+		addr       = flag.String("addr", "127.0.0.1:9900", "status and control API address")
+		routerAddr = flag.String("router", ":8080", "app traffic address (behind the load balancer)")
+		rootDomain = flag.String("domain", "supersonic.cv", "wildcard domain apps are served under")
+		interval   = flag.Duration("interval", 10*time.Second, "reconcile interval")
 	)
 	flag.Parse()
 
@@ -109,6 +117,20 @@ func main() {
 	a := &Agent{rt: rt, live: map[string]*live{}, slots: map[int]string{}}
 
 	go a.serve(*addr)
+	go NewRouter(*rootDomain).Serve(*routerAddr, routesPath)
+
+	// Health runs on its own clock. Folding it into the reconcile pass would tie
+	// how fast the router learns an app is sick to how long a reconcile takes,
+	// and a reconcile that is starting fifty apps takes a while.
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			a.probeAll()
+			if err := a.writeRoutes(); err != nil {
+				log.Printf("publish routes: %v", err)
+			}
+		}
+	}()
 
 	log.Printf("supersonicd up; reconciling every %s", *interval)
 	for {
@@ -214,6 +236,15 @@ func (a *Agent) reconcileOnce() error {
 		}
 	}
 
+	// Work out what needs starting, then start it CONCURRENTLY.
+	//
+	// Serially was the first version and it does not survive contact with a real
+	// node: each start includes an image pull, so bringing up 25 apps took
+	// minutes, and because routes were only published after the whole pass
+	// finished, the routing table stayed empty the entire time while the apps
+	// themselves were up and listening. A node rebooting with 200 placed apps
+	// would have been down for as long as it took to walk the list.
+	todo := []App{}
 	for _, app := range d.Apps {
 		a.mu.Lock()
 		l, running := a.live[app.Slug]
@@ -237,38 +268,74 @@ func (a *Agent) reconcileOnce() error {
 			delete(a.live, app.Slug)
 			a.mu.Unlock()
 		}
+		todo = append(todo, app)
+	}
 
-		if err := os.MkdirAll(app.DataDir, 0o755); err != nil {
-			log.Printf("%s: data dir: %v", app.Slug, err)
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(app.LogPath), 0o755); err != nil {
-			log.Printf("%s: log dir: %v", app.Slug, err)
-			continue
-		}
-
-		a.mu.Lock()
-		idx := a.slotFor(app.Slug)
-		a.mu.Unlock()
-
-		start := time.Now()
-		net, err := a.rt.Start(app, idx)
-		if err != nil {
-			log.Printf("%s: start failed: %v", app.Slug, err)
-			a.mu.Lock()
-			delete(a.slots, idx)
-			a.mu.Unlock()
-			continue
-		}
-		log.Printf("%s: running at %s (%.1fs)", app.Slug, net.IP, time.Since(start).Seconds())
-
-		a.mu.Lock()
-		a.live[app.Slug] = &live{app: app, net: net, index: idx, since: time.Now()}
-		a.mu.Unlock()
+	if len(todo) > 0 {
+		a.startMany(todo)
 	}
 
 	a.probeAll()
 	return a.writeRoutes()
+}
+
+// startMany brings up a set of apps concurrently and publishes each one the
+// moment it is serving, rather than at the end of the batch.
+func (a *Agent) startMany(apps []App) {
+	// Bounded. Each start is an image pull plus a sandbox boot, and letting two
+	// hundred of those run at once turns a node reboot into a thundering herd
+	// against Artifact Registry and the disk.
+	limit := runtime.NumCPU()
+	if limit > 8 {
+		limit = 8
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+
+	for _, app := range apps {
+		wg.Add(1)
+		go func(app App) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if err := os.MkdirAll(app.DataDir, 0o755); err != nil {
+				log.Printf("%s: data dir: %v", app.Slug, err)
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(app.LogPath), 0o755); err != nil {
+				log.Printf("%s: log dir: %v", app.Slug, err)
+				return
+			}
+
+			a.mu.Lock()
+			idx := a.slotFor(app.Slug)
+			a.mu.Unlock()
+
+			start := time.Now()
+			net, err := a.rt.Start(app, idx)
+			if err != nil {
+				log.Printf("%s: start failed: %v", app.Slug, err)
+				a.mu.Lock()
+				delete(a.slots, idx)
+				a.mu.Unlock()
+				return
+			}
+			log.Printf("%s: running at %s (%.1fs)", app.Slug, net.IP, time.Since(start).Seconds())
+
+			a.mu.Lock()
+			a.live[app.Slug] = &live{app: app, net: net, index: idx, since: time.Now()}
+			a.mu.Unlock()
+
+			// Publish immediately. An app that is serving and absent from the
+			// routing table is indistinguishable, from outside, from an app that
+			// is down.
+			if err := a.writeRoutes(); err != nil {
+				log.Printf("%s: publish routes: %v", app.Slug, err)
+			}
+		}(app)
+	}
+	wg.Wait()
 }
 
 // probeAll health-checks every running app.
@@ -312,6 +379,9 @@ func (a *Agent) probeAll() {
 // read during a rewrite would be a node briefly serving 502s for every app it
 // holds.
 func (a *Agent) writeRoutes() error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+
 	a.mu.Lock()
 	routes := make([]Route, 0, len(a.live))
 	for slug, l := range a.live {

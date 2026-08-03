@@ -446,10 +446,44 @@ in `deploy-pipeline.ts` (3,374 today), `lanes.ts` (354), `process-deploy.ts`
 Steps 7 and 10 can slip. Step 0 cannot, and steps 1–2 are what turn this from a
 document into a fleet.
 
-## Measure first
+## Measured — 2026-08-03, `fleet-lab-1`, n2d-standard-16
 
-Three numbers decide whether the shape above is right. None of them is published
-anywhere, and two of them nobody has published for anyone.
+Run on a real node against real customer images from
+`cloud-run-source-deploy`. `services/fleet/bench/` holds the scripts.
+
+| Question | Answer |
+|---|---|
+| Does a customer image run under gVisor on our own node? | Yes. HTTP 200, 796 bytes, **TTFB 1.6 ms**, `uname -r` → `4.19.0-gvisor`. |
+| Start to serving | **0.2 s** on a warm image; a cold pull dominates everything else. |
+| Resident cost per app (`memory.current`) | **64–69 MB mean**, stable from 25 apps to 100 (85 measured, 5,519 MB total). |
+| Implied ceiling on 55 GiB usable | ~850 apps by memory alone. CPU and working set will bind first — but the plan's "a few hundred per node" is not optimistic, it is conservative. |
+| Can a sandbox read the node's SA token? | **No.** Blocked, while DNS to the same address still works. |
+| Is compression in play yet? | No. Zero swap used at 100 apps. `memory.high` and zswap are not needed at this density. |
+
+The number that replaces the placeholder is **~64 MB per resident app**. Note it
+is `memory.current`, not RSS: summing RSS across `runsc-*` processes reports
+~435 MB for a single app because the sentry's `memfd` is counted repeatedly.
+Anything measuring this fleet by RSS will be wrong by roughly 7×.
+
+Two things this run also settled:
+
+- **Serial reconcile does not survive a real node.** Each start includes an image
+  pull, so bringing up 25 apps took minutes — and because routes were published
+  only at the end of a pass, the routing table stayed empty the whole time while
+  the apps were up and listening. Starts are now concurrent (bounded at 8) and
+  each app is published the moment it serves. A node rebooting with 200 placed
+  apps would otherwise have been dark for as long as it took to walk the list.
+- **Runner-lane images cannot move as-is.** They fail with `python: can't open
+  file '/app/app.py'` because that base image expects to fetch and unpack a code
+  bundle from GCS at container start, using a metadata-server token the sandbox
+  is now correctly denied. Those apps need a real image before they can be
+  placed. This is a migration prerequisite, not a fleet defect, and it belongs in
+  the cutover wave planning in step 9.
+
+## Still to measure
+
+Three numbers decide whether the rest of the shape is right. None of them is
+published anywhere, and two of them nobody has published for anyone.
 
 1. **SQLite in WAL mode under runsc on Local SSD, versus runc, versus Cloud SQL.**
    Persistent disk is a stated driver and gVisor has no published database
@@ -458,14 +492,17 @@ anywhere, and two of them nobody has published for anyone.
    stateful apps on a less-sandboxed node pool. Also confirm `mmap` on the `-shm`
    file works — the source path returns `ENODEV` without a host FD, and nobody
    has run it.
-2. **Resident cost of a real app under runsc**, measured as shmem not anon:
-   an idle Node app, an idle Python app, and the sandbox tax on each. This is the
-   apps-per-node number, and every capacity claim in this document is a
-   placeholder until it exists.
-3. **Only if 2 says we need it:** does a host `cgroup.freeze` on a runsc sandbox
-   thaw cleanly — does the guest clock jump, does the containerd shim's RPC hang
-   and does the shim then declare the container dead, do TCP connections survive.
-   This is unexplored territory publicly. It is an experiment, not a dependency.
+2. **Steady-state CPU at density.** Memory is settled; CPU is not. The 100-app
+   bring-up drove load average past 30, which is startup cost — eight concurrent
+   pulls and sandbox boots — and says nothing about a node holding 300 idle
+   sandboxes. The claim that matters is gVisor's "near zero CPU usage for idle
+   applications", and it should be measured on a quiet node, not inferred from a
+   noisy one.
+3. **Freeze is now firmly optional.** At 64 MB per app with zero swap in use at
+   100 apps, nothing is asking for it. If it is ever revisited: does a host
+   `cgroup.freeze` on a runsc sandbox thaw cleanly, does the guest clock jump, do
+   TCP connections survive. Unexplored publicly, and now clearly an experiment
+   rather than a dependency.
 
 ## The one real risk
 
