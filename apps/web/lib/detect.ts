@@ -854,6 +854,23 @@ function buildFor(language: RuntimeLanguage, manager: string, f: DirFacts): { bu
  * `adapter-static`. Those deploy correctly today on the lane Part 1 marks
  * "(unchanged)", and containerising them around an entrypoint the build never
  * emits is a regression the plan is explicit about avoiding.
+ *
+ * TWO ANSWERS, AND ONLY ONE OF THEM IS AUTHORITATIVE.
+ *
+ * The presence of a value here decides STATIC-VERSUS-SERVER, which is a proper
+ * noun selecting behaviour and is exactly what rule 1 permits. The value itself
+ * — `dist`, `build`, `out` — is a proper noun SUPPLYING a value the repository
+ * already answers, which is what rule 1 forbids, and every one of these
+ * defaults is overridable in the project's own config: Vite's `build.outDir`,
+ * Astro's `outDir`, Next's `distDir`, CRA's `BUILD_PATH`, an adapter's `pages`.
+ * The FastAPI full-stack template sets one, and the deploy published nothing.
+ *
+ * So it is a HINT and is treated as one. `static-build.ts` stamps a marker
+ * before the build and, when this prediction turns out to name a directory the
+ * build did not write, publishes the one it did. Do not add rows here to chase
+ * a framework — Angular, Gatsby, Eleventy, Hugo, Docusaurus, VitePress and
+ * Parcel all have their own answer and the list has no end. The build already
+ * knows; the only correct move is to ask it.
  */
 function staticOutputDir(f: DirFacts): string | undefined {
   if (f.deps.has("next")) return nextIsExport(f.nextConfig) ? "out" : undefined;

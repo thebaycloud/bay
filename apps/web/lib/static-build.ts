@@ -252,8 +252,21 @@ export function depsSaveScript(bucket: string, scope: string): string {
   ].join("; ");
 }
 
-/** The dependency cache's own scratch files, all of them under /workspace. */
-const SCRATCH = [TARBALL, MARKER, KEYFILE, SKIP];
+/**
+ * Written immediately before the build runs, so "what did this build produce"
+ * is answerable afterwards.
+ *
+ * Nothing else can answer it. See `publishScript`: the output directory was
+ * predicted from the framework's name, and a framework's name does not decide
+ * where it writes — its config does, and every one of them is overridable.
+ */
+const BUILD_START = "/workspace/.ss-build-start";
+
+/** The build's own scratch files, all of them under /workspace. */
+/** Where the resolve step records the directory the publish step must upload. */
+const OUTDIR = "/workspace/.ss-outdir";
+
+const SCRATCH = [TARBALL, MARKER, KEYFILE, SKIP, BUILD_START, OUTDIR];
 
 /**
  * Step 4: the assets go to GCS.
@@ -284,8 +297,90 @@ const SCRATCH = [TARBALL, MARKER, KEYFILE, SKIP];
  * `staticSite()` returns `.` only with a null install and build command, which
  * routes around Cloud Build entirely.)
  */
-export function publishScript(outputDir: string, destination: string): string {
-  return `rm -f ${SCRATCH.join(" ")}; gcloud storage rsync -r ${shellQuote(outputDir)} ${shellQuote(destination)}`;
+export function resolveOutputScript(outputDir: string): string {
+  const declared = shellQuote(outputDir);
+  return [
+    // The declared directory first. It is what the repo or the user said, it is
+    // right for every deploy that works today, and preferring it means this can
+    // only add deploys that currently fail — never change one that works.
+    `D=${declared}`,
+    // Discovery, and only when the prediction turned out to be wrong.
+    //
+    // WHY THIS EXISTS. The directory used to be predicted from a framework's
+    // name — vite→dist, react-scripts→build, astro→dist, sveltekit→build,
+    // next-export→out. That is a proper noun SUPPLYING a value the repository
+    // already answers, which is the one thing docs/MAKE-DEPLOYS-WORK.md's first
+    // rule forbids, and it is wrong in two directions at once. Every one of
+    // those defaults is overridable in the project's own config
+    // (`build.outDir`, `outDir`, `distDir`, `BUILD_PATH`, adapter `pages`), and
+    // the list of tools that has one is unbounded — Angular, Gatsby, Eleventy,
+    // Hugo, Docusaurus, VitePress, Parcel, and whatever ships next month. A
+    // longer table is the same defect with more rows.
+    //
+    // The build has already run, in this same /workspace, so the answer is on
+    // disk: the directory holding an index.html that did not exist before the
+    // build started. `-newer` against the marker is what makes that precise —
+    // a repo's SOURCE index.html (Vite keeps one at the root) is older than the
+    // marker and cannot be mistaken for output. Shallowest wins, so `dist/`
+    // beats `dist/nested/`.
+    // One element, not several joined by `; ` — `then; F=""` is a bash syntax
+    // error, and the whole script is a single shell line.
+    // POSIX `find`, deliberately: `-printf` is a GNU extension. The build image
+    // is Debian so it would have worked, but it fails silently on a BSD `find`
+    // — which is what a developer running this locally has, so the one construct
+    // nobody could test was the one doing the choosing. `awk -F/ {print NF}`
+    // counts path segments instead, which is the same shallowest-wins ordering
+    // and runs anywhere.
+    `if [ ! -d "$D" ] || [ -z "$(ls -A "$D" 2>/dev/null)" ]; then`
+      + ` F=""; [ -f ${BUILD_START} ] && F=$(find . -name index.html -newer ${BUILD_START}`
+      + ` -not -path './node_modules/*' -not -path './.git/*' 2>/dev/null`
+      + ` | awk -F/ '{print NF" "$0}' | sort -n | head -1 | cut -d' ' -f2-);`
+      + ` if [ -n "$F" ]; then D=$(dirname "$F");`
+      + ` echo "the build wrote $D, not the predicted directory - publishing what it produced"; fi;`
+      + ` fi`,
+    // A diagnostic, NOT a guard — deliberately no `exit`.
+    //
+    // Nothing that can end this shell may share it with the upload: that is the
+    // outage recorded below, where the cache's `exit 0` chain took the rsync with
+    // it and Cloud Build still reported SUCCESS. A missing directory needs no
+    // guard anyway, because the rsync itself fails on one — "Did not find
+    // existing container at: <dir>" is exactly the error this line explains.
+    `if [ ! -d "$D" ]; then echo "no build output: $D does not exist and the build wrote no index.html"; fi`,
+    // The answer, handed to the next step through /workspace. Deliberately a
+    // separate step from the upload: every conditional above is one more thing
+    // that could stand between the pipeline and the rsync, and the rule the
+    // upload step enforces is that NOTHING may. See `publishScript`.
+    `printf '%s' "$D" > ${OUTDIR}`,
+  ].join("; ");
+}
+
+/**
+ * Step 5: the assets go to GCS.
+ *
+ * **Nothing here may be able to `exit`, and no conditional may stand between
+ * this step and the upload.** That is a correctness requirement rather than
+ * tidiness, and it is why the directory is resolved in its own step above: the
+ * rsync used to be appended to the save script with a `;`, and the save script
+ * is a chain of `exit 0` guards. `exit` ends the shell, so every guard that
+ * fired (cache hit, no lockfile, no node_modules) took the upload with it. The
+ * step still exited 0, Cloud Build reported SUCCESS, the deploy published
+ * nothing, and the pointer moved to a release that did not exist. The cache
+ * working was precisely what broke the deploy.
+ *
+ * So this step is three commands that cannot branch: read the directory the
+ * previous step chose, clear the scratch, upload. If `.ss-outdir` is missing the
+ * substitution is empty and the rsync fails loudly, which is the correct outcome
+ * and not a silent skip.
+ *
+ * The `rm -f` obeys the same rule — it cannot exit and cannot fail — and it is
+ * here because the cache's scratch files live in `/workspace`, which is also a
+ * legal `outputDir`: a cache-hit build with outputDir `.` would otherwise rsync
+ * `.deps.tgz`, a 30-130MB dependency tarball, into a world-readable release
+ * prefix. `$D` is captured BEFORE the `rm`, because `.ss-outdir` is scratch too.
+ */
+export function publishScript(destination: string): string {
+  return `D=$(cat ${OUTDIR} 2>/dev/null); rm -f ${SCRATCH.join(" ")}; `
+    + `gcloud storage rsync -r "$D" ${shellQuote(destination)}`;
 }
 
 function step(image: string, script: string): string[] {
@@ -334,14 +429,22 @@ export function staticBuildConfig(opts: {
   // Cloud Build shares /workspace between steps and every step here defaults its
   // dir to /workspace, so node_modules restored in step 1 is the same directory
   // the build in step 2 sees.
-  const build = [installScript(opts.installCommand), opts.buildCommand].filter(Boolean).join(" && ") || "true";
+  // The marker is stamped before install and build, so everything either of them
+  // writes is newer than it. That is what lets the publish step below ask the
+  // filesystem where the output went instead of predicting it from a framework
+  // name. `touch` cannot fail in a way worth guarding, and it is separated by
+  // `;` rather than `&&` so it can never gate the build.
+  const build = `touch ${BUILD_START}; `
+    + ([installScript(opts.installCommand), opts.buildCommand].filter(Boolean).join(" && ") || "true");
 
   return [
     "steps:",
     ...step(CLOUD_SDK, depsRestoreScript(bucket, scope, opts.installCommand)),
     ...step(builder, build),
     ...step(CLOUD_SDK, depsSaveScript(bucket, scope)),
-    ...step(CLOUD_SDK, publishScript(opts.outputDir, opts.destination)),
+    // Its own step, so the upload's shell stays free of conditionals.
+    ...step(CLOUD_SDK, resolveOutputScript(opts.outputDir)),
+    ...step(CLOUD_SDK, publishScript(opts.destination)),
     "options:",
     // No machineType on purpose: across the last 20 builds in this project every
     // E2_HIGHCPU_8 build queued 44-57s before starting and every default-pool

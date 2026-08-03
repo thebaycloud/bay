@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   staticBuildConfig, escapeForCloudBuild, shellQuote, depsCacheScope,
-  warmInstall, installScript, depsRestoreScript, depsSaveScript, publishScript,
+  warmInstall, installScript, depsRestoreScript, depsSaveScript, publishScript, resolveOutputScript,
   lockfilePreference,
 } from "../lib/static-build";
 
@@ -14,8 +14,33 @@ const BUCKET = "supersonic-static-assets";
 const BUILDER = "node:22-slim";
 const CLOUD_SDK = "gcr.io/google.com/cloudsdktool/google-cloud-cli:slim";
 const DEST = "gs://supersonic-static-assets/demo/r/20260729t120000z-abcd1234/";
-/** The dependency cache's scratch files, cleared before the assets go up. */
-const SCRATCH_RM = "rm -f /workspace/.deps.tgz /workspace/.deps-restored /workspace/.deps-key /workspace/.deps-skip";
+/** The build's scratch files, cleared after the directory is chosen and before the upload. */
+const SCRATCH_RM = "rm -f /workspace/.deps.tgz /workspace/.deps-restored /workspace/.deps-key /workspace/.deps-skip /workspace/.ss-build-start /workspace/.ss-outdir";
+
+/**
+ * The whole publish step for one declared output directory.
+ *
+ * Built here rather than pasted into six assertions, because the interesting
+ * property is not the text — it is that the declared directory is what gets
+ * published whenever it exists, and that discovery is reached only when it does
+ * not. The pinned strings below are what proves the emitted shell is the shell
+ * we think it is; this keeps them one edit apart instead of six.
+ */
+function resolveFor(outputDir: string): string {
+  return `D='${outputDir}'; `
+    + `if [ ! -d "$D" ] || [ -z "$(ls -A "$D" 2>/dev/null)" ]; then`
+    + ` F=""; [ -f /workspace/.ss-build-start ] && F=$(find . -name index.html -newer /workspace/.ss-build-start`
+    + ` -not -path './node_modules/*' -not -path './.git/*' 2>/dev/null`
+    + ` | awk -F/ '{print NF" "$0}' | sort -n | head -1 | cut -d' ' -f2-);`
+    + ` if [ -n "$F" ]; then D=$(dirname "$F");`
+    + ` echo "the build wrote $D, not the predicted directory - publishing what it produced"; fi;`
+    + ` fi; `
+    + `if [ ! -d "$D" ]; then echo "no build output: $D does not exist and the build wrote no index.html"; fi; `
+    + `printf '%s' "$D" > /workspace/.ss-outdir`;
+}
+
+/** The upload step, which is the same three unbranching commands for every app. */
+const PUBLISH = `D=$(cat /workspace/.ss-outdir 2>/dev/null); ${SCRATCH_RM}; gcloud storage rsync -r "$D" '${DEST}'`;
 
 /** A stock Vite deploy — the exact shape that broke in production. */
 function vite(over: Partial<Parameters<typeof staticBuildConfig>[0]> = {}) {
@@ -95,7 +120,8 @@ test("a hostile outputDir cannot reach Cloud Build unescaped", () => {
   const yaml = vite({ outputDir: "dist/$BUILD_ID out" });
   assertNoBareDollar(yaml, "staticBuildConfig with a $ in outputDir");
   const publish = steps(yaml).at(-1)!.script;
-  assert.equal(publish, `${SCRATCH_RM}; gcloud storage rsync -r 'dist/$BUILD_ID out' '${DEST}'`);
+  assert.equal(publish, PUBLISH);
+  assert.equal(steps(yaml).at(-2)!.script, resolveFor("dist/$BUILD_ID out"));
 });
 
 // ── the outage ──────────────────────────────────────────────────────────────
@@ -106,7 +132,7 @@ test("the step that uploads the assets can never be short-circuited", () => {
   // the feature working — stopped the upload, the step still exited 0, Cloud Build
   // reported SUCCESS and the pointer moved to a release that was never uploaded.
   const publish = steps(vite()).at(-1)!;
-  assert.equal(publish.script, `${SCRATCH_RM}; gcloud storage rsync -r 'dist' '${DEST}'`);
+  assert.equal(publish.script, PUBLISH);
   assert.doesNotMatch(publish.script, /\bexit\b/, "nothing that can exit may share a shell with the upload");
   // The rule is "nothing that can end the shell", not "one command". `rm -f`
   // cannot exit and cannot fail; a guard, a pipeline or a `&&` chain could.
@@ -157,7 +183,7 @@ test("the emitted YAML is pinned byte for byte", () => {
       + '|| { rm -f /workspace/.deps.tgz; echo \\"deps cache entry unusable - ignoring it\\"; }"]',
     `  - name: ${BUILDER}`,
     "    entrypoint: bash",
-    '    args: ["-lc", "if [ -f /workspace/.deps-restored ]; then npm install --prefer-offline --no-audit --no-fund; '
+    '    args: ["-lc", "touch /workspace/.ss-build-start; if [ -f /workspace/.deps-restored ]; then npm install --prefer-offline --no-audit --no-fund; '
       + 'else npm ci --prefer-offline --no-audit --no-fund || npm install --prefer-offline --no-audit --no-fund; fi '
       + '&& npm run build"]',
     `  - name: ${CLOUD_SDK}`,
@@ -171,7 +197,10 @@ test("the emitted YAML is pinned byte for byte", () => {
       + `gcloud storage cp /tmp/deps.tgz \\"gs://${BUCKET}/_deps/v2/${SCOPE}/$$K.tgz\\" 2>/dev/null && echo \\"deps cached\\" || true"]`,
     `  - name: ${CLOUD_SDK}`,
     "    entrypoint: bash",
-    `    args: ["-lc", "${SCRATCH_RM}; gcloud storage rsync -r 'dist' '${DEST}'"]`,
+    `    args: ["-lc", ${JSON.stringify(resolveFor("dist").replace(/\$/g, "$$$$"))}]`,
+    `  - name: ${CLOUD_SDK}`,
+    "    entrypoint: bash",
+    `    args: ["-lc", ${JSON.stringify(PUBLISH.replace(/\$/g, "$$$$"))}]`,
     "options:",
     "  logging: CLOUD_LOGGING_ONLY",
     // Cloud Build's default is 10 minutes, and a cold monorepo install plus a
@@ -196,13 +225,14 @@ test("the shell the cache scripts emit really is the doubled form", () => {
   assert.ok(raw.includes(`L=""; for f in package-lock.json yarn.lock pnpm-lock.yaml; do [ -f "$f" ] && { L="$f"; break; }; done`));
   assert.equal(escapeForCloudBuild(raw), steps(vite())[0].script.replace(/\$/g, "$$$$"));
   assert.ok(depsSaveScript(BUCKET, SCOPE).includes('K=$(cat /workspace/.deps-key 2>/dev/null)'));
-  assert.equal(publishScript("dist", DEST), `${SCRATCH_RM}; gcloud storage rsync -r 'dist' '${DEST}'`);
+  assert.equal(publishScript(DEST), PUBLISH);
+  assert.equal(resolveOutputScript("dist"), resolveFor("dist"));
 });
 
 test("every step's args line is legal JSON, so the YAML scalar is legal too", () => {
   const all = steps(vite({ outputDir: `weird "dir" with 'quotes' and \\ backslash` }));
-  assert.equal(all.length, 4);
-  assert.deepEqual(all.map((s) => s.image), [CLOUD_SDK, BUILDER, CLOUD_SDK, CLOUD_SDK]);
+  assert.equal(all.length, 5);
+  assert.deepEqual(all.map((s) => s.image), [CLOUD_SDK, BUILDER, CLOUD_SDK, CLOUD_SDK, CLOUD_SDK]);
 });
 
 // ── the cache key ───────────────────────────────────────────────────────────
@@ -282,8 +312,10 @@ test("a cache hit installs incrementally because npm ci deletes node_modules", (
 
 test("a project with no commands still gets a config that uploads", () => {
   const all = steps(vite({ installCommand: null, buildCommand: null }));
-  assert.equal(all[1].script, "true");
-  assert.equal(all.at(-1)!.script, `${SCRATCH_RM}; gcloud storage rsync -r 'dist' '${DEST}'`);
+  // The marker is stamped even with nothing to build: a repo whose output is
+  // already committed still needs the publish step to resolve a directory.
+  assert.equal(all[1].script, "touch /workspace/.ss-build-start; true");
+  assert.equal(all.at(-1)!.script, PUBLISH);
 });
 
 test("a set-but-empty base-image env var does not emit a nameless step", () => {
@@ -393,7 +425,10 @@ function runLane(opts: {
   // disagree, which moves its hash after the restore already chose a key.
   if (opts.rewriteLock) writeFileSync(join(ws, "package-lock.json"), '{"lockfileVersion":3,"rewritten":true}');
   const save = sh(all[2].script);
-  const publish = sh(all[3].script);
+  // Two steps now, not one: the directory is resolved in its own shell so that
+  // the upload's shell can stay free of conditionals. See `publishScript`.
+  const resolve = sh(all[3].script);
+  const publish = sh(all[4].script);
 
   const calls = existsSync(log) ? readFileSync(log, "utf8") : "";
   /** The gs:// object the restore asked for, and the one the save wrote. */
@@ -402,6 +437,7 @@ function runLane(opts: {
   const result = {
     restoreOut: restore.stdout + restore.stderr, restoreCode: restore.status,
     saveOut: save.stdout + save.stderr, saveCode: save.status,
+    resolveOut: resolve.stdout + resolve.stderr, resolveCode: resolve.status,
     publishCode: publish.status,
     calls,
     objectRead,
@@ -497,4 +533,87 @@ test("the cache's scratch files are gone before the assets are uploaded", () => 
   const r = runLane({ cache: "hit" });
   assert.deepEqual(r.scratchLeft, [], "these would be rsynced into a public release prefix");
   assert.equal(r.uploaded, true);
+});
+
+// ── the output directory is observed, not predicted ─────────────────────────
+
+/** Run the resolve step in a real workspace and report the directory it chose. */
+function resolveIn(files: Record<string, string>, declared: string, opts: { built?: string[] } = {}): string {
+  const ws = mkdtempSync(join(tmpdir(), "resolve-"));
+  for (const [rel, body] of Object.entries(files)) {
+    mkdirSync(join(ws, rel, ".."), { recursive: true });
+    writeFileSync(join(ws, rel), body);
+  }
+  // The marker the build step stamps. Everything written after it is this
+  // build's output; everything before it is the repository's own source.
+  spawnSync("bash", ["-c", `sleep 1; touch ${JSON.stringify(join(ws, ".ss-build-start"))}; sleep 1`]);
+  for (const rel of opts.built ?? []) {
+    mkdirSync(join(ws, rel, ".."), { recursive: true });
+    writeFileSync(join(ws, rel), "<!doctype html>built");
+  }
+  const script = resolveOutputScript(declared).replace(/\/workspace/g, ws);
+  const r = spawnSync("bash", ["-lc", script], { cwd: ws, encoding: "utf8" });
+  assert.equal(r.status, 0, `resolve failed: ${r.stderr}`);
+  return readFileSync(join(ws, ".ss-outdir"), "utf8");
+}
+
+test("the declared output directory wins whenever the build actually wrote it", () => {
+  // The rule this whole mechanism is bounded by: it may only ADD deploys that
+  // currently fail, never change one that works. So when the prediction was
+  // right, nothing about it is second-guessed.
+  assert.equal(resolveIn({}, "dist", { built: ["dist/index.html"] }), "dist");
+  assert.equal(resolveIn({}, "build", { built: ["build/index.html"] }), "build");
+});
+
+test("a build that writes somewhere else is published from where it wrote", () => {
+  // THE HARDCODE THIS REPLACES. The directory was predicted from a framework's
+  // name — vite→dist, react-scripts→build, astro→dist, sveltekit→build,
+  // next-export→out — which is a proper noun SUPPLYING a value the repository
+  // already answers, the one thing docs/MAKE-DEPLOYS-WORK.md's first rule
+  // forbids. Every one of those defaults is overridable in the project's own
+  // config, and the list of tools that has one is unbounded.
+  //
+  // The real repository that found it: the FastAPI full-stack template, whose
+  // `frontend/vite.config.ts` sets `build.outDir`. The deploy predicted `dist`,
+  // published nothing, and failed with "Did not find existing container at:
+  // frontend/dist".
+  assert.equal(resolveIn({}, "dist", { built: ["build/index.html"] }), "./build");
+  // Equally: an output directory nobody has a rule for at all.
+  assert.equal(resolveIn({}, "dist", { built: ["_site/index.html"] }), "./_site");
+  assert.equal(resolveIn({}, "dist", { built: ["public/index.html"] }), "./public");
+});
+
+test("a repository's own source index.html is never mistaken for build output", () => {
+  // Vite keeps an `index.html` at the project root as the source template, so a
+  // discovery that only asked "where is there an index.html" would publish the
+  // whole source tree — including, on a cache-hit build, a 30-130MB deps
+  // tarball. `-newer` against the marker is what makes the question precise:
+  // not "where is there output" but "what did THIS build write".
+  const chosen = resolveIn(
+    { "index.html": "<html>the source template</html>", "src/main.ts": "" },
+    "dist",
+    { built: ["build/index.html"] },
+  );
+  assert.equal(chosen, "./build");
+  assert.notEqual(chosen, ".");
+});
+
+test("node_modules is never chosen, however many index.html files it holds", () => {
+  // A dependency ships an index.html far more often than not, and one of them at
+  // a shallower path than the real output would win a naive search.
+  const chosen = resolveIn(
+    { "node_modules/pkg/index.html": "<html>a dependency</html>" },
+    "dist",
+    { built: ["build/index.html"] },
+  );
+  assert.equal(chosen, "./build");
+});
+
+test("with nothing found the declared directory stands, so the rsync reports it", () => {
+  // Not a guess, and not silence. The upload step cannot branch — see
+  // publishScript — so an unresolvable build has to reach `gcloud storage rsync`
+  // and fail there with "Did not find existing container at: <dir>", naming the
+  // directory the deploy expected. A silent skip would move the pointer to an
+  // empty release and report success.
+  assert.equal(resolveIn({}, "dist", { built: [] }), "dist");
 });
