@@ -84,6 +84,7 @@ export function fleetEligibility(a: {
   image: string;
   staticServe: boolean;
   serviceless: boolean;
+  hasDockerfile: boolean;
 }): Eligibility {
   if (a.serviceless) {
     // Not a fleet limitation — the fleet runs a bot better than Cloud Run does,
@@ -106,11 +107,18 @@ export function fleetEligibility(a: {
     // this lane is what §8b deletes.
     return { ok: false, reason: "the runner lane's image is shared, and its code is not in it" };
   }
-  if (a.lane === "buildpack") {
+  if (a.lane === "buildpack" && !a.hasDockerfile) {
     // A buildpack image is made BY the deploy: `gcloud run deploy --source`
-    // runs the builder and Cloud Run names what comes out, so before the
-    // delivery there is no reference to hand a node. The fleet has no
-    // `--source` of its own to run.
+    // runs the builder and Cloud Run names what comes out, so at decision time
+    // there is no reference to hand a node. The fleet has no `--source` of its
+    // own to run.
+    //
+    // Only when there is no Dockerfile, and that qualifier is the whole point.
+    // The lane is fixed before the pipeline writes its generated, SPA and
+    // Next.js fallback Dockerfiles, so an app can reach here labelled
+    // "buildpack" having built a perfectly ordinary image with a resolvable
+    // digest. `useDockerBuild` in the pipeline asks this same question at build
+    // time; this asks it at decision time, which is when it is needed.
     //
     // The pipeline has a second builder — `builds submit --pack`, guarded by
     // `serviceless` — and it is deliberately not borrowed for this. It writes
@@ -147,6 +155,7 @@ export function chooseRuntime(a: {
   image: string;
   staticServe: boolean;
   serviceless: boolean;
+  hasDockerfile: boolean;
 }): { runtime: Runtime; reason?: string } {
   const can = fleetEligibility(a);
   return can.ok ? { runtime: "fleet" } : { runtime: "cloudrun", reason: can.reason };

@@ -32,7 +32,7 @@ function ports(over: Partial<PlacementPorts> = {}) {
 // `lane` is widened to `Lane` (not narrowed to the literal "container") so the
 // override cases below — which swap in "runner" — typecheck against
 // `Partial<typeof eligible>`.
-const eligible = { lane: "container" as Lane, image: "img", staticServe: false, serviceless: false };
+const eligible = { lane: "container" as Lane, image: "img", staticServe: false, serviceless: false, hasDockerfile: false };
 
 test("an app with a database goes to the fleet now that a node has a proxy", () => {
   // The refusal added on 2026-08-04 was a guard for exactly one gap: the fleet
@@ -117,6 +117,70 @@ test("a buildpack app is not placeable — its image is made by the deploy it is
   // …and it stays refused even when an image name IS supplied, which is the
   // whole point of naming it rather than leaning on the empty-image check.
   assert.equal(fleetEligibility({ ...eligible, lane: "buildpack", image: "img" }).ok, false);
+});
+
+test("a buildpack-lane app that has a Dockerfile is placeable", () => {
+  // The lane is fixed before the pipeline writes the SPA and Next.js fallback
+  // Dockerfiles, so an app can carry lane "buildpack" and still build a normal
+  // image with a resolvable digest. Refusing it reads the label instead of the
+  // fact next to it.
+  const got = fleetEligibility({
+    lane: "buildpack",
+    image: "us-central1-docker.pkg.dev/p/r/x@sha256:abc",
+    staticServe: false,
+    serviceless: false,
+    hasDockerfile: true,
+  });
+  assert.equal(got.ok, true, `refused a real image: ${got.ok ? "" : got.reason}`);
+});
+
+test("a buildpack-lane app with no Dockerfile is still refused, and says why", () => {
+  // This is the genuine case: `gcloud run deploy --source` builds it and Cloud
+  // Run names the result, so at decision time there is no reference to hand a
+  // node.
+  const got = fleetEligibility({
+    lane: "buildpack",
+    image: "",
+    staticServe: false,
+    serviceless: false,
+    hasDockerfile: false,
+  });
+  assert.equal(got.ok, false);
+  if (!got.ok) assert.match(got.reason!, /buildpack|source/i);
+});
+
+test("a Dockerfile does not rescue the lanes refused for other reasons", () => {
+  // Each of these is refused for something a Dockerfile does not change: a
+  // static app has no image of its own, the runner's image is shared and the
+  // app's code is not in it, and a serviceless app publishes no route to probe.
+  for (const c of [
+    { lane: "static" as const, staticServe: true, serviceless: false },
+    { lane: "runner" as const, staticServe: false, serviceless: false },
+    { lane: "container" as const, staticServe: false, serviceless: true },
+  ]) {
+    const got = fleetEligibility({
+      lane: c.lane,
+      image: "us-central1-docker.pkg.dev/p/r/x@sha256:abc",
+      staticServe: c.staticServe,
+      serviceless: c.serviceless,
+      hasDockerfile: true,
+    });
+    assert.equal(got.ok, false, `${c.lane} was wrongly allowed by a Dockerfile`);
+  }
+});
+
+test("no image is still no image, Dockerfile or not", () => {
+  // `hasDockerfile` says how it WOULD be built; `image` says what this deploy
+  // actually produced. An empty image must still refuse — placing a tag nobody
+  // built is the mistake the digest work exists to stop.
+  const got = fleetEligibility({
+    lane: "container",
+    image: "",
+    staticServe: false,
+    serviceless: false,
+    hasDockerfile: true,
+  });
+  assert.equal(got.ok, false);
 });
 
 test("a container app with an image is placeable", () => {
