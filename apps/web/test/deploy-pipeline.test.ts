@@ -50,7 +50,7 @@ interface Recorded {
    * argv: `gcloud builds submit` says an image was built and says nothing at all
    * about which reference was then written into the placement row.
    */
-  placements: { slug: string; node: string; spec: { image: string; memoryBytes: number; cpuShares: number } }[];
+  placements: { slug: string; node: string; spec: { image: string; memoryBytes: number; cpuShares: number; processes?: { name: string; kind: string; command?: string[] }[] } }[];
   /**
    * Every repair the pipeline handed off, with the runtime it named and the
    * runtime its `redeploy` closure actually reached.
@@ -252,6 +252,20 @@ async function install() {
       // default, and a fleet failure the node DOES claim is tested where it
       // belongs, in fleet-place.test.ts.
       nodeFaultFor: async () => null,
+      // A node that faithfully runs what it was placed.
+      //
+      // Derived from the placement rather than hardcoded, so it cannot agree
+      // with a spec the pipeline never wrote: if the pipeline places the wrong
+      // image or the wrong argv, this reports the wrong one back and the real
+      // `runVerdict` — which is NOT mocked — refuses it. What is faked is the
+      // node, not the judgement.
+      runningOnNode: async (slug: string, node: string) => {
+        const placed = active.placements.filter((p) => p.slug === slug && p.node === node).at(-1);
+        if (!placed) return [];
+        return (placed.spec.processes ?? [{ name: "web", kind: "web" }])
+          .filter((pr) => pr.kind === "web" || pr.kind === "worker")
+          .map((pr) => ({ slug, process: pr.name, image: placed.spec.image, command: pr.command }));
+      },
     },
   });
   // Additive, for the same reason gcp-rest is: `chooseRuntime`, `placeOnFleet`
@@ -828,4 +842,78 @@ test("a sibling's Dockerfile is written for the context it is built in", { ...NE
   assert.match(dockerfile, /^RUN pip install .*requirements\.txt$/m);
 
   assert.ok(rec.argv.some((a) => a[1] === "builds" && a[2] === "submit"), "the sibling never built");
+});
+
+/* -------------------------------------------------------------------------- */
+/* One app, one runtime                                                       */
+/* -------------------------------------------------------------------------- */
+
+/** Did this deploy create a Cloud Run worker pool? */
+const madeAWorkerPool = (rec: Recorded) =>
+  rec.argv.some((a) => a[0] === "gcloud" && a[1] === "beta" && a[2] === "run" && a[3] === "worker-pools" && a[4] === "deploy");
+
+test("an app on Cloud Run still gets its Cloud Run worker pool", NEEDS_MOCKS, async () => {
+  // The control for the test below. Without this the next assertion is satisfied
+  // by a pipeline that has simply stopped deploying workers altogether, which
+  // would be a far worse bug than the one being fixed.
+  const rec = await run(
+    { "Dockerfile": "FROM alpine\n", "Procfile": "web: node index.js\nbot: node bot.js\n", "index.js": "" },
+    {},
+    detect(),
+  );
+
+  assert.ok(madeAWorkerPool(rec), `no worker pool was deployed off the fleet; argv was ${JSON.stringify(rec.argv.map((a) => a.slice(0, 5)))}`);
+});
+
+test("an app on the fleet does not ALSO run its workers on Cloud Run", NEEDS_MOCKS, async () => {
+  // The defect this closes, and the reason it belongs in this slice. The
+  // `deployProcesses` call was gated on `result.ok && !staticServe` with no
+  // `toFleet` guard, and `planProcesses` emits a worker pool for every worker
+  // and a job plus schedule for every cron. The SAME processes are already in
+  // the placed spec and are started as sandboxes by the node.
+  //
+  // For a web app on the fleet those duplicates were the documented status quo.
+  // For a WORKER-ONLY app the entire app would run twice — a Telegram bot
+  // double-polling getUpdates, a queue consumer double-consuming — and the new
+  // verdict would truthfully report the node running it while the Cloud Run copy
+  // ran beside it. This slice is what first makes an app depend on the node
+  // alone, so this is where the guard has to land.
+  const rec = await onFleet({ "Dockerfile": "FROM alpine\n", "Procfile": "web: node index.js\nbot: node bot.js\n", "index.js": "" });
+
+  assert.ok(rec.placements.length > 0, `nothing was placed; stages were ${rec.stages.map((s) => s.stage).join(", ")}`);
+  // The node really was given the worker — otherwise "no Cloud Run worker" would
+  // mean the worker is not running anywhere at all, which is the failure mode
+  // this guard could most easily become.
+  const placed = rec.placements.at(-1)!.spec.processes ?? [];
+  assert.ok(placed.some((p) => p.name === "bot" && p.kind === "worker"),
+    `the node was not given the worker, so removing the Cloud Run one loses it: ${JSON.stringify(placed)}`);
+  assert.ok(!madeAWorkerPool(rec),
+    `the app runs on the fleet AND deployed a Cloud Run worker pool — two live copies of one process`);
+});
+
+test("a worker-only app deploys to the fleet, verified by the node rather than by a probe", NEEDS_MOCKS, async () => {
+  // The slice, end to end. `fleetEligibility` used to refuse every serviceless
+  // app — "a worker-only app has no route to verify from the fleet yet" — and
+  // that was never a fleet limitation; the fleet runs a bot better than Cloud
+  // Run does. It was a limitation of the CHECK. The node now reports what it is
+  // confirmed to be running, so there is a proof that does not need a route.
+  //
+  // The probe is forced to fail here, and the deploy must still succeed: that is
+  // what proves the verdict came from the node's report and not from an HTTP
+  // answer nothing should have been asking for.
+  probeCode = 503;
+  let rec: Recorded;
+  try {
+    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "Procfile": "bot: node bot.js\n", "index.js": "" });
+  } finally {
+    probeCode = 200;
+  }
+
+  assert.equal(rec.placements.length, 1, `expected one placement, got ${rec.placements.length}`);
+  const placed = rec.placements[0].spec.processes ?? [];
+  assert.deepEqual(placed.map((p) => `${p.kind}:${p.name}`), ["worker:bot"]);
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.equal(errors.length, 0, `a worker-only fleet deploy failed: ${JSON.stringify(errors).slice(0, 400)}`);
+  // And it is not double-run, which is the whole reason it is safe to ship.
+  assert.ok(!madeAWorkerPool(rec), "the bot runs on the node AND on Cloud Run");
 });

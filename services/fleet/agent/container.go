@@ -360,6 +360,15 @@ type runscState struct {
 	Status string `json:"status"`
 }
 
+// runscStatusFn is the liveness read reconcileOnce makes, behind a package
+// variable so a test can drive that pass without a sandbox — the same seam
+// shape secretManagerBase and tokenSource use in secrets.go.
+//
+// Only the reconcile call goes through it. Start's own poll stays on the direct
+// function: it is the code that decides a sandbox came up at all, and a test
+// that could make it lie would be a test that could invent a running process.
+var runscStatusFn = runscStatus
+
 func runscStatus(id string) (runscState, error) {
 	out, err := runsc("state", id)
 	if err != nil {

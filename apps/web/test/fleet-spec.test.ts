@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildAppSpec, type AppSpec } from "../lib/fleet-spec";
 import { resolveProcess, type ResolvedProcess } from "../lib/processes";
-import type { ProcessFault } from "../lib/fleet";
+import type { ProcessFault, ProcessState } from "../lib/fleet";
 
 /**
  * The json tags of the agent's `App` struct, read from the agent itself.
@@ -221,5 +221,47 @@ test("the wire field the control plane keys absent-vs-empty on is still optional
     block[1],
     /Processes\s+\*\[\]ProcessFault\s+`json:"processes,omitempty"`/,
     "the sync body's processes field is no longer a pointer-to-slice with omitempty",
+  );
+});
+
+/** The json tags of `ProcessState`, read from the agent itself. */
+function agentProcessStateFields(): string[] {
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type ProcessState struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type ProcessState struct` in the agent");
+  return [...block[1].matchAll(/json:"([^"]+)"/g)].map((m) => m[1].split(",")[0]);
+}
+
+test("what the node says it is RUNNING is what the control plane reads", () => {
+  // The same drift risk as ProcessFault, failing in a sharper direction. A field
+  // renamed on one side does not throw — it arrives as undefined, `runVerdict`
+  // finds no matching row or no matching image, and every worker-only fleet
+  // deploy rolls back with a reason nobody can act on. And this pair carries the
+  // comparison itself: drop `command` from the Go struct and the verdict
+  // silently weakens to an image check, which passes a redeploy on the process
+  // still running the old argv.
+  const full: Required<ProcessState> = {
+    slug: "a8ebb",
+    process: "bot",
+    image: "us-central1-docker.pkg.dev/p/r/a8ebb@sha256:abc",
+    command: ["/bin/sh", "-c", "python bot.py"],
+  };
+
+  assert.deepEqual(Object.keys(full).sort(), agentProcessStateFields().sort());
+});
+
+test("the wire field the control plane keys absent-vs-empty on is a pointer for `running` too", () => {
+  // Absent means "this agent does not report" and must leave the stored rows
+  // alone, so a rolling agent upgrade does not read as the fleet having stopped
+  // running things; `[]` means "I am running nothing confirmed" and must clear
+  // them. `null` is neither — the reader tests for an array — and a plain slice
+  // with omitempty cannot express the distinction at all.
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type syncBody struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type syncBody struct` in the agent");
+  assert.match(
+    block[1],
+    /Running\s+\*\[\]ProcessState\s+`json:"running,omitempty"`/,
+    "the sync body's running field is no longer a pointer-to-slice with omitempty",
   );
 });

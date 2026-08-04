@@ -252,6 +252,104 @@ export async function nodeFaultFor(slug: string): Promise<{ node: string; detail
   return r.rows[0] ? { node: r.rows[0].node as string, detail: r.rows[0].detail as string } : null;
 }
 
+/**
+ * One process a node says it is CONFIRMED to be running.
+ *
+ * The mirror of `ProcessState` in services/fleet/agent/desired.go, held to it by
+ * a drift test in test/fleet-spec.test.ts — the same one `ProcessFault` has, and
+ * for a sharper reason. A field renamed on one side arrives as undefined, the
+ * comparison in `runVerdict` finds no match, and every worker-only fleet deploy
+ * rolls back with a reason nobody can act on.
+ */
+export interface ProcessState {
+  slug: string;
+  process: string;
+  image: string;
+  command?: string[];
+}
+
+/**
+ * Replace this node's running set with what it just reported.
+ *
+ * Deliberately the same statement shape as `recordNodeFaults`, including the
+ * `accepted` join on fleet_placements — and that join is doing more work here.
+ * There it stopped a leaked FLEET_TOKEN from marking another node's apps failed;
+ * here a forged row would steer a deploy to PASS, flipping run_url onto a node
+ * that is running nothing. A node still cannot say anything about an app it was
+ * never given.
+ *
+ * Callers must not call this at all when the node sent no `running` field.
+ * Absent means "this agent does not report"; passing `[]` for it would clear
+ * every row an older agent binary knows nothing about — and unlike a cleared
+ * fault, a cleared running-row fails the next deploy of that app.
+ */
+export async function recordNodeRunning(node: string, running: ProcessState[]): Promise<void> {
+  await getPool(DB).query(
+    `WITH incoming AS (
+       SELECT DISTINCT ON (slug, process) slug, process, image, command
+         FROM jsonb_to_recordset($2::jsonb)
+              AS t(slug text, process text, image text, command jsonb)
+        WHERE slug IS NOT NULL AND process IS NOT NULL AND image IS NOT NULL
+        ORDER BY slug, process
+     ),
+     accepted AS (
+       SELECT i.*
+         FROM incoming i
+         JOIN fleet_placements p ON p.slug = i.slug AND p.node = $1
+     ),
+     cleared AS (
+       DELETE FROM fleet_process_running f
+        WHERE f.node = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM accepted a WHERE a.slug = f.slug AND a.process = f.process
+          )
+     )
+     INSERT INTO fleet_process_running(slug, node, process, image, command, reported_at)
+     SELECT a.slug, $1, a.process, a.image, a.command, now() FROM accepted a
+     ON CONFLICT (slug, node, process) DO UPDATE
+        SET image = EXCLUDED.image,
+            command = EXCLUDED.command,
+            reported_at = now()`,
+    [node, JSON.stringify(running)]
+  );
+}
+
+/**
+ * What a FRESH node says it is running for this app, right now.
+ *
+ * Two freshness conditions, the same pair `nodeFaultFor` uses and for the same
+ * reasons: `KillMode=process` means a restarted agent has not stopped anything,
+ * so a node that has not heartbeated in 90s is `unknown`; and a node can go on
+ * heartbeating while no longer sending this field at all — roll the agent back
+ * to a binary built before it existed and that is exactly what happens. The sync
+ * correctly leaves the stored rows alone in that case, so without the row's own
+ * window they would vouch for a process nobody is still claiming.
+ *
+ * The tight window is not here. The node only reports a process it watched runsc
+ * confirm within the last 30 seconds, so this is the second of two — its job is
+ * to catch a node that stopped talking, which is exactly what 90 seconds is the
+ * established answer to.
+ */
+export async function runningOnNode(slug: string, node: string): Promise<ProcessState[]> {
+  const r = await getPool(DB).query(
+    `SELECT f.process, f.image, f.command
+       FROM fleet_process_running f
+       JOIN fleet_nodes n ON n.name = f.node
+      WHERE f.slug = $1
+        AND f.node = $2
+        AND n.last_seen > now() - interval '90 seconds'
+        AND f.reported_at > now() - interval '90 seconds'
+      ORDER BY f.process`,
+    [slug, node]
+  );
+  return r.rows.map((row) => ({
+    slug,
+    process: row.process as string,
+    image: row.image as string,
+    command: (row.command as string[] | null) ?? undefined,
+  }));
+}
+
 export interface FleetNodeRow {
   name: string;
   zone: string;

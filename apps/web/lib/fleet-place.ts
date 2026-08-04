@@ -1,6 +1,6 @@
 import type { Lane } from "./lanes";
-import type { AppSpec } from "./fleet-spec";
-import type { Runtime } from "./fleet";
+import type { AppSpec, AgentProcess } from "./fleet-spec";
+import type { Runtime, ProcessState } from "./fleet";
 
 /**
  * Placing an app on the fleet, at deploy time.
@@ -47,6 +47,15 @@ export interface PlacementPorts {
   /** One request at the fleet, addressed the way the edge proxy will address it. */
   probe: (slug: string) => Promise<{ code: number; router?: string }>;
   /**
+   * The other verdict: is the NODE running what was just placed on it?
+   *
+   * For an app with no web process there is no request to make — a bot publishes
+   * no route — so the proof has to come from the node's own report rather than
+   * from the load balancer. A port like everything else the rollback path
+   * touches, so the order below stays checkable without a database.
+   */
+  runningOnNode: (slug: string, node: string, spec: AppSpec) => Promise<Eligibility>;
+  /**
    * Does the node holding this app blame ITSELF for its failure?
    *
    * A port rather than a direct import, like everything else the rollback path
@@ -92,14 +101,48 @@ export function fleetEligibility(a: {
   staticServe: boolean;
   serviceless: boolean;
   hasDockerfile: boolean;
+  /** How many `worker` processes this app declares. */
+  workers: number;
 }): Eligibility {
-  if (a.serviceless) {
-    // Not a fleet limitation — the fleet runs a bot better than Cloud Run does,
-    // which is half of why it exists. It is a limitation of the CHECK: the only
-    // proof accepted below is an HTTP answer through the load balancer, and a
-    // worker-only app publishes no route to ask. Placing one would be flipping
-    // on faith, and the whole point of this sequence is not doing that.
-    return { ok: false, reason: "a worker-only app has no route to verify from the fleet yet" };
+  // A worker-only app is placeable now, and the refusal that used to stand here
+  // said why it was not: "the only proof accepted is an HTTP answer through the
+  // load balancer, and a worker publishes no route to ask". That was never a
+  // fleet limitation — the fleet runs a bot better than Cloud Run does, which is
+  // half of why it exists — it was a limitation of the CHECK, and the node now
+  // reports what it is confirmed to be running. What remains are the two cases
+  // where that report still cannot answer.
+  if (a.serviceless && !(a.workers > 0)) {
+    // Nothing here runs continuously, so there is nothing for a node to confirm.
+    // A cron sandbox is never in `a.live` at all (the agent's `units` excludes
+    // it — the scheduler owns those), so the node would report no rows and every
+    // deploy would roll back for a correctly-configured app.
+    //
+    // `!(x > 0)` rather than `=== 0`, and that is the whole guard rather than a
+    // stylistic choice: nothing typechecks this repo's tests and four call sites
+    // in test/fleet-place.test.ts pass a full literal, so `a.workers` really can
+    // arrive as undefined. `undefined === 0` is false and would make a cron-only
+    // app ELIGIBLE — the mechanism defeating the rule it implements. This form
+    // refuses undefined, NaN and a negative too.
+    return {
+      ok: false,
+      reason: "this app declares no long-running process — a cron only runs on its schedule, so there is nothing for a node to report as running",
+    };
+  }
+  if (a.serviceless && !a.hasDockerfile) {
+    // A serviceless app with no Dockerfile is built by `builds submit --pack`,
+    // and that image must not be handed to a node.
+    //
+    // Stated directly rather than left to the lane. What actually selects that
+    // builder is `useDockerBuild = hasDockerfileNow` in the pipeline, not the
+    // lane label — `laneFor` happens to make the two agree today, which makes
+    // the guarantee contingent on a file in another module. The reasons are the
+    // buildpack rule's below: that submit writes no cloudbuild.yaml, so it has
+    // no logging destination and runs as the default build account, and it names
+    // the image before anything built it.
+    return {
+      ok: false,
+      reason: "this app has no Dockerfile, so its image is built by `builds submit --pack`, which the fleet must not borrow",
+    };
   }
   if (a.staticServe || a.lane === "static") {
     // Published to GCS and served by the shared static server. There is no image
@@ -163,6 +206,7 @@ export function chooseRuntime(a: {
   staticServe: boolean;
   serviceless: boolean;
   hasDockerfile: boolean;
+  workers: number;
 }): { runtime: Runtime; reason?: string } {
   const can = fleetEligibility(a);
   return can.ok ? { runtime: "fleet" } : { runtime: "cloudrun", reason: can.reason };
@@ -252,6 +296,134 @@ export async function fleetProbe(
   return last;
 }
 
+/**
+ * Does this spec have a web process — and therefore something to probe?
+ *
+ * The TypeScript mirror of `hasWeb(processesOf(app))` in the agent, including
+ * the branch that matters: an app carrying NO `processes` is not worker-only, it
+ * is an ordinary app whose start command is its web process under an older
+ * spelling, and `processesOf` synthesises exactly one web process for it. Reading
+ * an absent list as "no web" would send every app that predates the process model
+ * down the report path, where it has no rows and no deploy would ever pass.
+ */
+export function specHasWeb(spec: AppSpec): boolean {
+  if (!spec.processes?.length) return true;
+  return spec.processes.some((p) => p.kind === "web");
+}
+
+/**
+ * The processes a node must be running for this placement to count.
+ *
+ * `web` and `worker` only, mirroring the agent's `units`: a `release` is run once
+ * and is then gone, and a `cron` is owned by the scheduler and never enters
+ * `a.live` at all — so requiring either would require a row the node can never
+ * send.
+ */
+export function requiredProcesses(spec: AppSpec): AgentProcess[] {
+  if (!spec.processes?.length) {
+    // The implicit web process, built the way `processesOf` builds it.
+    return [{ name: "web", kind: "web", command: spec.command }];
+  }
+  return spec.processes.filter((p) => p.kind === "web" || p.kind === "worker");
+}
+
+function sameArgv(a: string[] | undefined, b: string[] | undefined): boolean {
+  const x = a ?? [];
+  const y = b ?? [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+/**
+ * Is the node running what was just placed on it?
+ *
+ * Every required process must have a reported row whose IMAGE AND COMMAND match
+ * the placed spec. Both, because that pair is the agent's own predicate for "this
+ * is a different program" — `reconcileOnce` leaves a live process alone only
+ * while both still match, and restarts it when either changes. Comparing the
+ * image alone would pass a redeploy that changed a worker's command against the
+ * process still running the old one, and pass it INSTANTLY, because the previous
+ * deploy's rows are still there and `reported_at` is refreshed on every sync.
+ *
+ * The converse is the reason this is the right predicate rather than a strict
+ * one: a change the node would NOT act on legitimately passes on the process
+ * already running, because that process IS the program the spec describes. What
+ * it cannot see is an env or secret change — see the note on `awaitRunning`.
+ *
+ * Fails closed in every direction. No rows, a missing process, a stale row that
+ * the reader's freshness window dropped: all of them are "not ok", and not ok is
+ * what drives the restore.
+ */
+export function runVerdict(spec: AppSpec, rows: ProcessState[]): Eligibility {
+  const required = requiredProcesses(spec);
+  if (!required.length) {
+    // Not reachable from `buildAppSpec` — `fleetEligibility` refuses an app with
+    // no long-running process before it is ever placed — but a verdict with
+    // nothing to check must never be a pass. "Everything I required is running"
+    // is vacuously true of nothing, and that is the shape a check quietly
+    // becomes when the thing it checks is refactored out from under it.
+    return { ok: false, reason: "this placement declares no long-running process, so there is nothing the node could confirm" };
+  }
+  const byName = new Map(rows.map((r) => [r.process, r]));
+  for (const p of required) {
+    const got = byName.get(p.name);
+    if (!got) return { ok: false, reason: `the node is not reporting ${p.kind} "${p.name}" as running` };
+    if (got.image !== spec.image) {
+      return { ok: false, reason: `the node is running a different image for "${p.name}" — this deploy has not reached it` };
+    }
+    if (!sameArgv(got.command, p.command)) {
+      return { ok: false, reason: `the node is running a different command for "${p.name}" — this deploy has not reached it` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Wait for the node to report the placed spec as running.
+ *
+ * The counterpart to `fleetProbe` for an app with no route, with the same budget
+ * — 24 attempts, 5 seconds apart, two minutes — and one deliberate difference:
+ * it SLEEPS FIRST. `fleetProbe` asks at t≈0 because an HTTP answer at t=0 is
+ * still an answer from the app. A report at t=0 is not: the node polls every ten
+ * seconds, so nothing it has said yet can be about a placement written moments
+ * ago, and the rows sitting there are the previous deploy's — still fresh,
+ * because every sync refreshes `reported_at`. One interval of delay is what makes
+ * the first answer capable of being about this deploy at all.
+ *
+ * Two minutes is the same budget the web probe has today, and on this path it
+ * has to cover a `release` process as well: a release blocks the app's own
+ * processes from starting at all and `RunToCompletion` allows it thirty minutes.
+ * A worker-only app with a slow migration will therefore roll back. Said here
+ * rather than left to be discovered on the node.
+ *
+ * Errors are swallowed into a verdict, exactly as `fleetProbe` swallows a refused
+ * connection, and for the same reason: an exception thrown out of here escapes
+ * `placeOnFleet` and skips the restore of the previous placement and runtime,
+ * which is the one thing in that function that must never be skipped.
+ */
+export async function awaitRunning(
+  slug: string,
+  node: string,
+  spec: AppSpec,
+  read: (slug: string, node: string) => Promise<ProcessState[]>,
+  opts: { attempts?: number; delayMs?: number; sleepImpl?: (ms: number) => Promise<void> } = {},
+): Promise<Eligibility> {
+  const attempts = opts.attempts ?? 24;
+  const delayMs = opts.delayMs ?? 5000;
+  const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+
+  let last: Eligibility = { ok: false, reason: "the node has not reported this app as running" };
+  for (let i = 0; i < attempts; i++) {
+    await sleep(delayMs);
+    try {
+      last = runVerdict(spec, await read(slug, node));
+    } catch {
+      last = { ok: false, reason: "could not read what the node is running" };
+    }
+    if (last.ok) return last;
+  }
+  return last;
+}
+
 export interface Placement {
   placed: boolean;
   node?: string;
@@ -305,10 +477,33 @@ export async function placeOnFleet(
   // there is nothing for step 2 to verify otherwise.
   await p.setRuntime(slug, "fleet");
 
-  // 2. verify, through the load balancer, addressed the way the proxy will
-  //    address it. Not over localhost: the point is to exercise the path real
-  //    traffic takes, LB included.
-  const verdict = fleetVerdict(await p.probe(slug));
+  // 2. verify — by the only means the app actually offers.
+  //
+  //    An app with a web process is asked, through the load balancer, addressed
+  //    the way the proxy will address it. Not over localhost: the point is to
+  //    exercise the path real traffic takes, LB included.
+  //
+  //    An app WITHOUT one publishes no route, so there is nothing to ask. Its
+  //    proof is the node's own report of what it is confirmed to be running,
+  //    which is the channel phase 1C-1 opened and this half completes. Both
+  //    answers are the same kind of thing — a verdict — so everything below is
+  //    single and untouched.
+  //
+  //    Guarded, and this is the same lesson as `nodeFaultFor` below, learned one
+  //    line earlier. A port that is missing entirely throws a TypeError
+  //    SYNCHRONOUSLY at the call, before there is a promise to attach anything
+  //    to — so an escape here would skip the restore with the broken spec placed
+  //    and `apps.runtime` already flipped to 'fleet'. A verdict we could not
+  //    obtain is not a pass; it is the same failure as any other unverifiable
+  //    deploy, and it takes the same restore.
+  let verdict: Eligibility;
+  try {
+    verdict = specHasWeb(spec)
+      ? fleetVerdict(await p.probe(slug))
+      : await p.runningOnNode(slug, node, spec);
+  } catch {
+    verdict = { ok: false, reason: "could not read what the node is running" };
+  }
   if (!verdict.ok) {
     // Whose failure was this? The probe cannot tell — it sees silence at the
     // load balancer, and silence is what an app crash and a dead node proxy

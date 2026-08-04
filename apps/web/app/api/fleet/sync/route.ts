@@ -1,7 +1,10 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { heartbeatNode, desiredFor, recordNodeFaults, type NodeReport, type ProcessFault } from "@/lib/fleet";
+import {
+  heartbeatNode, desiredFor, recordNodeFaults, recordNodeRunning,
+  type NodeReport, type ProcessFault, type ProcessState,
+} from "@/lib/fleet";
 
 /**
  * The only endpoint a fleet node talks to.
@@ -44,7 +47,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  let body: Partial<NodeReport> & { processes?: unknown };
+  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -75,6 +78,22 @@ export async function POST(req: Request) {
       // channel exists to prevent an outage rather than to cause one.
       await recordNodeFaults(name, body.processes as ProcessFault[]).catch((e) => {
         console.error("fleet sync: recording faults for", name, e instanceof Error ? e.message : String(e));
+      });
+    }
+    // The positive half, on the same absent-vs-empty rule and independent of the
+    // one above: an agent may report either, both or neither, and one arriving
+    // must never be read as a statement about the other. Absent leaves the rows
+    // alone — an agent built before this field existed says nothing about what it
+    // runs, and a worker-only deploy against one correctly finds no rows and
+    // rolls back rather than flipping on faith.
+    if (Array.isArray(body.running)) {
+      // Swallowed for the same reason: what the node needs from this response is
+      // `apps`, and a node that stops receiving desired state because a status
+      // write failed is a worse outcome than a stale row. The verdict this feeds
+      // fails closed, so a missed write costs a rolled-back deploy, never a
+      // wrongly passed one.
+      await recordNodeRunning(name, body.running as ProcessState[]).catch((e) => {
+        console.error("fleet sync: recording running for", name, e instanceof Error ? e.message : String(e));
       });
     }
 
