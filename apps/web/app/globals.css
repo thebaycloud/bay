@@ -8,9 +8,17 @@
    ============================================================ */
 
 :root {
-  --paper: #F5F4EF; --card: #FBFAF6; --ink: #15140F; --ink-2: #54524A; --faint: #8B897E;
-  --line: #DAD8CE; --line-2: #C6C4B8; --grid: #E3E1D7;
-  --fill: #15140F; --fill-fg: #F5F4EF; --live: #158043; --accent: #0B5E38; --accent-fg: #F5F4EF;
+  /* Light: a step darker, and neutral rather than cream.
+     The paper was #F5F4EF and the cards on it #FBFAF6 — six points apart on a
+     warm yellow cast, which is why a control drawn on --paper was invisible
+     against a --card row and every surface read as the same sheet. Grey at a
+     lower value separates them: cards still sit LIGHTER than the page, which is
+     what makes them read as cards, but now you can see which is which.
+     The greens are untouched. They are the only hue in the system and they were
+     mixed against ink, not against the paper. */
+  --paper: #E8E8E5; --card: #F1F1EE; --ink: #1A1A19; --ink-2: #5A5A58; --faint: #848481;
+  --line: #D3D3CF; --line-2: #BEBEB9; --grid: #DBDBD7;
+  --fill: #1A1A19; --fill-fg: #F4F4F2; --live: #158043; --accent: #0B5E38; --accent-fg: #F4F4F2;
   /* Radius, in one place.
      The system is squared on purpose — graph paper, registration brackets, mono
      type — so this softens only what you PRESS and what floats above the page.
@@ -32,8 +40,8 @@
   }
 }
 :root[data-theme="light"] {
-  --paper: #F5F4EF; --card: #FBFAF6; --ink: #15140F; --ink-2: #54524A; --faint: #8B897E;
-  --line: #DAD8CE; --line-2: #C6C4B8; --grid: #E3E1D7; --fill: #15140F; --fill-fg: #F5F4EF; --live: #158043; --accent: #0B5E38; --accent-fg: #F5F4EF;
+  --paper: #E8E8E5; --card: #F1F1EE; --ink: #1A1A19; --ink-2: #5A5A58; --faint: #848481;
+  --line: #D3D3CF; --line-2: #BEBEB9; --grid: #DBDBD7; --fill: #1A1A19; --fill-fg: #F4F4F2; --live: #158043; --accent: #0B5E38; --accent-fg: #F4F4F2;
 }
 :root[data-theme="dark"] {
   --paper: #0C0C0B; --card: #111110; --ink: #EAE8DF; --ink-2: #9C9A8F; --faint: #66645C;
@@ -414,8 +422,8 @@ a.btn { text-decoration: none; }
    overlay cannot swallow a click, and `:focus-within` keeps it tab-reachable. */
 .preview-open { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: rgba(10, 10, 8, .55); opacity: 0; pointer-events: none; transition: opacity .13s var(--ease); }
 .shelf-preview:hover .preview-open, .preview-open:focus-within { opacity: 1; pointer-events: auto; }
-.preview-open .po-btn { border-radius: var(--r); display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 148px; padding: 8px 14px; border: 1px solid rgba(245, 244, 239, .5); background: transparent; color: #F5F4EF; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; text-decoration: none; transition: background .13s var(--ease), border-color .13s var(--ease); }
-.preview-open .po-btn:hover { background: rgba(245, 244, 239, .16); border-color: #F5F4EF; }
+.preview-open .po-btn { border-radius: var(--r); display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 148px; padding: 8px 14px; border: 1px solid rgba(244, 244, 242, .5); background: transparent; color: #F4F4F2; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; text-decoration: none; transition: background .13s var(--ease), border-color .13s var(--ease); }
+.preview-open .po-btn:hover { background: rgba(244, 244, 242, .16); border-color: #F4F4F2; }
 .preview-open .po-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 .preview-open .po-btn.primary:hover { background: var(--accent); opacity: .88; }
 .shelf-main { display: flex; flex-direction: column; min-width: 0; }
@@ -749,6 +757,32 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 /* The shared menu is offset for the cockpit rail, which has no padding of its
    own. Here it sits inside a padded block, so it spans its wrapper instead. */
 .side-acct .foot-menu { left: 0; right: 0; }
+
+/* The Radix/shadcn dropdown motion, written out.
+   Their content is `fade-in-0 zoom-in-95 slide-in-from-bottom-2` for a menu on
+   the top side, mirrored on close, over tailwindcss-animate's 150ms — so:
+   opacity 0→1, scale .95→1, and 8px (slide-*-2 is 0.5rem) of travel from the
+   side the trigger is on. The origin is the bottom edge because the menu hangs
+   above its trigger; scaling from the centre would make it grow away from the
+   thing that opened it.
+   Keyed off data-state rather than a class for the same reason Radix does it:
+   one attribute describes both halves, and the exit cannot be forgotten. */
+@keyframes dd-enter {
+  from { opacity: 0; transform: scale(.95) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes dd-exit {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(.95) translateY(8px); }
+}
+.foot-menu[data-state] { transform-origin: bottom center; animation-duration: .15s; animation-timing-function: cubic-bezier(0, 0, .2, 1); animation-fill-mode: both; }
+.foot-menu[data-state="open"] { animation-name: dd-enter; }
+.foot-menu[data-state="closed"] { animation-name: dd-exit; }
+/* The component still unmounts on a timer, so this only removes the motion —
+   the menu appears and disappears at the same moments either way. */
+@media (prefers-reduced-motion: reduce) {
+  .foot-menu[data-state] { animation: none; }
+}
 .side-acct-plan { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
@@ -871,13 +905,13 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
      and the app has no theme persistence — ThemeToggle sets an attribute that a
      reload discards — so inheriting the OS preference meant a dark page with no
      durable way to change it. */
-  --paper: #F5F4EF; --card: #FBFAF6; --ink: #15140F; --ink-2: #54524A;
-  --line: #DAD8CE; --line-2: #C6C4B8;
+  --paper: #E8E8E5; --card: #F1F1EE; --ink: #1A1A19; --ink-2: #5A5A58;
+  --line: #D3D3CF; --line-2: #BEBEB9;
 
   --an-good: #158043;
   --an-bad: #C33A2C;
   --an-bar: var(--ink);
-  /* Small text. The app's --faint (#8B897E) is 3.36:1 on --card — fine for a
+  /* Small text. The app's --faint (#848481) is 3.3:1 on --card — fine for a
      hint beside something legible, short of the 4.5:1 that label-only text
      needs, and this page is mostly labels. Scoped here rather than changed
      globally: --faint is load-bearing across the product. */

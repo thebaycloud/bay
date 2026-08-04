@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { LayoutGrid, Settings, LogOut, Sparkles, X, Plus, Terminal, Loader2, ChevronUp } from "lucide-react";
@@ -63,6 +63,15 @@ function useFleet(initial?: App[]) {
   };
 }
 
+/**
+ * How long the closing animation runs, in one place.
+ *
+ * The stylesheet and this file have to agree: unmount early and the exit is cut
+ * off mid-flight, unmount late and the menu sits there invisible, eating the
+ * click that was meant for whatever is underneath it.
+ */
+const MENU_EXIT_MS = 150;
+
 /** "6 days left", for a trial that means nothing as a bare date. */
 function trialLeft(endsAt?: string | null): string {
   if (!endsAt) return "";
@@ -78,12 +87,45 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
   const [acct, setAcct] = useState<Acct | null>(null);
   const [showPlans, setShowPlans] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [confirmOut, setConfirmOut] = useState(false);
+  const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fleet = useFleet(initialApps);
 
   useEffect(() => {
     fetch("/api/account").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.email) setAcct(d); }).catch(() => {});
   }, []);
+
+  /**
+   * Closing is a state, not an unmount.
+   *
+   * React removes the node the instant `open` goes false, which is why a menu
+   * built this way has an entrance and no exit — the element is gone before a
+   * closing animation could paint a single frame. It stays mounted through the
+   * exit, marked `data-state="closed"` for the stylesheet, and leaves when the
+   * animation is done.
+   */
+  const closeMenu = useCallback(() => {
+    if (exitTimer.current) return; // already on its way out
+    setClosing(true);
+    exitTimer.current = setTimeout(() => {
+      exitTimer.current = null;
+      setClosing(false);
+      setMenuOpen(false);
+      setConfirmOut(false);
+    }, MENU_EXIT_MS);
+  }, []);
+
+  // A timer that outlives its component would call setState on nothing.
+  useEffect(() => () => { if (exitTimer.current) clearTimeout(exitTimer.current); }, []);
+
+  // Escape closes it, the same as every menu the person has used before.
+  useEffect(() => {
+    if (!menuOpen || closing) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeMenu(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen, closing, closeMenu]);
 
   const initial = (acct?.name || acct?.email || "?").trim().charAt(0).toUpperCase();
   const onTrial = acct?.access === "trial";
@@ -171,9 +213,12 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
           */}
           <div className="foot-wrap">
             <button
-              className={"side-acct-id" + (menuOpen ? " open" : "")}
-              onClick={() => { setMenuOpen((o) => !o); setConfirmOut(false); }}
-              aria-expanded={menuOpen}
+              className={"side-acct-id" + (menuOpen && !closing ? " open" : "")}
+              onClick={() => {
+                if (menuOpen) closeMenu();
+                else { setMenuOpen(true); setConfirmOut(false); }
+              }}
+              aria-expanded={menuOpen && !closing}
             >
               <span className="acct-av">{initial}</span>
               <div className="acct-idtxt">
@@ -186,9 +231,11 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
               <>
                 {/* A full-screen catcher rather than a document listener: one
                     click anywhere closes it, and it cannot leak past unmount. */}
-                <div className="dd-backdrop" onClick={() => setMenuOpen(false)} />
-                <div className="foot-menu">
-                  <Link href="/settings" className="dd-item" onClick={() => setMenuOpen(false)}>
+                <div className="dd-backdrop" onClick={closeMenu} />
+                {/* The attribute the animation hangs off, named as Radix names
+                    it so the two halves are obviously one thing. */}
+                <div className="foot-menu" data-state={closing ? "closed" : "open"}>
+                  <Link href="/settings" className="dd-item" onClick={closeMenu}>
                     <Settings size={14} />Settings
                   </Link>
                   {confirmOut ? (
