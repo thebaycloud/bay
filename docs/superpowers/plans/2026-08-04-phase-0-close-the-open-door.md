@@ -621,14 +621,51 @@ openssl rand -hex 32 | gcloud secrets create fleet-edge-secret \
   --project supersonic-deploy-prod --data-file=-
 ```
 
-The value is never printed. `AUTH_SECRET` and `PG_PASSWORD` already reach the
-proxy this way, so match them:
+The value is never printed.
+
+**Grant access BEFORE binding it to the service.** `--update-secrets` does not
+grant anything, and the proxy's service account holds only
+`roles/cloudsql.client` at the project level — I checked. Access to
+`supersonic-auth-secret` is granted on *that secret's own IAM policy*, not
+project-wide. Skip this and the next command deploys a revision that cannot read
+the secret and fails to start, taking down the edge for every app at once:
+
+```bash
+gcloud secrets add-iam-policy-binding fleet-edge-secret \
+  --project supersonic-deploy-prod \
+  --member serviceAccount:supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com \
+  --role roles/secretmanager.secretAccessor
+```
+
+Verify the binding landed before going further:
+
+```bash
+gcloud secrets get-iam-policy fleet-edge-secret --project supersonic-deploy-prod \
+  --format="value(bindings.role,bindings.members)"
+```
+
+Expected: `roles/secretmanager.secretAccessor` listing the proxy service account.
+This mirrors `supersonic-auth-secret`, which binds both the proxy and
+`supersonic-deployer@`; the deployer binding is not needed here, because the only
+reader is the proxy and Step 6 reads the value as the operator's own identity.
+
+Only now bind it to the service:
 
 ```bash
 gcloud run services update supersonic-proxy --project supersonic-deploy-prod \
   --region us-central1 \
   --update-secrets FLEET_EDGE_SECRET=fleet-edge-secret:latest
 ```
+
+Watch the revision actually reach serving before continuing — a secret the
+container cannot read fails at start, not at deploy:
+
+```bash
+gcloud run services describe supersonic-proxy --project supersonic-deploy-prod \
+  --region us-central1 --format="value(status.conditions[0].type,status.conditions[0].status)"
+```
+
+Expected: `Ready  True`.
 
 The proxy now sends `x-supersonic-edge`; the router still ignores it. Both
 halves are deployed and nothing is enforced. Confirm apps still serve:
