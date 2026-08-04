@@ -70,7 +70,24 @@ test("marked live with nothing to serve is stalled, not 'hang tight'", () => {
 });
 
 test("an app with no web process is not a broken app", () => {
-  // hdhxq: a Telegram bot, one `bot` process, no `web`. It went live correctly,
+  // The shape this exists for: an app with one `bot` process and no `web`.
+  //
+  // CORRECTION, 5 Aug. This case was written from hdhxq and the claim that hdhxq
+  // "went live correctly and has been working the whole time" is FALSE — checked
+  // against the live project rather than inherited. Its Cloud Run service holds
+  // one revision, hdhxq-00004-nwg, which never became ready:
+  // HealthCheckContainerError, latestReady None, no traffic, no url, and no
+  // Cloud Run Job either. Its own logs from 2 Aug say why, and it is not this
+  // defect: "[supersonic-run] FATAL: no run command for this app — the deploy
+  // must supply one". The bot has not run since.
+  //
+  // So hdhxq must NOT be given has_web = false. It is broken, not serviceless,
+  // and telling its owner "nothing is wrong" is the exact failure this file
+  // guards against in the other direction. The mechanism below is still right
+  // for a genuinely worker-only app; hdhxq is simply not one of them, and the
+  // real defect it points at is that a deploy marked an app `live` while its
+  // only revision never started.
+  // It went live correctly,
   // there is no run_url because there is no HTTP service to point at, and the
   // edge called that "This deploy stopped" for two days on a customer's URL.
   // Both readings of apps.status reach it — the row could say 'live' with a
