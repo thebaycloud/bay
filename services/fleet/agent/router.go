@@ -142,6 +142,7 @@ func NewRouter(rootDomain string) *Router {
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("router: upstream %s: %v", r.Host, err)
+			w.Header().Set("X-Supersonic-Router", "upstream-error")
 			w.WriteHeader(http.StatusBadGateway)
 			io.WriteString(w, page(502, "This app is not answering.",
 				"It is placed on this node but did not respond. If it was just deployed, give it a moment."))
@@ -183,8 +184,25 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slug := slugFromHost(r.Host, rt.rootDomain)
+	// `x-supersonic-slug` FIRST, Host second.
+	//
+	// This is what lets an app move to the fleet without touching the edge proxy
+	// at all. `services/proxy` already sends this header — it is how the shared
+	// static server has always known which tenant a request belongs to — and it
+	// has to, because by the time the proxy forwards, Host is the upstream's
+	// host, not `<slug>.supersonic.cv`. Routing on Host alone would mean every
+	// proxied request arriving here as "no app here".
+	//
+	// Trusting a client-supplied header is only safe because nothing reaches this
+	// port except the load balancer, whose firewall rule admits Google's health
+	// check and proxy ranges only. If this port is ever exposed directly, this
+	// header stops being trustworthy and the proxy has to sign it.
+	slug := strings.TrimSpace(r.Header.Get("x-supersonic-slug"))
 	if slug == "" {
+		slug = slugFromHost(r.Host, rt.rootDomain)
+	}
+	if slug == "" {
+		w.Header().Set("X-Supersonic-Router", "no-slug")
 		w.WriteHeader(http.StatusNotFound)
 		io.WriteString(w, page(404, "No app here.",
 			"Apps are served at &lt;name&gt;."+rt.rootDomain+"."))
@@ -193,6 +211,11 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	route, ok := rt.table.get(slug)
 	if !ok {
+		// Mark every response the ROUTER generates, so a caller can tell one from
+		// a response the app generated. Without this a routing miss and an app's
+		// own 404 are the same three digits — and the cutover script was using
+		// exactly that to decide whether an app was live on the fleet.
+		w.Header().Set("X-Supersonic-Router", "miss")
 		// Not on this node. Once placement is fleet-wide this becomes a forward
 		// to the node that holds it; until then, saying so plainly beats a
 		// generic 404 that looks like the app does not exist.
@@ -202,6 +225,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !route.Healthy {
+		w.Header().Set("X-Supersonic-Router", "unhealthy")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		io.WriteString(w, page(503, "This app is not healthy.",
 			"It is running but failing its health check."))
