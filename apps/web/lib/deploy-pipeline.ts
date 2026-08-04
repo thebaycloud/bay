@@ -3071,11 +3071,25 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const image = await buildImage();
       if (!image.ok) return { ok: false, error: image.error };
 
-      const placement = await placeOnFleet(
+      // EVERY secret the app has, read before the stage opens so the stage
+      // measures the placement rather than a Secret Manager round trip. Not
+      // just the ones this deploy stored: a node is handed the whole set at
+      // once, so a secret not passed is a secret the app loses.
+      const secrets = await allAppSecrets(slug, secretRefs);
+
+      // The `fleet` stage — placing the app on a node and checking it answers
+      // from there — written from inside the branch that does the work.
+      //
+      // It went missing when the additive block that used to write it was
+      // deleted, and nothing noticed: `stage-names.ts` still declares it in
+      // LANE_KNOWN_STAGES, and a declared name that nothing writes does not
+      // fail anything. It produces a table with no fleet rows in it, which
+      // reads as "no app was ever placed" rather than as a missing emitter —
+      // the same shape of defect the whole vocabulary file exists to prevent.
+      const placement = await stages.around("fleet", () => placeOnFleet(
         slug,
         buildAppSpec({
-          slug, image: image.image, env: extraEnv,
-          secrets: await allAppSecrets(slug, secretRefs),
+          slug, image: image.image, env: extraEnv, secrets,
           processes, healthPath: primaryHealth.health.path,
         }),
         FLEET_LB,
@@ -3084,7 +3098,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
           log,
         },
-      );
+      ));
       return placement.placed
         ? { ok: true, url: placement.runUrl }
         : { ok: false, error: placement.reason ?? "the app did not answer from the fleet" };
