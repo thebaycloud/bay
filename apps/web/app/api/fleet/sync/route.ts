@@ -31,6 +31,17 @@ import {
  * the metadata server, and verifying it against Google's keys would bind a node
  * to an actual VM instead of to a string that can be copied off any node. Worth
  * doing before the fleet leaves one project.
+ *
+ * One note for whoever builds that, established on 5 Aug and cheap to get wrong:
+ * this route needs NO change to auth.config.ts. An agent designing the upgrade
+ * proposed adding `/api/fleet/` to the middleware's `isPublic` list, and a
+ * safety review stopped it — correctly, and for a reason beyond the one it
+ * gave. The change is not merely risky, it is unnecessary: auth.config.ts
+ * already returns true for any `/api/` request carrying an `Authorization:
+ * Bearer` header, leaving the route to validate the token itself, which is
+ * exactly what `authorised` below does. Widening `isPublic` would have made
+ * every future route under this prefix reachable with no credential at all,
+ * to buy nothing.
  */
 function authorised(req: Request): boolean {
   const expected = process.env.FLEET_TOKEN;
