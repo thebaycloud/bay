@@ -257,3 +257,29 @@ test("place and verify, and only then is there an address to publish", async () 
   assert.equal(r.runUrl, "http://8.232.255.172");
   assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", "place:myapp@fleet-lab-1:" + spec.image, "runtime:myapp=fleet", "probe"]);
 });
+
+test("the probe asks the path the app said to ask", async () => {
+  // A 200 at the root proves a process started. epvmx proved a started process
+  // can refuse every real request, and an app whose database is unreachable
+  // serves its homepage perfectly happily — which is the exact failure this
+  // whole piece of work is about not shipping.
+  const seen: string[] = [];
+  const impl = (async (url: string) => {
+    seen.push(String(url));
+    return { status: 200, headers: { get: () => null } } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  await fleetProbe("8.232.255.172", "myapp", { fetchImpl: impl, attempts: 1, delayMs: 0, path: "/healthz" });
+  assert.deepEqual(seen, ["http://8.232.255.172/healthz"]);
+});
+
+test("no declared path means the root, which is what every app has", async () => {
+  const seen: string[] = [];
+  const impl = (async (url: string) => {
+    seen.push(String(url));
+    return { status: 200, headers: { get: () => null } } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  await fleetProbe("8.232.255.172", "myapp", { fetchImpl: impl, attempts: 1, delayMs: 0 });
+  assert.deepEqual(seen, ["http://8.232.255.172/"]);
+});

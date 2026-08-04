@@ -161,17 +161,20 @@ export function fleetVerdict(r: { code: number; router?: string }): Eligibility 
 export async function fleetProbe(
   loadBalancer: string,
   slug: string,
-  opts: { fetchImpl?: typeof fetch; attempts?: number; delayMs?: number } = {},
+  opts: { fetchImpl?: typeof fetch; attempts?: number; delayMs?: number; path?: string } = {},
 ): Promise<{ code: number; router?: string }> {
   const f = opts.fetchImpl ?? fetch;
   const attempts = opts.attempts ?? 24;
   const delayMs = opts.delayMs ?? 5000;
+  // The app's own health path, so a database-backed app is checked on a request
+  // that needs the database. Its root would answer 200 with no database at all.
+  const path = opts.path?.startsWith("/") ? opts.path : `/${opts.path ?? ""}`;
 
   let last: { code: number; router?: string } = { code: 0 };
   for (let i = 0; i < attempts; i++) {
     if (i) await new Promise((r) => setTimeout(r, delayMs));
     try {
-      const res = await f(`http://${loadBalancer}/`, {
+      const res = await f(`http://${loadBalancer}${path}`, {
         headers: { "x-supersonic-slug": slug },
         // A 302 to /login is a working app, and following it would probe
         // whatever the redirect points at instead.
