@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { validateHeaderValue } from "node:http";
 
 // config.ts reads the environment once, at module evaluation, so the env has to
 // be set before the import — which means a dynamic one, exactly as
@@ -18,10 +19,12 @@ test("the edge secret is trimmed at the one place it is read", () => {
 });
 
 test("a header value built from it carries no newline", () => {
-  // The property that actually matters, asserted directly rather than inferred
-  // from the string comparison above.
+  // The property that actually matters, asserted against the API that
+  // node:http itself uses to validate an outgoing header value — not the
+  // WHATWG Headers API, which per spec normalizes (strips) a leading or
+  // trailing newline rather than throwing, and so would pass this test even
+  // with the .trim() in config.ts removed.
   assert.doesNotThrow(() => {
-    const h = new Headers();
-    h.set("x-supersonic-edge", config.edgeSecret);
+    validateHeaderValue("x-supersonic-edge", config.edgeSecret);
   });
 });
