@@ -133,6 +133,13 @@ type Agent struct {
 	startFail *failTracker
 	cronFail  *failTracker
 
+	// blocked is the set of apps whose release means nothing else of theirs may
+	// run: its release is in flight, backing off, or has given up. Computed by
+	// reconcileOnce and PUBLISHED here because the cron tick runs on its own
+	// clock, off that goroutine, and needs the same answer rather than a second
+	// implementation of it.
+	blocked map[string]bool
+
 	// quiet keeps the states that persist — a release or a start that has given
 	// up, a cron blocked by its own release — legible without writing them to
 	// the node's append-only log on every ten-second pass.
@@ -147,6 +154,25 @@ type Agent struct {
 	// this tells the control plane that the something was ours, which is what
 	// keeps a repair agent out of a customer's repository over our own outage.
 	faults map[string]ProcessFault
+}
+
+// cronBlocked says whether this app's release means its scheduled work must
+// not run right now.
+//
+// Two sources, and both are needed. `relRunning` is live and exact — a release
+// executing on another goroutine this instant. `blocked` is reconcileOnce's
+// answer, at most one pass (ten seconds) old, and it additionally covers a
+// release that is backing off or has given up: in both of those the app's own
+// processes are NOT running, and a scheduled job is not more entitled to the
+// database than the app is.
+//
+// Being ten seconds stale can only ever hold a cron back, never let one
+// through: a release that starts does so inside reconcileOnce, which sets both
+// in the same pass.
+func (a *Agent) cronBlocked(slug string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.relRunning[slug] || a.blocked[slug]
 }
 
 // mayStart says whether a start may be attempted for this process right now.
@@ -289,6 +315,35 @@ func (a *Agent) fireDueCrons(now time.Time) {
 			continue
 		}
 		id := sandboxID(j.app.Slug, j.proc)
+
+		// The same gate the web and worker processes have, which this path did
+		// not: a scheduled job must not run while its app's release is in
+		// flight, or has not succeeded for the image the node is holding.
+		//
+		// This is the rollback defect 1A fixed, through a different door. A
+		// nightly export firing into a database whose migration is halfway
+		// applied is worse than a nightly export that does not run — and it is
+		// the same customer data either way. `relRunning` is the live, precise
+		// half; `blocked` also covers a release that is backing off or has
+		// given up, in which case the app's own processes are not running and
+		// its scheduled work has no business running either.
+		//
+		// Checked BEFORE shouldFire so the minute is not consumed: shouldFire
+		// records "this (job, minute) has fired". A cron for 03:00 that was
+		// blocked at 03:00 must not run at 03:07 instead — by then it is not
+		// the job that was scheduled.
+		if a.cronBlocked(j.app.Slug) {
+			// Throttled, because a release that has given up would otherwise
+			// write this line every minute forever. Silence is not an option
+			// either: a nightly job that quietly stopped running is the kind of
+			// failure nobody notices until the month-end report is empty.
+			if a.quiet.allow("cron-blocked:"+id, now, giveUpEvery) {
+				log.Printf("%s: cron %s NOT fired — this app's release is in flight or has not succeeded; "+
+					"running it now could write into a half-applied migration", j.app.Slug, j.proc.Name)
+			}
+			continue
+		}
+
 		if !runner.shouldFire(id, local) {
 			continue
 		}
@@ -375,6 +430,7 @@ func main() {
 		startFail:  newFailTracker(),
 		cronFail:   newFailTracker(),
 		quiet:      newLogThrottle(),
+		blocked:    map[string]bool{},
 		faults:     map[string]ProcessFault{}}
 
 	// Wired only when there is a control plane to report to. Leaving it nil on
@@ -746,6 +802,14 @@ func (a *Agent) reconcileOnce() error {
 			a.mu.Unlock()
 		}(slug, key, app, rel, idx)
 	}
+
+	// Publish, so the cron tick can ask the same question. Taken here rather
+	// than inside the loop above: `blocked` is only complete once every release
+	// has been considered, and a half-built set would let a cron through for an
+	// app whose release had not been reached yet.
+	a.mu.Lock()
+	a.blocked = blocked
+	a.mu.Unlock()
 
 	start := make([]work, 0, len(todo))
 	for _, t := range todo {
