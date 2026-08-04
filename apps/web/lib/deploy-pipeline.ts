@@ -18,7 +18,7 @@ import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppS
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { chooseNode, placeApp, placementFor, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
-import { buildAppSpec } from "@/lib/fleet-spec";
+import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
 import { chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
 import { rollback } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
@@ -3121,6 +3121,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * that is the path real traffic takes and the one a database-backed app
      * fails on when its database is unreachable.
      */
+    /**
+     * The spec this deploy actually placed, kept for `assertReached`.
+     *
+     * Null on the Cloud Run branch and on a fleet deploy that never got as far
+     * as placing. It is read only on success, so a failed verify — which
+     * restores the PREVIOUS placement — never reports this one as the outcome.
+     */
+    let placedSpec: AppSpec | null = null;
+
     const runFleetDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
       if (!FLEET_LB) return { ok: false, error: "no fleet load balancer is configured" };
       const image = await buildImage();
@@ -3141,17 +3150,56 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // fail anything. It produces a table with no fleet rows in it, which
       // reads as "no app was ever placed" rather than as a missing emitter —
       // the same shape of defect the whole vocabulary file exists to prevent.
+      // The size the author asked for, carried to the node.
+      //
+      // `buildAppSpec` used to default every app to 2 GiB / 1024 shares no
+      // matter what `scale:` said, and the check that should have caught it was
+      // the one throwing a false alarm two hundred lines below. An app declaring
+      // `memory: 4Gi` declares it because it OOMs at 2Gi — placing it at 2Gi
+      // anyway is an OOM kill on a deploy that reported success, which is the
+      // same shape of defect as the tag placement above.
+      //
+      // `scale` is `withScale(...)`, so these are never undefined and the `??`
+      // defaults inside `buildAppSpec` are not what keeps an undeclared app at
+      // the 2 GiB floor — DEFAULT_SCALE is. That floor exists because Cloud
+      // Run's 512Mi OOM-killed a real Node app at 564Mi before it bound $PORT.
+      const placing = buildAppSpec({
+        slug, image: image.image, env: extraEnv, secrets,
+        processes, healthPath: primaryHealth.health.path,
+        // Belt and suspenders with the append above: `processes` already
+        // carries a synthesised release entry when `releaseCmd` was set, but
+        // `buildAppSpec` only adds a second when a release is not already
+        // present, so passing this too can never double it.
+        releaseCommand: releaseCmd || null,
+        memoryBytes: memoryBytes(scale.memory),
+        cpuShares: cpuShares(scale.cpu),
+      });
+      placedSpec = placing;
+
+      // The half of `scale` a node has no primitive for, said out loud.
+      //
+      // Only the fields the author actually wrote, so an app that declared
+      // nothing hears nothing. Three of the four are honoured by construction
+      // and one is genuinely not, and the difference is exactly what an owner
+      // needs to know — a single "some fields are ignored" would be as useless
+      // as silence.
+      const declaredScale = primaryConfigService?.scale;
+      if (declaredScale) {
+        const byConstruction = [
+          declaredScale.maxInstances !== undefined && "maxInstances (the node runs one instance, which is under any ceiling)",
+          declaredScale.timeout !== undefined && "timeout (nothing on the node cuts a request short)",
+          declaredScale.cpuBoost !== undefined && "cpuBoost (a resident process has its full CPU share from the first instant)",
+        ].filter(Boolean) as string[];
+        if (byConstruction.length) log(`scale on the fleet: ${byConstruction.join("; ")}.`);
+        if (declaredScale.concurrency !== undefined) {
+          log(`! scale.concurrency=${declaredScale.concurrency} is NOT enforced on the fleet — the node does not cap in-flight requests the way Cloud Run does. `
+            + `Your app has to limit its own concurrency.`);
+        }
+      }
+
       const placement = await stages.around("fleet", () => placeOnFleet(
         slug,
-        buildAppSpec({
-          slug, image: image.image, env: extraEnv, secrets,
-          processes, healthPath: primaryHealth.health.path,
-          // Belt and suspenders with the append above: `processes` already
-          // carries a synthesised release entry when `releaseCmd` was set, but
-          // `buildAppSpec` only adds a second when a release is not already
-          // present, so passing this too can never double it.
-          releaseCommand: releaseCmd || null,
-        }),
+        placing,
         FLEET_LB,
         {
           chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
@@ -3222,6 +3270,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         releaseCommand: releaseCmd,
         argv: lastArgv,
         hasDatabase: Boolean(databaseUrl),
+        // What the fleet branch produced instead of an argv. Null on the Cloud
+        // Run branch, where `lastArgv` is the evidence — see DeployOutcome.
+        placed: placedSpec,
       });
     }
     if (!result.ok) {

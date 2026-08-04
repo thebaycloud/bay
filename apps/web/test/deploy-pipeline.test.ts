@@ -625,6 +625,53 @@ test("a repair of a Cloud Run deploy still redeploys to Cloud Run", NEEDS_MOCKS,
   assert.ok(!rec.repairs[0].placedAgain, "nothing may be placed on a node by a Cloud Run repair");
 });
 
+/** A one-service config, so `appConfig` exists and `declared` is the author's. */
+const configWith = (service: Record<string, unknown>) => JSON.stringify({
+  version: 1,
+  services: [{ name: "web", dir: ".", path: "/", ...service }],
+});
+
+test("an app that declares scale deploys to the fleet and gets the size it asked for", NEEDS_MOCKS, async () => {
+  // Two defects, one line apart.
+  //
+  // `assertReached`'s `scale` check read `o.argv` — which is `lastArgv`, assigned
+  // only inside `attempt()`, which `runFleetDeploy` never calls. So argv was `[]`,
+  // the check was false, and it THREW after the placement had already succeeded:
+  // the app was live on the node, the outer catch wrote `status: failed`,
+  // `markAppLive` never ran so `run_url` still pointed at the old address, and
+  // the owner was told "That is a platform bug". Its neighbours `env`, `secrets`
+  // and `uses` all short-circuit on `!hasRevision`; this one did not.
+  //
+  // And the check was right to be unhappy, for a reason it could not express:
+  // `buildAppSpec` ignored the declared scale and placed 2 GiB / 1024 shares no
+  // matter what the author wrote. Guarding the check without carrying the value
+  // would have made the platform agree with itself and still not do what it was
+  // told — an app that declares 4Gi because it OOMs at 2Gi would have been
+  // OOM-killed on a deploy reporting success.
+  const rec = await onFleet({
+    "Dockerfile": "FROM alpine\n",
+    "index.js": "",
+    "supersonic.json": configWith({ scale: { memory: "4Gi", cpu: 2 } }),
+  });
+
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.equal(errors.length, 0, `a successful fleet deploy was reported as failed: ${JSON.stringify(errors).slice(0, 500)}`);
+  assert.equal(rec.placements.length, 1, `expected one placement, got ${rec.placements.length}`);
+  const { spec } = rec.placements[0];
+  assert.equal(spec.memoryBytes, 4 * 1024 * 1024 * 1024, "the node must be told the memory the author declared");
+  assert.equal(spec.cpuShares, 2048, "the node must be told the CPU the author declared");
+});
+
+test("an app that declares no scale is placed at the platform's floor", NEEDS_MOCKS, async () => {
+  // The floor exists because Cloud Run's 512Mi OOM-killed a real Node app at
+  // 564Mi before it bound $PORT (see DEFAULT_SCALE). Carrying a declared scale
+  // must not turn "undeclared" into "unset" and hand a node a zero.
+  const rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+  assert.equal(rec.placements.length, 1);
+  assert.equal(rec.placements[0].spec.memoryBytes, 2 * 1024 * 1024 * 1024);
+  assert.equal(rec.placements[0].spec.cpuShares, 1024);
+});
+
 test("a sibling's Dockerfile is written for the context it is built in", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
   // The bug that broke EVERY sibling, and it is invisible from argv alone: the
   // context was right and the file inside it was written for a different one.

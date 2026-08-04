@@ -99,6 +99,22 @@ export function memoryBytes(memory: string | undefined): number | undefined {
 }
 
 /**
+ * A CPU count → the cgroup's share weight.
+ *
+ * One CPU is 1024 shares — what migrate.sh hardcoded and what DEFAULT_CPU_SHARES
+ * still means. Fractional counts are valid in the schema and on Cloud Run, so
+ * 0.5 is 512 rather than a rejection.
+ *
+ * Zero, negative and non-finite return undefined for the same reason
+ * `memoryBytes` does: the agent reads a zero as "use the app-wide limit", and a
+ * wrong number here is a throttled app at 3am that reads as the app's fault.
+ */
+export function cpuShares(cpu: number | undefined): number | undefined {
+  if (cpu === undefined || !Number.isFinite(cpu) || cpu <= 0) return undefined;
+  return Math.round(cpu * DEFAULT_CPU_SHARES);
+}
+
+/**
  * A start command, as the thing that will actually read it.
  *
  * The agent execs argv directly. The Cloud Run path wraps every command in
@@ -128,13 +144,15 @@ function agentProcess(p: ResolvedProcess): AgentProcess {
     // and a bot answering HTTP it never serves is a 502 with the app's name on it.
     const mem = memoryBytes(p.memory);
     if (mem) out.memoryBytes = mem;
-    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    const shares = cpuShares(p.cpu);
+    if (shares) out.cpuShares = shares;
     if (p.shutdownGrace) out.shutdownGrace = p.shutdownGrace;
   }
   if (p.kind === "cron" || p.kind === "release") {
     const mem = memoryBytes(p.memory);
     if (mem) out.memoryBytes = mem;
-    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    const shares = cpuShares(p.cpu);
+    if (shares) out.cpuShares = shares;
     if (p.schedule) out.schedule = p.schedule;
     if (p.timezone) out.timezone = p.timezone;
   }
