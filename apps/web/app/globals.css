@@ -382,11 +382,58 @@ a.btn { text-decoration: none; }
 .btn-new:hover { background: var(--card); border-color: var(--ink-2); }
 .home-hero .note { margin-top: 8px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
 
+/* A shelf: one full-width band per app. Three columns of cards was designed
+   against 14 apps on one screen, and those were the operator's test apps — a
+   normal user has two or three, so the scarce thing was never space on the page.
+   It was room for each app to say something. */
+.shelf { border-bottom: 1px solid var(--line); }
+.shelf-row { display: grid; grid-template-columns: 260px 1fr; gap: 22px; padding: 20px 28px; border-bottom: 1px solid var(--line); background: var(--card); transition: background .13s var(--ease); }
+.shelf-row:hover { background: var(--paper); }
+.shelf-row:last-child { border-bottom: none; }
+.shelf-preview { display: block; text-decoration: none; border: 1px solid var(--line); overflow: hidden; }
+.shelf-main { display: flex; flex-direction: column; min-width: 0; }
+.shelf-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.shelf-head .nm { font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); text-decoration: none; }
+.shelf-head .nm:hover { text-decoration: underline; text-underline-offset: 3px; }
+.shelf-host { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+/* The response body, when the app is the kind a screenshot cannot describe.
+   One line, clipped — it is evidence, not a payload viewer. */
+.shelf-body { margin: 10px 0 0; padding: 8px 10px; background: var(--paper); border: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--ink-2); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.shelf-actions { margin-top: auto; padding-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.shelf-actions .act { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); text-decoration: none; border: 1px solid var(--line); padding: 5px 10px; transition: color .13s var(--ease), border-color .13s var(--ease); }
+.shelf-actions .act:hover { color: var(--ink); border-color: var(--ink-2); }
+.shelf-empty { padding: 56px 28px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.shelf-empty p { margin: 0; font-family: var(--mono); font-size: 13px; color: var(--ink-2); }
+.shelf-empty .btn-new { margin-left: 0; }
+/* Stack below the width where a 260px preview leaves the facts nowhere to go. */
+@media (max-width: 720px) {
+  .shelf-row { grid-template-columns: 1fr; gap: 14px; padding: 18px; }
+}
+
 .apps-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
 .app-card { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--card); display: flex; flex-direction: column; text-decoration: none; color: var(--ink); transition: background .13s var(--ease); }
 .app-card:hover { background: var(--paper); }
 .app-card:nth-child(3n) { border-right: none; }
-.app-card .thumb { position: relative; height: 132px; border-bottom: 1px solid var(--line); overflow: hidden; background: var(--paper); }
+.app-card .thumb, .shelf-preview .thumb { position: relative; height: 132px; border-bottom: 1px solid var(--line); overflow: hidden; background: var(--paper); }
+/* Taller on the shelf, because there is a band to fill and a preview is the
+   reason the band is worth having. */
+.shelf-preview .thumb { height: 158px; border-bottom: none; }
+.shelf-preview .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; border: 0; }
+.shelf-preview .thumb .thumb-mono { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--mono); font-size: 44px; font-weight: 500; color: var(--line-2); }
+.shelf-preview .thumb .thumb-build { position: absolute; inset: 0; display: grid; place-items: center; font-size: 30px; color: var(--ink-2); animation: spin 1.1s linear infinite; }
+.shelf-row.building .shelf-host { color: var(--ink-2); animation: pulse 1.6s var(--ease) infinite; }
+.shelf-row .st { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); }
+.shelf-row .st .d { width: 6px; height: 6px; background: var(--live); }
+.shelf-row .st.ok .d { background: var(--live); }
+.shelf-row .st.warn { color: var(--ink); }
+.shelf-row .st.warn .d { background: none; border: 1.5px solid var(--ink); border-radius: 50%; }
+.shelf-row .st.down, .shelf-row .st.error { color: var(--ink); }
+.shelf-row .st.down .d, .shelf-row .st.error .d { background: none; border: 1.5px solid var(--ink); transform: rotate(45deg); }
+.shelf-row .st.unknown { color: var(--faint); }
+.shelf-row .st.unknown .d { background: none; border: 1px dashed var(--line-2); }
+.shelf-row .st.building { color: var(--accent); }
+.shelf-row .st.building .d { background: var(--accent); animation: pulse 1.4s var(--ease) infinite; }
+.shelf-row .probe-label { margin-left: 6px; color: var(--ink-2); letter-spacing: .04em; text-transform: none; }
 /* Was an iframe scaled to a third — a whole application rendered to fill 132px of
    card. Now a screenshot, sized to cover the same box. */
 .app-card .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; border: 0; }

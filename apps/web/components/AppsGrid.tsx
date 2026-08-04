@@ -138,21 +138,40 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
         </div>
       </section>
 
+      {/*
+        A shelf, not a grid, and the brief inverted to get here. The first pass
+        optimised for density because 14 apps were on the screen it was designed
+        against — but those were the operator's own test apps. A normal user has
+        two or three, so the problem was never fitting more in. It was that each
+        one had a card's worth of room to say almost nothing.
+      */}
       <section className="reveal" style={{ animationDelay: ".07s" }}>
-        <div className="apps-grid">
+        {apps.length === 0 ? (
+          // The empty state used to be implicit: the "New app" card was the only
+          // thing in the grid, so a new account saw it by accident. Moving that
+          // button to the header took the accident away, and a first-time user
+          // would have been shown a blank page.
+          <div className="shelf-empty">
+            <p>Nothing deployed yet.</p>
+            <Link href="/new" className="btn-new">Deploy your first app</Link>
+          </div>
+        ) : (
+        <div className="shelf">
           {apps.map((a) => a.status === "building" ? (
-            <Link key={a.slug} href={`/apps/${a.slug}?tab=deployments`} className="app-card building">
-              <div className="thumb"><span className="thumb-build">◐</span></div>
-              <div className="card-body">
-                <div className="r1">
-                  <span className="nm">{a.name || a.slug}</span>
+            <article key={a.slug} className="shelf-row building">
+              <Link href={`/apps/${a.slug}?tab=deployments`} className="shelf-preview" aria-label={`${a.name || a.slug} — deployments`}>
+                <div className="thumb"><span className="thumb-build">◐</span></div>
+              </Link>
+              <div className="shelf-main">
+                <div className="shelf-head">
+                  <Link href={`/apps/${a.slug}?tab=deployments`} className="nm">{a.name || a.slug}</Link>
                   <span className="st building"><span className="d" />Building</span>
                 </div>
-                <div className="url">{a.stage}</div>
+                <div className="shelf-host">{a.stage}</div>
               </div>
-            </Link>
+            </article>
           ) : (
-            <Link key={a.slug} href={`/apps/${a.slug}`} className="app-card">
+            <article key={a.slug} className="shelf-row">
               {/*
                 This used to be <iframe src={`https://${slug}.supersonic.cv`} /> — a
                 live load of the app itself, to draw a 132px-tall thumbnail. Opening
@@ -167,23 +186,43 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                 A screenshot taken at deploy time replaces it — same origin, one
                 image, no app code executed in the dashboard.
               */}
-              <Thumb slug={a.slug} src={a.thumbnail} />
-              <div className="card-body">
-                <div className="r1">
-                  <span className="nm">{a.name || a.slug}</span>
+              <Link href={`/apps/${a.slug}`} className="shelf-preview" aria-label={`Open ${a.name || a.slug}`}>
+                <Thumb slug={a.slug} src={a.thumbnail} />
+              </Link>
+              <div className="shelf-main">
+                <div className="shelf-head">
+                  <Link href={`/apps/${a.slug}`} className="nm">{a.name || a.slug}</Link>
                   <Status ready={a.ready} probe={probes[a.slug]} />
                 </div>
+                <div className="shelf-host">{a.slug}.supersonic.cv</div>
                 {/*
                   What it answered, when that says more than a picture of it
                   does. A screenshot works for a site and not for an API: a
                   thumbnail of {"ok":true} is a picture of the word ok. HTML
-                  bodies are deliberately blank here — they have the screenshot.
+                  bodies are deliberately blank here — they have the screenshot,
+                  and the row keeps its height either way.
                 */}
-                <div className="url">{probes[a.slug]?.preview || `${a.slug}.supersonic.cv`}</div>
+                {probes[a.slug]?.preview
+                  ? <pre className="shelf-body">{probes[a.slug]!.preview}</pre>
+                  : null}
+                {/*
+                  Actions, which a card had no room for at all — the whole card
+                  was one link to one place, so every other destination cost a
+                  page load to reach. Real anchors rather than a nested <Link>
+                  inside a linked card, which is invalid markup and unreachable
+                  by keyboard.
+                */}
+                <div className="shelf-actions">
+                  <a className="act" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">Open ↗</a>
+                  <Link className="act" href={`/apps/${a.slug}?tab=deployments`}>Deployments</Link>
+                  <Link className="act" href={`/apps/${a.slug}?tab=issues`}>Issues</Link>
+                  <Link className="act" href={`/apps/${a.slug}?tab=settings`}>Settings</Link>
+                </div>
               </div>
-            </Link>
+            </article>
           ))}
         </div>
+        )}
       </section>
     </>
   );
