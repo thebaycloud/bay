@@ -175,3 +175,51 @@ func TestMergeFailuresUnionsDistinctKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestTheCapIsReachedLongBeforeTheDelayCeilingIs(t *testing.T) {
+	// maxDelay reads like the ceiling on retry spacing. It is not one, and this
+	// pins the arithmetic that makes it unreachable so that raising
+	// maxAttempts — which WOULD make it reachable — fails here first and gets
+	// read rather than discovered on a node.
+	tr := newFailTracker()
+	t0 := time.Unix(1000, 0)
+
+	var last time.Duration
+	for n := 1; n < maxAttempts; n++ {
+		tr.fail("k", t0)
+		got := tr.m["k"].next.Sub(t0)
+		want := baseDelay << (n - 1)
+		if got != want {
+			t.Fatalf("after %d failures the delay is %s, want %s", n, got, want)
+		}
+		last = got
+	}
+	if last >= maxDelay {
+		t.Fatalf("the last reachable delay is %s, which reaches maxDelay (%s) — the comment above maxDelay is now wrong", last, maxDelay)
+	}
+	if last != 2*time.Minute {
+		t.Fatalf("the last reachable delay is %s, want 2m — the measured curve on the node was 21/31/61/123s", last)
+	}
+
+	// And the attempt that would have had a longer delay never gets one,
+	// because it is refused outright.
+	tr.fail("k", t0)
+	if got := tr.decide("k", t0.Add(24*time.Hour)); got != actGiveUp {
+		t.Fatalf("a day later got %v, want %v", got, actGiveUp)
+	}
+}
+
+func TestAnUnboundedCounterIsClampedRatherThanOverflowing(t *testing.T) {
+	// cronFail is never asked to decide — a nightly job should keep trying — so
+	// its count rises for as long as the job keeps failing. 15s << 60 is not a
+	// delay anybody meant, and Go defines an over-wide shift as zero, so both
+	// the huge and the zero case have to land somewhere sane.
+	tr := newFailTracker()
+	t0 := time.Unix(1000, 0)
+	for i := 0; i < 400; i++ {
+		tr.fail("nightly", t0)
+	}
+	if d := tr.m["nightly"].next.Sub(t0); d != maxDelay {
+		t.Fatalf("after 400 failures the delay is %s, want it clamped to %s", d, maxDelay)
+	}
+}
