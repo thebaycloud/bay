@@ -65,28 +65,7 @@ export function fleetEligibility(a: {
   image: string;
   staticServe: boolean;
   serviceless: boolean;
-  cloudsql: string | null | undefined;
 }): Eligibility {
-  if (a.cloudsql) {
-    // The sharpest edge here, and it is not about the spec.
-    //
-    // `provisionPostgres` writes DATABASE_URL as postgresql://…@127.0.0.1:5432/…
-    // and that resolves ONLY because a Cloud SQL Auth Proxy sidecar runs beside
-    // the app in the same Cloud Run service — see dbContainerArgs, which also
-    // records what Cloud Run charged to learn it. A node runs one sandbox per
-    // process and has no sidecar, so the identical url points at a port with
-    // nothing behind it.
-    //
-    // Carrying the secret was necessary and is not sufficient. And the failure
-    // is the shape that gets past every check we have: the app starts, serves
-    // its homepage, answers the probe 200, and fails every request that touches
-    // data. Refusing here is the difference between "did not move" and "moved
-    // and is quietly broken".
-    //
-    // The fix is a per-app proxy process on the node, which is a piece of work
-    // and not a flag.
-    return { ok: false, reason: "its database is reached through a sidecar proxy the fleet has no equivalent for" };
-  }
   if (a.serviceless) {
     // Not a fleet limitation — the fleet runs a bot better than Cloud Run does,
     // which is half of why it exists. It is a limitation of the CHECK: the only
@@ -110,6 +89,25 @@ export function fleetEligibility(a: {
   }
   if (!a.image) return { ok: false, reason: "this deploy produced no image to place" };
   return { ok: true };
+}
+
+/**
+ * Where this app is deployed. Decided BEFORE anything is deployed.
+ *
+ * The same judgement `fleetEligibility` makes, with an answer that names the
+ * other branch — because the pipeline no longer deploys to Cloud Run and then
+ * also places. A database-backed app under that shape failed its first step, on
+ * the runtime it was leaving, for a reason belonging to the runtime it was
+ * going to.
+ */
+export function chooseRuntime(a: {
+  lane: Lane;
+  image: string;
+  staticServe: boolean;
+  serviceless: boolean;
+}): { runtime: Runtime; reason?: string } {
+  const can = fleetEligibility(a);
+  return can.ok ? { runtime: "fleet" } : { runtime: "cloudrun", reason: can.reason };
 }
 
 /**

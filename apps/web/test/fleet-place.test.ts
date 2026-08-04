@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, type PlacementPorts } from "../lib/fleet-place";
+import { fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, chooseRuntime, type PlacementPorts } from "../lib/fleet-place";
 import type { AppSpec } from "../lib/fleet-spec";
+import type { Lane } from "../lib/lanes";
 
 const spec: AppSpec = {
   slug: "myapp",
@@ -25,22 +26,34 @@ function ports(over: Partial<PlacementPorts> = {}) {
   return { calls, p: { ...base, ...over } };
 }
 
-const eligible = { lane: "container" as const, image: "img", staticServe: false, serviceless: false, cloudsql: null };
+// `lane` is widened to `Lane` (not narrowed to the literal "container") so the
+// override cases below — which swap in "runner" — typecheck against
+// `Partial<typeof eligible>`.
+const eligible = { lane: "container" as Lane, image: "img", staticServe: false, serviceless: false };
 
-test("an app with a database is not placed, because the fleet has nowhere to put the proxy", () => {
-  // The finding that stopped the first canary. provisionPostgres writes
-  // DATABASE_URL as postgresql://…@127.0.0.1:5432/…, and that only resolves
-  // because a Cloud SQL Auth Proxy sidecar runs beside the app in the same Cloud
-  // Run service (dbContainerArgs). A node runs one sandbox per process and has
-  // no sidecar, so the same url points at a port nothing is listening on.
-  //
-  // Carrying the secret is necessary and NOT sufficient, and the failure is the
-  // dangerous shape: the app starts, serves its homepage, answers the probe with
-  // 200, and fails every request that touches data. A placement that passes its
-  // own check and breaks the app is worse than one that never happens.
-  const r = fleetEligibility({ ...eligible, cloudsql: "supersonic-deploy-prod:us-central1:supersonic-shared-pg" });
-  assert.equal(r.ok, false);
-  assert.match(r.reason!, /database|proxy/i);
+test("an app with a database goes to the fleet now that a node has a proxy", () => {
+  // The refusal added on 2026-08-04 was a guard for exactly one gap: the fleet
+  // had no equivalent of Cloud Run's sidecar. A node runs one now, on the
+  // bridge gateway, so the guard is what is wrong.
+  assert.equal(chooseRuntime(eligible).runtime, "fleet");
+});
+
+test("what the fleet cannot serve is named, and goes to Cloud Run", () => {
+  const cases: Array<[Partial<typeof eligible>, RegExp]> = [
+    [{ staticServe: true }, /static/i],
+    [{ lane: "runner" }, /runner/i],
+    [{ image: "" }, /image/i],
+    [{ serviceless: true }, /route|worker-only/i],
+  ];
+  for (const [over, why] of cases) {
+    const r = chooseRuntime({ ...eligible, ...over });
+    assert.equal(r.runtime, "cloudrun", `${JSON.stringify(over)} should stay on Cloud Run`);
+    assert.match(r.reason!, why);
+  }
+});
+
+test("a placeable app is given no reason, because there is nothing to explain", () => {
+  assert.equal(chooseRuntime(eligible).reason, undefined);
 });
 
 test("a worker-only app is not placed yet, and the reason is the check, not the runtime", () => {
