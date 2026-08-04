@@ -28,3 +28,22 @@ export const CLOUD_RUN_DB: DbAddress = { host: "127.0.0.1", port: "5432" };
  * namespace sees that traffic.
  */
 export const FLEET_DB: DbAddress = { host: "10.200.0.1", port: "5432" };
+
+/**
+ * The connection URL, which is the one string every database-backed app depends
+ * on and which had no test over it: it was built inline inside
+ * `provisionPostgres`, a function that shells out to gcloud.
+ *
+ * The user and password are percent-encoded. A generated password containing
+ * `@` moves the host, and the app then fails to resolve a hostname that is
+ * really the tail of a password — a confusing error, and a password in a log.
+ */
+export function databaseUrlFor(
+  role: { user: string; password: string },
+  dbName: string,
+  at: DbAddress,
+): string {
+  const user = encodeURIComponent(role.user);
+  const password = encodeURIComponent(role.password);
+  return `postgresql://${user}:${password}@${at.host}:${at.port}/${dbName}`;
+}

@@ -39,6 +39,7 @@ import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
+import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, DB_HOST, DB_PORT, withScale, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
@@ -597,7 +598,7 @@ async function databaseExists(slug: string): Promise<boolean> {
 }
 
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
-function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
+function provisionPostgres(slug: string, log: (l: string) => void, at: DbAddress = CLOUD_RUN_DB): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
   try { cfg = pgConfig(); } catch (e) { return Promise.reject(e); }
   // Same helper the delete path uses, so an app's database can always be found
@@ -620,7 +621,7 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
       // cannot express a socket at all: `PostgresDsn.build(host="/cloudsql/…")`
       // is REJECTED outright (verified), so a socket left every such app unable
       // to reach a database the platform had already created for it.
-      const databaseUrl = `postgresql://${role.user}:${role.password}@${DB_HOST}:${DB_PORT}/${dbName}`;
+      const databaseUrl = databaseUrlFor(role, dbName, at);
       return { databaseUrl, connectionName: cfg.connectionName, user: role.user, password: role.password, dbName, isolated: role.isolated };
     });
 }

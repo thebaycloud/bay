@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CLOUD_RUN_DB, FLEET_DB } from "../lib/db-address";
+import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor } from "../lib/db-address";
 import { databaseEnv } from "../lib/lanes";
 
 const db = { databaseUrl: "postgresql://u:p@H:P/d", user: "u", password: "p", dbName: "d" };
@@ -27,4 +27,22 @@ test("the two addresses are the only two, and they differ only in host", () => {
   // different port on each runtime is a second thing to get wrong for no gain.
   assert.equal(CLOUD_RUN_DB.port, FLEET_DB.port);
   assert.notEqual(CLOUD_RUN_DB.host, FLEET_DB.host);
+});
+
+test("the connection URL names the runtime's address", () => {
+  const role = { user: "app_x", password: "s3cr3t" };
+  assert.equal(databaseUrlFor(role, "x", FLEET_DB), "postgresql://app_x:s3cr3t@10.200.0.1:5432/x");
+  assert.equal(databaseUrlFor(role, "x", CLOUD_RUN_DB), "postgresql://app_x:s3cr3t@127.0.0.1:5432/x");
+});
+
+test("a password that needs escaping does not silently produce a broken URL", () => {
+  // Generated passwords have gone out with characters that are syntax in a URL.
+  // A `@` in a password unescaped moves the host, and the app fails to resolve a
+  // hostname that is really the tail of a password — which is both a confusing
+  // error and a password in a log line.
+  const url = databaseUrlFor({ user: "app_x", password: "p@ss/w:rd" }, "x", FLEET_DB);
+  const parsed = new URL(url);
+
+  assert.equal(parsed.hostname, "10.200.0.1");
+  assert.equal(decodeURIComponent(parsed.password), "p@ss/w:rd");
 });
