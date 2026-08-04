@@ -148,7 +148,7 @@ export async function planDeploy(opts: {
  * an agent that fixed something are different agents, and only one is detectable
  * from here.
  */
-export async function repairDeploy(opts: {
+export async function agentRepair(opts: {
   dir: string;
   slug: string;
   initialError: string;

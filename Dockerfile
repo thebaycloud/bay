@@ -26,11 +26,21 @@ ENV PATH="/usr/local/google-cloud-sdk/bin:${PATH}"
 # `beta` is needed for `run domain-mappings` (pretty *.supersonic.cv domains) and `builds log`.
 RUN gcloud components install beta --quiet >/dev/null
 
-# The repair engine: opencode drives a failed deploy to green when DEPLOY_ENGINE=opencode.
-# Installs to /root/.opencode/bin; symlinked onto PATH. lib/opencode-deploy.ts finds it.
+# The repair engines. DEPLOY_AGENT picks which one drives — codex by default,
+# opencode one variable away — so BOTH have to be present in the image or the
+# switch is a switch to a missing binary. See docs/CODEX.md.
+#
+# opencode installs to /root/.opencode/bin; symlinked onto PATH.
 RUN curl -fsSL https://opencode.ai/install | bash \
   && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
   && opencode --version
+
+# Codex is an npm package. Pinned: the event stream `lib/agents/codex.ts` parses
+# is documented nowhere and was established by recording it
+# (apps/web/test/fixtures/codex-*.jsonl). An unpinned upgrade can change that
+# shape and the first symptom would be a deploy log that has gone quiet.
+RUN npm install -g @openai/codex@0.146.0 \
+  && codex --version
 
 WORKDIR /app
 COPY --from=webbuild /app/apps/web ./apps/web
