@@ -325,6 +325,9 @@ a.btn { text-decoration: none; }
 .home-hero { padding: 26px 28px; border-bottom: 1px solid var(--line); }
 .home-hero .eyebrow { margin-bottom: 12px; }
 .home-hero h1 { margin: 0; font-family: var(--mono); font-size: 28px; font-weight: 500; letter-spacing: -.03em; }
+.home-hero .hero-row { display: flex; align-items: center; gap: 16px; }
+.btn-new { margin-left: auto; font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); text-decoration: none; border: 1px solid var(--line-2); padding: 7px 14px; transition: background .13s var(--ease), border-color .13s var(--ease); }
+.btn-new:hover { background: var(--card); border-color: var(--ink-2); }
 .home-hero .note { margin-top: 8px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
 
 .apps-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
@@ -338,13 +341,21 @@ a.btn { text-decoration: none; }
 .app-card .st.building .d { animation: pulse 1.4s var(--ease) infinite; }
 .app-card .st.error { color: var(--ink); }
 .app-card .st.error .d { background: none; border: 1.5px solid var(--ink); transform: rotate(45deg); }
+/* Kept in step with globals.css. `warn` is its own state — an app answering 400
+   to everything is neither live nor unreachable — and each state differs in
+   SHAPE as well as colour so the distinction survives without hue. */
+.app-card .st.ok .d { background: var(--live); }
+.app-card .st.warn { color: var(--ink); }
+.app-card .st.warn .d { background: none; border: 1.5px solid var(--ink); border-radius: 50%; }
+.app-card .st.down { color: var(--ink); }
+.app-card .st.down .d { background: none; border: 1.5px solid var(--ink); transform: rotate(45deg); }
+.app-card .st.unknown { color: var(--faint); }
+.app-card .st.unknown .d { background: none; border: 1px dashed var(--line-2); }
+.app-card .probe-label { margin-left: 6px; color: var(--ink-2); letter-spacing: .04em; text-transform: none; }
 .app-card .url { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
 .app-card .fw { margin-top: auto; display: flex; align-items: center; gap: 8px; padding-top: 12px; }
 .app-card .fw .tag { font-family: var(--mono); font-size: 10px; color: var(--ink-2); border: 1px solid var(--line); padding: 2px 6px; }
 .app-card .meta { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 8px; }
-.app-card.new { align-items: center; justify-content: center; flex-direction: row; gap: 9px; color: var(--ink-2); font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em; text-transform: uppercase; }
-.app-card.new:hover { color: var(--ink); }
-.app-card.new .plusbig { font-family: var(--mono); font-size: 16px; }
 
 /* new-app flow */
 .newflow { max-width: 760px; margin: 0 auto; padding: 44px 28px; }

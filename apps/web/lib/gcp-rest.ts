@@ -319,6 +319,80 @@ export async function accessToken(): Promise<string | null> {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Identity tokens                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * When a JWT says it expires, in ms, or null when it does not say.
+ *
+ * An access token arrives with `expires_in` beside it. An identity token arrives
+ * as a bare JWT and nothing else, so the only honest source for its lifetime is
+ * the token. Null rather than a guess: a token cached past the moment it stops
+ * working is a 401 the caller mostly does not recover from, which is the failure
+ * `accessToken` already carries a comment about.
+ *
+ * The signature is not checked and does not need to be. This reads a claim to
+ * decide how long to keep something we were just handed by the metadata server;
+ * the service being called is what verifies it.
+ */
+export function jwtExpiry(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { exp?: unknown };
+    return typeof claims.exp === "number" && Number.isFinite(claims.exp) ? claims.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One cached identity token per audience — a token minted for one app is not valid for another. */
+const idTokenCache = new Map<string, TokenEntry>();
+
+async function idTokenFromMetadata(audience: string): Promise<string | null> {
+  if (!shouldProbeMetadata(metadataProbe, Date.now())) return null;
+  try {
+    const r = await fetch(
+      `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(audience)}`,
+      { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(METADATA_TIMEOUT_MS) },
+    );
+    if (!r.ok) { metadataProbe = { ok: false, at: Date.now() }; return null; }
+    metadataProbe = { ok: true, at: Date.now() };
+    // A bare JWT, not JSON.
+    return (await r.text()).trim() || null;
+  } catch {
+    metadataProbe = { ok: false, at: Date.now() };
+    return null;
+  }
+}
+
+/**
+ * An ID token for one Cloud Run url, so a sealed app can be called.
+ *
+ * The same two sources and the same order as `accessToken`, for the same
+ * reasons. Cached per audience because that is what an ID token is bound to —
+ * one minted for app A is refused by app B, which is the property the whole seal
+ * rests on.
+ *
+ * Never throws. Null means "could not get one", and every caller here treats
+ * that as "do not claim to have checked".
+ */
+export async function identityToken(audience: string): Promise<string | null> {
+  const hit = idTokenCache.get(audience);
+  if (tokenUsable(hit ?? null, Date.now())) return hit!.token;
+
+  const token = (await idTokenFromMetadata(audience))
+    ?? (await gcloudCapture(["auth", "print-identity-token", `--audiences=${audience}`]))?.trim()
+    ?? null;
+  if (!token) return null;
+
+  const entry: TokenEntry = { token, expiresAt: jwtExpiry(token) ?? tokenExpiresAt(3600, Date.now()) };
+  if (!tokenUsable(entry, Date.now())) return null;
+  idTokenCache.set(audience, entry);
+  return token;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Request plumbing                                                           */
 /* -------------------------------------------------------------------------- */
 

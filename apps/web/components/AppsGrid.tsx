@@ -42,9 +42,60 @@ function Thumb({ slug, src }: { slug: string; src?: string }) {
   );
 }
 
+/**
+ * What the app said when asked, under the name it is filed by.
+ *
+ * Asked from the browser, one request per card, after the page is on screen.
+ * Rendering it on the server would hold the entire dashboard behind the slowest
+ * app on it — and the slowest app is the one most worth showing.
+ */
+function useProbes(apps: App[]) {
+  const [probes, setProbes] = useState<Record<string, ProbeState>>({});
+
+  const slugs = apps.filter((a) => a.status !== "building").map((a) => a.slug).join(",");
+  useEffect(() => {
+    if (!slugs) return;
+    let stop = false;
+    for (const slug of slugs.split(",")) {
+      fetch(`/api/apps/${encodeURIComponent(slug)}/probe`)
+        .then((r) => r.json())
+        .then((d) => { if (!stop) setProbes((p) => ({ ...p, [slug]: d.probe ?? null })); })
+        // A probe that fails to run is left undefined, which renders as nothing.
+        // Drawing "down" here would blame the app for our own request failing.
+        .catch(() => {});
+    }
+    return () => { stop = true; };
+  }, [slugs]);
+
+  return probes;
+}
+
+type ProbeState = { verdict: "ok" | "warn" | "down"; label: string; preview: string } | null | undefined;
+
+/**
+ * The status line, which used to be a guess.
+ *
+ * `ready` is Cloud Run's opinion of the revision — its container answered a
+ * startup probe on $PORT once. An app can pass that and refuse every real
+ * request afterwards, and one does: `epvmx` serves Django's DisallowedHost and
+ * drew exactly the same green LIVE as a working app. Until the probe answers,
+ * `ready` is still all we have, so it is shown as the weaker claim it is.
+ */
+function Status({ ready, probe }: { ready: boolean; probe: ProbeState }) {
+  if (probe === undefined) return <span className={`st ${ready ? "live" : "error"}`}><span className="d" />{ready ? "Live" : "Down"}</span>;
+  if (probe === null) return <span className="st unknown"><span className="d" />Unchecked</span>;
+  const word = probe.verdict === "ok" ? "Live" : probe.verdict === "warn" ? "Refusing" : "Down";
+  return (
+    <span className={`st ${probe.verdict}`} title={probe.label}>
+      <span className="d" />{word}<span className="probe-label">{probe.label}</span>
+    </span>
+  );
+}
+
 export function AppsGrid({ initial, initialError }: { initial: App[]; initialError?: string }) {
   const [apps, setApps] = useState<App[]>(initial);
   const [err, setErr] = useState(initialError ?? "");
+  const probes = useProbes(apps);
 
   const building = apps.some((a) => a.status === "building");
 
@@ -71,7 +122,16 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
     <>
       <section className="home-hero reveal" style={{ animationDelay: ".03s" }}>
         <div className="eyebrow">/ APPS</div>
-        <h1>Your apps</h1>
+        <div className="hero-row">
+          <h1>Your apps</h1>
+          {/*
+            Moved out of the grid. As a card it occupied an app-sized slot in the
+            most valuable corner of the screen and never changed — which is most
+            of the screen when a normal user has two or three apps, and this is
+            the one thing on the page that is not one of theirs.
+          */}
+          <Link href="/new" className="btn-new">New app</Link>
+        </div>
         <div className="note">
           {`${apps.length} apps · ${live} live`}
           {err ? ` · ⚠ ${err.slice(0, 70)}` : ""}
@@ -80,9 +140,6 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
 
       <section className="reveal" style={{ animationDelay: ".07s" }}>
         <div className="apps-grid">
-          <Link href="/new" className="app-card new">
-            <span className="plusbig">+</span>New app
-          </Link>
           {apps.map((a) => a.status === "building" ? (
             <Link key={a.slug} href={`/apps/${a.slug}?tab=deployments`} className="app-card building">
               <div className="thumb"><span className="thumb-build">◐</span></div>
@@ -114,9 +171,15 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
               <div className="card-body">
                 <div className="r1">
                   <span className="nm">{a.name || a.slug}</span>
-                  <span className={`st ${a.ready ? "live" : "error"}`}><span className="d" />{a.ready ? "Live" : "Down"}</span>
+                  <Status ready={a.ready} probe={probes[a.slug]} />
                 </div>
-                <div className="url">{a.slug}.supersonic.cv</div>
+                {/*
+                  What it answered, when that says more than a picture of it
+                  does. A screenshot works for a site and not for an API: a
+                  thumbnail of {"ok":true} is a picture of the word ok. HTML
+                  bodies are deliberately blank here — they have the screenshot.
+                */}
+                <div className="url">{probes[a.slug]?.preview || `${a.slug}.supersonic.cv`}</div>
               </div>
             </Link>
           ))}
