@@ -617,11 +617,42 @@ backend drains from here.
 - [ ] **Step 5: Create the secret and give it to the proxy**
 
 ```bash
-openssl rand -hex 32 | gcloud secrets create fleet-edge-secret \
+printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create fleet-edge-secret \
   --project supersonic-deploy-prod --data-file=-
 ```
 
 The value is never printed.
+
+**`printf '%s' "$(...)"`, not a bare pipe from `openssl`.** `openssl rand -hex 32`
+emits 65 bytes — 64 hex characters and a trailing `0x0a`. I measured it. A
+newline stored in this secret breaks the rollout in two different ways at once,
+and neither points at the cause:
+
+- The proxy reads the value into a header. Node **rejects a header value
+  containing a newline**, so `forward()` throws on every fleet-bound request, the
+  handler catches it, and all nineteen fleet apps serve 502 — from the proxy,
+  before the node is ever contacted.
+- The node would not even have the same value to compare: Step 6 reads the secret
+  through `$(cat ...)`, and command substitution strips trailing newlines. So the
+  two sides differ by one byte and every request 403s.
+
+An operator seeing 502s would go and debug the node. The cause would be in Secret
+Manager. This is the same trap the previous handoff recorded for the OpenAI key —
+"paste, then Ctrl+D with **no** Enter."
+
+Verify the stored length before going any further. This is cheap and it is the
+only check that catches the problem at the point where it is still free:
+
+```bash
+gcloud secrets versions access latest --secret fleet-edge-secret \
+  --project supersonic-deploy-prod | wc -c
+```
+
+Expected: **64**. If it says 65, destroy the version and create it again — do not
+continue, and do not try to compensate on the node side. Neither the Go
+comparison nor the TypeScript sender trims, deliberately: a byte-exact secret
+fails loudly and is fixed in seconds, whereas trimming would silently absorb a
+misconfigured secret and hide it.
 
 **Grant access BEFORE binding it to the service.** `--update-secrets` does not
 grant anything, and the proxy's service account holds only
