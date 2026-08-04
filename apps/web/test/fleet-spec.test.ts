@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildAppSpec, type AppSpec } from "../lib/fleet-spec";
 import { resolveProcess, type ResolvedProcess } from "../lib/processes";
+import type { ProcessFault } from "../lib/fleet";
 
 /**
  * The json tags of the agent's `App` struct, read from the agent itself.
@@ -170,4 +171,55 @@ test("declared processes cross over with the fields their kind uses", () => {
   assert.equal(by("nightly")?.kind, "cron");
   assert.equal(by("nightly")?.schedule, "0 3 * * *");
   assert.equal(by("nightly")?.timezone, "Asia/Almaty");
+});
+
+/**
+ * The json tags of the agent's `ProcessFault` struct, read from the agent.
+ *
+ * The same check as above, for the pair phase 1C-1's self-review flagged and
+ * deferred: `ProcessFault` is declared in Go (services/fleet/agent/desired.go)
+ * and mirrored in TypeScript (lib/fleet.ts), the node writes one and the
+ * control plane reads it, and nothing held the two together.
+ *
+ * The failure it prevents is silent in the worst direction. A field renamed on
+ * one side does not throw — it arrives as undefined, `fault` reads as neither
+ * "node" nor "app", nodeFaultFor finds nothing, and a fault the node correctly
+ * blamed on itself goes back to being blamed on the app. Which is the one
+ * outcome that whole slice exists to prevent, restored by a typo.
+ */
+function agentProcessFaultFields(): string[] {
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type ProcessFault struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type ProcessFault struct` in the agent");
+  return [...block[1].matchAll(/json:"([^"]+)"/g)].map((m) => m[1].split(",")[0]);
+}
+
+test("what the node says about a process is what the control plane reads", () => {
+  // Every field present, so this is the whole shape and not whatever one
+  // instance happened to carry.
+  const full: Required<ProcessFault> = {
+    slug: "a8ebb",
+    process: "web",
+    fault: "node",
+    detail: "this node's database path (10.200.0.1:5432) is not answering",
+  };
+
+  assert.deepEqual(Object.keys(full).sort(), agentProcessFaultFields().sort());
+});
+
+test("the wire field the control plane keys absent-vs-empty on is still optional in Go", () => {
+  // `processes` is a POINTER to a slice with omitempty, and that is the whole
+  // absent/empty distinction: absent means "this agent does not report" and
+  // must leave the stored faults alone; `[]` means "I hold nothing failing" and
+  // must clear them. A plain slice with omitempty cannot express it — it drops
+  // nil and empty alike — and dropping the pointer would silently leave every
+  // repaired app marked as a node fault forever.
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type syncBody struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type syncBody struct` in the agent");
+  assert.match(
+    block[1],
+    /Processes\s+\*\[\]ProcessFault\s+`json:"processes,omitempty"`/,
+    "the sync body's processes field is no longer a pointer-to-slice with omitempty",
+  );
 });

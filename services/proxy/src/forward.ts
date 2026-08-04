@@ -1,7 +1,7 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, type VisitorIdentity } from "./headers";
-import { idTokenFor } from "./idtoken";
+import { mintIdToken } from "./idtoken";
 import { isCloudRunTarget } from "./upstream";
 import { config } from "./config";
 import { injectOverlay, isHtmlDocument } from "./inject";
@@ -35,8 +35,14 @@ export async function forward(
   // untouched for the container, which is the entire reason it exists.
   const cloudRun = isCloudRunTarget(targetBase);
 
-  if (cloudRun && !process.env.SKIP_ID_TOKEN) {
-    headers["x-serverless-authorization"] = `Bearer ${await idTokenFor(new URL(targetBase).origin)}`;
+  //
+  // No SKIP_ID_TOKEN any more. That was a production branch on this line that
+  // existed for a test's benefit, and set in a real environment it would have
+  // stripped this header from every Cloud Run upstream at once — every tenant's
+  // app 403ing, with nothing here saying why. The test that needed to avoid the
+  // metadata server now replaces the minter instead. See idtoken.ts.
+  if (cloudRun) {
+    headers["x-serverless-authorization"] = `Bearer ${await mintIdToken(new URL(targetBase).origin)}`;
   }
 
   // The fleet's node router trusts `x-supersonic-slug` to name the app. That

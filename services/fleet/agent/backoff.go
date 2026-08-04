@@ -25,7 +25,24 @@ const (
 	maxAttempts = 5
 
 	baseDelay = 15 * time.Second
-	maxDelay  = 10 * time.Minute
+
+	// maxDelay is a CLAMP, not the ceiling on retry spacing it reads like.
+	//
+	// It cannot bind as a backoff cap at these constants and it is worth saying
+	// so, because a reader who takes it at face value expects a broken app to
+	// be retried ten minutes apart. It is not: decide answers actGiveUp at
+	// maxAttempts, so the last delay ever consulted is the one set by the
+	// failure before the cap — 15s << 3 = 120s — and the whole allowance is
+	// spent in under four minutes. The measured curve on the live node agrees:
+	// five attempts at 21 / 31 / 61 / 123 seconds.
+	//
+	// What it does do is bound the shift for a tracker whose count is NOT
+	// bounded by give-up. cronFail is one: nothing calls decide on it — a
+	// nightly job should keep trying — so its count grows for as long as the
+	// job keeps failing, and 15s << 60 is not a delay anybody meant. Go defines
+	// an over-wide shift as zero rather than undefined, so that arrives here as
+	// d <= 0; both doors lead to the same clamp.
+	maxDelay = 10 * time.Minute
 )
 
 type failAction int
