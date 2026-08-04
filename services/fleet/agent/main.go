@@ -43,10 +43,10 @@ const (
 
 // App is one thing this node has been told to run.
 type App struct {
-	Slug        string            `json:"slug"`
-	Image       string            `json:"image"`
-	Command     []string          `json:"command,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
+	Slug    string            `json:"slug"`
+	Image   string            `json:"image"`
+	Command []string          `json:"command,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 	// Secrets maps an environment variable name to a Secret Manager secret id.
 	// Resolved at start; the values never touch node disk or config.json.
 	Secrets     map[string]string `json:"secrets,omitempty"`
@@ -102,7 +102,7 @@ type Agent struct {
 	// and each publishes on completion, so without this two goroutines share one
 	// temp path and the rename can land a half-written file — a node briefly
 	// serving 502s for every app it holds.
-	writeMu sync.Mutex
+	writeMu  sync.Mutex
 	slots    map[int]string
 	desired  Desired
 	cron     *cronRunner
@@ -133,6 +133,11 @@ type Agent struct {
 	startFail *failTracker
 	cronFail  *failTracker
 
+	// quiet keeps the states that persist — a release or a start that has given
+	// up, a cron blocked by its own release — legible without writing them to
+	// the node's append-only log on every ten-second pass.
+	quiet *logThrottle
+
 	// faults is the most recent start failure per sandbox id, retained rather
 	// than logged and dropped. Cleared when that id next starts successfully,
 	// and when it stops being desired at all.
@@ -142,6 +147,54 @@ type Agent struct {
 	// this tells the control plane that the something was ours, which is what
 	// keeps a repair agent out of a customer's repository over our own outage.
 	faults map[string]ProcessFault
+}
+
+// mayStart says whether a start may be attempted for this process right now.
+//
+// This is the bound that was missing. `a.live` only gains an entry on SUCCESS,
+// so a process whose start FAILS is never `running` on any later pass and never
+// reached the restart counter — it was re-attempted every ten seconds, forever,
+// with nothing counting it. That is the same unbounded-retry shape 1A closed on
+// the release path and the restart path, through the one door left open, and it
+// is the one an app that cannot start at all falls into.
+func (a *Agent) mayStart(id, image string, now time.Time) bool {
+	key := startKey(id, image)
+	switch a.startFail.decide(key, now) {
+	case actWait:
+		return false
+	case actGiveUp:
+		if a.quiet.allow("start:"+key, now, giveUpEvery) {
+			log.Printf("%s: has failed to start %d times, not trying again — deploy a new image to reset",
+				id, maxAttempts)
+		}
+		return false
+	}
+	return true
+}
+
+// recordStartFailure counts one failed start and keeps its reason.
+//
+// The count is what mayStart reads on the next pass. The fault is what the
+// control plane reads, and it deliberately OUTLIVES the give-up: a process
+// nobody is retrying any more is still a process that is failing, and going
+// quiet about it is how a node fault turns back into the app's fault.
+//
+// Not cleared on a successful start. The record is cleared where it always was
+// — on a later pass that finds the process still running — because "it started"
+// and "it is still up ten seconds later" are different facts, and clearing on
+// the first would destroy the bound on a process that starts fine and then
+// exits immediately.
+func (a *Agent) recordStartFailure(id string, app App, proc Process, err error, now time.Time) {
+	n := a.startFail.failWith(startKey(id, app.Image), now, err.Error())
+	log.Printf("%s: start failed (%d/%d): %v", id, n, maxAttempts, err)
+
+	fault := classifyStartError(err)
+	a.mu.Lock()
+	a.faults[id] = ProcessFault{
+		Slug: app.Slug, Process: proc.Name,
+		Fault: fault, Detail: faultDetail(fault, err),
+	}
+	a.mu.Unlock()
 }
 
 // reportFaults answers the sync with what is currently failing on this node.
@@ -321,6 +374,7 @@ func main() {
 		relRunning: map[string]bool{},
 		startFail:  newFailTracker(),
 		cronFail:   newFailTracker(),
+		quiet:      newLogThrottle(),
 		faults:     map[string]ProcessFault{}}
 
 	// Wired only when there is a control plane to report to. Leaving it nil on
@@ -540,7 +594,7 @@ func (a *Agent) reconcileOnce() error {
 				// forever is not — that is a broken image turning into a
 				// permanent cycle of sandbox creation on a node holding
 				// nineteen working apps.
-				key := id + "@" + u.app.Image
+				key := startKey(id, u.app.Image)
 				switch a.startFail.decide(key, time.Now()) {
 				case actWait:
 					continue
@@ -563,6 +617,26 @@ func (a *Agent) reconcileOnce() error {
 			delete(a.live, id)
 			a.mu.Unlock()
 		} else {
+			// A process that has NEVER come up needs the same bound as one that
+			// came up and died, and did not have it.
+			//
+			// `a.live` only gains an entry on SUCCESS. So a process whose start
+			// fails is not `running` on this pass or any later one, never reaches
+			// the counter above, and was re-attempted every ten seconds forever
+			// with nothing counting — the third unbounded retry loop, through the
+			// one door 1A left open. It closed the release loop and the restart
+			// loop; this is the start loop, and it is the one an app that cannot
+			// start at all falls into.
+			//
+			// Same key shape as the restart counter, `id@image`, so a new deploy
+			// is a new key and clears the state without this code having to
+			// notice that a deploy happened. A process that both died AND then
+			// would not restart is counted by both paths in the same pass and so
+			// reaches the cap sooner; that is the safe direction to be wrong in,
+			// and it is more broken, not less.
+			if !a.mayStart(id, u.app.Image, time.Now()) {
+				continue
+			}
 			needRelease[u.app.Slug] = u.app
 		}
 		todo = append(todo, work{app: u.app, proc: u.proc})
@@ -728,14 +802,19 @@ func (a *Agent) startMany(items []work) {
 			started := time.Now()
 			net, err := a.rt.Start(app, proc, idx)
 			if err != nil {
-				log.Printf("%s: start failed: %v", id, err)
-				fault := classifyStartError(err)
+				// Counted, which it was not before. The reconcile loop reads this
+				// on the next pass and stops re-attempting a start that cannot
+				// succeed; without the count it re-attempted forever.
+				//
+				// NOT cleared on success here, deliberately. The record is
+				// cleared where it always was — on a later pass that finds the
+				// process still running — because "it started" and "it is still
+				// up ten seconds later" are different facts, and clearing on the
+				// first would destroy the bound on a process that starts fine
+				// and then exits immediately.
+				a.recordStartFailure(id, app, proc, err, time.Now())
 				a.mu.Lock()
 				delete(a.slots, idx)
-				a.faults[id] = ProcessFault{
-					Slug: app.Slug, Process: proc.Name,
-					Fault: fault, Detail: faultDetail(fault, err),
-				}
 				a.mu.Unlock()
 				return
 			}
@@ -918,6 +997,20 @@ func mergeFailures(ts ...*failTracker) map[string]FailState {
 	}
 	return out
 }
+
+// giveUpEvery is how often a state that is not going to change on its own is
+// repeated into the node's log. Ten minutes is 144 lines a day instead of
+// 8,640, and still soon enough that a human tailing the log meets it.
+const giveUpEvery = 10 * time.Minute
+
+// startKey is the failure key for one process on one image.
+//
+// The image is IN the key on purpose: a new deploy is a new key, so a fix
+// clears the give-up state without anything here having to notice that a deploy
+// happened. Written once, here, because two paths now build it — the restart
+// counter and the start counter — and they must agree or a process would carry
+// two independent counts.
+func startKey(id, image string) string { return id + "@" + image }
 
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {
