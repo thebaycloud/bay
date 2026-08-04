@@ -14,6 +14,7 @@ const path = require("path");
 const http = require("http");
 const { spawn, spawnSync } = require("child_process");
 const { readEnvFiles, selectEnv, encodeEnvHeader } = require("./lib/envfile");
+const { joinExecArgs } = require("./lib/exec-args");
 
 const CFG_DIR = path.join(os.homedir(), ".supersonic");
 const CFG = path.join(CFG_DIR, "config.json");
@@ -379,7 +380,7 @@ async function rollback(args) {
 
 async function exec(args) {
   const app = needApp(args);
-  const command = (args._raw || []).join(" ").trim();
+  const command = joinExecArgs(args._raw || []);
   if (!command) die('usage: supersonic exec <app> -- <command>   e.g. supersonic exec myapp -- node -v');
   info(dim(`exec in ${app} (isolated instance, app env + db attached)`));
   info(dim("cold-starting a one-off container — can take ~30–60s…"));
