@@ -553,6 +553,30 @@ No repository changes except the systemd unit. This is a rollout, and its order
 is the whole point: at no moment may the proxy be sending a header the router
 rejects, or the router requiring one the proxy does not send.
 
+**Precondition: this branch — Tasks 2 and 3 — must already be merged and
+deployed, on both sides, before Step 5.** `gcloud run services update
+--update-secrets` and the `scp`/restart in Step 3 do not ship code; they mint a
+new revision, or restart a unit, from whatever is *already* running. Binding the
+secret without the branch's code underneath it fails silently in two different
+ways:
+
+- The proxy gets the secret but not the code that sends `x-supersonic-edge`.
+  Step 5's confirmation curl still returns 200 — an old proxy simply omitting
+  the header is indistinguishable from a working one — so nothing here catches
+  it. Step 6 then 403s all nineteen fleet apps, and Step 7's third curl is the
+  first thing that notices, with live traffic already failing.
+- The node gets the secret but not the change that makes `NewRouter` read and
+  compare it, so it never enforces regardless of what `fleet.env` says, and
+  every probe from `fleetProbe` goes unsigned once the proxy side does start
+  signing — no step below would detect that either.
+
+Both sides log their gate state at startup, and that is the signal this task
+uses to close the gap: the check after Step 5 reads the proxy's line, the check
+after Step 6 reads the node's. An old revision — one that predates this branch —
+prints **neither** line, which is how a stale deploy is told apart from a
+correctly-timed one instead of being inferred two steps later from a 403 that
+has two possible causes.
+
 **Blocked on:** SSH to `fleet-lab-1`. The key at `~/.ssh/google_compute_engine`
 has a forgotten passphrase and `enable-oslogin` is explicitly `FALSE` on the
 instance, so the path is a regenerated key pushed to project metadata. Do that
@@ -610,23 +634,29 @@ gcloud compute scp services/fleet/image/provision.sh fleet-lab-1:/tmp/ \
 gcloud compute scp services/fleet/agent/*.go fleet-lab-1:/opt/agent/ \
   --zone us-central1-a --project supersonic-deploy-prod
 gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
-  --command 'test -f /tmp/restart-agent.sh && sudo bash /tmp/provision.sh && sudo bash /tmp/restart-agent.sh'
+  --command 'sudo bash /tmp/provision.sh && test -f /tmp/restart-agent.sh && sudo bash /tmp/restart-agent.sh'
 ```
 
-**The `test -f` comes first, and it is not defensive padding.**
-`/tmp/restart-agent.sh` is not in this repository and nothing above `scp`s it —
-it is a script a previous session left on the node, and `/tmp` does not survive a
-reboot. Without the check the chain fails at the *last* link, after
-`provision.sh` has already rewritten the unit file and run `daemon-reload`: the
-node is then left with the new unit description and the old binary still running,
-which is the one state where `systemctl is-active` says `active` and what is
-active is not what the unit now says. Checking first fails before anything has
-been touched.
+**`provision.sh` runs first and unconditionally — it is not behind the `test
+-f`.** It is the only thing that adds `EnvironmentFile=-/etc/supersonic/fleet.env`
+to the unit (Step 2), which is what lets the node ever read `FLEET_EDGE_SECRET`
+at all. An earlier version of this chain gated `provision.sh` itself behind
+`test -f /tmp/restart-agent.sh`: when the script was missing, the `&&` chain
+short-circuited before `provision.sh` ran, the fallback text below said to build
+and restart but never to provision, and Step 6 would then write the secret to a
+file the unit does not read — the gate silently stays off while every check
+except Step 7's curl #2 looks fine. Ordering `provision.sh` first closes that:
+it runs whether or not `restart-agent.sh` exists, so the unit always gets
+rewritten and `daemon-reload`'d, and the only thing left conditional is which
+command restarts the process — `provision.sh` itself never restarts anything.
 
-If it is missing, do its two jobs by hand — build the sources just copied into
-`/opt/agent`, then restart the unit. Take the build command and the output path
-from the unit itself rather than guessing them; `ExecStart` names the binary the
-service actually runs:
+`/tmp/restart-agent.sh` is not in this repository and nothing above `scp`s it —
+it is a script a previous session left on the node, and `/tmp` does not survive
+a reboot. If it is missing here, `provision.sh` above has already run and
+already rewritten the unit — do restart-agent.sh's one remaining job by hand:
+build the sources just copied into `/opt/agent`, then restart the unit. Take
+the build command and the output path from the unit itself rather than
+guessing them; `ExecStart` names the binary the service actually runs:
 
 ```bash
 gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
@@ -766,6 +796,29 @@ slug here proves the proxy is up and proves nothing about the fleet path. A
 newline that survived into the header throws inside `forward()` and shows up here
 as `502` on a fleet slug while every Cloud Run app is perfectly fine.
 
+**Confirm this revision is actually running this branch's code**, per the
+precondition at the top of this task — a 200 above proves the proxy is up, not
+that it is new enough to send the header at all:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="supersonic-proxy" AND textPayload:"edge gate:"' \
+  --project supersonic-deploy-prod --freshness=10m --limit=5 \
+  --format="value(textPayload)" > /tmp/proxy-gate-log.txt
+cat /tmp/proxy-gate-log.txt
+```
+
+Expected, verbatim from `services/proxy/src/index.ts`: `edge gate: signing
+fleet requests with x-supersonic-edge`. Two other outcomes both mean stop:
+
+- `edge gate: OFF (no FLEET_EDGE_SECRET) — fleet requests go unsigned` means
+  the revision is new enough to log its state but did not read the secret —
+  the binding above did not land the way it looked like it did.
+- No line at all, empty file, means the serving revision predates this branch
+  and does not contain the log line to begin with. This is the silent case the
+  precondition describes: merge and deploy the branch, then re-run Step 5's
+  `--update-secrets`, before going anywhere near Step 5b or Step 6.
+
 - [ ] **Step 5b: Give the deploy job the same secret**
 
 The proxy is not the only thing that talks to the node. `fleetProbe`
@@ -894,6 +947,31 @@ gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-
 ```
 
 Expected: `1`. The count is safe to print; the value is not.
+
+**Confirm the node is actually enforcing**, per the precondition at the top of
+this task — the restart above proves the unit came back up, not that the
+binary it restarted is new enough to read `edgeSecret` at all:
+
+```bash
+gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
+  --command 'tail -n 30 /var/log/supersonicd.log' > /tmp/node-gate-log.txt
+grep -c "edge gate:" /tmp/node-gate-log.txt
+cat /tmp/node-gate-log.txt
+```
+
+Expected, verbatim from `services/fleet/agent/router.go`: `edge gate: enforcing
+— x-supersonic-edge required on every request but /__fleet/healthz`. Two other
+outcomes both mean stop, and neither is safe to walk back from by continuing to
+Step 7 anyway:
+
+- `edge gate: OFF (no FLEET_EDGE_SECRET) — anything reaching this port can
+  name any app` means the binary read an empty value — the file write or the
+  restart did not do what it looked like it did.
+- No `edge gate:` line at all means this binary predates Task 2 and does not
+  have `edgeSecret` to read in the first place: `FLEET_EDGE_SECRET` is sitting
+  in `fleet.env` doing nothing, and the node is running exactly as open as it
+  was before this task started, even though every step up to here reported
+  success. Build and ship this branch to the node before repeating Step 6.
 
 - [ ] **Step 7: Verify the door, both ways**
 
