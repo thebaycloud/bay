@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, type PlacementPorts } from "../lib/fleet-place";
+import { fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, chooseRuntime, type PlacementPorts } from "../lib/fleet-place";
 import type { AppSpec } from "../lib/fleet-spec";
+import type { Lane } from "../lib/lanes";
 
 const spec: AppSpec = {
   slug: "myapp",
@@ -17,7 +18,10 @@ function ports(over: Partial<PlacementPorts> = {}) {
   const calls: string[] = [];
   const base: PlacementPorts = {
     chooseNode: async () => { calls.push("chooseNode"); return "fleet-lab-1"; },
-    placeApp: async (slug, node) => { calls.push(`place:${slug}@${node}`); },
+    placeApp: async (slug, node, s) => { calls.push(`place:${slug}@${node}:${s.image}`); },
+    unplaceApp: async (slug) => { calls.push(`unplace:${slug}`); },
+    readPlacement: async () => { calls.push("read"); return null; },
+    readRuntime: async () => { calls.push("readRuntime"); return "fleet"; },
     setRuntime: async (slug, rt) => { calls.push(`runtime:${slug}=${rt}`); },
     probe: async () => { calls.push("probe"); return { code: 200 }; },
     log: () => {},
@@ -25,22 +29,35 @@ function ports(over: Partial<PlacementPorts> = {}) {
   return { calls, p: { ...base, ...over } };
 }
 
-const eligible = { lane: "container" as const, image: "img", staticServe: false, serviceless: false, cloudsql: null };
+// `lane` is widened to `Lane` (not narrowed to the literal "container") so the
+// override cases below — which swap in "runner" — typecheck against
+// `Partial<typeof eligible>`.
+const eligible = { lane: "container" as Lane, image: "img", staticServe: false, serviceless: false };
 
-test("an app with a database is not placed, because the fleet has nowhere to put the proxy", () => {
-  // The finding that stopped the first canary. provisionPostgres writes
-  // DATABASE_URL as postgresql://…@127.0.0.1:5432/…, and that only resolves
-  // because a Cloud SQL Auth Proxy sidecar runs beside the app in the same Cloud
-  // Run service (dbContainerArgs). A node runs one sandbox per process and has
-  // no sidecar, so the same url points at a port nothing is listening on.
-  //
-  // Carrying the secret is necessary and NOT sufficient, and the failure is the
-  // dangerous shape: the app starts, serves its homepage, answers the probe with
-  // 200, and fails every request that touches data. A placement that passes its
-  // own check and breaks the app is worse than one that never happens.
-  const r = fleetEligibility({ ...eligible, cloudsql: "supersonic-deploy-prod:us-central1:supersonic-shared-pg" });
-  assert.equal(r.ok, false);
-  assert.match(r.reason!, /database|proxy/i);
+test("an app with a database goes to the fleet now that a node has a proxy", () => {
+  // The refusal added on 2026-08-04 was a guard for exactly one gap: the fleet
+  // had no equivalent of Cloud Run's sidecar. A node runs one now, on the
+  // bridge gateway, so the guard is what is wrong.
+  assert.equal(chooseRuntime(eligible).runtime, "fleet");
+});
+
+test("what the fleet cannot serve is named, and goes to Cloud Run", () => {
+  const cases: Array<[Partial<typeof eligible>, RegExp]> = [
+    [{ staticServe: true }, /static/i],
+    [{ lane: "runner" }, /runner/i],
+    [{ lane: "buildpack" }, /buildpack/i],
+    [{ image: "" }, /image/i],
+    [{ serviceless: true }, /route|worker-only/i],
+  ];
+  for (const [over, why] of cases) {
+    const r = chooseRuntime({ ...eligible, ...over });
+    assert.equal(r.runtime, "cloudrun", `${JSON.stringify(over)} should stay on Cloud Run`);
+    assert.match(r.reason!, why);
+  }
+});
+
+test("a placeable app is given no reason, because there is nothing to explain", () => {
+  assert.equal(chooseRuntime(eligible).reason, undefined);
 });
 
 test("a worker-only app is not placed yet, and the reason is the check, not the runtime", () => {
@@ -86,9 +103,24 @@ test("an app whose build produced no image is not placeable", () => {
   assert.match(r.reason!, /image/i);
 });
 
+test("a buildpack app is not placeable — its image is made by the deploy it is skipping", () => {
+  // This lane used to be allowed here, and was kept off the fleet only by
+  // `image: ""` — the pipeline has no name for a buildpack image at decision
+  // time, because `run deploy --source` builds it and Cloud Run names it. That
+  // is an accident, not a decision: give the lane a deterministic tag and it
+  // becomes eligible again, and what it would place is an image no build in
+  // this deploy produced. The fleet branch runs no `--source`, so there is
+  // nothing to hand a node, and the refusal now says which.
+  const r = fleetEligibility({ ...eligible, lane: "buildpack" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason!, /buildpack/i);
+  // …and it stays refused even when an image name IS supplied, which is the
+  // whole point of naming it rather than leaning on the empty-image check.
+  assert.equal(fleetEligibility({ ...eligible, lane: "buildpack", image: "img" }).ok, false);
+});
+
 test("a container app with an image is placeable", () => {
   assert.equal(fleetEligibility(eligible).ok, true);
-  assert.equal(fleetEligibility({ ...eligible, lane: "buildpack" }).ok, true);
 });
 
 test("the router answering is not the app answering", () => {
@@ -164,16 +196,68 @@ test("a full fleet leaves the app on Cloud Run instead of losing it", () => {
   })();
 });
 
-test("an app that does not answer from the fleet is put back, before anything routes to it", async () => {
-  const { calls, p } = ports({ probe: async () => ({ code: 502 }) });
+test("a version that does not answer is replaced by the one that did, on the node it was already on", async () => {
+  // The previous placement is on fleet-lab-2, a DIFFERENT node than the one
+  // this deploy's chooseNode hands back (fleet-lab-1). placeApp upserts on
+  // (slug, node), so restoring onto fleet-lab-1 instead of fleet-lab-2 would
+  // write a second row rather than putting back the one that was overwritten
+  // — this is the test that catches that mistake; a membership check on
+  // "was placeApp called with the right image" cannot see which node it went to.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 502 }; },
+    readPlacement: async () => {
+      calls.push("read");
+      return { node: "fleet-lab-2", spec: { ...spec, image: "registry/myapp:good" } };
+    },
+  });
+  const r = await placeOnFleet("myapp", { ...spec, image: "registry/myapp:bad" }, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.equal(r.runUrl, undefined);
+  // The full ordered sequence, not just membership: it proves the read
+  // happened BEFORE the place that overwrites it (a read taken afterward would
+  // see the broken spec and "restore" it over itself) and that the restore
+  // lands on fleet-lab-2, not fleet-lab-1.
+  assert.deepEqual(calls, [
+    "chooseNode",
+    "read",
+    "readRuntime",
+    "place:myapp@fleet-lab-1:registry/myapp:bad",
+    "runtime:myapp=fleet",
+    "probe",
+    "place:myapp@fleet-lab-2:registry/myapp:good",
+    "runtime:myapp=fleet",
+  ]);
+  // And nothing goes to Cloud Run. There is no way back any more.
+  assert.ok(!calls.some((c) => c.includes("cloudrun")), "an app was sent back to Cloud Run");
+});
+
+test("a first deploy that fails is unplaced rather than restored to nothing, and the runtime flag goes back with it", async () => {
+  // No previous placement exists, so there is nothing to put back — the app
+  // must not be left pointing at a version that does not serve. The runtime
+  // flag was only flipped to 'fleet' so the probe below had something to
+  // check; a first deploy's real previous runtime is 'cloudrun' (the default
+  // for an app that has never been placed), and that is what must come back —
+  // asserted as a value, not just that setRuntime was called at all, because a
+  // stub that always restores 'fleet' would pass a call-membership check.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 0 }; },
+    readPlacement: async () => { calls.push("read"); return null; },
+    readRuntime: async () => { calls.push("readRuntime"); return "cloudrun"; },
+  });
   const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
-  // Back to cloudrun, which drops the placement. And no address is handed back,
-  // so the caller writes the Cloud Run url it already had — no traffic was ever
-  // aimed at a node that could not serve it.
-  assert.ok(calls.includes("runtime:myapp=cloudrun"));
-  assert.equal(r.runUrl, undefined);
+  assert.deepEqual(calls, [
+    "chooseNode",
+    "read",
+    "readRuntime",
+    `place:myapp@fleet-lab-1:${spec.image}`,
+    "runtime:myapp=fleet",
+    "probe",
+    "unplace:myapp",
+    "runtime:myapp=cloudrun",
+  ]);
 });
 
 test("place and verify, and only then is there an address to publish", async () => {
@@ -187,5 +271,31 @@ test("place and verify, and only then is there an address to publish", async () 
   // keeps run_url with ONE writer: markAppLive would otherwise overwrite a flip
   // made here with the Cloud Run url it was already carrying.
   assert.equal(r.runUrl, "http://8.232.255.172");
-  assert.deepEqual(calls, ["chooseNode", "place:myapp@fleet-lab-1", "runtime:myapp=fleet", "probe"]);
+  assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", "place:myapp@fleet-lab-1:" + spec.image, "runtime:myapp=fleet", "probe"]);
+});
+
+test("the probe asks the path the app said to ask", async () => {
+  // A 200 at the root proves a process started. epvmx proved a started process
+  // can refuse every real request, and an app whose database is unreachable
+  // serves its homepage perfectly happily — which is the exact failure this
+  // whole piece of work is about not shipping.
+  const seen: string[] = [];
+  const impl = (async (url: string) => {
+    seen.push(String(url));
+    return { status: 200, headers: { get: () => null } } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  await fleetProbe("8.232.255.172", "myapp", { fetchImpl: impl, attempts: 1, delayMs: 0, path: "/healthz" });
+  assert.deepEqual(seen, ["http://8.232.255.172/healthz"]);
+});
+
+test("no declared path means the root, which is what every app has", async () => {
+  const seen: string[] = [];
+  const impl = (async (url: string) => {
+    seen.push(String(url));
+    return { status: 200, headers: { get: () => null } } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  await fleetProbe("8.232.255.172", "myapp", { fetchImpl: impl, attempts: 1, delayMs: 0 });
+  assert.deepEqual(seen, ["http://8.232.255.172/"]);
 });

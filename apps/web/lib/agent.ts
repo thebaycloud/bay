@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { accessToken as restAccessToken, invalidateToken } from "./gcp-rest";
+import type { Runtime } from "./fleet";
 
 const PROJECT = "supersonic-deploy-prod";
 const LOCATION = "us-central1";
@@ -91,16 +92,33 @@ function runCommand(dir: string, command: string): Promise<string> {
   });
 }
 
-const TOOLS = [
+/**
+ * Where this repair's `redeploy` actually goes, in the model's words.
+ *
+ * A parameter rather than a constant because the pipeline forks: a fleet deploy
+ * is repaired by redeploying to the fleet, and telling the model "Cloud Run"
+ * while the closure places on a node is a description of a system that no longer
+ * exists. It matters beyond tidiness — a model that believes it is on Cloud Run
+ * reads `10.200.0.1` in a connection string as a misconfiguration and "fixes" it.
+ */
+const RUNTIME_NAMES: Record<Runtime, string> = {
+  cloudrun: "Google Cloud Run",
+  fleet: "the Supersonic fleet (the app's container, run under gVisor on our own VM)",
+};
+
+const toolsFor = (runtime: Runtime) => [
   { name: "list_files", description: "List the repo's files.", parameters: { type: "object", properties: {} } },
   { name: "read_file", description: "Read a file's contents.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
   { name: "write_file", description: "Create or overwrite a file with new contents.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
   { name: "run_command", description: "Run a shell command inside the repo (only npm / npx / pnpm / yarn / node / tsc). Use 'npm install' to regenerate a broken/out-of-sync lockfile — the usual fix for npm ci errors. Returns exit code + output.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
-  { name: "redeploy", description: "Redeploy to Cloud Run and return the result. Slow (~2 min). Call after making changes.", parameters: { type: "object", properties: {} } },
+  { name: "redeploy", description: `Redeploy to ${RUNTIME_NAMES[runtime]} and return the result. Slow (~2 min). Call after making changes.`, parameters: { type: "object", properties: {} } },
   { name: "give_up", description: "Stop and tell the user exactly what they must fix themselves (e.g. a required secret).", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
 ];
 
-const SYSTEM = `You are Supersonic's deployment repair agent. A vibe-coded app failed to deploy to Google Cloud Run. Your ONLY goal is to make it deploy successfully and serve HTTP on the port given by the PORT environment variable (Cloud Run sets PORT, usually 8080).
+const systemFor = (runtime: Runtime) => `You are Supersonic's deployment repair agent. A vibe-coded app failed to deploy to ${RUNTIME_NAMES[runtime]}, and that is where your redeploy goes — the app is not moving anywhere else. Your ONLY goal is to make it deploy successfully and serve HTTP on the port given by the PORT environment variable (the platform sets PORT, usually 8080, on either runtime).
+${runtime === "fleet" ? `
+- This app runs on our own VM, not on Cloud Run. Its database is reached through a proxy on the host at 10.200.0.1:5432, so a DATABASE_URL, PGHOST or POSTGRES_HOST naming 10.200.0.1 is CORRECT and must not be "fixed" to localhost or to a public address. If the database is unreachable, that is our proxy and not this repository — call give_up and say so.
+` : ""}
 
 Guidance:
 - NEVER create an application that was not already there. Do not write a new entrypoint, a new server, or new source files to make the deploy go green. You are repairing someone's app, not supplying one. Given a repo whose container exited immediately, an agent once wrote main.py, requirements.txt, index.html and a Dockerfile and reported success — so the URL served an app its owner had never written, under their name, and every log line downstream called it a win. A deploy that fails honestly is far better. If the only fix you can see is to write the app, call give_up and say exactly that.
@@ -120,9 +138,17 @@ export async function repairDeploy(opts: {
   slug: string;
   initialError: string;
   redeploy: () => Promise<{ ok: boolean; url?: string; error?: string }>;
+  /**
+   * Which runtime `redeploy` reaches. Required rather than defaulted: the whole
+   * failure being fixed is a description that disagreed with the closure, and a
+   * default is exactly how the two drift apart again the next time a caller is
+   * added.
+   */
+  runtime: Runtime;
   log: (l: string) => void;
 }): Promise<{ ok: boolean; url?: string; changes: string[]; summary: string }> {
-  const { dir, initialError, redeploy, log } = opts;
+  const { dir, initialError, redeploy, runtime, log } = opts;
+  const TOOLS = toolsFor(runtime);
   const changes: string[] = [];
   const contents: any[] = [{
     role: "user",
@@ -135,7 +161,7 @@ export async function repairDeploy(opts: {
     let resp: any;
     try {
       resp = await gemini({
-        systemInstruction: { parts: [{ text: SYSTEM }] },
+        systemInstruction: { parts: [{ text: systemFor(runtime) }] },
         contents,
         tools: [{ functionDeclarations: TOOLS }],
         toolConfig: { functionCallingConfig: { mode: "ANY" } },

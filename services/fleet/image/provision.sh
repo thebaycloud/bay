@@ -259,6 +259,27 @@ table inet supersonic {
     # The rest of link-local. Nothing a tenant needs lives here.
     ip daddr 169.254.0.0/16 counter drop
   }
+
+  chain input {
+    type filter hook input priority 0; policy accept;
+
+    # The Cloud SQL proxy binds 0.0.0.0 because ssbr0 does not exist at boot —
+    # the agent creates it. So the bind is wide and the door is narrow: only a
+    # sandbox, or the host itself, may reach 5432.
+    #
+    # INPUT, and the hook is the whole rule. The proxy's socket is on this host,
+    # so a sandbox's packet to 10.200.0.1:5432 is addressed to a LOCAL address
+    # and the kernel delivers it here. `forward` sees only packets being routed
+    # onward, which is exactly why the metadata block belongs there —
+    # 169.254.169.254 is never a local address. The same line in `forward`
+    # matches nothing at all, and a rule that matches nothing reads precisely
+    # like a rule that works.
+    #
+    # `lo` stays open so someone debugging on the node can still reach Postgres;
+    # a sandbox has its own network namespace and cannot use the host's loopback
+    # to get here.
+    tcp dport 5432 iifname != { "lo", "ssbr0" } drop
+  }
 }
 EOF
 systemctl enable nftables
@@ -344,6 +365,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+systemctl enable cloud-sql-proxy >/dev/null 2>&1 || true
 systemctl enable supersonicd >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------

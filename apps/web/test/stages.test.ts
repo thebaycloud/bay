@@ -62,6 +62,21 @@ test("every stage the code writes is in the vocabulary", () => {
   }
 });
 
+test("every stage the vocabulary declares is written by something", () => {
+  // The inverse of the test above, and the half that was missing. That one
+  // catches a name written but not declared — a row nobody queries. This one
+  // catches a name declared but not written, which is quieter and no less
+  // wrong: `fleet` was declared here and its only emitter was deleted with the
+  // block that held it, leaving a stage that reads as "no app was ever placed"
+  // rather than as an emitter somebody removed. Nothing failed, because a name
+  // that is never written breaks no constraint and no query — it just returns
+  // zero forever.
+  const emitted = emittedStages();
+  for (const stage of ALL_STAGES) {
+    assert.ok(emitted.has(stage), `"${stage}" is in the vocabulary but nothing writes it`);
+  }
+});
+
 test("the two stages the analytics turn on are still emitted", () => {
   // Activation is `min(ended_at) FILTER (WHERE stage = 'deploy' AND outcome =
   // 'ok')` with no WHERE and no window, and `run-record` is what splits rows into

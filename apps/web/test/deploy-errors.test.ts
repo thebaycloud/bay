@@ -155,6 +155,16 @@ test("a real platform failure is still caught, because the verdict says so", () 
   assert.equal(classify("Build failed:\nRuntime not available: something").blame, "platform");
 });
 
+test("a registry that will not name the image it was just given is ours", () => {
+  // The failure the digest pin introduced, and the reason it is classified at
+  // all: it happens AFTER a successful build and push, so every word in it is
+  // about our registry and none of it is about the repository. Handed to the
+  // repair agent it buys a $12-15 read of a customer's app that finds nothing —
+  // and the ledger already records that we decided not to fuse the agent off.
+  const c = classify("the image digest could not be resolved: the build pushed us-central1-docker.pkg.dev/p/r/demo:latest, and the registry did not say which image that now names.");
+  assert.equal(c.blame, "platform");
+});
+
 test("pip disagreeing with the interpreter is the app's problem now", () => {
   // It was the platform's while the platform held one Python. `FROM python:3.14`
   // is buildable, so "requires a different Python" in a build log is an ordinary

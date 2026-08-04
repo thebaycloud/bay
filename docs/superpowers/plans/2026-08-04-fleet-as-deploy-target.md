@@ -83,16 +83,34 @@ systemctl enable supersonicd >/dev/null 2>&1 || true
 
 - [ ] **Step 2: Close the proxy to everything except sandboxes**
 
-Add to the nftables ruleset written in §6, in the same `define`/`chain` block that
-blocks the metadata server:
+The ruleset in §6 declares two chains, `output` and `forward`, and **neither is
+the right hook for this**. Add a third:
 
 ```
-# The Cloud SQL proxy binds 0.0.0.0 because ssbr0 does not exist at boot — the
-# agent creates it. So the bind is wide and the DOOR is narrow: only sandbox
-# traffic arriving on the bridge may reach 5432. Without this the node's VPC
-# address answers Postgres for anything that can route to it.
-tcp dport 5432 iifname != "ssbr0" drop
+  chain input {
+    type filter hook input priority 0; policy accept;
+
+    # The Cloud SQL proxy binds 0.0.0.0 because ssbr0 does not exist at boot —
+    # the agent creates it. So the bind is wide and the door is narrow: only a
+    # sandbox, or the host itself, may reach 5432.
+    #
+    # INPUT, and the hook is the whole rule. The proxy's socket is on this host,
+    # so a sandbox's packet to 10.200.0.1:5432 is addressed to a LOCAL address
+    # and the kernel delivers it here. `forward` sees only packets being routed
+    # onward, which is exactly why the metadata block belongs there —
+    # 169.254.169.254 is never a local address. The same line in `forward`
+    # matches nothing at all, and a rule that matches nothing reads precisely
+    # like a rule that works.
+    #
+    # `lo` stays open so someone debugging on the node can still reach Postgres;
+    # a sandbox has its own network namespace and cannot use the host's loopback
+    # to get here.
+    tcp dport 5432 iifname != { "lo", "ssbr0" } drop
+  }
 ```
+
+Without it the node's VPC address answers Postgres for anything that can route
+to it.
 
 - [ ] **Step 3: Apply to the live node and check it comes up**
 

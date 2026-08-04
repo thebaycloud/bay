@@ -119,6 +119,39 @@ test("a process that asked for its own memory gets it, in the unit the agent spe
   assert.equal(spec.processes?.[0].memoryBytes, 512 * 1024 * 1024);
 });
 
+test("a release command reaches the node as a release process", () => {
+  // The agent runs KindRelease to completion BEFORE web and worker start, and
+  // keys it by image so a slow start does not run a customer's migration twice
+  // concurrently. All of that is wasted if the command never arrives.
+  const spec = buildAppSpec({
+    ...base,
+    processes: [
+      resolveProcess("release", { command: "python manage.py migrate" }),
+      resolveProcess("web", { command: "gunicorn app:wsgi" }),
+    ] as ResolvedProcess[],
+  });
+
+  const release = spec.processes?.find((p) => p.name === "release");
+  assert.equal(release?.kind, "release");
+  assert.deepEqual(release?.command, ["/bin/sh", "-c", "python manage.py migrate"]);
+});
+
+test("a release declared in config, not a Procfile, still reaches the node", () => {
+  // deploy-pipeline.ts:483 treats a release PROCESS and a release COMMAND as
+  // separate things, because on Cloud Run they were: one is a Procfile line and
+  // the other is a job. On a node there is one primitive, so the command has to
+  // arrive as a process or the app's migrations simply never run.
+  const spec = buildAppSpec({
+    ...base,
+    processes: [resolveProcess("web", { command: "gunicorn app:wsgi" })] as ResolvedProcess[],
+    releaseCommand: "python manage.py migrate",
+  });
+
+  const release = spec.processes?.find((p) => p.name === "release");
+  assert.equal(release?.kind, "release");
+  assert.deepEqual(release?.command, ["/bin/sh", "-c", "python manage.py migrate"]);
+});
+
 test("declared processes cross over with the fields their kind uses", () => {
   const processes = [
     resolveProcess("web", { command: "npm start" }),

@@ -58,6 +58,15 @@ export interface SpecInput {
   env: string[];
   secrets: SecretRef[];
   processes: ResolvedProcess[];
+  /**
+   * A release declared in config rather than in a Procfile.
+   *
+   * On Cloud Run these were two different mechanisms — a Procfile line became a
+   * process, and this became a job — so nothing ever needed them to agree. A
+   * node has one primitive, and an app whose migrations never run is an app that
+   * serves its homepage and fails everything else.
+   */
+  releaseCommand?: string | null;
   port?: number;
   memoryBytes?: number;
   cpuShares?: number;
@@ -90,6 +99,22 @@ export function memoryBytes(memory: string | undefined): number | undefined {
 }
 
 /**
+ * A CPU count → the cgroup's share weight.
+ *
+ * One CPU is 1024 shares — what migrate.sh hardcoded and what DEFAULT_CPU_SHARES
+ * still means. Fractional counts are valid in the schema and on Cloud Run, so
+ * 0.5 is 512 rather than a rejection.
+ *
+ * Zero, negative and non-finite return undefined for the same reason
+ * `memoryBytes` does: the agent reads a zero as "use the app-wide limit", and a
+ * wrong number here is a throttled app at 3am that reads as the app's fault.
+ */
+export function cpuShares(cpu: number | undefined): number | undefined {
+  if (cpu === undefined || !Number.isFinite(cpu) || cpu <= 0) return undefined;
+  return Math.round(cpu * DEFAULT_CPU_SHARES);
+}
+
+/**
  * A start command, as the thing that will actually read it.
  *
  * The agent execs argv directly. The Cloud Run path wraps every command in
@@ -119,13 +144,15 @@ function agentProcess(p: ResolvedProcess): AgentProcess {
     // and a bot answering HTTP it never serves is a 502 with the app's name on it.
     const mem = memoryBytes(p.memory);
     if (mem) out.memoryBytes = mem;
-    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    const shares = cpuShares(p.cpu);
+    if (shares) out.cpuShares = shares;
     if (p.shutdownGrace) out.shutdownGrace = p.shutdownGrace;
   }
   if (p.kind === "cron" || p.kind === "release") {
     const mem = memoryBytes(p.memory);
     if (mem) out.memoryBytes = mem;
-    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    const shares = cpuShares(p.cpu);
+    if (shares) out.cpuShares = shares;
     if (p.schedule) out.schedule = p.schedule;
     if (p.timezone) out.timezone = p.timezone;
   }
@@ -162,11 +189,20 @@ export function buildAppSpec(i: SpecInput): AppSpec {
   };
   if (Object.keys(env).length) spec.env = env;
   if (Object.keys(secrets).length) spec.secrets = secrets;
+  const declared = i.processes.map(agentProcess);
+  // A release declared in config only ever existed as a Cloud Run Job — nothing
+  // in a Procfile named it, so `declared` would not otherwise contain it. Added
+  // only when no Procfile line already claimed the name "release", the same
+  // precedence the pipeline gives a Procfile-declared process over the inferred
+  // one.
+  if (i.releaseCommand && !declared.some((p) => p.name === "release")) {
+    declared.push({ name: "release", kind: "release", command: shellArgv(i.releaseCommand) });
+  }
   // Absent rather than empty, and the difference is load-bearing: `processesOf`
   // reads a zero-length list as "one implicit web process built from the app's
   // own port and health path". An empty array takes the other branch and places
   // an app that runs nothing.
-  if (i.processes.length) spec.processes = i.processes.map(agentProcess);
+  if (declared.length) spec.processes = declared;
 
   return spec;
 }
