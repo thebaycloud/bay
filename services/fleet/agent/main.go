@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -423,16 +424,31 @@ func (a *Agent) reconcileOnce() error {
 			a.mu.Unlock()
 
 			// Forget this id's own failure history: the start key carries the
-			// image, so an exact delete can't find it — remove by prefix. The
-			// cron key is a bare id, so exact removal is right there.
+			// image, so an exact delete can't find it — remove by prefix.
 			a.startFail.forgetPrefix(id + "@")
-			a.cronFail.succeed(id)
-			// The release record belongs to the app, not the process — clear
-			// it only once no other process of this app survives, so this
-			// doesn't hand a still-live app a fresh five attempts.
+			// The release and cron records belong to the app, not to this one
+			// process — clear them only once no other process of this app
+			// survives, so this doesn't hand a still-live app a fresh five
+			// attempts. Cron sandbox ids never reach `have` (units excludes
+			// KindCron, so a.live never holds one), so an exact-key delete on
+			// `id` here could never match a cron record — remove by the app's
+			// slug prefix instead, matching sandboxID's `slug + "--" + name + "."`
+			// shape.
 			if wasLive && !survivingSlugs[l.app.Slug] {
 				a.relFail.forgetPrefix(l.app.Slug + "@")
+				a.cronFail.forgetPrefix(l.app.Slug + "--")
 			}
+		}
+	}
+
+	// An app whose release gave up never started a process, so it never entered
+	// a.live and the removal loop above never sees it. That is precisely the app
+	// an operator removes after reading "has given up", and without this its
+	// record outlives it in /status with nothing left on the node to explain it.
+	for key := range a.relFail.report() {
+		slug, _, ok := strings.Cut(key, "@")
+		if ok && !survivingSlugs[slug] {
+			a.relFail.forgetPrefix(slug + "@")
 		}
 	}
 
@@ -458,7 +474,11 @@ func (a *Agent) reconcileOnce() error {
 			// actually mean "this is a different program".
 			if l.app.Image == u.app.Image && sameStrings(l.proc.Command, u.proc.Command) {
 				if st, err := runscStatus(id); err == nil && st.Status == "running" {
-					a.startFail.succeed(id + "@" + u.app.Image)
+					// Forget every image this id ever failed on, not just the
+					// current one — otherwise a bad image's record (e.g.
+					// `id@bad`, fails: 5) outlives the fix and /status keeps
+					// reporting a healthy process as given-up forever.
+					a.startFail.forgetPrefix(id + "@")
 					continue
 				}
 				// It died. Restarting is right; restarting it every ten seconds
@@ -540,12 +560,22 @@ func (a *Agent) reconcileOnce() error {
 		}
 
 		var rel Process
-		found := false
+		found, extra := false, 0
 		for _, p := range processesOf(app) {
-			if p.Kind == KindRelease {
-				rel, found = p, true
-				break
+			if p.Kind != KindRelease {
+				continue
 			}
+			if found {
+				extra++
+				continue
+			}
+			rel, found = p, true
+		}
+		if extra > 0 {
+			// Running two concurrently would double-book the slot and the
+			// sandbox id, so only the first runs — but an app that declares two
+			// is misconfigured and must not discover that silently.
+			log.Printf("%s: %d release processes declared, running only %q", slug, extra+1, rel.Name)
 		}
 		if !found {
 			continue
@@ -569,7 +599,12 @@ func (a *Agent) reconcileOnce() error {
 				log.Printf("%s: release FAILED (%d/%d), not starting the app: %v",
 					slug, n, maxAttempts, err)
 			} else {
-				a.relFail.succeed(key)
+				// Forget every image this slug ever failed a release on, not
+				// just the one that just succeeded — otherwise a bad image's
+				// record (e.g. `slug@bad`, fails: 5) survives a later good
+				// deploy and /status keeps reporting a recovered app as
+				// given-up forever.
+				a.relFail.forgetPrefix(slug + "@")
 				log.Printf("%s: release finished", slug)
 			}
 
