@@ -2882,6 +2882,89 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       }
     };
 
+    /**
+     * Build the app's image. The ONE place in this file that does.
+     *
+     * It is defined before the fork because both runtimes need it, and it is one
+     * function rather than two because a second copy of "submit the build, read
+     * the log back if it fails" is a worse outcome than the bug it would fix.
+     *
+     * The bug it does fix: this used to sit inside `runDeploy`, and
+     * `runFleetDeploy` never calls `runDeploy`. So the fleet branch resolved its
+     * image as `processImage` — the literal string `${IMAGE}:latest`, a tag name
+     * and not evidence that a build ran — and placed it. A first-ever fleet
+     * deploy failed on an image that was never pushed; every redeploy after that
+     * resolved the tag to whatever the last Cloud Run build had left there,
+     * placed it successfully, and marked the app live. The customer's new code
+     * was reported shipped and the fleet went on serving the previous version.
+     * A thing accepted, confirmed, and then not applied is the one failure this
+     * platform is built not to have, and the silent one is the worse half.
+     *
+     * The `build` stage is recorded here, so it is recorded once per deploy on
+     * whichever branch runs — the Dockerfile lane never recorded it at all
+     * before, which is the other half of "not zero times, not twice".
+     *
+     * A failure comes back as an error string carrying the real Cloud Build log,
+     * because that string is what the repair agent is given to work from and
+     * `gcloud exited 1` is not something it can fix.
+     */
+    const buildImage = async (): Promise<{ ok: true; image: string } | { ok: false; error: string }> => {
+      if (!useDockerBuild && !serviceless) {
+        // Only the buildpack lane reaches here: its image is produced as a side
+        // effect of `run deploy --source` and named by Cloud Run, so there is
+        // nothing to build ahead of the delivery. `runDeploy` knows that and
+        // never asks; `fleetEligibility` refuses the lane outright for the same
+        // reason. This is the answer if a third caller ever appears, and it is a
+        // refusal rather than a shrug — placing an image nobody built is exactly
+        // what this function was extracted to prevent.
+        return { ok: false, error: "this lane has no image of its own to build before the deploy" };
+      }
+      // Kept for the error path. `gcloud builds submit` reports the failure in
+      // its own output long before the build log is fetchable, and the last
+      // lines of it are the only diagnosis available when the log read fails.
+      const btail: string[] = [];
+      const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
+      try {
+        await stages.around("build", async () => {
+          const args = useDockerBuild
+            ? ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()]
+            // The one lane where skipping the Cloud Run deploy would skip the
+            // BUILD: buildpacks run inside `run deploy --source`, so with no
+            // service there is nothing to produce an image. `builds submit
+            // --pack` is the same builder without the deploy, which is exactly
+            // what a worker-only app needs.
+            //
+            // NOT `--source` on the worker pool itself, though it accepts one:
+            // that would rebuild the app once per process, on a lane whose
+            // release job already pays for the build twice and says so.
+            //
+            // No `--service-account` here, and it is not an oversight. This is
+            // the one submit that writes no cloudbuild.yaml, so it has no
+            // `logging: CLOUD_LOGGING_ONLY` — and Cloud Build REFUSES a
+            // user-specified build account unless a logging destination is set,
+            // which would turn a scoped identity into a failed deploy. The
+            // buildpack lane is what step 4 deletes anyway; it keeps the default
+            // account until it goes.
+            : ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`];
+          if (useDockerBuild) log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
+          else log("Building with buildpacks — no service to deploy, so the image is built directly…");
+          const hb = setInterval(() => log("building…"), 8000);
+          builds.reset();
+          try {
+            await run("gcloud", args, onBuild);
+          } finally { clearInterval(hb); }
+        });
+      } catch (e) {
+        const buildLog = await builds.error();
+        const reason = buildLog
+          || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
+          || btail.slice(-6).join("\n")
+          || (e instanceof Error ? e.message : String(e));
+        return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
+      }
+      return { ok: true, image: `${IMAGE}:latest` };
+    };
+
     const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
       if (staticServe) return runStatic(staticServe);
       // Read once, before any lane runs: the container shape belongs to the
@@ -2925,62 +3008,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         }));
       }
       if (useDockerBuild) {
-        log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
-        const hb = setInterval(() => log("building…"), 8000);
-        const btail: string[] = [];
-        const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
-        builds.reset();
-        try {
-          await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()], onBuild);
-        } catch {
-          clearInterval(hb);
-          const buildLog = await builds.error();
-          const reason = buildLog
-            || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
-            || btail.slice(-6).join("\n");
-          return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
-        }
-        clearInterval(hb);
-        const relC = await runRelease({ lane: "container", service: slug, image: `${IMAGE}:latest`, env: extraEnv, release: releaseCmd });
+        const image = await buildImage();
+        if (!image.ok) return { ok: false, error: image.error };
+        const relC = await runRelease({ lane: "container", service: slug, image: image.image, env: extraEnv, release: releaseCmd });
         if (!relC.ok) return { ok: false, error: relC.error };
         return attempt(deployArgs({
           lane: "container", service: slug, serviceFlags: deployFlags, appFlags,
-          image: `${IMAGE}:latest`, scale, cloudsql, existingScoped,
+          image: image.image, scale, cloudsql, existingScoped,
         }));
       }
       if (serviceless) {
-        // The one lane where skipping the deploy would skip the BUILD: buildpacks
-        // run inside `run deploy --source`, so with no service there is nothing to
-        // produce an image. `builds submit --pack` is the same builder without the
-        // deploy, which is exactly what a worker-only app needs.
-        //
-        // NOT `--source` on the worker pool itself, though it accepts one: that
-        // would rebuild the app once per process, on a lane whose release job
-        // already pays for the build twice and says so.
-        try {
-          await stages.around("build", async () => {
-            log("Building with buildpacks — no service to deploy, so the image is built directly…");
-            const hb = setInterval(() => log("building…"), 8000);
-            builds.reset();
-            try {
-              // No `--service-account` here, and it is not an oversight. This is
-              // the one submit that writes no cloudbuild.yaml, so it has no
-              // `logging: CLOUD_LOGGING_ONLY` — and Cloud Build REFUSES a
-              // user-specified build account unless a logging destination is
-              // set, which would turn a scoped identity into a failed deploy.
-              // The buildpack lane is what step 4 deletes anyway; it keeps the
-              // default account until it goes.
-              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`], buildLine);
-            } finally { clearInterval(hb); }
-          });
-        } catch (e) {
-          const buildLog = await builds.error();
-          return { ok: false, error: `Build failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
-        }
+        const image = await buildImage();
+        if (!image.ok) return { ok: false, error: image.error };
         // Released against the image that now exists, not against the source —
         // otherwise the release job pays for a second buildpack build of bytes it
         // has already built.
-        const relS = await runRelease({ lane: "container", service: slug, image: `${IMAGE}:latest`, env: extraEnv, release: releaseCmd });
+        const relS = await runRelease({ lane: "container", service: slug, image: image.image, env: extraEnv, release: releaseCmd });
         if (!relS.ok) return { ok: false, error: relS.error };
         return { ok: true };
       }
@@ -3007,20 +3050,31 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     /**
      * The fleet branch. No Cloud Run service is created at all.
      *
-     * The image is already built by the time this runs — building is shared, it
-     * is only the delivery that forks. Verification is the load balancer with
-     * the app's own health path, because that is the path real traffic takes and
-     * the one a database-backed app fails on when its database is unreachable.
+     * It builds through `buildImage`, the same closure `runDeploy` builds
+     * through — building is shared, it is only the delivery that forks — and it
+     * places the reference that build returned rather than the tag the deploy
+     * expected it to write. Those are not the same thing, and treating them as
+     * the same is how this branch spent Task 7 placing the previous version of
+     * the customer's code while reporting the new one live.
+     *
+     * A failed build is a failed deploy here exactly as it is on the Cloud Run
+     * side, carrying the build's own error. There is no placement attempt after
+     * one: a node given an image that does not exist fails later, further from
+     * the cause, and a node given a STALE image does not fail at all.
+     *
+     * Verification is the load balancer with the app's own health path, because
+     * that is the path real traffic takes and the one a database-backed app
+     * fails on when its database is unreachable.
      */
     const runFleetDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
       if (!FLEET_LB) return { ok: false, error: "no fleet load balancer is configured" };
-      const built = processImage ?? await liveContainerImage(slug);
-      if (!built) return { ok: false, error: "this deploy produced no image to place" };
+      const image = await buildImage();
+      if (!image.ok) return { ok: false, error: image.error };
 
       const placement = await placeOnFleet(
         slug,
         buildAppSpec({
-          slug, image: built, env: extraEnv,
+          slug, image: image.image, env: extraEnv,
           secrets: await allAppSecrets(slug, secretRefs),
           processes, healthPath: primaryHealth.health.path,
         }),
