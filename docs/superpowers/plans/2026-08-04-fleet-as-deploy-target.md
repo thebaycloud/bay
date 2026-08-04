@@ -1382,3 +1382,58 @@ as handled:
 `10.200.0.1` becoming load-bearing IS handled, as far as it can be: Task 2 puts
 it in one exported constant with a test, so changing it is a one-line change
 rather than a search.
+
+---
+
+## Outstanding after the merge — read before setting FLEET_APPS
+
+The plan's own ledger lived in a scratch workspace that is deleted once the
+branch lands, so what survived it is written down here.
+
+### Preconditions nobody has satisfied yet
+
+- **The proxy has never been started on a live node.** Task 1's steps 3-5 were
+  not run: `gcloud compute ssh fleet-lab-1` fails with `Permission denied
+  (publickey)`. Nobody has enabled the unit, proved a sandbox can reach
+  `10.200.0.1:5432`, or rebooted to confirm it survives. Do all three before any
+  app is routed to the fleet.
+- **The nftables ruleset has never been syntax-checked.** `nft -c -f` was not run
+  (no `nft` on the machine that wrote it). This matters beyond the new rule:
+  section 6 ends with `systemctl restart nftables`, so a ruleset that fails to
+  parse means the metadata-server block does not load either — and that block is
+  the only thing stopping a tenant from reading the node's service-account token.
+
+### Parked findings, with their rulings
+
+- **`deployProcesses` has no `toFleet` guard.** A fleet app's workers and crons
+  are placed in the AppSpec *and* deployed as Cloud Run worker pools and
+  scheduler jobs. A cron that runs twice is a production hazard, so this must be
+  closed before `FLEET_APPS` names any app that declares a worker or a cron.
+- **`gcp-rest.ts`'s digest-lookup comment is now false.** It still says the
+  lookup is "best-effort … must never cost the deploy. The caller falls back to
+  the tag". Since the fix it costs the deploy and there is no fallback. Cheap,
+  and exactly the defect class this branch kept hitting.
+- **`scale.cpu` is not validated the way `scale.memory` is.** `app-config.ts`
+  regex-checks memory but takes cpu through `num()`, so `cpu: 0` or a negative
+  reproduces the shape Task 7's fix removed: the placement succeeds,
+  `assertReached` throws, the deploy reports failed and `run_url` is never
+  flipped while the app is live on the node. One line at parse time.
+
+### Decided, not deferred
+
+- **A dead node proxy is still blamed on the app.** The agent refuses to start a
+  database-backed app when the node's proxy is unreachable and logs an error
+  naming the node, but no channel carries that to the control plane — the sync
+  endpoint accepts only a node's report about itself, with no per-app status. So
+  the failure classifies as the app's and dispatches the repair agent against the
+  customer's repository. The operator's ruling was to keep the repair agent
+  running rather than add a fuse; closing it properly needs a protocol change on
+  both sides and is a task of its own.
+
+### The canary has not flown
+
+Task 10 was deliberately not executed. `FLEET_APPS` and `FLEET_PLACEMENT` are
+both unset and `fleetPlacementWanted` still gates the fleet branch, so nothing
+reaches a node until an operator says so. Removing those flags before one
+database-backed app has been deployed, migrated, written to, restarted and read
+back would discard the only thing they exist for.
