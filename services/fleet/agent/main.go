@@ -208,8 +208,14 @@ func (a *Agent) fireDueCrons(now time.Time) {
 			a.mu.Unlock()
 			log.Printf("%s: cron firing", id)
 			if err := a.rt.RunToCompletion(j.app, j.proc, idx, 30*time.Minute); err != nil {
-				log.Printf("%s: cron failed: %v", id, err)
+				n := a.cronFail.failWith(id, time.Now(), err.Error())
+				// The count is the whole point. One failed run is an incident;
+				// the same one failing every night is a broken job, and on a
+				// node whose logs do not leave it those look identical without
+				// a number.
+				log.Printf("%s: cron failed (%d in a row): %v", id, n, err)
 			} else {
+				a.cronFail.succeed(id)
 				log.Printf("%s: cron finished", id)
 			}
 			a.mu.Lock()
@@ -733,8 +739,18 @@ func (a *Agent) serve(addr string) {
 		}
 		a.mu.Unlock()
 		sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+		// Processes AND what has stopped being retried. A node that has given up
+		// on something is the one state that is invisible from the outside: the
+		// process is simply absent, which looks the same as never having been
+		// asked for.
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		json.NewEncoder(w).Encode(struct {
+			Processes any                  `json:"processes"`
+			Failures  map[string]FailState `json:"failures"`
+		}{
+			Processes: out,
+			Failures:  mergeFailures(a.relFail, a.startFail, a.cronFail),
+		})
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
@@ -746,6 +762,24 @@ func (a *Agent) serve(addr string) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// mergeFailures flattens the three trackers into one map for /status.
+//
+// The keys are already distinguishable — a release key is slug@image, a start
+// key is id@image, a cron key is a bare sandbox id — so a prefix would only add
+// a second thing to keep in step with the callers.
+func mergeFailures(ts ...*failTracker) map[string]FailState {
+	out := map[string]FailState{}
+	for _, t := range ts {
+		if t == nil {
+			continue
+		}
+		for k, v := range t.report() {
+			out[k] = v
+		}
+	}
+	return out
+}
 
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {
