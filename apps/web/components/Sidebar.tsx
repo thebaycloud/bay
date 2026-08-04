@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
-import { LayoutGrid, Settings, LogOut, Sparkles, X, Plus, Terminal, Loader2 } from "lucide-react";
+import { LayoutGrid, Settings, LogOut, Sparkles, X, Plus, Terminal, Loader2, ChevronUp } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { Paywall } from "./Paywall";
 import type { App } from "./AppsGrid";
@@ -77,6 +77,7 @@ function trialLeft(endsAt?: string | null): string {
 export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "settings"; apps?: App[] }) {
   const [acct, setAcct] = useState<Acct | null>(null);
   const [showPlans, setShowPlans] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOut, setConfirmOut] = useState(false);
   const fleet = useFleet(initialApps);
 
@@ -161,12 +162,47 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
 
       {acct && (
         <div className="side-acct">
-          <div className="side-acct-id">
-            <span className="acct-av">{initial}</span>
-            <div className="acct-idtxt">
-              {acct.name && <div className="acct-name">{acct.name}</div>}
-              <div className="acct-email">{acct.email}</div>
-            </div>
+          {/*
+            The identity row is the control now. Sign out was a permanent button
+            in the rail — a destructive action with the same weight as Settings,
+            sitting there on every page — and the row above it, the one with the
+            person's own name on it, did nothing at all. This is the pattern the
+            cockpit rail already uses; the classes are its classes.
+          */}
+          <div className="foot-wrap">
+            <button
+              className={"side-acct-id" + (menuOpen ? " open" : "")}
+              onClick={() => { setMenuOpen((o) => !o); setConfirmOut(false); }}
+              aria-expanded={menuOpen}
+            >
+              <span className="acct-av">{initial}</span>
+              <div className="acct-idtxt">
+                {acct.name && <div className="acct-name">{acct.name}</div>}
+                <div className="acct-email">{acct.email}</div>
+              </div>
+              <ChevronUp className="foot-chev" size={13} />
+            </button>
+            {menuOpen && (
+              <>
+                {/* A full-screen catcher rather than a document listener: one
+                    click anywhere closes it, and it cannot leak past unmount. */}
+                <div className="dd-backdrop" onClick={() => setMenuOpen(false)} />
+                <div className="foot-menu">
+                  <Link href="/settings" className="dd-item" onClick={() => setMenuOpen(false)}>
+                    <Settings size={14} />Settings
+                  </Link>
+                  {confirmOut ? (
+                    <>
+                      <div className="dd-confirmq">Sign out of Supersonic?</div>
+                      <button className="dd-item dd-danger" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={14} />Yes, sign out</button>
+                      <button className="dd-item" onClick={() => setConfirmOut(false)}><X size={14} />Cancel</button>
+                    </>
+                  ) : (
+                    <button className="dd-item" onClick={() => setConfirmOut(true)}><LogOut size={14} />Sign out</button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
           <div className="side-acct-plan">
             <span className={"plan-tag" + (onTrial || acct.plan === "pro" ? " pro" : "")}>
@@ -183,15 +219,6 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
               <div className="usage-row"><span>Apps</span><span>{meter.apps}/{meter.maxApps}</span></div>
               <div className="usage-bar"><span style={{ width: `${Math.min(100, (meter.apps / (meter.maxApps || 1)) * 100)}%` }} /></div>
             </div>
-          )}
-          {confirmOut ? (
-            <div className="signout-confirm">
-              <span className="dd-confirmq">Sign out?</span>
-              <button className="side-nav-item danger" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={15} />Yes, sign out</button>
-              <button className="side-nav-item" onClick={() => setConfirmOut(false)}><X size={15} />Cancel</button>
-            </div>
-          ) : (
-            <button className="side-nav-item" onClick={() => setConfirmOut(true)}><LogOut size={15} />Sign out</button>
           )}
         </div>
       )}
