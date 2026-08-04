@@ -350,6 +350,23 @@ Type=simple
 # Root, because it creates network namespaces, mounts snapshots and drives
 # runsc. The tenant boundary is the sandbox, not this process.
 User=root
+# BOTH files, and both optional (`-`), because this heredoc REPLACES the unit
+# every time provision.sh runs.
+#
+# agent.env holds FLEET_ENDPOINT and FLEET_TOKEN. It was added to the live unit
+# by hand and was never in this file, so re-provisioning fleet-lab-1 without
+# this line would have restarted the agent with no control plane to ask. That
+# does not fail loudly: `Source.Fetch` treats an empty Endpoint as "this node
+# has no control plane" and reads /srv/state/desired.json instead — deliberately
+# NOT the cache, which is the fallback for a control plane that is merely
+# unreachable. On 2026-08-04 that local file listed 3 apps while the control
+# plane listed 20, and reconcileOnce stops what is no longer desired before it
+# starts anything. Seventeen apps would have gone down, quietly, as a
+# side effect of running this script.
+#
+# fleet.env is where the rollout writes FLEET_EDGE_SECRET.
+EnvironmentFile=-/etc/supersonic/agent.env
+EnvironmentFile=-/etc/supersonic/fleet.env
 ExecStart=/opt/agent/supersonicd -interval 10s
 Restart=always
 RestartSec=5
