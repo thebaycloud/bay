@@ -598,7 +598,7 @@ async function databaseExists(slug: string): Promise<boolean> {
 }
 
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
-function provisionPostgres(slug: string, log: (l: string) => void, at: DbAddress = CLOUD_RUN_DB): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
+function provisionPostgres(slug: string, log: (l: string) => void, at: DbAddress): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
   try { cfg = pgConfig(); } catch (e) { return Promise.reject(e); }
   // Same helper the delete path uses, so an app's database can always be found
@@ -2028,7 +2028,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
 
     const pgPromise = wants("database") && s.database?.engine === "postgres"
-      ? provisionPostgres(slug, log).then(
+      ? provisionPostgres(slug, log, CLOUD_RUN_DB).then(
           (pg) => ({ ok: true as const, pg }),
           (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
         )
