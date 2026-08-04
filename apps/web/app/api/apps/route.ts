@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { listOwnedApps } from "@/lib/apps";
+import { listOwnedApps, sortOf } from "@/lib/apps";
 import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
 
@@ -17,7 +17,7 @@ import { currentUserId } from "@/lib/session";
  * region — but none of them belong on a list card. They are fetched per app, on the
  * page that shows them.
  */
-export async function GET() {
+export async function GET(req: Request) {
   const uid = await currentUserId();
   if (!uid) return Response.json({ apps: [], error: "not signed in" }, { status: 401 });
   try {
@@ -27,7 +27,11 @@ export async function GET() {
     // every row the moment a deploy starts. That is exactly what happened to
     // the "deployed" line, which the server had and this route did not.
     const [apps, deploys, last] = await Promise.all([
-      listOwnedApps(uid), listActiveDeploys(uid), lastDeploySummaries(uid),
+      // The poll has to ask for the same order the page was rendered with, or
+      // the first refresh while something builds reshuffles the list under the
+      // reader's cursor.
+      listOwnedApps(uid, sortOf(new URL(req.url).searchParams.get("sort"))),
+      listActiveDeploys(uid), lastDeploySummaries(uid),
     ]);
     const known = new Set(apps.map((a) => a.slug));
     // Deploys that have not written an apps row yet — shown as "building" cards so
@@ -58,8 +62,11 @@ export async function GET() {
           deployMs: last[a.slug]?.durationMs ?? undefined,
           // A row still marked deploying is in flight, and the card should say so
           // rather than showing it as a finished app that happens to be down.
-          status: a.status === "deploying" ? ("building" as const) : undefined,
+          status: a.status === "deploying" ? ("building" as const)
+                : a.status === "failed" ? ("failed" as const)
+                : undefined,
           stage: a.status === "deploying" ? "deploying…" : undefined,
+          error: a.status === "failed" ? a.error : undefined,
         })),
       ],
     });

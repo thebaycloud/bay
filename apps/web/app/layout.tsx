@@ -1,13 +1,28 @@
 import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { Instrument_Serif } from "next/font/google";
+import { Bitter } from "next/font/google";
 import { SessionWrapper } from "@/components/SessionWrapper";
 import { themeBootScript } from "@/lib/theme";
 import "./globals.css";
 
-const instrumentSerif = Instrument_Serif({
-  weight: "400",
+/**
+ * The wordmark's face, and it is the LANDING's face.
+ *
+ * These two apps both spelled "Supersonic" in `var(--serif)` and rendered two
+ * different typefaces: the landing loads Bitter — a slab serif with real 600 and
+ * 700 weights — under the variable name `--font-instrument-serif`, while this
+ * app loaded Instrument Serif at weight 400 under the same name and asked for
+ * 600, which the browser faked. Same declared tracking, visibly different
+ * letterforms and rhythm.
+ *
+ * Matching the landing is the point of the wordmark, so this app loads what the
+ * landing loads. The variable keeps its misleading name on purpose: renaming it
+ * here without renaming it there would put the two apps back out of step, and
+ * the name is wrong in exactly one place — the definition.
+ */
+const displaySerif = Bitter({
+  weight: ["400", "600", "700"],
   subsets: ["latin"],
   variable: "--font-instrument-serif",
   display: "swap",
@@ -49,7 +64,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${GeistSans.variable} ${GeistMono.variable} ${instrumentSerif.variable}`}
+      className={`${GeistSans.variable} ${GeistMono.variable} ${displaySerif.variable}`}
     >
       {/* Restores the chosen theme before the first paint — see lib/theme.ts. */}
       <head>

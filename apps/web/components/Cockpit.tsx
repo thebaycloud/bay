@@ -34,6 +34,16 @@ const tabs: { id: Tab; icon: typeof LayoutGrid; label: string }[] = [
 ];
 
 export function Cockpit({ appName, data, children }: { appName: string; data: ServiceInfo | null; children?: ReactNode }) {
+  /**
+   * Worker pools, asked for after this page exists rather than before.
+   *
+   * They used to arrive with the rest of the service description, which meant
+   * every visit to every app waited 1.5–1.7s on `gcloud beta run worker-pools
+   * list` — a subprocess that returns nothing for almost every app. Undefined
+   * until the answer lands, which is why `workerOnly` below is careful: an app
+   * with no URL is only "worker-only" once we actually know it has workers.
+   */
+  const [fetchedWorkers, setFetchedWorkers] = useState<{ name: string; ready: boolean }[] | undefined>(undefined);
   const d = data ?? { slug: appName, name: appName, url: "", ready: false, region: "us-central1", created: "", revision: "", image: "", envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: "" };
   const domain = `${appName}.supersonic.cv`;
   // Apps are served through the proxy at <slug>.supersonic.cv (the raw run.app URL
@@ -48,7 +58,8 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
   // different kind of app. A Telegram bot has no URL, no revision and no request
   // to be ready for, and reading it through a service's eyes reported DOWN while
   // the worker was running perfectly.
-  const workers = d.workers ?? [];
+  const workers = fetchedWorkers ?? d.workers ?? [];
+  const workersKnown = fetchedWorkers !== undefined || d.workers !== undefined;
   const workerOnly = workers.length > 0 && !d.url;
   const workersRunning = workers.length > 0 && workers.every((w) => w.ready);
   const running = workerOnly ? workersRunning : d.ready;
@@ -79,6 +90,12 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
   useEffect(() => {
     fetch("/api/account").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.email) setAcct(d); }).catch(() => {});
     fetch("/api/apps").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.apps) setApps(d.apps); }).catch(() => {});
+    fetch(`/api/apps/${encodeURIComponent(appName)}/workers`)
+      .then((r) => (r.ok ? r.json() : null))
+      // An empty list is an answer — "this app has none" — and it has to be
+      // distinguishable from "not asked yet".
+      .then((w) => setFetchedWorkers(w?.workers ?? []))
+      .catch(() => setFetchedWorkers([]));
   }, []);
   // Deep-link: /apps/<slug>?tab=deployments (used by the dashboard's Building card).
   useEffect(() => {
@@ -211,7 +228,11 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
 
                 <div className="ct-head">
                   <div className="eyebrow">
-                    <span className="live"><span className="d" style={{ background: running ? "var(--live)" : "var(--faint)" }} />{running ? (workerOnly ? "RUNNING" : "LIVE") : "DOWN"}</span>
+                    {/* An app with no web service is only "down" once we know
+                        it has no workers either. Until that answer lands it is
+                        an open question, not a dead app — the workers list is
+                        fetched after this page renders now. */}
+                    <span className="live"><span className="d" style={{ background: running ? "var(--live)" : "var(--faint)" }} />{running ? (workerOnly ? "RUNNING" : "LIVE") : (!d.url && !workersKnown ? "CHECKING" : "DOWN")}</span>
                     <span>/ YOUR APP</span>
                   </div>
                   <h1>{displayName}</h1>

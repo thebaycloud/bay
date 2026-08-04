@@ -29,7 +29,7 @@
   --r: 5px; --r-sm: 3px; --r-pill: 999px;
   --mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
   --sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
-  --serif: var(--font-instrument-serif), Georgia, serif;
+  --serif: var(--font-instrument-serif), "Times New Roman", Georgia, serif;
   --ease: cubic-bezier(.4, 0, .2, 1);
 }
 @media (prefers-color-scheme: dark) {
@@ -135,12 +135,21 @@ nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 0; }
 .crumb .c-dim { color: var(--ink-2); }
 .crumb .sep { color: var(--faint); }
 .topbar .spacer { flex: 1; }
+/* The bar, landed on the page's column.
+   `.topbar-wrap` repeats `.wrap` (max-width, centred) and `.topbar-row` repeats
+   the card list (30px in, capped at the same width), so the search field starts
+   exactly where the heading does and New app ends exactly where a card does.
+   Opted into per page, since a bar with breadcrumbs and a URL pill wants the
+   full width. */
+.topbar-flush { padding: 0; }
+.topbar-wrap { display: flex; width: 100%; height: 100%; max-width: 1260px; margin: 0 auto; padding: 0 30px; }
+.topbar-row { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 1020px; }
 
 .kbar { border-radius: var(--r); display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid var(--line); background: var(--card); color: var(--faint); font-family: var(--mono); font-size: 12.5px; min-width: 156px; transition: border-color .13s var(--ease); }
 .kbar:hover { border-color: var(--line-2); }
 .kbar .kbd { border-radius: var(--r-sm); margin-left: auto; font-size: 11px; border: 1px solid var(--line); padding: 1px 4px; color: var(--ink-2); }
 
-/* command palette (⌘K) — see components/CommandPalette.tsx */
+/* command palette (opens on `/`) — see components/CommandPalette.tsx */
 .cp-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, .38); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 20px 20px; }
 .cp-panel { border-radius: var(--r); width: 100%; max-width: 520px; background: var(--card); border: 1px solid var(--line-2); box-shadow: 0 18px 50px rgba(0, 0, 0, .32); animation: cp-in .13s var(--ease); }
 @keyframes cp-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
@@ -356,6 +365,9 @@ table.dg tr:hover td { background: var(--paper); }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translate(-50%, 14px); background: var(--fill); color: var(--fill-fg); font-family: var(--mono); font-size: 12.5px; letter-spacing: .03em; padding: 10px 15px; display: flex; align-items: center; gap: 9px; opacity: 0; pointer-events: none; transition: opacity .2s var(--ease), transform .22s var(--ease); z-index: 60; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+/* A deploy that failed says so in the colour it deserves, not in the ink used
+   for "it worked". */
+.toast.bad { background: var(--down, #c33a2c); color: #fff; }
 
 .theme-toggle { position: fixed; bottom: 15px; right: 15px; z-index: 40; }
 
@@ -409,7 +421,11 @@ a.btn { text-decoration: none; }
    left with the heading. They were one welded stack across the full window:
    shared hairlines, an outer border on the container, and the two corner actions
    a screen's width from the name they belong to. */
-.shelf { max-width: 1020px; margin-right: auto; display: flex; flex-direction: column; gap: 12px; }
+/* Inset to the same 30px the heading above it sits at. The hero carries its
+   padding on itself and the cards carried none, so "Your apps" was indented and
+   the cards under it ran flush into the rail — two different left edges for one
+   column of content. */
+.shelf { max-width: 1020px; margin: 0 30px; display: flex; flex-direction: column; gap: 12px; }
 .shelf-row { display: grid; grid-template-columns: 260px 1fr; gap: 22px; padding: 22px 30px; border: 1px solid var(--line); background: var(--card); transition: background .13s var(--ease), border-color .13s var(--ease); }
 .shelf-row:hover { border-color: var(--line-2); }
 /* The `overflow: hidden` that was here for the screenshot now earns a second
@@ -466,18 +482,36 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
    last cell to the frame, so the three read as one control with two rounded
    ends rather than three rounded chips that happen to touch. The dividers stay
    dead straight. */
-.shelf-actions .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line-2); background: var(--paper); border-radius: var(--r); overflow: hidden; }
-.shelf-actions .act { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-left: 1px solid var(--line-2); font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink); text-decoration: none; transition: background .13s var(--ease), color .13s var(--ease); }
-.shelf-actions .act:first-child { border-left: none; }
-.shelf-actions .act svg { color: var(--faint); transition: color .13s var(--ease); }
-.shelf-actions .act:hover { background: var(--fill); color: var(--fill-fg); }
-.shelf-actions .act:hover svg { color: var(--fill-fg); }
-.shelf-empty { max-width: 1020px; margin-right: auto; padding: 56px 28px; border: 1px solid var(--line); background: var(--card); display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+/* Unscoped, because the card's actions and the list's filters are the same
+   control doing the same job in two places. */
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line-2); background: var(--paper); border-radius: var(--r); overflow: hidden; }
+.seg .act { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border: 0; border-left: 1px solid var(--line-2); background: none; font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink); text-decoration: none; cursor: pointer; transition: background .13s var(--ease), color .13s var(--ease); }
+.seg .act:first-child { border-left: none; }
+.seg .act svg { color: var(--faint); transition: color .13s var(--ease); }
+.seg .act:hover:not(:disabled) { background: var(--fill); color: var(--fill-fg); }
+.seg .act:hover:not(:disabled) svg { color: var(--fill-fg); }
+/* The one that is currently true, held rather than hovered. */
+.seg .act.on { background: var(--fill); color: var(--fill-fg); }
+.seg .act.on svg, .seg .act.on .n { color: var(--fill-fg); }
+.seg .act:disabled { color: var(--faint); cursor: default; }
+.seg .act .n { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* The filter/sort bar, on the card column's own edges — see .shelf. */
+.shelf-tools { max-width: 1020px; margin: 0 30px 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+.shelf-tools .tool-sort { margin-left: auto; display: flex; align-items: center; gap: 9px; transition: opacity .13s var(--ease); }
+/* While the new order is being fetched. Dimmed rather than replaced by a
+   spinner: the list underneath is still the truth until the answer lands. */
+.shelf-tools .tool-sort.busy { opacity: .55; }
+.shelf-tools .tool-lbl { font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.shelf-none { padding: 34px 28px; border: 1px dashed var(--line-2); border-radius: var(--r); font-family: var(--mono); font-size: 12.5px; color: var(--faint); }
+.shelf-empty { max-width: 1020px; margin: 0 30px; padding: 56px 28px; border: 1px solid var(--line); background: var(--card); display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
 .shelf-empty p { margin: 0; font-family: var(--mono); font-size: 14.5px; color: var(--ink-2); }
 .shelf-empty .btn-new { margin-left: 0; }
 /* Stack below the width where a 260px preview leaves the facts nowhere to go. */
 @media (max-width: 720px) {
   .shelf-row { grid-template-columns: 1fr; gap: 14px; padding: 18px; }
+  /* 30px of inset on each side is a tenth of a phone screen. */
+  .shelf, .shelf-empty, .shelf-tools { margin-left: 16px; margin-right: 16px; }
 }
 
 .apps-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
@@ -491,6 +525,13 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .shelf-preview .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; border: 0; }
 .shelf-preview .thumb .thumb-mono { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--mono); font-size: 48.5px; font-weight: 500; color: var(--line-2); }
 .shelf-preview .thumb .thumb-build { position: absolute; inset: 0; display: grid; place-items: center; font-size: 33px; color: var(--ink-2); animation: spin 1.1s linear infinite; }
+/* A failed app: the one card with no picture and no promises. */
+.shelf-row.failed { border-color: color-mix(in srgb, var(--down, #c33a2c) 35%, var(--line)); }
+.shelf-preview.fail-mark { border-style: dashed; }
+.shelf-preview.fail-mark .thumb { display: grid; place-items: center; color: var(--down, #c33a2c); background: color-mix(in srgb, var(--down, #c33a2c) 6%, var(--paper)); }
+.shelf-row .st.fail { color: var(--down, #c33a2c); }
+.shelf-row .st.fail .d { background: var(--down, #c33a2c); }
+.shelf-body.fail-why { color: var(--ink); border-color: color-mix(in srgb, var(--down, #c33a2c) 30%, var(--line)); white-space: pre-wrap; max-height: 54px; }
 .shelf-row.building .shelf-host { color: var(--ink-2); animation: pulse 1.6s var(--ease) infinite; }
 .shelf-row .st { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); }
 .shelf-row .st .d { width: 6px; height: 6px; background: var(--live); }
@@ -695,7 +736,10 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 /* persistent left sidebar */
 .shell-side { flex-direction: row; }
 .sidebar { width: 252px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--paper); }
-.side-brand { display: flex; align-items: center; gap: 9px; height: 56px; flex: none; padding: 0 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-weight: 600; font-size: 15px; letter-spacing: .02em; color: var(--ink); text-decoration: none; }
+/* The wordmark takes the landing's serif, not the rail's mono — the same rule
+   as `.ss .nav .brand` over there, so the name is spelled one way across the
+   two products. */
+.side-brand { display: flex; align-items: center; gap: 9px; height: 56px; flex: none; padding: 0 16px; border-bottom: 1px solid var(--line); font-family: var(--serif); font-weight: 600; font-size: 20px; letter-spacing: -0.02em; text-transform: none; color: var(--ink); text-decoration: none; }
 .side-brand .logo { border-radius: var(--r); width: 24px; height: 24px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; }
 /* The rail is the one surface in the product with no blueprint texture on it.
    A ruled edge, the same repeat as the page's own rulers, turned 90°. */
@@ -717,6 +761,26 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .side-block { padding: 0 8px 10px; }
 .side-block .side-label { padding: 10px 4px 6px; }
 .side-more { padding: 4px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+
+/* The deck.
+   Collapsed, the cards after the first are pulled up under it with a negative
+   margin so only their top edge shows — margins and transforms rather than
+   absolute positioning, because they stay in flow and the expansion is
+   therefore animatable. Hover (or a tab landing inside) deals them out. */
+.dep-stack { position: relative; }
+/* A stated height, so the overlap below is arithmetic rather than a guess: the
+   two text lines are already clipped to one line each, so nothing here wraps and
+   every card in the deck is the same size. 68 + 6 of margin = 74 between tops;
+   -66 leaves 8px of each card showing, which reads as an edge rather than as a
+   second card that failed to load. */
+.dep-stack .dep-strip { position: relative; min-height: 68px; transition: margin-top .18s var(--ease), transform .18s var(--ease), opacity .18s var(--ease); }
+.dep-stack.many:not(:hover):not(:focus-within) .dep-strip:nth-child(2) { margin-top: -66px; transform: scale(.965); opacity: .9; z-index: 2; }
+.dep-stack.many:not(:hover):not(:focus-within) .dep-strip:nth-child(3) { margin-top: -66px; transform: scale(.93); opacity: .72; z-index: 1; }
+/* A fourth card adds nothing to a stack that already reads as "several". */
+.dep-stack.many:not(:hover):not(:focus-within) .dep-strip:nth-child(n+4) { display: none; }
+.dep-stack .dep-strip:nth-child(1) { z-index: 3; }
+/* The peeking edges must not swallow the click meant for the card on top. */
+.dep-stack.many:not(:hover):not(:focus-within) .dep-strip:nth-child(n+2) { pointer-events: none; }
 
 /* A deploy in flight, visible from every page rather than only the grid. */
 .dep-strip { display: block; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); text-decoration: none; margin-bottom: 6px; transition: border-color .13s var(--ease); }
@@ -798,7 +862,14 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .acct-title { font-family: var(--mono); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
 .acct-id { display: flex; align-items: center; gap: 12px; padding: 18px 16px; border-bottom: 1px solid var(--line); }
 .acct-idtxt { min-width: 0; }
-.acct-name { font-family: var(--mono); font-size: 14.5px; font-weight: 600; }
+.acct-name { font-family: var(--mono); font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Name and plan on one line: the name takes what it needs and gives way first,
+   because the tag is two syllables and the name can be anything. */
+.acct-nameline { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.acct-nameline .acct-name { min-width: 0; flex: 0 1 auto; }
+.acct-nameline .plan-tag { flex: none; }
+/* The tag beside a name, rather than filling a row of its own. */
+.plan-tag.sm { padding: 1px 6px; font-size: 10px; letter-spacing: .08em; gap: 0; }
 .acct-email { font-family: var(--mono); font-size: 13px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acct-plan { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .acct-note { padding: 8px 16px; color: var(--down, #c33a2c); font-family: var(--mono); font-size: 12px; }
@@ -1083,3 +1154,23 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .an-err { font-family: var(--mono); font-size: 11.5px; max-width: 34ch; word-break: break-word; line-height: 1.45; }
 
 @media (max-width: 900px) { .an-people, .an-apps { font-size: 12px; } }
+
+/* ---------- skeletons ----------
+   Streamed while a page's data is still coming. The shapes are the real
+   layout's, so nothing moves when the content replaces them; only the fill is
+   different. */
+.sk-bar { display: block; border-radius: var(--r-sm); background: var(--line); position: relative; overflow: hidden; }
+.sk-bar::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--card) 70%, transparent), transparent);
+  animation: sk-sweep 1.25s var(--ease) infinite;
+}
+@keyframes sk-sweep { to { transform: translateX(100%); } }
+.shelf-row.sk .thumb { height: 172px; }
+.shelf-row.sk .shelf-head { min-height: 34px; }
+.sk-panel { margin-top: 18px; padding: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); }
+/* The brand mark has no glyph in a skeleton — just its square. */
+.sidebar .side-brand .logo:empty { background: var(--line); }
+@media (prefers-reduced-motion: reduce) {
+  .sk-bar::after { animation: none; }
+}

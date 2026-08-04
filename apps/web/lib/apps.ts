@@ -71,6 +71,8 @@ export interface OwnedApp {
   status: "deploying" | "live" | "failed";
   visibility: Visibility;
   createdAt: string;
+  /** Why the last deploy failed, when it did. From the deploy record. */
+  error?: string;
 }
 
 /**
@@ -86,22 +88,84 @@ export interface OwnedApp {
  *
  * `deploys` carries the friendly name the person deployed under; an app that
  * predates that table falls back to its slug.
+ *
+ * Failed apps are INCLUDED. They used to be filtered out here, which meant a
+ * deploy that failed removed the app from the dashboard entirely: no card, no
+ * reason, and no way back to it except knowing the URL. The one moment the
+ * product most needs to explain itself was the one moment it went silent. The
+ * deploy record's `error` comes along so the card can say what happened.
+ *
+ * Quotas are unaffected — `lib/entitlements.ts` counts non-failed apps in its
+ * own query, so a broken deploy still does not consume a slot.
  */
-export async function listOwnedApps(ownerId: string): Promise<OwnedApp[]> {
+/**
+ * Newest work first, which is not the same as newest app.
+ *
+ * This ordered by `a.created_at` — the day the app was FIRST deployed — so a
+ * throwaway from January outranked the thing shipped twenty minutes ago, and
+ * the dashboard's top row was an accident of history rather than an answer to
+ * "what am I working on". The last deploy is what changes; the creation date
+ * never does.
+ *
+ * Ordered here rather than in the component on purpose: the list is paged by
+ * nothing today, but a sort that lives in the browser is a sort that breaks the
+ * moment it is, and both the page render and /api/apps read through this one
+ * function. Sorting in SQL means they cannot disagree.
+ *
+ * `finished_at` arrived in an ALTER (see lib/deploys.ts), so a database that
+ * has not run it yet falls back to the old ordering instead of failing the
+ * whole dashboard. The apps list is the page; it does not get to 500 over a
+ * sort key.
+ */
+const OWNED_APPS = (order: string) =>
+  `SELECT a.slug,
+          COALESCE(NULLIF(d.name, ''), a.slug) AS name,
+          a.run_url,
+          a.status,
+          a.visibility,
+          a.created_at,
+          d.error
+     FROM apps a
+     LEFT JOIN deploys d ON d.slug = a.slug
+    WHERE a.owner_id = $1
+    ORDER BY ${order}`;
+
+/** Last deploy, then last progress report, then the day it was created. */
+const BY_LAST_DEPLOY = "COALESCE(d.finished_at, d.updated_at, a.created_at) DESC";
+
+/**
+ * The orders a person may ask for, as a fixed set.
+ *
+ * A map rather than a string the caller supplies: this value is interpolated
+ * into SQL, so the only safe version is one where the caller picks a KEY and
+ * never writes the clause. `sortOf` turns anything at all — a query string, a
+ * typo, a hand-edited URL — into one of these three.
+ */
+export type AppSort = "deployed" | "name" | "oldest";
+const ORDER: Record<AppSort, string> = {
+  deployed: BY_LAST_DEPLOY,
+  name: "lower(COALESCE(NULLIF(d.name, ''), a.slug)) ASC",
+  // The inverse of `deployed`, which is what "oldest" means next to "recent".
+  // This was `a.created_at DESC` — newest app first, by the date it was FIRST
+  // deployed — so it read as a third spelling of the default and looked like a
+  // button that did nothing.
+  oldest: "COALESCE(d.finished_at, d.updated_at, a.created_at) ASC",
+};
+
+/** Whatever the caller asked for, as a sort this module will actually run. */
+export function sortOf(value: unknown): AppSort {
+  return value === "name" || value === "oldest" ? value : "deployed";
+}
+
+export async function listOwnedApps(ownerId: string, sort: AppSort = "deployed"): Promise<OwnedApp[]> {
   if (!ownerId) return [];
-  const r = await getPool(DB).query(
-    `SELECT a.slug,
-            COALESCE(NULLIF(d.name, ''), a.slug) AS name,
-            a.run_url,
-            a.status,
-            a.visibility,
-            a.created_at
-       FROM apps a
-       LEFT JOIN deploys d ON d.slug = a.slug
-      WHERE a.owner_id = $1 AND a.status <> 'failed'
-      ORDER BY a.created_at DESC`,
-    [ownerId]
-  );
+  let r;
+  try {
+    r = await getPool(DB).query(OWNED_APPS(ORDER[sort] ?? BY_LAST_DEPLOY), [ownerId]);
+  } catch (e) {
+    if (!/column .*(finished_at|updated_at).* does not exist/i.test(e instanceof Error ? e.message : String(e))) throw e;
+    r = await getPool(DB).query(OWNED_APPS("a.created_at DESC"), [ownerId]);
+  }
   return r.rows.map((row) => ({
     slug: row.slug,
     name: row.name,
@@ -112,6 +176,7 @@ export async function listOwnedApps(ownerId: string): Promise<OwnedApp[]> {
     status: row.status,
     visibility: row.visibility,
     createdAt: row.created_at?.toISOString?.() ?? String(row.created_at ?? ""),
+    error: row.status === "failed" ? (row.error ?? undefined) : undefined,
   }));
 }
 

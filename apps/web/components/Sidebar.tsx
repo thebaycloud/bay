@@ -135,7 +135,10 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
 
   return (
     <aside className="sidebar">
-      <Link href="/" className="side-brand"><span className="logo"><Mark size={15} onDark /></span>SUPERSONIC</Link>
+      {/* The landing's wordmark, not the mono one: same serif, same case, same
+          mark beside it — see `.ss .nav .brand` in apps/landing. Two products
+          were spelling their own name differently. */}
+      <Link href="/" className="side-brand"><span className="logo"><Mark size={15} onDark /></span>Supersonic</Link>
 
       {/*
         Grouped, and labelled. Two unlabelled links in a 232px column read as an
@@ -167,8 +170,16 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
       */}
       {fleet.building.length > 0 && (
         <div className="side-block">
-          <div className="side-label">Deploying</div>
-          {fleet.building.slice(0, 3).map((b) => (
+          <div className="side-label">Deploying{fleet.building.length > 1 ? ` · ${fleet.building.length}` : ""}</div>
+          {/*
+            A deck rather than a list. Three simultaneous deploys pushed the
+            health block and the account off the bottom of a short window, and
+            the rail's job is to say "something is happening", not to be a
+            deployments page. Collapsed it is one card with the others peeking
+            out behind; hovering it deals them out.
+          */}
+          <div className={"dep-stack" + (fleet.building.length > 1 ? " many" : "")}>
+          {fleet.building.slice(0, 4).map((b) => (
             <Link key={b.slug} className="dep-strip" href={`/apps/${b.slug}?tab=deployments`}>
               <div className="ds-top">
                 <span className="ds-nm">{b.name || b.slug}</span>
@@ -180,8 +191,9 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
               <div className="ds-bar"><span /></div>
             </Link>
           ))}
-          {fleet.building.length > 3 && (
-            <div className="side-more">+{fleet.building.length - 3} more</div>
+          </div>
+          {fleet.building.length > 4 && (
+            <div className="side-more">+{fleet.building.length - 4} more</div>
           )}
         </div>
       )}
@@ -222,7 +234,16 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
             >
               <span className="acct-av">{initial}</span>
               <div className="acct-idtxt">
-                {acct.name && <div className="acct-name">{acct.name}</div>}
+                {/* The plan rides with the name. It was a tag on its own line
+                    below, which spent a whole row of the rail restating one
+                    word — and the word describes the person, so it belongs on
+                    the line that names them. */}
+                <div className="acct-nameline">
+                  {acct.name && <span className="acct-name">{acct.name}</span>}
+                  <span className={"plan-tag sm" + (onTrial || acct.plan === "pro" ? " pro" : "")}>
+                    {onTrial ? "Trial" : acct.plan === "pro" ? "Pro" : "Basic"}
+                  </span>
+                </div>
                 <div className="acct-email">{acct.email}</div>
               </div>
               <ChevronUp className="foot-chev" size={14} />
@@ -251,12 +272,13 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
               </>
             )}
           </div>
-          <div className="side-acct-plan">
-            <span className={"plan-tag" + (onTrial || acct.plan === "pro" ? " pro" : "")}>
-              <Sparkles size={13} />{onTrial ? "Trial" : acct.plan === "pro" ? "Pro" : "Basic"}
-            </span>
-            {canUpgrade && <button className="btn sm primary" onClick={() => setShowPlans(true)}>Upgrade</button>}
-          </div>
+          {/* Only the offer stays on its own line, and only when there is one
+              to make: on Pro this whole row used to exist to say "Pro" twice. */}
+          {canUpgrade && (
+            <div className="side-acct-plan">
+              <button className="btn sm primary" onClick={() => setShowPlans(true)}><Sparkles size={13} />Upgrade</button>
+            </div>
+          )}
           {/* The clock the tag never showed. `trialEndsAt` has been in the
               account payload since trials shipped and nothing read it, so the
               rail said "Trial" on day one and on the last day alike. */}
