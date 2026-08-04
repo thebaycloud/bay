@@ -427,9 +427,24 @@ func (a *Agent) reconcileOnce() error {
 			// actually mean "this is a different program".
 			if l.app.Image == u.app.Image && sameStrings(l.proc.Command, u.proc.Command) {
 				if st, err := runscStatus(id); err == nil && st.Status == "running" {
+					a.startFail.succeed(id + "@" + u.app.Image)
 					continue
 				}
-				log.Printf("%s: not running, restarting", id)
+				// It died. Restarting is right; restarting it every ten seconds
+				// forever is not — that is a broken image turning into a
+				// permanent cycle of sandbox creation on a node holding
+				// nineteen working apps.
+				key := id + "@" + u.app.Image
+				switch a.startFail.decide(key, time.Now()) {
+				case actWait:
+					continue
+				case actGiveUp:
+					log.Printf("%s: has died %d times, not restarting — deploy a new image to reset",
+						id, maxAttempts)
+					continue
+				}
+				n := a.startFail.fail(key, time.Now())
+				log.Printf("%s: not running, restarting (%d/%d)", id, n, maxAttempts)
 			} else {
 				log.Printf("%s: image or command changed, restarting", id)
 				// A changed image means the release process has to run again
