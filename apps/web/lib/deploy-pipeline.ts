@@ -231,9 +231,16 @@ async function fetchContainerError(slug: string): Promise<string | null> {
       "logging", "read",
       appLogFilter(slug, { minSeverity: "ERROR" }),
       "--project", PROJECT, "--limit", "25", "--freshness", "10m",
-      "--format=value(textPayload)", "--order=asc",
+      "--format=json", "--order=asc",
     ]);
-    const lines = out.split("\n").map((l) => l.trim()).filter(Boolean)
+    // Both runtimes, because they differ: a Cloud Run entry carries textPayload,
+    // and an entry the ops agent shipped from a node carries jsonPayload.message.
+    // Reading only textPayload returned null for every fleet app while looking
+    // exactly like an app that logged nothing.
+    const lines = (JSON.parse(out) as any[])
+      .map((e) => String(e.textPayload ?? e.jsonPayload?.message ?? ""))
+      .map((l) => l.trim())
+      .filter(Boolean)
       .filter((l) => !/STARTUP (TCP|HTTP) probe|Default STARTUP|Connection failed with status/i.test(l));
     const signal = lines.filter((l) => /error|exception|throw|cannot|not initialize|not found|refused|denied|undefined|EADDR|traceback|fatal|missing|required/i.test(l));
     const pick = (signal.length ? signal : lines).slice(0, 12);
