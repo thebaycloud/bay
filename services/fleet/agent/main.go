@@ -399,6 +399,14 @@ func (a *Agent) reconcileOnce() error {
 	}
 	a.mu.Unlock()
 
+	// Which slugs still have at least one process unit, so a release's failure
+	// record is forgotten only once its app is truly gone — not while some
+	// other process of the same app is still desired.
+	survivingSlugs := map[string]bool{}
+	for _, u := range units {
+		survivingSlugs[u.app.Slug] = true
+	}
+
 	// Remove what is no longer wanted, before starting anything new: on a node
 	// near its memory ceiling, starting first would be the difference between a
 	// clean swap and an OOM.
@@ -407,11 +415,24 @@ func (a *Agent) reconcileOnce() error {
 			log.Printf("%s: removing (no longer desired)", id)
 			a.rt.Stop(id)
 			a.mu.Lock()
-			if l, ok := a.live[id]; ok {
+			l, wasLive := a.live[id]
+			if wasLive {
 				delete(a.slots, l.index)
 			}
 			delete(a.live, id)
 			a.mu.Unlock()
+
+			// Forget this id's own failure history: the start key carries the
+			// image, so an exact delete can't find it — remove by prefix. The
+			// cron key is a bare id, so exact removal is right there.
+			a.startFail.forgetPrefix(id + "@")
+			a.cronFail.succeed(id)
+			// The release record belongs to the app, not the process — clear
+			// it only once no other process of this app survives, so this
+			// doesn't hand a still-live app a fresh five attempts.
+			if wasLive && !survivingSlugs[l.app.Slug] {
+				a.relFail.forgetPrefix(l.app.Slug + "@")
+			}
 		}
 	}
 
@@ -778,8 +799,10 @@ func (a *Agent) serve(addr string) {
 // mergeFailures flattens the three trackers into one map for /status.
 //
 // The keys are already distinguishable — a release key is slug@image, a start
-// key is id@image, a cron key is a bare sandbox id — so a prefix would only add
-// a second thing to keep in step with the callers.
+// key is id@image, a cron key is a bare sandbox id — but that non-collision
+// guarantee lives entirely outside this package, in what callers choose to
+// pass as keys. A collision is therefore reported loudly rather than silently
+// resolved by last-write-wins.
 func mergeFailures(ts ...*failTracker) map[string]FailState {
 	out := map[string]FailState{}
 	for _, t := range ts {
@@ -787,6 +810,10 @@ func mergeFailures(ts ...*failTracker) map[string]FailState {
 			continue
 		}
 		for k, v := range t.report() {
+			if _, dup := out[k]; dup {
+				log.Printf("status: failure key %q reported by two trackers — keeping the first", k)
+				continue
+			}
 			out[k] = v
 		}
 	}

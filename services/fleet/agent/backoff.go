@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -134,6 +135,25 @@ func (t *failTracker) succeed(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.m, key)
+}
+
+// forgetPrefix drops every record whose key starts with p.
+//
+// Callers key on slug@image or id@image, so a process or app that leaves
+// desired state cannot be forgotten by exact key — the image is part of the key
+// and the caller removing it does not know which images it ever failed on.
+// Without this, /status accumulates ghost entries for things that no longer
+// exist, which is precisely what it was added to help a human rule out.
+func (t *failTracker) forgetPrefix(p string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Deleting from a map during range is safe per the Go spec — do not
+	// "fix" this into a two-pass collect-then-delete.
+	for k := range t.m {
+		if strings.HasPrefix(k, p) {
+			delete(t.m, k)
+		}
+	}
 }
 
 // report is a copy, so a caller iterating it cannot race the reconcile loop.

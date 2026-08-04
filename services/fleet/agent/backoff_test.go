@@ -133,3 +133,45 @@ func TestReportIsACopy(t *testing.T) {
 		t.Fatalf("report handed out its own map — a caller deleted a live record")
 	}
 }
+
+func TestForgetPrefixRemovesMatchingKeysOnly(t *testing.T) {
+	tr := newFailTracker()
+	now := time.Unix(1000, 0)
+	tr.fail("a8ebb@sha256:old", now)
+	tr.fail("a8ebb@sha256:new", now)
+	tr.fail("other@sha256:old", now)
+
+	tr.forgetPrefix("a8ebb@")
+
+	r := tr.report()
+	if _, ok := r["a8ebb@sha256:old"]; ok {
+		t.Fatalf("forgetPrefix left a8ebb@sha256:old — matching key was not removed")
+	}
+	if _, ok := r["a8ebb@sha256:new"]; ok {
+		t.Fatalf("forgetPrefix left a8ebb@sha256:new — matching key was not removed")
+	}
+	if _, ok := r["other@sha256:old"]; !ok {
+		t.Fatalf("forgetPrefix removed other@sha256:old — a non-matching key must survive")
+	}
+}
+
+func TestMergeFailuresUnionsDistinctKeys(t *testing.T) {
+	rel := newFailTracker()
+	start := newFailTracker()
+	cron := newFailTracker()
+	now := time.Unix(1000, 0)
+
+	rel.fail("app1@sha256:aaa", now)
+	start.fail("id1@sha256:bbb", now)
+	cron.fail("id2", now)
+
+	out := mergeFailures(rel, start, cron)
+	if len(out) != 3 {
+		t.Fatalf("mergeFailures returned %d entries, want 3 (one per tracker): %+v", len(out), out)
+	}
+	for _, k := range []string{"app1@sha256:aaa", "id1@sha256:bbb", "id2"} {
+		if _, ok := out[k]; !ok {
+			t.Fatalf("mergeFailures missing key %q from the union", k)
+		}
+	}
+}
