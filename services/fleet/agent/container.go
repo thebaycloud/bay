@@ -401,6 +401,17 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 		return nil, fmt.Errorf("%s: image declares no entrypoint or cmd and the process declares no command", id)
 	}
 
+	// Checked before secrets are even fetched, let alone the namespace created:
+	// if the node's own proxy is down, every database-backed app on it is about
+	// to fail the same way, and there is no point spending a Secret Manager round
+	// trip — or a namespace this function would then have to tear back down — on
+	// a start that cannot succeed. Apps with no database skip this entirely.
+	if hasDatabase(app) {
+		if err := dbPathReachable(dbProxyAddr, 3*time.Second); err != nil {
+			return nil, fmt.Errorf("%s: %w", id, err)
+		}
+	}
+
 	// Resolve secrets BEFORE the namespace exists, so a missing binding fails
 	// cheaply and leaves nothing to clean up. An app whose DATABASE_URL cannot be
 	// read must not start: it would come up, fail every request, and still pass a

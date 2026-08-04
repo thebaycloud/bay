@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +32,11 @@ import (
 )
 
 const secretManagerBase = "https://secretmanager.googleapis.com/v1"
+
+// dbProxyAddr is the one Cloud SQL Auth Proxy per node, reached over the
+// sandbox bridge gateway (see bridgeCIDR in network.go) rather than
+// localhost, because every sandbox's network namespace has its own loopback.
+const dbProxyAddr = "10.200.0.1:5432"
 
 // resolveSecret fetches one secret version's payload.
 //
@@ -116,4 +122,35 @@ func resolveAll(project string, refs map[string]string) (map[string]string, erro
 		return nil, firstErr
 	}
 	return out, nil
+}
+
+// hasDatabase is true when this app was given a database by the platform.
+//
+// The reference can arrive either as a Secret Manager id (before resolution)
+// or, once resolved, as a plain value in the environment — checking both
+// means this stays correct regardless of where in the start sequence it is
+// called from.
+func hasDatabase(app App) bool {
+	if _, ok := app.Secrets["DATABASE_URL"]; ok {
+		return true
+	}
+	_, ok := app.Env["DATABASE_URL"]
+	return ok
+}
+
+// dbPathReachable checks that this node's database path is up.
+//
+// A secret that cannot be resolved already fails a start, and for the same
+// reason: an app that comes up without a working DATABASE_URL passes a health
+// check on "/" and fails every request that touches data.
+//
+// The error names the NODE deliberately. Without that this failure is
+// indistinguishable from a broken app, and the repair agent is handed a
+// customer's repository to fix over our own outage.
+func dbPathReachable(addr string, timeout time.Duration) error {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return fmt.Errorf("this node's database path (%s) is not answering — a node problem, not this app's: %w", addr, err)
+	}
+	return conn.Close()
 }
