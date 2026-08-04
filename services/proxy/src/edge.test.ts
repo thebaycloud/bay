@@ -72,21 +72,32 @@ test("marked live with nothing to serve is stalled, not 'hang tight'", () => {
 test("an app with no web process is not a broken app", () => {
   // The shape this exists for: an app with one `bot` process and no `web`.
   //
-  // CORRECTION, 5 Aug. This case was written from hdhxq and the claim that hdhxq
-  // "went live correctly and has been working the whole time" is FALSE — checked
-  // against the live project rather than inherited. Its Cloud Run service holds
-  // one revision, hdhxq-00004-nwg, which never became ready:
-  // HealthCheckContainerError, latestReady None, no traffic, no url, and no
-  // Cloud Run Job either. Its own logs from 2 Aug say why, and it is not this
-  // defect: "[supersonic-run] FATAL: no run command for this app — the deploy
-  // must supply one". The bot has not run since.
+  // Checked against the live project on 5 Aug, in two passes, because the first
+  // pass reached the wrong answer and the way it went wrong is worth keeping.
   //
-  // So hdhxq must NOT be given has_web = false. It is broken, not serviceless,
-  // and telling its owner "nothing is wrong" is the exact failure this file
-  // guards against in the other direction. The mechanism below is still right
-  // for a genuinely worker-only app; hdhxq is simply not one of them, and the
-  // real defect it points at is that a deploy marked an app `live` while its
-  // only revision never started.
+  // Pass one looked at the Cloud Run SERVICE named hdhxq and found revision
+  // hdhxq-00004-nwg stuck on HealthCheckContainerError, latestReady None, no
+  // url, no traffic — and its logs from 2 Aug 20:42 saying "[supersonic-run]
+  // FATAL: no run command for this app". No Cloud Run Job either. Every one of
+  // those facts is true, and together they look exactly like a dead app.
+  //
+  // They are a dead ATTEMPT. A worker does not run as a service or as a job: it
+  // runs as a Cloud Run WORKER POOL, which `gcloud run services list` and
+  // `jobs list` do not show, so looking in both and finding nothing reads as
+  // "nothing is running" when the thing is simply somewhere else. hdhxq-bot was
+  // created at 20:59 that same evening — seventeen minutes after the failed
+  // service revision — is Ready=True on revision hdhxq-bot-00003-4jq, and its
+  // own logs record `telegram.ext.Application - INFO - Application started`.
+  // It has logged nothing for a day, which is what an idle polling bot does and
+  // is not evidence of anything.
+  //
+  // So hdhxq IS worker-only and IS running, the 503 was ours, and has_web=false
+  // is right for it. The failed service revision is leftover from the runner
+  // lane that same day and is what made the app look broken to anyone checking.
+  //
+  // The lesson that survives: "no service and no job" is not "not running" on
+  // this platform, and any future check written here must look at worker pools
+  // too.
   // It went live correctly,
   // there is no run_url because there is no HTTP service to point at, and the
   // edge called that "This deploy stopped" for two days on a customer's URL.
