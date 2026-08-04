@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, chooseRuntime, type PlacementPorts } from "../lib/fleet-place";
-import type { AppSpec } from "../lib/fleet-spec";
+import {
+  fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, chooseRuntime,
+  specHasWeb, requiredProcesses, runVerdict, awaitRunning, type PlacementPorts,
+} from "../lib/fleet-place";
+import { buildAppSpec, type AppSpec } from "../lib/fleet-spec";
+import { resolveProcess } from "../lib/processes";
+import type { ProcessState } from "../lib/fleet";
 import type { Lane } from "../lib/lanes";
 import { classify } from "../lib/deploy-errors";
 
@@ -14,6 +19,40 @@ const spec: AppSpec = {
   healthPath: "/",
 };
 
+/**
+ * A worker-only placement, built by the thing that builds the real ones.
+ *
+ * Hand-writing the AppSpec would prove that this file and `runVerdict` share an
+ * imagination. Everything the verdict compares is produced here by the pipeline's
+ * own resolver and translator — `resolveProcess` decides the kind, `buildAppSpec`
+ * wraps the command in `/bin/sh -c` via shellArgv — so a change to either shows up
+ * as a failing test rather than as a worker-only deploy that rolls back for a
+ * reason nobody can act on.
+ */
+function workerOnlySpec(command = "python bot.py"): AppSpec {
+  return buildAppSpec({
+    slug: "myapp",
+    image: "us-central1-docker.pkg.dev/p/r/myapp@sha256:abc",
+    env: [], secrets: [],
+    processes: [resolveProcess("bot", { command })],
+  });
+}
+
+/**
+ * What the node reports for a spec it is faithfully running.
+ *
+ * Derived from the spec rather than typed out, and that is the point: it mirrors
+ * `reportRunning` in services/fleet/agent/main.go field for field — slug from the
+ * app, process from the process's own name, image from the app, command from the
+ * process — so the strings the two sides key on cannot drift apart here without
+ * the Go side's own tests or the drift test in fleet-spec.test.ts catching it.
+ */
+function reportFor(s: AppSpec): ProcessState[] {
+  return requiredProcesses(s).map((p) => ({
+    slug: s.slug, process: p.name, image: s.image, command: p.command,
+  }));
+}
+
 /** Ports that record what was done, so the ORDER can be asserted. */
 function ports(over: Partial<PlacementPorts> = {}) {
   const calls: string[] = [];
@@ -25,6 +64,7 @@ function ports(over: Partial<PlacementPorts> = {}) {
     readRuntime: async () => { calls.push("readRuntime"); return "fleet"; },
     setRuntime: async (slug, rt) => { calls.push(`runtime:${slug}=${rt}`); },
     probe: async () => { calls.push("probe"); return { code: 200 }; },
+    runningOnNode: async () => { calls.push("running"); return { ok: true }; },
     nodeFaultFor: async () => { calls.push("nodeFault"); return null; },
     log: () => {},
   };
@@ -34,7 +74,10 @@ function ports(over: Partial<PlacementPorts> = {}) {
 // `lane` is widened to `Lane` (not narrowed to the literal "container") so the
 // override cases below — which swap in "runner" — typecheck against
 // `Partial<typeof eligible>`.
-const eligible = { lane: "container" as Lane, image: "img", staticServe: false, serviceless: false, hasDockerfile: false };
+const eligible = { lane: "container" as Lane, image: "img", staticServe: false, serviceless: false, hasDockerfile: false, workers: 0 };
+
+/** A worker-only app that IS placeable: one long-running process, and a Dockerfile. */
+const eligibleWorker = { ...eligible, serviceless: true, workers: 1, hasDockerfile: true };
 
 test("an app with a database goes to the fleet now that a node has a proxy", () => {
   // The refusal added on 2026-08-04 was a guard for exactly one gap: the fleet
@@ -49,7 +92,10 @@ test("what the fleet cannot serve is named, and goes to Cloud Run", () => {
     [{ lane: "runner" }, /runner/i],
     [{ lane: "buildpack" }, /buildpack/i],
     [{ image: "" }, /image/i],
-    [{ serviceless: true }, /route|worker-only/i],
+    // Serviceless with no worker is a CRON-ONLY app, and it is refused for a
+    // reason that survived the change: a cron sandbox is never in the agent's
+    // live set, so no node could report it running.
+    [{ serviceless: true }, /long-running|schedule/i],
   ];
   for (const [over, why] of cases) {
     const r = chooseRuntime({ ...eligible, ...over });
@@ -62,14 +108,50 @@ test("a placeable app is given no reason, because there is nothing to explain", 
   assert.equal(chooseRuntime(eligible).reason, undefined);
 });
 
-test("a worker-only app is not placed yet, and the reason is the check, not the runtime", () => {
-  // The fleet runs a bot better than Cloud Run does — that is half of why it
-  // exists. What is missing is the VERIFY step: the only proof this pipeline
-  // accepts is an HTTP answer through the load balancer, and a worker publishes
-  // no route to ask. Placing one would mean flipping on faith.
-  const r = fleetEligibility({ ...eligible, serviceless: true });
+test("a worker-only app can be placed on the fleet now that the node reports what it runs", () => {
+  // The refusal this replaces said the fleet had no way to VERIFY a worker: the
+  // only proof accepted was an HTTP answer through the load balancer, and a bot
+  // publishes no route to ask. That was never a fleet limitation — the fleet
+  // runs a bot better than Cloud Run does — and the node now reports the
+  // processes it is confirmed to be running, so the proof exists.
+  const r = fleetEligibility(eligibleWorker);
+  assert.equal(r.ok, true, `a worker-only app was refused: ${r.reason}`);
+  assert.equal(chooseRuntime(eligibleWorker).runtime, "fleet");
+});
+
+test("a cron-only app is still refused, because nothing about it is ever running", () => {
+  // The distinction the whole verdict rests on. A cron process is never in the
+  // agent's live set — `units` in reconcileOnce excludes it, because the
+  // scheduler owns it — so the node would report no rows and every deploy of a
+  // correctly-configured app would roll back.
+  const r = fleetEligibility({ ...eligibleWorker, workers: 0 });
   assert.equal(r.ok, false);
-  assert.match(r.reason!, /no route|worker-only/i);
+  assert.match(r.reason!, /long-running|schedule/i);
+});
+
+test("a serviceless app whose `workers` never arrived is refused, not placed", () => {
+  // Not hypothetical, and not a type error either: nothing in this repo
+  // typechecks the tests — the test command is `node --import tsx --test` and
+  // there is no typecheck script — so a caller that forgets this field ships.
+  // `workers === 0` would be FALSE for undefined and place a cron-only app on a
+  // node that can never confirm it. Asked the way a caller who forgot would ask.
+  const missing = { ...eligibleWorker } as Partial<typeof eligibleWorker>;
+  delete missing.workers;
+  const r = fleetEligibility(missing as typeof eligibleWorker);
+  assert.equal(r.ok, false, "an app with no `workers` count at all was declared placeable");
+  assert.match(r.reason!, /long-running|schedule/i);
+});
+
+test("a worker-only app with no Dockerfile is refused, because `--pack` built its image", () => {
+  // Stated directly rather than left to the lane label. What actually selects
+  // that builder is `useDockerBuild = hasDockerfileNow` in the pipeline, not the
+  // lane — they agree today only because `laneFor` happens to make them, which
+  // makes the guarantee contingent on a file in another module. That submit
+  // writes no cloudbuild.yaml, so it has no logging destination and runs as the
+  // default build account, and it names the image before anything built it.
+  const r = fleetEligibility({ ...eligibleWorker, hasDockerfile: false });
+  assert.equal(r.ok, false);
+  assert.match(r.reason!, /Dockerfile|pack/i);
 });
 
 test("one app can be moved before the default does", () => {
@@ -132,6 +214,7 @@ test("a buildpack-lane app that has a Dockerfile is placeable", () => {
     staticServe: false,
     serviceless: false,
     hasDockerfile: true,
+    workers: 0,
   });
   assert.equal(got.ok, true, `refused a real image: ${got.ok ? "" : got.reason}`);
 });
@@ -146,6 +229,7 @@ test("a buildpack-lane app with no Dockerfile is still refused, and says why", (
     staticServe: false,
     serviceless: false,
     hasDockerfile: false,
+    workers: 0,
   });
   assert.equal(got.ok, false);
   if (!got.ok) assert.match(got.reason!, /buildpack|source/i);
@@ -154,11 +238,14 @@ test("a buildpack-lane app with no Dockerfile is still refused, and says why", (
 test("a Dockerfile does not rescue the lanes refused for other reasons", () => {
   // Each of these is refused for something a Dockerfile does not change: a
   // static app has no image of its own, the runner's image is shared and the
-  // app's code is not in it, and a serviceless app publishes no route to probe.
+  // app's code is not in it, and a cron-only app has nothing a node could ever
+  // report as running. The serviceless case used to sit here for a fourth reason
+  // — no route to probe — and a Dockerfile did not change that one either. It is
+  // gone because the reason is gone, not because the rule weakened.
   for (const c of [
-    { lane: "static" as const, staticServe: true, serviceless: false },
-    { lane: "runner" as const, staticServe: false, serviceless: false },
-    { lane: "container" as const, staticServe: false, serviceless: true },
+    { lane: "static" as const, staticServe: true, serviceless: false, workers: 0 },
+    { lane: "runner" as const, staticServe: false, serviceless: false, workers: 0 },
+    { lane: "container" as const, staticServe: false, serviceless: true, workers: 0 },
   ]) {
     const got = fleetEligibility({
       lane: c.lane,
@@ -166,6 +253,7 @@ test("a Dockerfile does not rescue the lanes refused for other reasons", () => {
       staticServe: c.staticServe,
       serviceless: c.serviceless,
       hasDockerfile: true,
+      workers: c.workers,
     });
     assert.equal(got.ok, false, `${c.lane} was wrongly allowed by a Dockerfile`);
   }
@@ -181,6 +269,7 @@ test("no image is still no image, Dockerfile or not", () => {
     staticServe: false,
     serviceless: false,
     hasDockerfile: true,
+    workers: 0,
   });
   assert.equal(got.ok, false);
 });
@@ -526,4 +615,254 @@ test("a node fault with nothing to add does not trail an empty dash", async () =
 
   assert.match(r.reason ?? "", /FLEET_NODE_FAULT/);
   assert.ok(!/—\s*$/.test(r.reason ?? ""), `reason ends in a dangling dash: ${r.reason}`);
+});
+
+// --- verifying an app that has no route -------------------------------------
+
+test("which proof a placement needs is decided by whether the app serves HTTP", () => {
+  // The branch everything below turns on, and the case that would break every
+  // app on the platform if it went the wrong way: a spec with NO processes is
+  // not worker-only. It is an ordinary app whose start command is its web
+  // process under an older spelling, and `processesOf` synthesises exactly one
+  // web process for it. Reading absent as "no web" would send every app that
+  // predates the process model down the report path, where it has no rows and
+  // no deploy could ever pass.
+  assert.equal(specHasWeb(spec), true, "an app with no declared processes was treated as worker-only");
+  assert.equal(specHasWeb(workerOnlySpec()), false);
+  assert.equal(specHasWeb({ ...spec, processes: [{ name: "web", kind: "web" }] }), true);
+  assert.equal(specHasWeb({ ...spec, processes: [{ name: "api", kind: "web" }, { name: "bot", kind: "worker" }] }), true);
+});
+
+test("only the processes a node actually keeps running are required of it", () => {
+  // Mirrors the agent's `units`: a release runs once and is then gone, and a
+  // cron is owned by the scheduler and never enters the live set at all.
+  // Requiring either would require a row the node can never send, and every
+  // deploy of an app with a migration would roll back.
+  const withAll = buildAppSpec({
+    slug: "myapp", image: "img", env: [], secrets: [],
+    processes: [
+      resolveProcess("bot", { command: "python bot.py" }),
+      resolveProcess("nightly", { command: "python export.py", schedule: "0 3 * * *" }),
+    ],
+    releaseCommand: "python manage.py migrate",
+  });
+  // The producer really did put all three in the spec — otherwise this test
+  // proves nothing about filtering.
+  assert.deepEqual(withAll.processes?.map((p) => p.kind).sort(), ["cron", "release", "worker"]);
+  assert.deepEqual(requiredProcesses(withAll).map((p) => p.name), ["bot"]);
+});
+
+test("a node running exactly what was placed is the verdict that passes", () => {
+  const s = workerOnlySpec();
+  const v = runVerdict(s, reportFor(s));
+  assert.equal(v.ok, true, `a faithful report was rejected: ${v.reason}`);
+});
+
+test("silence from the node is not a pass", () => {
+  // The whole reason this slice exists. `a.faults` is written only when a start
+  // FAILS, so "nothing failing" is also what a node says about a process it has
+  // not fetched yet — and absence-plus-time would flip run_url onto a node that
+  // never started the bot.
+  const s = workerOnlySpec();
+  assert.equal(runVerdict(s, []).ok, false);
+  assert.match(runVerdict(s, []).reason!, /not reporting/i);
+  // A row for a DIFFERENT process of the same app is not a row for this one.
+  assert.equal(runVerdict(s, [{ slug: "myapp", process: "other", image: s.image }]).ok, false);
+});
+
+test("the node running the PREVIOUS image is not this deploy having landed", () => {
+  // The first read happens while the node may not have fetched the new
+  // placement, and the previous deploy's rows are still there and still fresh —
+  // `reported_at` is refreshed on every sync. Without the image in the
+  // comparison this passes instantly, on the old process.
+  const s = workerOnlySpec();
+  const stale = reportFor(s).map((r) => ({ ...r, image: "us-central1-docker.pkg.dev/p/r/myapp@sha256:old" }));
+  const v = runVerdict(s, stale);
+  assert.equal(v.ok, false);
+  assert.match(v.reason!, /different image/i);
+});
+
+test("the node running the PREVIOUS command at the same image is not it either", () => {
+  // The half an image comparison cannot see, and it is not a corner case: an
+  // author editing a Procfile line redeploys the same digest with a different
+  // argv. The agent restarts on EITHER changing (`l.app.Image != u.app.Image ||
+  // !sameStrings(...)`), so a verdict checking only the image claims to be the
+  // node's own predicate and is weaker than it.
+  const s = workerOnlySpec("python bot.py --new-flag");
+  const previous = reportFor(workerOnlySpec("python bot.py"));
+  // Same image, different command — otherwise this test is the one above.
+  assert.equal(previous[0].image, s.image);
+  assert.notDeepEqual(previous[0].command, requiredProcesses(s)[0].command);
+
+  const v = runVerdict(s, previous);
+  assert.equal(v.ok, false, "a worker still running the old command verified the new deploy");
+  assert.match(v.reason!, /different command/i);
+});
+
+test("a placement with nothing long-running to confirm is not vacuously true", () => {
+  // "Everything I required is running" is trivially true of nothing, which is
+  // the shape a check quietly becomes when the thing it checks is refactored out
+  // from under it. Unreachable through `fleetEligibility` today, and that is
+  // exactly why it is worth pinning.
+  const cronOnly = buildAppSpec({
+    slug: "myapp", image: "img", env: [], secrets: [],
+    processes: [resolveProcess("nightly", { command: "python export.py", schedule: "0 3 * * *" })],
+  });
+  assert.deepEqual(requiredProcesses(cronOnly), []);
+  assert.equal(runVerdict(cronOnly, []).ok, false);
+});
+
+test("the first question is asked after a reconcile interval, not before one", async () => {
+  // `fleetProbe` asks at t≈0 because an HTTP answer at t=0 is still an answer
+  // from the app. A REPORT at t=0 is not: the node polls every ten seconds, so
+  // nothing it has said yet can be about a placement written moments ago, and
+  // the rows sitting there are the previous deploy's.
+  const s = workerOnlySpec();
+  const order: string[] = [];
+  const v = await awaitRunning("myapp", "fleet-lab-1", s,
+    async () => { order.push("read"); return reportFor(s); },
+    { attempts: 3, delayMs: 5000, sleepImpl: async (ms) => { order.push(`sleep:${ms}`); } });
+
+  assert.equal(v.ok, true);
+  assert.deepEqual(order, ["sleep:5000", "read"]);
+});
+
+test("an app that needs a moment to come up on the node is waited for", async () => {
+  // The same false negative `fleetProbe` retries against: a worker does not
+  // appear in the node's report the instant it is placed — the node has to fetch
+  // the placement, pull the image and start the sandbox, and only then does a
+  // pass confirm it.
+  const s = workerOnlySpec();
+  let asked = 0;
+  const v = await awaitRunning("myapp", "fleet-lab-1", s,
+    async () => (++asked < 3 ? [] : reportFor(s)),
+    { attempts: 6, delayMs: 0, sleepImpl: async () => {} });
+
+  assert.equal(v.ok, true);
+  assert.equal(asked, 3);
+});
+
+test("a node that never reports the app is given up on, and the deploy fails", async () => {
+  const s = workerOnlySpec();
+  let asked = 0;
+  const v = await awaitRunning("myapp", "fleet-lab-1", s,
+    async () => { asked++; return []; },
+    { attempts: 4, delayMs: 0, sleepImpl: async () => {} });
+
+  assert.equal(asked, 4);
+  assert.equal(v.ok, false, "a worker that never came up passed its deploy");
+});
+
+test("a reader that throws becomes a failed verdict, never an escaped exception", async () => {
+  // Same rule as `fleetProbe` swallowing a refused connection: this is a
+  // database call inside the one sequence that must always restore, and an
+  // exception thrown out of here would skip the restore of the previous
+  // placement and the runtime flag.
+  const s = workerOnlySpec();
+  const v = await awaitRunning("myapp", "fleet-lab-1", s,
+    async () => { throw new Error("connection terminated unexpectedly"); },
+    { attempts: 2, delayMs: 0, sleepImpl: async () => {} });
+
+  assert.equal(v.ok, false);
+  assert.match(v.reason!, /could not read/i);
+});
+
+test("a worker-only app is verified by the node's report, and never probed", async () => {
+  // There is no route to probe. Asking for one would get a 404 from the router —
+  // which `fleetVerdict` correctly reads as "the app never came up" — so a
+  // worker-only app on the probe path could never deploy at all.
+  const s = workerOnlySpec();
+  const { calls, p } = ports();
+  const r = await placeOnFleet("myapp", s, "8.232.255.172", p);
+
+  assert.equal(r.placed, true);
+  assert.equal(r.runUrl, "http://8.232.255.172");
+  assert.ok(calls.includes("running"), "the node was never asked what it is running");
+  assert.ok(!calls.includes("probe"), "a worker-only app was probed over HTTP");
+  assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", `place:myapp@fleet-lab-1:${s.image}`, "runtime:myapp=fleet", "running"]);
+});
+
+test("an app that serves HTTP is still verified by probing it", async () => {
+  // The report exists for apps that cannot be asked. An app that CAN be asked
+  // still is, over the load balancer, because that exercises the path real
+  // traffic takes — LB, router and app — and the node's report does not.
+  const { calls, p } = ports();
+  const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
+
+  assert.equal(r.placed, true);
+  assert.ok(calls.includes("probe"));
+  assert.ok(!calls.includes("running"), "a web app was verified from the node's report instead of the load balancer");
+});
+
+test("a worker the node never confirms is rolled back onto the node it was already on", async () => {
+  // The rollback path is the part that must never be wrong, and it must not care
+  // which verdict failed. The previous placement goes back on fleet-lab-2 — not
+  // this deploy's fleet-lab-1, where `placeApp`'s upsert on (slug, node) would
+  // write a SECOND row and leave two copies of the bot placed.
+  const s = workerOnlySpec("python bot.py --new");
+  const previous = workerOnlySpec("python bot.py --old");
+  const { calls, p } = ports({
+    runningOnNode: async () => { calls.push("running"); return { ok: false, reason: `the node is not reporting worker "bot" as running` }; },
+    readPlacement: async () => { calls.push("read"); return { node: "fleet-lab-2", spec: previous }; },
+    readRuntime: async () => { calls.push("readRuntime"); return "cloudrun"; },
+  });
+  const r = await placeOnFleet("myapp", s, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.equal(r.runUrl, undefined);
+  assert.match(r.reason!, /not reporting/i);
+  assert.deepEqual(calls, [
+    "chooseNode",
+    "read",
+    "readRuntime",
+    `place:myapp@fleet-lab-1:${s.image}`,
+    "runtime:myapp=fleet",
+    "running",
+    "nodeFault",
+    `place:myapp@fleet-lab-2:${previous.image}`,
+    "runtime:myapp=cloudrun",
+  ]);
+});
+
+test("the running reader being unwired cannot take the rollback with it", async () => {
+  // The defect the `nodeFaultFor` guard already documents, reintroduced one line
+  // earlier if the new call sits outside the try/catch. A port that is missing
+  // entirely throws a TypeError SYNCHRONOUSLY at the call — there is no promise
+  // yet — so the exception escapes `placeOnFleet`, and what it leaves behind is
+  // the broken spec placed with `apps.runtime` already flipped to 'fleet'.
+  const s = workerOnlySpec();
+  const { calls, p } = ports();
+  delete (p as Partial<PlacementPorts>).runningOnNode;
+  const r = await placeOnFleet("myapp", s, "8.232.255.172", p as PlacementPorts);
+
+  assert.equal(r.placed, false);
+  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("runtime:myapp=fleet"), "the runtime flag was not restored");
+});
+
+test("a reader that throws inside placeOnFleet still restores everything", async () => {
+  // The asynchronous half of the same rule, and the pre-existing gap it also
+  // closes: `probe` throwing had no guard here either.
+  const s = workerOnlySpec();
+  const { calls, p } = ports({
+    runningOnNode: async () => { calls.push("running"); throw new Error("connection terminated unexpectedly"); },
+  });
+  const r = await placeOnFleet("myapp", s, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.ok(calls.includes("unplace:myapp"));
+  assert.ok(calls.includes("runtime:myapp=fleet"));
+});
+
+test("a probe that throws is a failed verdict too, not an escaped exception", async () => {
+  // Pre-existing and untested: `fleetProbe` swallows its own errors, but nothing
+  // stopped a DIFFERENT probe implementation from throwing straight through the
+  // restore. The guard covers both branches because there is only one.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); throw new Error("fetch failed"); },
+  });
+  const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.ok(calls.includes("unplace:myapp"), "a throwing probe skipped the rollback");
 });

@@ -17,10 +17,10 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
-import { chooseNode, nodeFaultFor, placeApp, placementFor, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
+import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
-import { chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
+import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
 import { rollback } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -436,6 +436,17 @@ async function liveContainerImage(service: string): Promise<string | null> {
   const image = s?.spec?.template?.spec?.containers?.[0]?.image;
   return typeof image === "string" && image ? image : null;
 }
+
+/**
+ * What this app declares to Cloud Run when the fleet is running it: nothing.
+ *
+ * Named rather than written inline as `[]`, because an empty array at a call
+ * site reads like an omission and this is a decision. `planProcesses` plans no
+ * steps for it, and the orphan pass then removes every worker-pool and job the
+ * app has on Cloud Run — which is the whole point. Two live copies of one
+ * process is the defect class the fleet fork exists to end.
+ */
+const FLEET_OWNS_PROCESSES: ResolvedProcess[] = [];
 
 /**
  * Deploy the app's workers and crons, and remove the ones it no longer declares.
@@ -2091,7 +2102,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // fixed even earlier and does not update either way — this is the checkout
     // telling the truth about how the app will actually be built.
     const hasDockerfileNow = existsSync(join(dir, "Dockerfile"));
-    const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless, hasDockerfile: hasDockerfileNow });
+    // `workers` is what makes "worker-only" placeable and "cron-only" not. The
+    // node confirms a process it is RUNNING, and a cron is never running — the
+    // agent's reconcile excludes it, because the scheduler owns it — so an app
+    // whose only declared process is scheduled has nothing a node could report
+    // and every deploy of it would roll back.
+    const workerCount = processes.filter((pr) => pr.kind === "worker").length;
+    const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless, hasDockerfile: hasDockerfileNow, workers: workerCount });
     const toFleet = target.runtime === "fleet" && fleetPlacementWanted(process.env, slug);
     // The address the database is provisioned at follows `toFleet`, never
     // `target.runtime` alone. The two differ for exactly the apps this gate
@@ -3219,6 +3236,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         {
           chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
           probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
+          runningOnNode: (s, n, sp) => awaitRunning(s, n, sp, runningOnNode),
           nodeFaultFor,
           log,
         },
@@ -3554,7 +3572,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       await stages.around("processes", () => deployProcesses({
         slug, dir, lane, image: built ?? undefined,
         env: extraEnv, secrets: allSecrets || null,
-        cloudsql, labels: labelPairs, config: primaryConfigService, processes, log,
+        cloudsql, labels: labelPairs, config: primaryConfigService,
+        // The node owns this app's workers and crons, so Cloud Run must own
+        // neither — and passing NO processes is how that is said, because the
+        // orphan pass inside `deployProcesses` then deletes the worker-pools and
+        // jobs this app already has there. Nothing new is needed for the
+        // removal; that machinery exists and this is exactly what it is for.
+        //
+        // Until now this ran unguarded, and for a web app on the fleet the
+        // duplicate workers were the documented status quo. For a WORKER-ONLY
+        // app they are not survivable: the entire app would run twice — a
+        // Telegram bot double-polling getUpdates, a queue consumer
+        // double-consuming — and the new verdict would truthfully report the
+        // node running it while the Cloud Run copy ran beside it. The guard
+        // belongs in the slice that first makes an app depend on the node alone.
+        processes: toFleet ? FLEET_OWNS_PROCESSES : processes,
+        log,
       })).catch((e) => log(`! processes: ${e instanceof Error ? e.message : String(e)}`));
     }
 
