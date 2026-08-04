@@ -21,6 +21,7 @@ function ports(over: Partial<PlacementPorts> = {}) {
     placeApp: async (slug, node, s) => { calls.push(`place:${slug}@${node}:${s.image}`); },
     unplaceApp: async (slug) => { calls.push(`unplace:${slug}`); },
     readPlacement: async () => { calls.push("read"); return null; },
+    readRuntime: async () => { calls.push("readRuntime"); return "fleet"; },
     setRuntime: async (slug, rt) => { calls.push(`runtime:${slug}=${rt}`); },
     probe: async () => { calls.push("probe"); return { code: 200 }; },
     log: () => {},
@@ -179,32 +180,68 @@ test("a full fleet leaves the app on Cloud Run instead of losing it", () => {
   })();
 });
 
-test("a version that does not answer is replaced by the one that did", async () => {
-  const previous: AppSpec = { ...spec, image: "registry/myapp:good" };
+test("a version that does not answer is replaced by the one that did, on the node it was already on", async () => {
+  // The previous placement is on fleet-lab-2, a DIFFERENT node than the one
+  // this deploy's chooseNode hands back (fleet-lab-1). placeApp upserts on
+  // (slug, node), so restoring onto fleet-lab-1 instead of fleet-lab-2 would
+  // write a second row rather than putting back the one that was overwritten
+  // — this is the test that catches that mistake; a membership check on
+  // "was placeApp called with the right image" cannot see which node it went to.
   const { calls, p } = ports({
-    probe: async () => ({ code: 502 }),
-    readPlacement: async () => { calls.push("read"); return previous; },
+    probe: async () => { calls.push("probe"); return { code: 502 }; },
+    readPlacement: async () => {
+      calls.push("read");
+      return { node: "fleet-lab-2", spec: { ...spec, image: "registry/myapp:good" } };
+    },
   });
   const r = await placeOnFleet("myapp", { ...spec, image: "registry/myapp:bad" }, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
   assert.equal(r.runUrl, undefined);
-  // The previous spec is put back, because placing the new one already
-  // overwrote the row — doing nothing would leave the broken version placed.
-  assert.ok(calls.includes("place:myapp@fleet-lab-1:registry/myapp:good"),
-    `previous spec was not restored — calls were ${calls.join(", ")}`);
+  // The full ordered sequence, not just membership: it proves the read
+  // happened BEFORE the place that overwrites it (a read taken afterward would
+  // see the broken spec and "restore" it over itself) and that the restore
+  // lands on fleet-lab-2, not fleet-lab-1.
+  assert.deepEqual(calls, [
+    "chooseNode",
+    "read",
+    "readRuntime",
+    "place:myapp@fleet-lab-1:registry/myapp:bad",
+    "runtime:myapp=fleet",
+    "probe",
+    "place:myapp@fleet-lab-2:registry/myapp:good",
+    "runtime:myapp=fleet",
+  ]);
   // And nothing goes to Cloud Run. There is no way back any more.
   assert.ok(!calls.some((c) => c.includes("cloudrun")), "an app was sent back to Cloud Run");
 });
 
-test("a first deploy that fails is unplaced rather than restored to nothing", async () => {
-  // No previous placement exists, so there is nothing to put back and the app
-  // must not be left pointing at a version that does not serve.
-  const { calls, p } = ports({ probe: async () => ({ code: 0 }), readPlacement: async () => null });
+test("a first deploy that fails is unplaced rather than restored to nothing, and the runtime flag goes back with it", async () => {
+  // No previous placement exists, so there is nothing to put back — the app
+  // must not be left pointing at a version that does not serve. The runtime
+  // flag was only flipped to 'fleet' so the probe below had something to
+  // check; a first deploy's real previous runtime is 'cloudrun' (the default
+  // for an app that has never been placed), and that is what must come back —
+  // asserted as a value, not just that setRuntime was called at all, because a
+  // stub that always restores 'fleet' would pass a call-membership check.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 0 }; },
+    readPlacement: async () => { calls.push("read"); return null; },
+    readRuntime: async () => { calls.push("readRuntime"); return "cloudrun"; },
+  });
   const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:myapp"), `calls were ${calls.join(", ")}`);
+  assert.deepEqual(calls, [
+    "chooseNode",
+    "read",
+    "readRuntime",
+    `place:myapp@fleet-lab-1:${spec.image}`,
+    "runtime:myapp=fleet",
+    "probe",
+    "unplace:myapp",
+    "runtime:myapp=cloudrun",
+  ]);
 });
 
 test("place and verify, and only then is there an address to publish", async () => {
@@ -218,5 +255,5 @@ test("place and verify, and only then is there an address to publish", async () 
   // keeps run_url with ONE writer: markAppLive would otherwise overwrite a flip
   // made here with the Cloud Run url it was already carrying.
   assert.equal(r.runUrl, "http://8.232.255.172");
-  assert.deepEqual(calls, ["chooseNode", "read", "place:myapp@fleet-lab-1:" + spec.image, "runtime:myapp=fleet", "probe"]);
+  assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", "place:myapp@fleet-lab-1:" + spec.image, "runtime:myapp=fleet", "probe"]);
 });

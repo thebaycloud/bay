@@ -89,10 +89,20 @@ export async function unplaceApp(slug: string): Promise<void> {
   await getPool(DB).query(`DELETE FROM fleet_placements WHERE slug = $1`, [slug]);
 }
 
-/** The spec a node is currently running for this app, or null if it has none. */
-export async function placementFor(slug: string): Promise<AppSpec | null> {
-  const r = await getPool(DB).query(`SELECT spec FROM fleet_placements WHERE slug = $1 LIMIT 1`, [slug]);
-  return (r.rows[0]?.spec as AppSpec) ?? null;
+/**
+ * Where an app is placed right now, and what it is running there — or null if
+ * it has no placement.
+ *
+ * The node is part of the answer, not just the spec: a restore that placed
+ * only the spec would place it on whichever node THIS deploy chose, which is
+ * not necessarily the node the app was already running on. `placeApp` upserts
+ * on `(slug, node)`, so placing the restored spec on the wrong node writes a
+ * second row instead of overwriting the first — two copies of the app running
+ * at once, which is exactly what this sequence exists to prevent.
+ */
+export async function placementFor(slug: string): Promise<{ node: string; spec: AppSpec } | null> {
+  const r = await getPool(DB).query(`SELECT node, spec FROM fleet_placements WHERE slug = $1 LIMIT 1`, [slug]);
+  return r.rows[0] ? { node: r.rows[0].node as string, spec: r.rows[0].spec as AppSpec } : null;
 }
 
 /**

@@ -14,10 +14,13 @@ import type { Runtime } from "./fleet";
  *
  * A failure at 1 leaves the app placed nowhere new, so nothing changes for it.
  * A failure at 2 is harder: placing the new spec at step 1 already overwrote
- * whatever the node was running before, so the version that used to answer is
- * only recoverable from what was read before that write. There is no Cloud Run
- * to fall back to any more, so that previous spec — or, on a first deploy, no
- * placement at all — is what a failed verify restores.
+ * whatever the node was running before, and already flipped `apps.runtime` to
+ * `fleet` — `desiredFor` will not hand a node anything otherwise — so both the
+ * spec that used to answer and the runtime it was on are only recoverable from
+ * what was read before those writes. There is no Cloud Run to fall back to any
+ * more, so that previous spec and runtime — or, on a first deploy, no
+ * placement and whatever the runtime was before — are what a failed verify
+ * restores.
  *
  * Everything the fleet needs from the outside world arrives as a port, so the
  * order above — and the rollback, which is the part that must never be wrong —
@@ -28,8 +31,15 @@ export interface PlacementPorts {
   chooseNode: () => Promise<string | null>;
   placeApp: (slug: string, node: string, spec: AppSpec) => Promise<void>;
   unplaceApp: (slug: string) => Promise<void>;
-  /** What is placed for this app right now, before this deploy overwrites it. */
-  readPlacement: (slug: string) => Promise<AppSpec | null>;
+  /**
+   * What is placed for this app right now, and where — before this deploy
+   * overwrites it. The node travels with the spec because a restore must land
+   * on the node the app was already running on, not on whichever node this
+   * deploy's own `chooseNode` happened to pick.
+   */
+  readPlacement: (slug: string) => Promise<{ node: string; spec: AppSpec } | null>;
+  /** Which runtime the app is on right now, before this deploy changes it. */
+  readRuntime: (slug: string) => Promise<Runtime>;
   setRuntime: (slug: string, runtime: Runtime) => Promise<void>;
   /** One request at the fleet, addressed the way the edge proxy will address it. */
   probe: (slug: string) => Promise<{ code: number; router?: string }>;
@@ -211,12 +221,17 @@ export async function placeOnFleet(
     return { placed: false, reason };
   }
 
-  // Read BEFORE placing: placing overwrites the row, so after that the version
-  // that was working is only knowable from here.
+  // Read BEFORE placing: placing overwrites the row, and setRuntime("fleet")
+  // below overwrites the runtime flag, so after those writes both the version
+  // that was working and the runtime it was on are only knowable from here.
   const previous = await p.readPlacement(slug);
+  const previousRuntime = await p.readRuntime(slug);
 
   // 1. place. Nothing routes here yet; run_url still points at wherever it did.
   await p.placeApp(slug, node, spec);
+  // desiredFor only hands a node placements for apps whose runtime is 'fleet',
+  // so this has to happen before the probe even though it is not yet proven —
+  // there is nothing for step 2 to verify otherwise.
   await p.setRuntime(slug, "fleet");
 
   // 2. verify, through the load balancer, addressed the way the proxy will
@@ -225,15 +240,24 @@ export async function placeOnFleet(
   const verdict = fleetVerdict(await p.probe(slug));
   if (!verdict.ok) {
     // There is no Cloud Run to fall back to any more, so the fallback is the
-    // last version that answered. With none — a first deploy — the placement is
-    // dropped rather than left pointing at something that does not serve.
+    // last version that answered, on the node it was already running on — not
+    // this deploy's node, which `placeApp`'s upsert would otherwise treat as a
+    // second placement rather than overwriting the first. With none — a first
+    // deploy — the placement is dropped rather than left pointing at something
+    // that does not serve.
     if (previous) {
-      await p.placeApp(slug, node, previous);
+      await p.placeApp(slug, previous.node, previous.spec);
       p.log(`· kept the previous version — ${verdict.reason}`);
     } else {
       await p.unplaceApp(slug);
       p.log(`· nothing placed — ${verdict.reason}`);
     }
+    // The runtime flag flipped to 'fleet' above so the probe had something to
+    // check. Restoring it — rather than leaving it — matters most on the
+    // first-deploy branch: unplacing drops the row but the flag would still
+    // say 'fleet', which is what would have silently pointed a node's next
+    // reconcile at a placement that no longer exists.
+    await p.setRuntime(slug, previousRuntime);
     return { placed: false, reason: verdict.reason };
   }
 
