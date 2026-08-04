@@ -113,12 +113,16 @@ type Agent struct {
 	// several times, concurrently with itself, and failing with "container
 	// already exists". A release belongs to an IMAGE, so that is the key.
 	released map[string]string
-	// relFail counts consecutive release failures per slug@image, and relRunning
-	// marks the ones currently executing off this goroutine.
+	// relFail counts consecutive release failures per slug@image: a release
+	// belongs to an IMAGE, so a new deploy is a new key and starts with a clean
+	// count, without anything here having to notice that a deploy happened.
 	//
-	// Both are keyed by slug@image rather than slug: a release belongs to an
-	// IMAGE, so a new deploy is a new key and starts with a clean count, without
-	// anything here having to notice that a deploy happened.
+	// relRunning marks the ones currently executing off this goroutine, keyed by
+	// bare slug rather than slug@image: the slot and the sandbox id it runs in
+	// are per-slug, and so is the safety property — an app must stay blocked
+	// while ITS release is in flight even if the image changed mid-release, or
+	// a rollback to an already-released image would start the web process while
+	// the previous image's migration is still writing.
 	relFail    *failTracker
 	relRunning map[string]bool
 
@@ -483,15 +487,20 @@ func (a *Agent) reconcileOnce() error {
 		key := slug + "@" + app.Image
 
 		a.mu.Lock()
+		inFlight := a.relRunning[slug]
 		alreadyRan := a.released[slug] == app.Image
-		inFlight := a.relRunning[key]
 		a.mu.Unlock()
 
-		if alreadyRan {
-			continue
-		}
+		// In flight FIRST, and keyed by slug rather than slug@image. A release
+		// running for a DIFFERENT image must still block this app: rolling back
+		// to an image whose release already succeeded would otherwise pass the
+		// alreadyRan check and start the web process while the previous image's
+		// migration is still writing.
 		if inFlight {
 			blocked[slug] = true
+			continue
+		}
+		if alreadyRan {
 			continue
 		}
 
@@ -500,9 +509,9 @@ func (a *Agent) reconcileOnce() error {
 			blocked[slug] = true
 			continue
 		case actGiveUp:
-			// Logged once per pass rather than once ever: until logs leave this
-			// node (phase 1B) this line is the only way a human learns the app
-			// is down on purpose rather than being retried.
+			// Logged once per pass rather than once ever: /status already
+			// carries this state via relFail.report(), but a human tailing the
+			// log this way sees it without having to go query /status.
 			log.Printf("%s: release has failed %d times, not retrying — deploy a new image to reset",
 				slug, maxAttempts)
 			blocked[slug] = true
@@ -523,7 +532,7 @@ func (a *Agent) reconcileOnce() error {
 
 		blocked[slug] = true
 		a.mu.Lock()
-		a.relRunning[key] = true
+		a.relRunning[slug] = true
 		idx := a.slotFor(sandboxID(slug, rel))
 		a.mu.Unlock()
 
@@ -531,14 +540,9 @@ func (a *Agent) reconcileOnce() error {
 			log.Printf("%s: running release", slug)
 			err := a.rt.RunToCompletion(app, p, idx, 30*time.Minute)
 
-			a.mu.Lock()
-			delete(a.relRunning, key)
-			delete(a.slots, idx)
-			if err == nil {
-				a.released[slug] = app.Image
-			}
-			a.mu.Unlock()
-
+			// Record the outcome BEFORE clearing in-flight, so the slug is
+			// never observable as idle-and-unrecorded — a reconcile pass
+			// landing in that window would relaunch with no backoff at all.
 			if err != nil {
 				n := a.relFail.failWith(key, time.Now(), err.Error())
 				log.Printf("%s: release FAILED (%d/%d), not starting the app: %v",
@@ -547,6 +551,14 @@ func (a *Agent) reconcileOnce() error {
 				a.relFail.succeed(key)
 				log.Printf("%s: release finished", slug)
 			}
+
+			a.mu.Lock()
+			delete(a.relRunning, slug)
+			delete(a.slots, idx)
+			if err == nil {
+				a.released[slug] = app.Image
+			}
+			a.mu.Unlock()
 		}(slug, key, app, rel, idx)
 	}
 
