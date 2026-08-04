@@ -563,7 +563,40 @@ export async function deleteApp(slug: string): Promise<void> {
   // The app's database on the shared instance. Left behind, these accumulate
   // silently until a five-character slug is reused and the new app finds
   // somebody else's tables already in it.
-  try { await capture(["sql", "databases", "delete", dbNameForSlug(slug), "--instance", PG_INSTANCE, "--project", PROJECT, "--quiet"]); } catch { /* never had one */ }
+  //
+  // This call DOES NOT WORK for a provisioned database and never has, and the
+  // catch is why nobody knew. Measured on 5 Aug:
+  //
+  //   ERROR: (gcloud.sql.databases.delete) HTTPError 400: Invalid request:
+  //   failed to delete database "icflz". Detail: pq: must be owner of database
+  //   icflz. (Please use psql client to delete database that is not owned by
+  //   "cloudsqlsuperuser")
+  //
+  // Provisioning gives each app its own role and makes that role the owner —
+  // which is the isolation the deploy log advertises, "no other app can reach
+  // it" — and gcloud connects as cloudsqlsuperuser, which is not it. So every
+  // delete since databases existed has left the customer's data on the
+  // instance. Five such databases were on it when this was written.
+  //
+  // Doing it properly means taking ownership over SQL first (GRANT the app's
+  // role to the connecting user, ALTER DATABASE ... OWNER TO, then DROP) and is
+  // deliberately NOT added here by the same change that discovered it: it is a
+  // destructive path against shared production and it must be written by
+  // someone who can watch it run once. What changes now is that the failure
+  // stops being invisible.
+  try {
+    await capture(["sql", "databases", "delete", dbNameForSlug(slug), "--instance", PG_INSTANCE, "--project", PROJECT, "--quiet"]);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // An app that never had a database is the ordinary case and says so; a
+    // failure for any other reason is a customer's data staying on a shared
+    // instance after they asked for it to be gone, and that gets said out loud.
+    if (/not found|does not exist/i.test(msg)) {
+      // nothing to delete
+    } else {
+      console.error(`deleteApp ${slug}: database ${dbNameForSlug(slug)} NOT deleted — ${msg.slice(0, 300)}`);
+    }
+  }
 
   // The app's secrets. Left behind they are live credentials belonging to an app
   // that no longer exists, and the slug space is small enough that the name will
