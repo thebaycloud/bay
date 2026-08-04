@@ -37,9 +37,14 @@ import (
 const (
 	resolvConfPath = "/run/supersonic/resolv.conf"
 	statePath      = "/srv/state/desired.json"
-	routesPath     = "/srv/state/routes.json"
 	dataRoot       = "/srv/apps"
 )
+
+// routesPath is where the routing table is published for the router to read.
+//
+// A var rather than a const only so a test can drive reconcileOnce without
+// writing to /srv on the machine running it. Nothing in the agent reassigns it.
+var routesPath = "/srv/state/routes.json"
 
 // App is one thing this node has been told to run.
 type App struct {
@@ -91,6 +96,21 @@ type live struct {
 	index int
 	ok    bool
 	since time.Time
+	// confirmed is the last time this process was OBSERVED running — not the
+	// last time the agent believed it was.
+	//
+	// The distinction is the whole value of the field. `a.live` is a memory
+	// belief: an entry is written on a successful start and removed on a pass
+	// that notices the process gone, so between those two it says "running"
+	// about a process that may have died seconds ago. Reporting that as a
+	// positive signal would pass a deploy for a worker that crashed on boot.
+	//
+	// Only two places write it, and both have just watched runsc say "running":
+	// Start's own poll (container.go), and reconcileOnce's liveness check. When
+	// neither runs, this ages out and the process stops being reported — a node
+	// that has stopped reconciling says nothing rather than vouching from
+	// memory.
+	confirmed time.Time
 }
 
 type Agent struct {
@@ -279,6 +299,76 @@ func (a *Agent) reportFaults() []ProcessFault {
 	}
 	// Stable order so two syncs that say the same thing look the same, in a log
 	// and in a diff.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Slug != out[j].Slug {
+			return out[i].Slug < out[j].Slug
+		}
+		return out[i].Process < out[j].Process
+	})
+	return out
+}
+
+// confirmWindow is how old an observation may be and still be reported as
+// "running".
+//
+// Three reconcile passes. One missed pass is ordinary — a slow control plane, a
+// node under load — and expiring on it would fail deploys for nothing. Three
+// missed passes is a node that has stopped reconciling, and the report going
+// quiet is exactly right then: a control plane reading silence rolls the deploy
+// back, which is the safe direction. Deliberately shorter than the 90 seconds
+// nodeFaultFor allows a fault row, because this steers a deploy to PASS and a
+// fault only ever steers one to fail.
+const confirmWindow = 30 * time.Second
+
+// confirmRunning records that this process was just seen running.
+//
+// Takes the lock and re-reads the map rather than writing through a pointer the
+// caller already holds: reconcileOnce reads `a.live[id]` outside the lock, and
+// by the time the runsc check comes back the entry may have been replaced by a
+// restart. Stamping the pointer it read would then vouch for a process that is
+// no longer the one in the map, and would race the sync goroutine reading the
+// same field.
+func (a *Agent) confirmRunning(id string, now time.Time) {
+	a.mu.Lock()
+	if l, ok := a.live[id]; ok {
+		l.confirmed = now
+	}
+	a.mu.Unlock()
+}
+
+// reportRunning answers the sync with what this node is confirmed to be running.
+//
+// The counterpart to reportFaults, and it answers the question a worker-only app
+// makes unanswerable any other way: a bot publishes no route, so there is no
+// HTTP probe that can tell "the node started it" from "the node has not got to
+// it yet". Only a process the node has WATCHED reach running appears here.
+//
+// Values, never the *live pointers: the caller marshals this on the sync
+// goroutine while reconcile writes to those same structs, and handing out
+// pointers puts a JSON encoder on one end of a data race. Command is copied for
+// the same reason — a shared backing array is shared state whether or not the
+// header is.
+func (a *Agent) reportRunning() []ProcessState {
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]ProcessState, 0, len(a.live))
+	for _, l := range a.live {
+		// A process nobody has confirmed lately is not reported at all. Stale
+		// beats wrong here: no row fails the deploy, and a wrong row passes one.
+		if l.confirmed.IsZero() || now.Sub(l.confirmed) > confirmWindow {
+			continue
+		}
+		s := ProcessState{
+			Slug: l.app.Slug, Process: l.proc.Name, Image: l.app.Image,
+		}
+		if len(l.proc.Command) > 0 {
+			s.Command = append([]string(nil), l.proc.Command...)
+		}
+		out = append(out, s)
+	}
+	// Stable order so two syncs that say the same thing look the same, in a log
+	// and in a diff. Same rule as reportFaults.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Slug != out[j].Slug {
 			return out[i].Slug < out[j].Slug
@@ -486,6 +576,7 @@ func main() {
 	// the control plane must not confuse with "this node reports nothing wrong".
 	if src.Endpoint != "" {
 		src.Report = a.reportFaults
+		src.ReportRunning = a.reportRunning
 	}
 
 	go a.serve(*addr)
@@ -693,12 +784,19 @@ func (a *Agent) reconcileOnce() error {
 			// would restart on every irrelevant field; these two are what
 			// actually mean "this is a different program".
 			if l.app.Image == u.app.Image && sameStrings(l.proc.Command, u.proc.Command) {
-				if st, err := runscStatus(id); err == nil && st.Status == "running" {
+				if st, err := runscStatusFn(id); err == nil && st.Status == "running" {
 					// Forget every image this id ever failed on, not just the
 					// current one — otherwise a bad image's record (e.g.
 					// `id@bad`, fails: 5) outlives the fix and /status keeps
 					// reporting a healthy process as given-up forever.
 					a.startFail.forgetPrefix(id + "@")
+					// The observation this pass just made, kept rather than
+					// thrown away. It costs nothing — the subprocess has already
+					// run and already answered — and it is the only thing that
+					// keeps a worker's report alive between deploys. Under the
+					// `err == nil && running` branch on purpose: a process runsc
+					// will not vouch for must age out, not be re-stamped.
+					a.confirmRunning(id, time.Now())
 					continue
 				}
 				// It died. Restarting is right; restarting it every ten seconds
@@ -951,7 +1049,14 @@ func (a *Agent) startMany(items []work) {
 			}
 
 			a.mu.Lock()
-			a.live[id] = &live{app: app, proc: proc, net: net, index: idx, since: time.Now()}
+			// `confirmed` is set here and not left zero, because Start does not
+			// return until it has polled `runsc state` to "running" itself
+			// (container.go) — so this IS an observation, made moments ago, not
+			// a belief. Leaving it zero would mean a worker's first report waited
+			// for the next reconcile pass, which is up to ten seconds of a deploy
+			// timeout spent on a process that is already up.
+			a.live[id] = &live{app: app, proc: proc, net: net, index: idx,
+				since: time.Now(), confirmed: time.Now()}
 			// Same critical section as the live entry on purpose. A process that
 			// is running is not failing, and leaving the two facts to be written
 			// separately is a window in which the node reports both.

@@ -56,6 +56,30 @@ type ProcessFault struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// ProcessState is one process this node is CONFIRMED to be running right now.
+//
+// The positive half of the channel ProcessFault opened, and it exists because
+// absence is not evidence. `faults` is written only when a start FAILS, so
+// "nothing failing" is also what a node says about a process it has not fetched
+// yet, one blocked behind a release, and one whose release failed. A worker-only
+// app has no route to probe, so absence-plus-time was the only other verdict
+// available and it passes an app that never came up — which is the one thing the
+// place-verify-flip sequence exists to stop.
+//
+// Image and Command, because those are the agent's OWN predicate for "this is a
+// different program" (see reconcileOnce: a live process is left alone only while
+// both still match what was placed). Reporting the slug alone would pass a
+// redeploy that changed the worker's command on the process still running the
+// old one. Nothing else travels: env and secrets are not in that predicate, so
+// the node would not restart on a change to them and a report carrying them
+// would claim more than the node checks.
+type ProcessState struct {
+	Slug    string   `json:"slug"`
+	Process string   `json:"process"`
+	Image   string   `json:"image"`
+	Command []string `json:"command,omitempty"`
+}
+
 // syncBody is what the node POSTs: its identity, plus what it has to say about
 // the processes it was given.
 //
@@ -75,9 +99,18 @@ type ProcessFault struct {
 // node fault in Postgres forever, failing every later deploy as a platform
 // problem. `omitempty` on a plain slice cannot express this — it drops nil and
 // empty alike — which is why the pointer is here.
+//
+// Running is a pointer for the same reason and with the same three states, but
+// the cost of confusing them runs the other way. A stale fault wrongly FAILS a
+// deploy; a missing running-report also fails one, and a spurious one PASSES a
+// deploy for an app that is not up. So absent stays "does not report" — the
+// control plane leaves stored rows alone, and a worker-only deploy against an
+// agent too old to send this finds no rows and rolls back, which is the safe
+// direction — while `[]` means "I am running nothing confirmed" and clears them.
 type syncBody struct {
 	NodeIdentity
 	Processes *[]ProcessFault `json:"processes,omitempty"`
+	Running   *[]ProcessState `json:"running,omitempty"`
 }
 
 func metadata(path string) (string, error) {
@@ -148,6 +181,10 @@ type Source struct {
 	// sync. A nil Report means this node does not report at all, which is a
 	// different statement from reporting nothing — see syncBody.
 	Report func() []ProcessFault
+	// ReportRunning answers "what am I confirmed to be running right now", on
+	// the same sync. Nil carries the same meaning as a nil Report and is the
+	// state every agent built before this field was added is permanently in.
+	ReportRunning func() []ProcessState
 }
 
 func (s *Source) Fetch() (Desired, error) {
@@ -190,6 +227,16 @@ func (s *Source) fromControlPlane() (Desired, error) {
 			p = []ProcessFault{}
 		}
 		payload.Processes = &p
+	}
+	if s.ReportRunning != nil {
+		// Same nil-to-empty normalisation, for the same reason: `null` is not an
+		// array, so a reader testing for one would take it as "does not report"
+		// and never clear the rows of a node that has stopped running anything.
+		r := s.ReportRunning()
+		if r == nil {
+			r = []ProcessState{}
+		}
+		payload.Running = &r
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
