@@ -124,18 +124,35 @@ func resolveAll(project string, refs map[string]string) (map[string]string, erro
 	return out, nil
 }
 
-// hasDatabase is true when this app was given a database by the platform.
+// hasDatabase is true when this app was given a database BY THE PLATFORM —
+// which is the only case where a dead node proxy is this app's problem.
 //
-// The reference can arrive either as a Secret Manager id (before resolution)
-// or, once resolved, as a plain value in the environment — checking both
-// means this stays correct regardless of where in the start sequence it is
-// called from.
+// The platform supports bring-your-own-database apps: an app can arrive with
+// its own DATABASE_URL pointing at Supabase, Neon, or anywhere else, set by
+// the app owner rather than provisioned by us. Gating such an app's start on
+// our proxy would be wrong twice — it never talks to that proxy, and a dead
+// proxy would then block a start that would otherwise have succeeded. So
+// "has DATABASE_URL" is not the test; "is DATABASE_URL ours" is.
+//
+// Two signals mean ours, checked in order:
+//
+//   - A Secrets entry. Before resolution the reference lives there, not in
+//     Env, and it is a Secret Manager id this platform created
+//     (app-<slug>-DATABASE_URL, see resolveSecret) — its presence alone means
+//     the platform provisioned the database, whatever Env separately holds.
+//   - An Env value that names the proxy address. Once resolved, the platform
+//     writes its own DATABASE_URL as a DSN pointing at dbProxyAddr; an app's
+//     own external DSN never will, short of an astronomically unlikely
+//     collision.
 func hasDatabase(app App) bool {
 	if _, ok := app.Secrets["DATABASE_URL"]; ok {
 		return true
 	}
-	_, ok := app.Env["DATABASE_URL"]
-	return ok
+	v, ok := app.Env["DATABASE_URL"]
+	if !ok {
+		return false
+	}
+	return strings.Contains(v, dbProxyAddr)
 }
 
 // dbPathReachable checks that this node's database path is up.
