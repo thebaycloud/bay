@@ -836,21 +836,32 @@ Run path; it gains a sibling, and the fork decides which runs.
 - [ ] **Step 1: Decide the runtime before the deploy**
 
 Immediately before `let result = await runDeploy();`, replace the log line and
-add the decision:
+add the decision. **The canary gate stays** — `chooseRuntime` says what the fleet
+*can* serve, and `fleetPlacementWanted` says what it is *allowed* to serve yet.
+Task 10 removes the second half after one app has proved the path; without it,
+the first app to prove this is whichever one somebody happens to deploy.
 
 ```ts
     const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless });
+    const toFleet = target.runtime === "fleet" && fleetPlacementWanted(process.env, slug);
     if (target.reason) log(`Deploying ${slug} to Cloud Run — ${target.reason}`);
+    else if (!toFleet) log(`Deploying ${slug} to Cloud Run — the fleet could take it, but it is not a canary yet`);
     else log(`Deploying ${slug} to the fleet…`);
 ```
 
 - [ ] **Step 2: Give the database the right address**
 
-`provisionPostgres` is called earlier than this decision, so hoist
-`chooseRuntime` above it and pass the address:
+`provisionPostgres` is called earlier than this decision, so hoist both lines
+above it and pass the address.
+
+**Derive the address from `toFleet`, not from `target.runtime`.** They differ for
+exactly the apps this gate exists for: an app the fleet could serve but which is
+not a canary deploys to Cloud Run, and giving it `FLEET_DB` would hand a Cloud
+Run revision an address it cannot reach — the same failure this whole task
+exists to stop, arriving through the back door.
 
 ```ts
-    const dbAt = target.runtime === "fleet" ? FLEET_DB : CLOUD_RUN_DB;
+    const dbAt = toFleet ? FLEET_DB : CLOUD_RUN_DB;
     // …and at the provisionPostgres call site:
     const db = await provisionPostgres(slug, log, dbAt);
     // …and wherever databaseEnv is called for this app:
@@ -897,7 +908,7 @@ add the decision:
 
 ```ts
     const firstAttempt = stages.start(ACTIVATION_STAGE);
-    let result = target.runtime === "fleet" ? await runFleetDeploy() : await runDeploy();
+    let result = toFleet ? await runFleetDeploy() : await runDeploy();
     await stages.end(firstAttempt, result.ok ? "ok" : "failed");
 ```
 
@@ -1069,11 +1080,12 @@ exists, append one:
 
 - [ ] **Step 3b: Skip the Cloud Run release job on the fleet branch**
 
-Guard the existing release-job call with `target.runtime === "cloudrun"`, and log
-the fleet case so it is not silent:
+Guard the existing release-job call with `!toFleet` — the same value the deploy
+branch used, so the release and the app can never disagree about where they are —
+and log the fleet case so it is not silent:
 
 ```ts
-    if (target.runtime === "fleet") log("release runs on the node, before the app starts");
+    if (toFleet) log("release runs on the node, before the app starts");
 ```
 
 - [ ] **Step 5: Verify**
