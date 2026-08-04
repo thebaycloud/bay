@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { heartbeatNode, desiredFor, type NodeReport } from "@/lib/fleet";
+import { heartbeatNode, desiredFor, recordNodeFaults, type NodeReport, type ProcessFault } from "@/lib/fleet";
 
 /**
  * The only endpoint a fleet node talks to.
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  let body: Partial<NodeReport>;
+  let body: Partial<NodeReport> & { processes?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -64,6 +64,20 @@ export async function POST(req: Request) {
       memoryBytes: Number(body.memoryBytes ?? 0),
       cpus: Number(body.cpus ?? 0),
     });
+    // Only when the node actually sent the field. Absent means "this agent does
+    // not report" — an agent built before the field existed sends nothing, and
+    // must not silently clear the rows a newer one wrote. An empty array is the
+    // opposite statement, "I hold nothing failing", and DOES clear them.
+    if (Array.isArray(body.processes)) {
+      // Failing here must not fail the sync. What the node needs from this
+      // response is `apps`; a node that stops receiving desired state because a
+      // status write failed is a worse outcome than a stale fault row, and this
+      // channel exists to prevent an outage rather than to cause one.
+      await recordNodeFaults(name, body.processes as ProcessFault[]).catch((e) => {
+        console.error("fleet sync: recording faults for", name, e instanceof Error ? e.message : String(e));
+      });
+    }
+
     const apps = await desiredFor(name);
     return Response.json({ apps });
   } catch (e) {

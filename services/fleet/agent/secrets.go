@@ -31,7 +31,22 @@ import (
 	"time"
 )
 
-const secretManagerBase = "https://secretmanager.googleapis.com/v1"
+// secretManagerBase and tokenSource are variables rather than constants for one
+// reason: fault_test.go has to be able to call resolveSecret for real.
+//
+// classifyStartError (fault.go) reads the error this file formats. A test that
+// hand-writes — or mirrors — that format string proves only that the mirror
+// matches itself: reword the fmt.Errorf below and the mirror keeps passing while
+// the classifier silently degrades to FaultUnknown for every real secret
+// failure, which is precisely the failure this whole slice exists to prevent.
+// With these two seams the fixture points at an httptest server, the real
+// producer writes the real string, and rewording it fails a test here.
+//
+// Nothing in production ever assigns to either.
+var (
+	secretManagerBase = "https://secretmanager.googleapis.com/v1"
+	tokenSource       = metadataToken
+)
 
 // dbProxyAddr is the one Cloud SQL Auth Proxy per node, reached over the
 // sandbox bridge gateway (see bridgeCIDR in network.go) rather than
@@ -45,7 +60,7 @@ const dbProxyAddr = "10.200.0.1:5432"
 // keeps the placement spec free of project ids, so the same spec is valid if the
 // fleet ever moves project.
 func resolveSecret(project, name string) (string, error) {
-	tok, err := metadataToken()
+	tok, err := tokenSource()
 	if err != nil {
 		return "", fmt.Errorf("metadata token: %w", err)
 	}

@@ -132,6 +132,39 @@ type Agent struct {
 	// are declared here so the struct literal in Step 2 is written once.
 	startFail *failTracker
 	cronFail  *failTracker
+
+	// faults is the most recent start failure per sandbox id, retained rather
+	// than logged and dropped. Cleared when that id next starts successfully,
+	// and when it stops being desired at all.
+	//
+	// The trackers next to it count; this remembers WHY, and whose fault it was.
+	// A count tells an operator reading /status that something is wrong; only
+	// this tells the control plane that the something was ours, which is what
+	// keeps a repair agent out of a customer's repository over our own outage.
+	faults map[string]ProcessFault
+}
+
+// reportFaults answers the sync with what is currently failing on this node.
+//
+// A copy under the lock, never the map itself: the caller marshals it on the
+// sync goroutine while starts write to it, and handing out the live map is a
+// data race with a JSON encoder on one end.
+func (a *Agent) reportFaults() []ProcessFault {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]ProcessFault, 0, len(a.faults))
+	for _, f := range a.faults {
+		out = append(out, f)
+	}
+	// Stable order so two syncs that say the same thing look the same, in a log
+	// and in a diff.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Slug != out[j].Slug {
+			return out[i].Slug < out[j].Slug
+		}
+		return out[i].Process < out[j].Process
+	})
+	return out
 }
 
 // syncCron starts the once-a-minute tick the first time it is needed, and keeps
@@ -287,7 +320,15 @@ func main() {
 		relFail:    newFailTracker(),
 		relRunning: map[string]bool{},
 		startFail:  newFailTracker(),
-		cronFail:   newFailTracker()}
+		cronFail:   newFailTracker(),
+		faults:     map[string]ProcessFault{}}
+
+	// Wired only when there is a control plane to report to. Leaving it nil on
+	// the lab path is deliberate: nil means "this node does not report", which
+	// the control plane must not confuse with "this node reports nothing wrong".
+	if src.Endpoint != "" {
+		src.Report = a.reportFaults
+	}
 
 	go a.serve(*addr)
 	go NewRouter(*rootDomain, edgeSecretFromEnv()).Serve(*routerAddr, routesPath)
@@ -440,6 +481,20 @@ func (a *Agent) reconcileOnce() error {
 			}
 		}
 	}
+
+	// Same shape of hole for the fault set, through a different door: a process
+	// that FAILED to start never entered a.live either, and that is the only
+	// kind of process this map ever holds. So the removal loop above can never
+	// clear one, and an app deleted after it failed to start would go on being
+	// reported as failing by a node that no longer holds it. Sweep against what
+	// is still desired instead.
+	a.mu.Lock()
+	for id := range a.faults {
+		if _, wanted := units[id]; !wanted {
+			delete(a.faults, id)
+		}
+	}
+	a.mu.Unlock()
 
 	// An app whose release gave up never started a process, so it never entered
 	// a.live and the removal loop above never sees it. That is precisely the app
@@ -674,8 +729,13 @@ func (a *Agent) startMany(items []work) {
 			net, err := a.rt.Start(app, proc, idx)
 			if err != nil {
 				log.Printf("%s: start failed: %v", id, err)
+				fault := classifyStartError(err)
 				a.mu.Lock()
 				delete(a.slots, idx)
+				a.faults[id] = ProcessFault{
+					Slug: app.Slug, Process: proc.Name,
+					Fault: fault, Detail: faultDetail(fault, err),
+				}
 				a.mu.Unlock()
 				return
 			}
@@ -687,6 +747,10 @@ func (a *Agent) startMany(items []work) {
 
 			a.mu.Lock()
 			a.live[id] = &live{app: app, proc: proc, net: net, index: idx, since: time.Now()}
+			// Same critical section as the live entry on purpose. A process that
+			// is running is not failing, and leaving the two facts to be written
+			// separately is a window in which the node reports both.
+			delete(a.faults, id)
 			a.mu.Unlock()
 
 			// Publish immediately. An app that is serving and absent from the

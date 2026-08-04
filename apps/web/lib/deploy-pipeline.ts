@@ -17,7 +17,7 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
-import { chooseNode, placeApp, placementFor, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
+import { chooseNode, nodeFaultFor, placeApp, placementFor, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
 import { chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
@@ -3219,6 +3219,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         {
           chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
           probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
+          nodeFaultFor,
           log,
         },
       ));

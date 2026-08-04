@@ -229,6 +229,11 @@ async function install() {
       placementFor: async () => null,
       runtimeOf: async () => "cloudrun",
       setRuntime: asyncNoop,
+      // No node blames itself here, which is what keeps these deploys' failures
+      // the app's — the repair-agent tests below depend on that being the
+      // default, and a fleet failure the node DOES claim is tested where it
+      // belongs, in fleet-place.test.ts.
+      nodeFaultFor: async () => null,
     },
   });
   // Additive, for the same reason gcp-rest is: `chooseRuntime`, `placeOnFleet`
