@@ -30,3 +30,6 @@ __pycache__/
 # Worktrees created by the harness and by using-git-worktrees. Never committable:
 # each one contains a full checkout of this repository.
 .claude/worktrees/
+
+# `go build ./...` with no -o drops the fleet agent binary here.
+services/fleet/agent/agent

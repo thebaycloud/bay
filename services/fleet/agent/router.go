@@ -232,10 +232,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// host, not `<slug>.supersonic.cv`. Routing on Host alone would mean every
 	// proxied request arriving here as "no app here".
 	//
-	// Trusting a client-supplied header is only safe because nothing reaches this
-	// port except the load balancer, whose firewall rule admits Google's health
-	// check and proxy ranges only. If this port is ever exposed directly, this
-	// header stops being trustworthy and the proxy has to sign it.
+	// `x-supersonic-slug` is trustworthy here because it survived the gate above:
+	// this line only runs for a request the edge proxy signed, so the slug is the
+	// proxy's word about which app this is, not an unauthenticated client's.
 	slug := strings.TrimSpace(r.Header.Get("x-supersonic-slug"))
 	if slug == "" {
 		slug = slugFromHost(r.Host, rt.rootDomain)
