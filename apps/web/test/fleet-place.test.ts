@@ -25,7 +25,17 @@ function ports(over: Partial<PlacementPorts> = {}) {
   return { calls, p: { ...base, ...over } };
 }
 
-const eligible = { lane: "container" as const, image: "img", staticServe: false };
+const eligible = { lane: "container" as const, image: "img", staticServe: false, serviceless: false };
+
+test("a worker-only app is not placed yet, and the reason is the check, not the runtime", () => {
+  // The fleet runs a bot better than Cloud Run does — that is half of why it
+  // exists. What is missing is the VERIFY step: the only proof this pipeline
+  // accepts is an HTTP answer through the load balancer, and a worker publishes
+  // no route to ask. Placing one would mean flipping on faith.
+  const r = fleetEligibility({ ...eligible, serviceless: true });
+  assert.equal(r.ok, false);
+  assert.match(r.reason!, /no route|worker-only/i);
+});
 
 test("a static app is not placeable, and the reason says why", () => {
   const r = fleetEligibility({ ...eligible, staticServe: true });

@@ -48,9 +48,17 @@ export const HANDOFF_STAGES = ["run-record", "job-dispatch", "job-cold-start", "
  */
 export const PRE_LANE_STAGES = ["clone", "detect", "infer-services", "render"] as const;
 
-/** Written by a recorder that knows the lane. */
+/**
+ * Written by a recorder that knows the lane.
+ *
+ * `fleet` — placing the app on a node and checking it answers from there — is a
+ * new name nothing has ever written, so it is free to add by the rule above. It
+ * is lane-known rather than lane-blind because whether an app can be placed at
+ * all is a property of its lane: `static` has no image and `runner`'s image is
+ * not the app's, and those are exactly the two that stay on Cloud Run.
+ */
 export const LANE_KNOWN_STAGES = [
-  "unpack", "prepare", "build", "upload", "release", "deploy", "verify", "processes", "repair-agent",
+  "unpack", "prepare", "build", "upload", "release", "deploy", "verify", "processes", "repair-agent", "fleet",
 ] as const;
 
 /** Every stage name this system may write. */

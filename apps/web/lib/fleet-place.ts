@@ -42,7 +42,15 @@ export interface Eligibility {
  * genuinely cannot do yet, and saying which one keeps "did not move" from
  * reading as "failed".
  */
-export function fleetEligibility(a: { lane: Lane; image: string; staticServe: boolean }): Eligibility {
+export function fleetEligibility(a: { lane: Lane; image: string; staticServe: boolean; serviceless: boolean }): Eligibility {
+  if (a.serviceless) {
+    // Not a fleet limitation — the fleet runs a bot better than Cloud Run does,
+    // which is half of why it exists. It is a limitation of the CHECK: the only
+    // proof accepted below is an HTTP answer through the load balancer, and a
+    // worker-only app publishes no route to ask. Placing one would be flipping
+    // on faith, and the whole point of this sequence is not doing that.
+    return { ok: false, reason: "a worker-only app has no route to verify from the fleet yet" };
+  }
   if (a.staticServe || a.lane === "static") {
     // Published to GCS and served by the shared static server. There is no image
     // to pull. VM-FLEET moves this onto a node as an ordinary resident process

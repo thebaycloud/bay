@@ -17,6 +17,9 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
+import { chooseNode, placeApp, setRuntime } from "@/lib/fleet";
+import { buildAppSpec } from "@/lib/fleet-spec";
+import { fleetEligibility, fleetProbe, placeOnFleet, type Placement } from "@/lib/fleet-place";
 import { rollback } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -67,6 +70,23 @@ const REGION = "us-central1";
  * it. See docs/CUTOVER.md for the order of operations.
  */
 const SEAL_APPS = process.env.SEAL_APPS === "1";
+
+/**
+ * Whether a deploy tries to put the app on the fleet.
+ *
+ * Off by default, and that is not timidity: every push to main deploys to
+ * production and there is no staging, so a new path that runs on every deploy
+ * has to be switchable without a build. On, it is additive — the app is deployed
+ * to Cloud Run exactly as it was first, and only then is a placement attempted.
+ * Cloud Run remains the rollback for as long as this is a dual-run.
+ *
+ * `FLEET_LB` is the address of the fleet's load balancer. Empty means there is
+ * nowhere to send traffic, so placement is skipped no matter what the flag says
+ * — an app placed on a node with no route to it is strictly worse than an app
+ * left on Cloud Run.
+ */
+const FLEET_PLACEMENT = process.env.FLEET_PLACEMENT === "1";
+const FLEET_LB = process.env.FLEET_LB ?? "";
 // The identity the prepare step actually runs as, and therefore what must be able
 // to read the app's secrets.
 //
@@ -3235,23 +3255,70 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // Reported and recorded, never fatal: a worker that fails to come up leaves
     // an app whose frontend is live, and tearing the frontend down would make
     // that strictly worse. Same rule as a sibling, for the same reason.
+    // The buildpack lane's image only exists once `run deploy` has run, and its
+    // name is Cloud Run's to choose — so it is read off the service that was
+    // just deployed rather than guessed. Null means the read failed, and a
+    // worker with no image is skipped loudly inside deployProcesses rather than
+    // deployed from a source tree that would build a third time.
+    //
+    // Read once for both readers below. The fleet placement needs the same image
+    // and the same secrets the processes do, and asking Cloud Run twice for one
+    // answer is how the two quietly stop being the same answer.
+    let built: string | null = null;
+    let allRefs: SecretRef[] = [];
     if (result.ok && !staticServe) {
-      // The buildpack lane's image only exists once `run deploy` has run, and its
-      // name is Cloud Run's to choose — so it is read off the service that was
-      // just deployed rather than guessed. Null means the read failed, and a
-      // worker with no image is skipped loudly inside deployProcesses rather than
-      // deployed from a source tree that would build a third time.
-      const built = processImage ?? await liveContainerImage(slug);
+      built = processImage ?? await liveContainerImage(slug);
       // EVERY secret the app has, not just the ones this deploy stored. The
       // service path can pass the delta because `--update-secrets` merges; these
       // primitives are deployed with `--set-secrets`, so a secret not passed is a
       // secret dropped. See allAppSecrets for the deploy this cost.
-      const allSecrets = setSecretsFlag(await allAppSecrets(slug, secretRefs));
+      allRefs = await allAppSecrets(slug, secretRefs);
+      const allSecrets = setSecretsFlag(allRefs);
       await stages.around("processes", () => deployProcesses({
         slug, dir, lane, image: built ?? undefined,
         env: extraEnv, secrets: allSecrets || null,
         cloudsql, labels: labelPairs, config: primaryConfigService, processes, log,
       })).catch((e) => log(`! processes: ${e instanceof Error ? e.message : String(e)}`));
+    }
+
+    // Onto the fleet, if this app can go and there is somewhere to put it.
+    //
+    // After Cloud Run, never instead of it. The app is already deployed and
+    // verified above, so everything here is an attempt to do better — and every
+    // way it can fail ends with the app still served by Cloud Run. That is what
+    // makes it safe to run on an ordinary deploy rather than as an operation
+    // somebody watches.
+    //
+    // `chooseNode` finally has a caller.
+    let fleetUrl: string | undefined;
+    if (FLEET_PLACEMENT && result.ok) {
+      const can = !FLEET_LB
+        ? { ok: false, reason: "no fleet load balancer is configured" }
+        : fleetEligibility({ lane, image: built ?? "", staticServe: !!staticServe, serviceless });
+      if (!can.ok) {
+        log(`· staying on Cloud Run — ${can.reason}`);
+      } else {
+        // Never fatal. A deploy that has already gone live on Cloud Run must not
+        // be failed by the runtime it was going to move to — the app is up, and
+        // the worst outcome available here is that it stays where it is.
+        const placement = await stages.around("fleet", () => placeOnFleet(
+          slug,
+          buildAppSpec({
+            slug, image: built!, env: extraEnv, secrets: allRefs, processes,
+            healthPath: primaryHealth.health.path,
+          }),
+          FLEET_LB,
+          {
+            chooseNode, placeApp, setRuntime,
+            probe: (s) => fleetProbe(FLEET_LB, s),
+            log,
+          },
+        )).catch((e): Placement => {
+          log(`! fleet: ${e instanceof Error ? e.message : String(e)} — staying on Cloud Run`);
+          return { placed: false };
+        });
+        fleetUrl = placement.runUrl;
+      }
     }
 
     // The two routing models are mutually exclusive: a per-app domain
@@ -3283,7 +3350,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
     setDeploy(slug, { status: "live", url: result.url });
     if (ownerId && ownerWorkspace) {
-      await markAppLive(slug, result.url ?? "", null, routes);
+      // The flip, and the only write of run_url. `fleetUrl` is present only once
+      // the app has answered from the fleet through the load balancer; every
+      // other path leaves this the Cloud Run url the deploy already proved.
+      await markAppLive(slug, fleetUrl ?? result.url ?? "", null, routes);
       // Not awaited: the deploy is finished, and a thumbnail must never hold it.
       // Skipped entirely for a worker-only app: there is no page to photograph,
       // and asking the shot service for one produces a screenshot of an error
