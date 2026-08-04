@@ -1,16 +1,22 @@
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isSameFailure } from "../deploy-errors";
+import { startBridge, redeployScript, type Redeploy } from "./bridge";
 import { CodexBackend } from "./codex";
 import { runAgent } from "./harness";
 import { PLAN_SCHEMA, fromStructured } from "./plan-schema";
 import type { AgentBackend } from "./types";
 import {
+  AGENT_MD,
   PLAN_AGENT_MD,
   PartialPlan,
   extractPlan,
+  opencodeRepair,
   planDeploy as opencodePlanDeploy,
   type DeployPlan,
+  type PlatformFacts,
+  type RepairResult,
 } from "../opencode-deploy";
 
 /**
@@ -132,6 +138,98 @@ export async function planDeploy(opts: {
   const outcome = plan.static ? (plan.outputDir || "the repository root") : (plan.run || "built as a container");
   log(`planner · ${plan.language}${plan.static ? " (static)" : ""}${plan.needsDB ? " +db" : ""} → ${outcome}`);
   return plan;
+}
+
+/**
+ * Repair a failed deploy: same contract as `opencodeRepair`, same ground truth.
+ *
+ * The agent is not trusted. `ok` is whether the BRIDGE saw a successful deploy,
+ * never whether the agent said so — an agent that claims it fixed something and
+ * an agent that fixed something are different agents, and only one is detectable
+ * from here.
+ */
+export async function repairDeploy(opts: {
+  dir: string;
+  slug: string;
+  initialError: string;
+  plan?: DeployPlan | null;
+  facts?: PlatformFacts | null;
+  redeploy: Redeploy;
+  log: (l: string) => void;
+  timeoutMs?: number;
+}): Promise<RepairResult> {
+  if (agentName() === "opencode") return opencodeRepair(opts);
+
+  const { dir, slug, initialError, plan, facts, redeploy, log } = opts;
+  const timeoutMs = opts.timeoutMs ?? Number(process.env.REPAIR_TIMEOUT_MS || 900000);
+  const ws = mkdtempSync(join(tmpdir(), "ss-repair-"));
+
+  const bridge = await startBridge({
+    redeploy,
+    log,
+    maxRedeploys: Number(process.env.OPENCODE_MAX_REDEPLOYS || 3),
+    // Loopback while the agent is a subprocess of this process. On a fleet node
+    // this becomes the node's bridge gateway — see bridge.ts.
+    bind: process.env.AGENT_BRIDGE_BIND || "127.0.0.1",
+    sameFailure: isSameFailure,
+  });
+
+  let run: Awaited<ReturnType<typeof runAgent>> | null = null;
+  try {
+    symlinkSync(dir, join(ws, "repo"));
+
+    // What the platform DECIDED and what it DID. Without these the agent sees an
+    // error and a repo and nothing else, cannot tell which half of the failure
+    // was ours, and edits the customer's code to compensate — it has written a
+    // fake .env, sed-ed a migrate script out of package.json, and once burned
+    // 287k tokens writing an application around what was actually an IAM grant.
+    if (plan) writeFileSync(join(ws, "deploy-plan.json"), JSON.stringify(plan, null, 2));
+    if (facts) writeFileSync(join(ws, "platform.json"), JSON.stringify(facts, null, 2));
+    writeFileSync(join(ws, "redeploy.sh"), redeployScript(bridge.url));
+
+    const backend = backendFor("codex");
+    const spec = {
+      ws,
+      model: bareModel(MODEL),
+      instructions: AGENT_MD,
+      // The repair agent must reach the bridge and run gcloud. Every sandbox
+      // mode blocks network by default, and getting this wrong looks like an
+      // agent that edits files correctly and can never redeploy.
+      network: true,
+      prompt:
+        `The deploy failed with this error:\n\n${initialError}\n\n` +
+        "Fix the app in ./repo and run `bash redeploy.sh` until it deploys live.",
+    };
+
+    run = await runAgent({
+      backend, spec, log, label: "agent", timeoutMs,
+      // A repair legitimately takes many more steps than a plan: it edits, it
+      // redeploys, it reads a new error, it edits again. The planner's budget
+      // would kill it in the middle of working.
+      maxCalls: Number(process.env.REPAIR_MAX_CALLS || 120),
+      repeatsAllowed: 4,
+    });
+  } finally {
+    bridge.close();
+    if (process.env.OPENCODE_KEEP_WS === "1") log(`kept ws: ${ws}`);
+    else try { rmSync(ws, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+
+  const url = bridge.lastUrl();
+  const ok = !!url;
+  const changes = run?.changes ?? [];
+  const tokens = run?.tokens ?? { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+  log(
+    `tokens · total ${tokens.total} (in ${tokens.input} / out ${tokens.output} / reasoning ${tokens.reasoning}` +
+    ` / cacheRead ${tokens.cacheRead}) · ${run?.steps ?? 0} steps · ${bridge.redeploys()} redeploys`
+  );
+
+  return {
+    ok, url, changes, steps: run?.steps ?? 0, redeploys: bridge.redeploys(), tokens,
+    summary: ok
+      ? `Fixed via ${agentName()}: ${changes.join(", ") || "config"}`
+      : `${agentName()} couldn't get it live after ${bridge.redeploys()} redeploys`,
+  };
 }
 
 export { PartialPlan, type DeployPlan };
