@@ -2084,7 +2084,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // serve yet. Task 10 drops the second half once one app has proved the
     // path; until then the first app to prove it is whichever one somebody
     // happens to deploy.
-    const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless });
+    //
+    // Read fresh rather than reusing `hasDockerfile` above: that read happened
+    // before the SPA and Next.js fallback Dockerfiles (just above this block)
+    // were written, so an app can have gained one since. The lane label was
+    // fixed even earlier and does not update either way — this is the checkout
+    // telling the truth about how the app will actually be built.
+    const hasDockerfileNow = existsSync(join(dir, "Dockerfile"));
+    const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless, hasDockerfile: hasDockerfileNow });
     const toFleet = target.runtime === "fleet" && fleetPlacementWanted(process.env, slug);
     // The address the database is provisioned at follows `toFleet`, never
     // `target.runtime` alone. The two differ for exactly the apps this gate
@@ -2378,7 +2385,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       spaFallback: primaryConfigService?.spaFallback,
     };
 
-    const useDockerBuild = existsSync(join(dir, "Dockerfile"));
+    const useDockerBuild = hasDockerfileNow;
     // Slug-aware, so `BUILDKIT_APPS=<slug>` can prove the registry auth on one
     // app before the default moves. Without the slug this reads the global
     // `BUILDER` exactly as it did.
