@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
 import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./registry";
-import { page403, page404, pageGate, pageBuilding, pageFailed, pageStalled } from "./pages";
+import { page403, page404, pageGate, pageBuilding, pageFailed, pageStalled, pageNoWeb } from "./pages";
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
@@ -50,6 +50,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     tunnelUp: hasTunnel(slug),
     status: app.status,
     deploy: app.deploy,
+    hasWeb: app.has_web,
     now: Date.now(),
   });
   if ("page" in action) {
@@ -59,6 +60,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // ("deployed but not answering") describes a working app having a bad moment,
     // which is not what either of these is.
     if (action.page === "failed") return html(res, 503, pageFailed(slug, action.reason));
+    // 404, not 503. The app is healthy; this URL just does not exist for it.
+    // A 5xx here says the platform is broken, which is what it said about a
+    // working bot for two days.
+    if (action.page === "noweb") return html(res, 404, pageNoWeb(slug));
     return html(res, 503, pageStalled(slug));
   }
 

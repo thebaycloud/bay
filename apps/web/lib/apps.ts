@@ -33,6 +33,13 @@ export async function markAppLive(
   runUrl: string,
   releaseHash?: string | null,
   routes?: { path: string; url: string }[] | null,
+  /**
+   * Whether this deploy produced a web process. Optional only because TypeScript
+   * forbids a required parameter after an optional one; every call site passes
+   * it explicitly, and none should be allowed to stop. Omitting it leaves the
+   * stored value alone rather than asserting a web process exists.
+   */
+  hasWeb?: boolean,
 ): Promise<void> {
   // The hash is written in the same statement that marks the app live, so the live
   // release and the hash a redeploy compares against can never disagree. Passing
@@ -44,18 +51,33 @@ export async function markAppLive(
   // the routes of the deploy before it. Null clears them, so an app that drops
   // back to a single service stops being split.
   //
+  // `has_web` is written the same way again, and is the reason an app with no
+  // web process stops being described as a broken one. COALESCE, not a bare
+  // assignment: a caller that passes nothing must leave the stored value alone,
+  // because silently writing `true` would take a worker-only app that was
+  // correctly marked and put it back to answering "This deploy stopped".
+  //
   // Written defensively: `routes` arrives in a migration, and a control plane
   // that has shipped ahead of it must NOT fail every deploy at the moment it goes
   // live. Marking an app live is the last thing a deploy does, so a failure here
   // discards a build that actually worked. The column is used when present and
   // skipped when not.
+  //
+  // The alternation in the pattern below is load-bearing and was nearly the
+  // whole value of this change reversed. Postgres names the missing column in
+  // the message, so a pattern matching only `routes` does not match
+  // `column "has_web" of relation "apps" does not exist` — it rethrows, and
+  // every deploy in the platform fails at go-live on a database that has not
+  // been migrated yet. Any column added here must be added to this pattern and
+  // dropped from the fallback query in the same edit.
   try {
     await getPool(DB).query(
-      `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3, routes = $4::jsonb WHERE slug = $1`,
-      [slug, runUrl, releaseHash ?? null, routes && routes.length ? JSON.stringify(routes) : null]
+      `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3, routes = $4::jsonb,
+              has_web = COALESCE($5, apps.has_web) WHERE slug = $1`,
+      [slug, runUrl, releaseHash ?? null, routes && routes.length ? JSON.stringify(routes) : null, hasWeb ?? null]
     );
   } catch (e) {
-    if (!/column .*routes.* does not exist/i.test(e instanceof Error ? e.message : String(e))) throw e;
+    if (!/column .*(routes|has_web).* does not exist/i.test(e instanceof Error ? e.message : String(e))) throw e;
     await getPool(DB).query(
       `UPDATE apps SET run_url = $2, status = 'live', release_hash = $3 WHERE slug = $1`,
       [slug, runUrl, releaseHash ?? null]

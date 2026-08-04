@@ -1331,7 +1331,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
         if (ownerId && ownerWorkspace) {
           const staticUrl = (await staticServiceUrl()) ?? "";
-          await markAppLive(slug, staticUrl, prebuiltHash || null);
+          // A static site is nothing but a web page, so `true` — and `null` for
+          // routes, which this call never had and must not acquire by having a
+          // later argument slide into its place.
+          await markAppLive(slug, staticUrl, prebuiltHash || null, null, true);
           void requestThumbnail(slug, staticUrl);
         }
       });
@@ -3590,7 +3593,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // The flip, and the only write of run_url. `result.url` is the fleet's
       // load-balancer address on the fleet branch and the Cloud Run url on the
       // other — whichever branch ran is the one that proved this address live.
-      await markAppLive(slug, result.url ?? "", null, routes);
+      // `!serviceless` is the same fact the repair agent is already told at the
+      // top of this file and that declaredNeeds.web is already computed from —
+      // this is where it finally gets persisted, so the edge can stop calling a
+      // working bot a failed deploy.
+      await markAppLive(slug, result.url ?? "", null, routes, !serviceless);
       // Not awaited: the deploy is finished, and a thumbnail must never hold it.
       // Skipped entirely for a worker-only app: there is no page to photograph,
       // and asking the shot service for one produces a screenshot of an error
