@@ -329,6 +329,67 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# 7a. Log shipping
+#
+# App stdout and stderr land in /srv/apps/<slug>/<process>.log, written by the
+# agent. Without this they stay there: `supersonic logs` filters Cloud Logging
+# for cloud_run_revision, so an app on a node produces nothing at all — not an
+# error, nothing. Three separate incidents on 2026-08-04 were diagnosable only
+# over ssh, and one of them had been looping unnoticed for hours.
+#
+# The agent's own log ships too, deliberately. Every one of those incidents was
+# read from /var/log/supersonicd.log rather than from an app's output: it is the
+# file that says WHY an app is not running.
+#
+# No IAM step here — the node's service account already holds
+# roles/logging.logWriter. If entries stop arriving, check that first anyway: it
+# is the one dependency this section does not create for itself.
+# ---------------------------------------------------------------------------
+
+if ! systemctl list-unit-files 2>/dev/null | grep -q '^google-cloud-ops-agent'; then
+  log "installing google-cloud-ops-agent"
+  curl -fsSL -o /tmp/add-google-cloud-ops-agent-repo.sh \
+    https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+  bash /tmp/add-google-cloud-ops-agent-repo.sh --also-install
+  rm -f /tmp/add-google-cloud-ops-agent-repo.sh
+fi
+
+mkdir -p /etc/google-cloud-ops-agent
+cat > /etc/google-cloud-ops-agent/config.yaml <<'EOF'
+logging:
+  receivers:
+    supersonic_apps:
+      type: files
+      # Without this an entry carries NOTHING that says which app it came from:
+      # resource.type is gce_instance, resource.labels are instance/zone/project,
+      # and logName is the receiver name — identical for all twenty apps. Measured
+      # on 2026-08-04 before this line was added. With it, each entry gets
+      # labels."agent.googleapis.com/log_file_path" = /srv/apps/<slug>/<proc>.log,
+      # which is the only discriminator that exists.
+      record_log_file_path: true
+      include_paths:
+        - /srv/apps/*/*.log
+    supersonic_agent:
+      type: files
+      # Without this an entry carries NOTHING that says which app it came from:
+      # resource.type is gce_instance, resource.labels are instance/zone/project,
+      # and logName is the receiver name — identical for all twenty apps. Measured
+      # on 2026-08-04 before this line was added. With it, each entry gets
+      # labels."agent.googleapis.com/log_file_path" = /srv/apps/<slug>/<proc>.log,
+      # which is the only discriminator that exists.
+      record_log_file_path: true
+      include_paths:
+        - /var/log/supersonicd.log
+  service:
+    pipelines:
+      supersonic:
+        receivers: [supersonic_apps, supersonic_agent]
+EOF
+
+systemctl enable google-cloud-ops-agent >/dev/null 2>&1 || true
+systemctl restart google-cloud-ops-agent || true
+
+# ---------------------------------------------------------------------------
 # 7b. The agent
 #
 # A node that reboots must come back serving without anyone logging in. Local
