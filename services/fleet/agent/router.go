@@ -129,6 +129,20 @@ type Router struct {
 	proxy      *httputil.ReverseProxy
 }
 
+// edgeSecretFromEnv reads the gate's secret, trimmed.
+//
+// Trimmed because the two sides are not symmetrical about whitespace and the
+// asymmetry is silent. Go's header parser strips the RECEIVED value, so a stray
+// space or newline on the proxy's copy disappears on the wire; the same stray
+// byte on this side is compared literally and makes the secret unmatchable
+// forever — every fleet request 403s, and the difference between the two copies
+// is invisible in any log. The secret reaches this node through a file written
+// by a hand that may never have read the rollout runbook, and `openssl rand`
+// emits a trailing newline by default.
+func edgeSecretFromEnv() string {
+	return strings.TrimSpace(os.Getenv("FLEET_EDGE_SECRET"))
+}
+
 func NewRouter(rootDomain, edgeSecret string) *Router {
 	rt := &Router{
 		table:      &routerTable{byslug: map[string]Route{}},
@@ -232,9 +246,16 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// host, not `<slug>.supersonic.cv`. Routing on Host alone would mean every
 	// proxied request arriving here as "no app here".
 	//
-	// `x-supersonic-slug` is trustworthy here because it survived the gate above:
-	// this line only runs for a request the edge proxy signed, so the slug is the
-	// proxy's word about which app this is, not an unauthenticated client's.
+	// How far `x-supersonic-slug` can be trusted depends on `edgeSecret`, and
+	// only on that. With a secret set, this line runs only for a request the edge
+	// proxy signed, so the slug is the proxy's word about which app this is. With
+	// none set — bootstrap, which is the mode this binary ships in and stays in
+	// for the whole window between rollout steps — nothing was checked above and
+	// the slug is an unauthenticated client's claim, exactly as it was before the
+	// gate existed. That is the pre-gate posture, deliberately kept so the two
+	// deploys need not be simultaneous, and it is not a state to leave the node
+	// in: until `edgeSecret` is set, anything that can reach this port can still
+	// name any app on the node.
 	slug := strings.TrimSpace(r.Header.Get("x-supersonic-slug"))
 	if slug == "" {
 		slug = slugFromHost(r.Host, rt.rootDomain)
@@ -307,6 +328,17 @@ func (rt *Router) Serve(addr, routesFile string) {
 	_ = rt.table.load(routesFile)
 	go rt.watch(routesFile)
 	log.Printf("router on %s for *.%s", addr, rt.rootDomain)
+	// Say out loud whether the door is shut. Nothing else does, and the failure
+	// this catches is quiet: `FLEET_EDGE_SECRET=` with an empty value — a
+	// plausible outcome of a botched rotation — disables the gate while the
+	// health check keeps answering 200 and every app keeps serving. Never the
+	// secret itself, not even a prefix or a length: this log is world-readable to
+	// anything that can read the journal.
+	if rt.edgeSecret == "" {
+		log.Printf("edge gate: OFF (no FLEET_EDGE_SECRET) — anything reaching this port can name any app")
+	} else {
+		log.Printf("edge gate: enforcing — x-supersonic-edge required on every request but %s", fleetHealthPath)
+	}
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           rt,

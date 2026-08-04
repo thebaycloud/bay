@@ -77,6 +77,27 @@ func TestNoSecretConfiguredMeansNoEnforcement(t *testing.T) {
 	}
 }
 
+func TestTheSecretIsReadTrimmed(t *testing.T) {
+	// The proxy's copy of the same secret loses its whitespace for free: Go's
+	// header parser trims the received value. Untrimmed here, the two copies
+	// differ by a byte nobody can see and every fleet request 403s forever.
+	t.Setenv("FLEET_EDGE_SECRET", " \t"+testSecret+"\n")
+	if got := edgeSecretFromEnv(); got != testSecret {
+		t.Fatalf("edgeSecretFromEnv() did not trim; got %d bytes, want %d", len(got), len(testSecret))
+	}
+}
+
+func TestAWhitespaceOnlySecretDoesNotEnforce(t *testing.T) {
+	// A rotation that writes `FLEET_EDGE_SECRET=` and a newline leaves the gate
+	// OFF rather than enforcing a secret no caller can ever send. Both are bad;
+	// this one is at least the state the startup log names out loud.
+	t.Setenv("FLEET_EDGE_SECRET", "   \n")
+	rt := NewRouter("supersonic.cv", edgeSecretFromEnv())
+	if rt.edgeSecret != "" {
+		t.Fatalf("a whitespace-only secret survived as %d bytes", len(rt.edgeSecret))
+	}
+}
+
 func TestTheSecretIsNeverForwardedToTheApp(t *testing.T) {
 	var seen string
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
