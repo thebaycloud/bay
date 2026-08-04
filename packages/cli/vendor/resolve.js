@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp b11e3d8ba4a06dce
+// supersonic-vendor-stamp 632389782bc02d33
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -70,28 +70,31 @@ var import_node_path7 = require("node:path");
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
 
+// lib/db-address.ts
+var CLOUD_RUN_DB = { host: "127.0.0.1", port: "5432" };
+
 // lib/lanes.ts
 var SERVICE_LANES = ["runner", "container", "buildpack"];
 var ALL_LANES = ["static", ...SERVICE_LANES];
-var DB_HOST = "127.0.0.1";
-var DB_PORT = "5432";
+var DB_HOST = CLOUD_RUN_DB.host;
+var DB_PORT = CLOUD_RUN_DB.port;
 var CLOUD_SQL_PROXY_IMAGE = process.env.CLOUD_SQL_PROXY_IMAGE ?? "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1";
-function databaseEnv(db) {
+function databaseEnv(db, at = CLOUD_RUN_DB) {
   return [
     `DATABASE_URL=${db.databaseUrl}`,
-    `POSTGRES_SERVER=${DB_HOST}`,
-    `POSTGRES_HOST=${DB_HOST}`,
-    `POSTGRES_PORT=${DB_PORT}`,
+    `POSTGRES_SERVER=${at.host}`,
+    `POSTGRES_HOST=${at.host}`,
+    `POSTGRES_PORT=${at.port}`,
     `POSTGRES_USER=${db.user}`,
     `POSTGRES_PASSWORD=${db.password}`,
     `POSTGRES_DB=${db.dbName}`,
-    `PGHOST=${DB_HOST}`,
-    `PGPORT=${DB_PORT}`,
+    `PGHOST=${at.host}`,
+    `PGPORT=${at.port}`,
     `PGUSER=${db.user}`,
     `PGPASSWORD=${db.password}`,
     `PGDATABASE=${db.dbName}`,
-    `DB_HOST=${DB_HOST}`,
-    `DB_PORT=${DB_PORT}`,
+    `DB_HOST=${at.host}`,
+    `DB_PORT=${at.port}`,
     `DB_USER=${db.user}`,
     `DB_PASSWORD=${db.password}`,
     `DB_NAME=${db.dbName}`
