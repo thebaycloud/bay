@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   workerPoolArgs, cronJobArgs, cronScheduleArgs, cronScheduleUpdateArgs,
+  appPingScheduleArgs,
   webIngressFlags, processArgs, processResourceName, jobRunUri,
   type ProcessDeploy,
 } from "../lib/process-deploy";
@@ -169,6 +170,52 @@ test("the schedule triggers the JOB and authenticates with OAuth, not OIDC", () 
   // And an auth flag is present at all, which is the live latent break: createJob
   // in lib/gcloud.ts passes none, and that works only while SEAL_APPS is off.
   assert.ok(argv.some((a) => a.includes("service-account-email=")));
+});
+
+const ping = {
+  id: "myapp--nightly",
+  schedule: "0 3 * * *",
+  serviceUrl: "https://myapp-abc123-uc.a.run.app",
+  path: "/cron/digest",
+  region: "us-central1",
+  project: "supersonic-deploy-prod",
+  schedulerServiceAccount: "sched@p.iam.gserviceaccount.com",
+};
+
+test("a cron created from the dashboard authenticates with OIDC, not OAuth", () => {
+  const argv = appPingScheduleArgs(ping);
+
+  assert.deepEqual(argv.slice(0, 5), ["scheduler", "jobs", "create", "http", "myapp--nightly"]);
+
+  // The mirror image of the rule above, and the reason both live in one file.
+  // This target is the app's own Cloud Run service, not a Google API, so the
+  // identity token is the right token — gcloud's own help states the split:
+  // OIDC everywhere except APIs on *.googleapis.com.
+  assert.equal(valueOf(argv, "--oidc-service-account-email"), "sched@p.iam.gserviceaccount.com");
+  assert.ok(!argv.some((a) => a.startsWith("--oauth-")));
+});
+
+test("the token is minted for the service and the request goes to the path", () => {
+  const argv = appPingScheduleArgs(ping);
+
+  // Cloud Run validates `aud` against the SERVICE url — which is why probeApp
+  // mints its token for the bare url and still reaches a health path. Left
+  // unset, Cloud Scheduler uses "the URI specified in target" (its own help),
+  // path included, so the token would be refused by the one service it was
+  // minted for and the cron would 403 with nothing in the app's logs.
+  assert.equal(valueOf(argv, "--oidc-token-audience"), "https://myapp-abc123-uc.a.run.app");
+  assert.equal(valueOf(argv, "--uri"), "https://myapp-abc123-uc.a.run.app/cron/digest");
+});
+
+test("the audience is the uri's own origin, whatever shape the two arrive in", () => {
+  // The caller cannot hand in a uri and an audience that disagree, because it
+  // hands in neither. That is the whole reason this takes a url and a path: two
+  // strings that must agree are two strings that eventually will not, and the
+  // failure mode is a 403 a night, in a place nobody is looking.
+  const odd = appPingScheduleArgs({ ...ping, serviceUrl: "https://myapp-abc123-uc.a.run.app/", path: "cron/digest" });
+
+  assert.equal(valueOf(odd, "--uri"), "https://myapp-abc123-uc.a.run.app/cron/digest");
+  assert.equal(valueOf(odd, "--oidc-token-audience"), "https://myapp-abc123-uc.a.run.app");
 });
 
 test("a timezone is sent only when the author said which one they meant", () => {

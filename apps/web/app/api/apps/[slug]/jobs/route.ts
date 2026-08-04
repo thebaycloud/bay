@@ -28,8 +28,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     if (!schedule) return Response.json({ error: "schedule (cron) required" }, { status: 400 });
     const svc = await describeService(slug);
     if (!svc.url) return Response.json({ error: "app has no URL yet" }, { status: 400 });
-    const uri = svc.url.replace(/\/$/, "") + (path.startsWith("/") ? path : "/" + path);
-    const id = await createJob(slug, name, schedule, uri);
+    const id = await createJob(slug, name, schedule, svc.url, path);
     return Response.json({ ok: true, id });
   } catch (e) { return Response.json({ error: msg(e) }); }
 }

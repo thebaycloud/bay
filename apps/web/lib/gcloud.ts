@@ -6,6 +6,8 @@ import { ASSETS_BUCKET } from "./static-release";
 import { dbNameForSlug } from "./db";
 import { deleteAppSecrets } from "./app-secrets";
 import { runIdsForSlug } from "./deploy-runs";
+import { appPingScheduleArgs } from "./process-deploy";
+import { SCHEDULER_SA } from "./identities";
 
 const PROJECT = "supersonic-deploy-prod";
 // The one shared Cloud SQL instance every app's database lives on.
@@ -290,9 +292,20 @@ async function retryMutate<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   }
 }
 
-export async function createJob(slug: string, name: string, schedule: string, uri: string): Promise<string> {
+/**
+ * A cron the dashboard created: a scheduled, authenticated request at the app.
+ *
+ * It takes the service url and a path rather than the joined uri because the
+ * request and the token it carries have to describe the same service — see
+ * `appPingScheduleArgs`, which owns that rule and is tested against it.
+ */
+export async function createJob(slug: string, name: string, schedule: string, serviceUrl: string, path: string): Promise<string> {
   const id = `${slug}--${name}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 60);
-  await retryMutate(() => capture(["scheduler", "jobs", "create", "http", id, "--schedule", schedule, "--uri", uri, "--http-method", "POST", "--location", REGION, "--project", PROJECT]));
+  const argv = appPingScheduleArgs({
+    id, schedule, serviceUrl, path,
+    region: REGION, project: PROJECT, schedulerServiceAccount: SCHEDULER_SA,
+  });
+  await retryMutate(() => capture(argv));
   return id;
 }
 
