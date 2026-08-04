@@ -36,6 +36,50 @@ type NodeIdentity struct {
 	CPUs        int    `json:"cpus"`
 }
 
+// ProcessFault is one process's most recent start failure, as the node sees it.
+//
+// Sent on the sync that already runs every ten seconds, so there is no new
+// channel to secure and no second auth surface.
+//
+// Detail carries the error text ONLY for a classified fault. An unclassified
+// failure's error can be the last 800 bytes of the app's own log (container.go
+// wraps the runsc tail into it), which is the customer's stdout and can hold
+// anything they printed — including a credential. That text already goes to the
+// node's log; this field would take it off the node, into shared Postgres, and
+// in phase 1C-1 Task 4 into a deploy reason a user reads. The classified cases
+// are strings this package writes itself — dbPathReachable's and resolveSecret's
+// — and carry no app output at all.
+type ProcessFault struct {
+	Slug    string `json:"slug"`
+	Process string `json:"process"`
+	Fault   Fault  `json:"fault"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+// syncBody is what the node POSTs: its identity, plus what it has to say about
+// the processes it was given.
+//
+// Processes is a POINTER to a slice, and that is load-bearing on the wire:
+//
+//	nil            -> the field is absent    -> "this agent does not report"
+//	&[]            -> the field is []        -> "I hold nothing failing"
+//	&[...]         -> the field is a list    -> "these are failing"
+//
+// Absent and empty must stay different facts. An agent too old to know about
+// this field sends neither, and the control plane must leave whatever it has
+// stored alone — otherwise a rolling agent upgrade reads as a fleet-wide
+// recovery. But a NEW agent with nothing failing must send `[]` and mean it,
+// because that is the only thing that ever clears a stored fault: the agent
+// keeps faults in memory, so every restart legitimately starts with none, and
+// an agent that stayed silent about that would leave a repaired app marked as a
+// node fault in Postgres forever, failing every later deploy as a platform
+// problem. `omitempty` on a plain slice cannot express this — it drops nil and
+// empty alike — which is why the pointer is here.
+type syncBody struct {
+	NodeIdentity
+	Processes *[]ProcessFault `json:"processes,omitempty"`
+}
+
 func metadata(path string) (string, error) {
 	req, _ := http.NewRequest("GET", "http://169.254.169.254/computeMetadata/v1/"+path, nil)
 	req.Header.Set("Metadata-Flavor", "Google")
@@ -100,6 +144,10 @@ type Source struct {
 	Token    string
 	Identity NodeIdentity
 	Local    string // fallback file for a node with no control plane
+	// Report answers "what is failing on this node right now", called once per
+	// sync. A nil Report means this node does not report at all, which is a
+	// different statement from reporting nothing — see syncBody.
+	Report func() []ProcessFault
 }
 
 func (s *Source) Fetch() (Desired, error) {
@@ -132,7 +180,18 @@ func (s *Source) Fetch() (Desired, error) {
 
 func (s *Source) fromControlPlane() (Desired, error) {
 	var d Desired
-	body, err := json.Marshal(s.Identity)
+	payload := syncBody{NodeIdentity: s.Identity}
+	if s.Report != nil {
+		// Never a nil slice behind the pointer: json.Marshal writes `null` for
+		// one, and `null` is not an array, so the control plane would read it as
+		// "does not report" and never clear a stale fault.
+		p := s.Report()
+		if p == nil {
+			p = []ProcessFault{}
+		}
+		payload.Processes = &p
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return d, err
 	}

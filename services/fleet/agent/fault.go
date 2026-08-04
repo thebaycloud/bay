@@ -62,3 +62,32 @@ func classifyStartError(err error) Fault {
 		return FaultUnknown
 	}
 }
+
+// detailLimit bounds what leaves the node. The text lands in a Postgres column
+// and, for a node fault, inside a sentence a user reads on a failed deploy.
+const detailLimit = 400
+
+// faultDetail is the error text the node is willing to send with a fault.
+//
+// Only a CLASSIFIED fault carries one, and that restriction is the point rather
+// than tidiness. The classified strings are written by this package —
+// dbPathReachable's, and resolveSecret's status line plus Secret Manager's error
+// body — and contain no app output. An unclassified failure's error can be the
+// last 800 bytes of the app's own log, which container.go folds into the runsc
+// error: that is the customer's stdout, it can contain anything they printed
+// including a credential, and "never print secrets" stops meaning anything the
+// moment it is copied off the node into shared Postgres and a user-facing
+// message. It stays in the node's log, where it already was.
+//
+// The count in /status and the fault value itself still travel for an unknown
+// fault. Only the prose is withheld.
+func faultDetail(f Fault, err error) string {
+	if err == nil || (f != FaultNode && f != FaultApp) {
+		return ""
+	}
+	r := []rune(err.Error())
+	if len(r) > detailLimit {
+		return string(r[:detailLimit]) + "…"
+	}
+	return string(r)
+}
