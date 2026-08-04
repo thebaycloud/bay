@@ -577,6 +577,43 @@ prints **neither** line, which is how a stale deploy is told apart from a
 correctly-timed one instead of being inferred two steps later from a 403 that
 has two possible causes.
 
+**"Deployed" means three different things here, and only one of them is
+automatic.** This is worth writing down because nothing in the repository says
+it, and the precondition is unsatisfiable without knowing it:
+
+| Side | What it carries | How it reaches production |
+|---|---|---|
+| `apps/web` | `fleetProbe` signs (Task 4 depends on it) | **automatic** — push to `main` runs `.github/workflows/deploy.yml` |
+| `services/fleet/agent` | the gate itself | **by hand** — the `scp` + restart in Step 3 below |
+| `services/proxy` | sends `x-supersonic-edge` | **by hand, and undocumented until now** |
+
+The proxy is the one that will catch people out. No workflow, no Cloud Build
+trigger and no script in this repository deploys it — I checked all three. The
+evidence that it is a manual `gcloud run deploy` is the image itself: the live
+revision runs
+`cloud-run-source-deploy/supersonic-proxy@sha256:394ff47…`, and
+`cloud-run-source-deploy` is the repository `--source` builds land in, with
+`run.googleapis.com/client-name: gcloud` on the service.
+
+So the proxy step is approximately:
+
+```bash
+gcloud run deploy supersonic-proxy --source services/proxy \
+  --project supersonic-deploy-prod --region us-central1
+```
+
+**Confirm that against however it has actually been deployed before running
+it** — this command is inferred from the artifacts, not read from a runbook, and
+this service is the edge for every app. Pass no `--set-env-vars`: the live
+service carries `AUTH_SECRET`, `PG_PASSWORD`, `ROOT_DOMAIN` and `LOGIN_URL`, and
+a deploy that passes that flag wipes the ones it does not name. Verify with the
+Step 5 log check below rather than by assuming the deploy worked.
+
+A follow-up worth its own small task: put this in a workflow. A service on the
+request path of every customer app, deployed by hand from a laptop with no
+record of the command, is the same class of problem as the two-long-gcloud-
+commands that `deploy.yml` was written to end.
+
 **Blocked on:** SSH to `fleet-lab-1`. The key at `~/.ssh/google_compute_engine`
 has a forgotten passphrase and `enable-oslogin` is explicitly `FALSE` on the
 instance, so the path is a regenerated key pushed to project metadata. Do that
