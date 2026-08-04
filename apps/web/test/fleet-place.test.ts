@@ -25,7 +25,23 @@ function ports(over: Partial<PlacementPorts> = {}) {
   return { calls, p: { ...base, ...over } };
 }
 
-const eligible = { lane: "container" as const, image: "img", staticServe: false, serviceless: false };
+const eligible = { lane: "container" as const, image: "img", staticServe: false, serviceless: false, cloudsql: null };
+
+test("an app with a database is not placed, because the fleet has nowhere to put the proxy", () => {
+  // The finding that stopped the first canary. provisionPostgres writes
+  // DATABASE_URL as postgresql://…@127.0.0.1:5432/…, and that only resolves
+  // because a Cloud SQL Auth Proxy sidecar runs beside the app in the same Cloud
+  // Run service (dbContainerArgs). A node runs one sandbox per process and has
+  // no sidecar, so the same url points at a port nothing is listening on.
+  //
+  // Carrying the secret is necessary and NOT sufficient, and the failure is the
+  // dangerous shape: the app starts, serves its homepage, answers the probe with
+  // 200, and fails every request that touches data. A placement that passes its
+  // own check and breaks the app is worse than one that never happens.
+  const r = fleetEligibility({ ...eligible, cloudsql: "supersonic-deploy-prod:us-central1:supersonic-shared-pg" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason!, /database|proxy/i);
+});
 
 test("a worker-only app is not placed yet, and the reason is the check, not the runtime", () => {
   // The fleet runs a bot better than Cloud Run does — that is half of why it

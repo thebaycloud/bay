@@ -3287,7 +3287,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     if (fleetPlacementWanted(process.env, slug) && result.ok) {
       const can = !FLEET_LB
         ? { ok: false, reason: "no fleet load balancer is configured" }
-        : fleetEligibility({ lane, image: built ?? "", staticServe: !!staticServe, serviceless });
+        : fleetEligibility({ lane, image: built ?? "", staticServe: !!staticServe, serviceless, cloudsql });
       if (!can.ok) {
         log(`· staying on Cloud Run — ${can.reason}`);
       } else {
