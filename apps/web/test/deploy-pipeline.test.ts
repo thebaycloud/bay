@@ -51,6 +51,15 @@ interface Recorded {
    * about which reference was then written into the placement row.
    */
   placements: { slug: string; node: string; spec: { image: string; memoryBytes: number; cpuShares: number } }[];
+  /**
+   * Every repair the pipeline handed off, with the runtime it named and the
+   * runtime its `redeploy` closure actually reached.
+   *
+   * Two fields rather than one because the defect was precisely that they
+   * disagreed: the agent was told "Cloud Run" and handed the Cloud Run closure
+   * on a deploy whose DATABASE_URL named 10.200.0.1.
+   */
+  repairs: { named: string; placedAgain: boolean; ranCloudRunDeploy: boolean }[];
 }
 
 /** A `gcloud`/`npm` reply, chosen by what the command line looks like. */
@@ -92,10 +101,13 @@ process.env.FLEET_LB ??= "10.0.0.9";
 const A_DIGEST = `sha256:${"ab".repeat(32)}`;
 let digestReply: string | null = A_DIGEST;
 
+/** What the fleet load balancer answers, so a failed verification is reachable. */
+let probeCode = 200;
+
 /** Which build implementation this process is exercising. See `generatedBuild`. */
 const COLLAPSED = process.env.RUNNER === "0";
 
-let active: Recorded = { argv: [], events: [], stages: [], placements: [] };
+let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [] };
 let activeReplies: Replies = () => ({});
 
 function fakeSpawn() {
@@ -223,7 +235,31 @@ async function install() {
   // the one function that opens a socket is replaced.
   const fleetPlace = await import("@/lib/fleet-place");
   mock.module("@/lib/fleet-place", {
-    namedExports: { ...fleetPlace, fleetProbe: async () => ({ code: 200 }) },
+    namedExports: { ...fleetPlace, fleetProbe: async () => ({ code: probeCode }) },
+  });
+
+  // The repair agent, replaced by a recorder that calls its own `redeploy` tool
+  // exactly once.
+  //
+  // Calling it is the whole point: which runtime a repair reaches is not visible
+  // from the arguments — a closure named `redeploy` looks identical either way —
+  // and the only honest way to find out is to invoke it and watch what happens.
+  const agent = await import("@/lib/agent");
+  mock.module("@/lib/agent", {
+    namedExports: {
+      ...agent,
+      repairDeploy: async (o: { runtime: string; redeploy: () => Promise<{ ok: boolean }> }) => {
+        const placedBefore = active.placements.length;
+        const argvBefore = active.argv.length;
+        await o.redeploy();
+        active.repairs.push({
+          named: o.runtime,
+          placedAgain: active.placements.length > placedBefore,
+          ranCloudRunDeploy: active.argv.slice(argvBefore).some((a) => a[1] === "run" && a[2] === "deploy"),
+        });
+        return { ok: false, changes: [], summary: "the harness fixes nothing; it only records where the repair went" };
+      },
+    },
   });
   mock.module("@/lib/thumbnail", { namedExports: { requestThumbnail: noop } });
   mock.module("@/lib/deploy-notify", { namedExports: { notifyDeployFinished: asyncNoop } });
@@ -258,7 +294,7 @@ function input(over: Record<string, unknown> = {}) {
 
 async function run(files: Record<string, string>, over: Record<string, unknown> = {}, replies: Replies = () => ({})) {
   const runDeploy = await loadPipeline();
-  const rec: Recorded = { argv: [], events: [], stages: [], placements: [] };
+  const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [] };
   active = rec;
   activeReplies = replies;
   // The pipeline swallows nothing at the top level, so a throw here is a real
@@ -492,14 +528,17 @@ test("a deploy that comes up broken puts the last working version back", NEEDS_M
  * test and taken away again — and it MUST be taken away again, or every test
  * declared after this one silently changes runtime.
  */
-async function onFleet(files: Record<string, string>, replies: Replies = detect()) {
+async function onFleet(files: Record<string, string>, replies: Replies = detect(), over: Record<string, unknown> = {}) {
   process.env.FLEET_APPS = "demo";
   try {
-    return await run(files, {}, replies);
+    return await run(files, over, replies);
   } finally {
     delete process.env.FLEET_APPS;
   }
 }
+
+/** Pro, so the repair agent runs at all — Basic gets a paste-ready prompt instead. */
+const AUTO_FIX = { limits: { maxApps: 10, maxGrants: 10, autoFix: true, canRemoveBadge: false } };
 
 test("a fleet deploy places the image by digest, never a moving tag", NEEDS_MOCKS, async () => {
   // The defect this is here to keep dead: `buildImage` returned the constant
@@ -536,6 +575,54 @@ test("a digest that cannot be resolved fails the deploy instead of placing a tag
   const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
   assert.ok(errors.length > 0, "an unresolvable digest must fail the deploy");
   assert.match(JSON.stringify(errors), /digest/i, `the error must say what could not be resolved — got ${JSON.stringify(errors).slice(0, 400)}`);
+});
+
+test("a repair of a fleet deploy redeploys to the fleet, and is told so", NEEDS_MOCKS, async () => {
+  // `redeploy: runDeploy` was passed at both repair call sites — the Cloud Run
+  // branch — so a fleet deploy blamed on the app ended with the app on Cloud
+  // Run. `dbAt` had already resolved to FLEET_DB, so its DATABASE_URL, PGHOST
+  // and POSTGRES_HOST all named 10.200.0.1, which no Cloud Run revision can
+  // route to: the repaired app started, served its homepage, answered the probe
+  // 200 and failed every request that touched data. Worse on a repeat, because
+  // `placeOnFleet` had restored the previous placement — so the node went on
+  // serving the old version while `markAppLive` wrote a Cloud Run url. Two live
+  // runtimes for one app is the defect class this piece exists to end, and this
+  // was the surviving way back into it.
+  probeCode = 503;
+  let rec: Recorded;
+  try {
+    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" }, detect(), AUTO_FIX);
+  } finally {
+    probeCode = 200;
+  }
+
+  assert.equal(rec.repairs.length, 1, `the repair agent must still run on a fleet failure — the ledger's Task 9 ruling. Events: ${JSON.stringify(rec.events).slice(0, 300)}`);
+  const [repair] = rec.repairs;
+  // The closure first, because it is the one that moves an app: a description
+  // that lies is bad, a redeploy that lands on the wrong runtime is an outage.
+  assert.ok(!repair.ranCloudRunDeploy, "a fleet deploy must never be repaired onto Cloud Run — its DATABASE_URL names 10.200.0.1");
+  assert.ok(repair.placedAgain, "the repair's redeploy must place on the fleet again");
+  assert.equal(repair.named, "fleet", "the agent must be told which runtime its redeploy reaches");
+});
+
+test("a repair of a Cloud Run deploy still redeploys to Cloud Run", NEEDS_MOCKS, async () => {
+  // The other half, and not a formality: a fix that routes every repair to the
+  // fleet is the same bug pointing the other way, and it would be invisible in
+  // a suite that only ever exercised the fleet.
+  const rec = await run(
+    { "Dockerfile": "FROM alpine\n", "index.js": "" },
+    AUTO_FIX,
+    (argv) => {
+      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
+      if (argv[1] === "run" && argv[2] === "deploy") return { code: 1 };
+      return {};
+    },
+  );
+
+  assert.equal(rec.repairs.length, 1, `no repair ran; events were ${JSON.stringify(rec.events).slice(0, 300)}`);
+  assert.equal(rec.repairs[0].named, "cloudrun");
+  assert.ok(rec.repairs[0].ranCloudRunDeploy, "a Cloud Run deploy is repaired on Cloud Run");
+  assert.ok(!rec.repairs[0].placedAgain, "nothing may be placed on a node by a Cloud Run repair");
 });
 
 test("a sibling's Dockerfile is written for the context it is built in", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {

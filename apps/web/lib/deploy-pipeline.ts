@@ -3175,6 +3175,26 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // rather than left to be inferred from which function is not called: the
     // release and the app can never disagree about which runtime they are on.
     if (toFleet) log("release runs on the node, before the app starts");
+    /**
+     * What a repair agent's `redeploy` tool actually does.
+     *
+     * The SAME branch this deploy took, and it has to be, because the deploy has
+     * already committed to a runtime in ways nothing downstream can undo.
+     * `dbAt` resolved to FLEET_DB above, so `DATABASE_URL`, `PGHOST` and
+     * `POSTGRES_HOST` all name 10.200.0.1 — the sandbox bridge gateway, an
+     * address no Cloud Run revision can route to. A repair that redeployed to
+     * Cloud Run therefore produced an app that starts, serves its homepage,
+     * answers the probe 200 and fails every request that touches data. On a
+     * repeat it was worse: `placeOnFleet` had already restored the previous
+     * placement, so the node went on serving the old version while `markAppLive`
+     * wrote a Cloud Run url over the top of it — two live runtimes for one app,
+     * which is the defect class this whole piece exists to end.
+     *
+     * A human ruled that the repair agent keeps running on fleet failures (see
+     * the ledger, Task 9). This is not that fuse. It is the agent redeploying to
+     * where the app lives.
+     */
+    const redeploy = toFleet ? runFleetDeploy : runDeploy;
     const firstAttempt = stages.start(ACTIVATION_STAGE);
     let result = toFleet ? await runFleetDeploy() : await runDeploy();
     await stages.end(firstAttempt, result.ok ? "ok" : "failed");
@@ -3315,7 +3335,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const repair = stages.start("repair-agent");
       const fixed = useOpencode
         ? await opencodeRepair({
-            dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy: runDeploy, log,
+            dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy, log,
+            // Named, not inferred: the agent is told which runtime its
+            // `redeploy` reaches, so its prompt cannot describe one while the
+            // closure runs the other.
+            runtime: toFleet ? "fleet" : "cloudrun",
             // What the platform DID, not only what it planned. Without this the
             // agent reads every failure as the app's fault, because the repo is
             // the only surface it can change — which is how a Telegram bot got an
@@ -3332,7 +3356,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
               attached: resourcePlan.attach.map((r) => r.kind),
             },
           })
-        : await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
+        : await repairDeploy({
+            dir, slug, initialError: result.error ?? "unknown", redeploy, log,
+            runtime: toFleet ? "fleet" : "cloudrun",
+          });
       await stages.end(repair, fixed.ok ? "ok" : "failed");
       if (fixed.ok) {
         result = { ok: true, url: fixed.url };
