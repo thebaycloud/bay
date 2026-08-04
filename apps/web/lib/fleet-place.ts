@@ -103,6 +103,29 @@ export function fleetEligibility(a: {
     // this lane is what §8b deletes.
     return { ok: false, reason: "the runner lane's image is shared, and its code is not in it" };
   }
+  if (a.lane === "buildpack") {
+    // A buildpack image is made BY the deploy: `gcloud run deploy --source`
+    // runs the builder and Cloud Run names what comes out, so before the
+    // delivery there is no reference to hand a node. The fleet has no
+    // `--source` of its own to run.
+    //
+    // The pipeline has a second builder — `builds submit --pack`, guarded by
+    // `serviceless` — and it is deliberately not borrowed for this. It writes
+    // no cloudbuild.yaml, so it has no logging destination, and Cloud Build
+    // REFUSES a user-specified build account without one: it is the only build
+    // in the pipeline that still runs as the default account, and using it here
+    // would move every buildpack app off the scoped build identity as a side
+    // effect of a fleet canary. It would also mean naming the image before
+    // anything built it, which is the exact mistake — a tag is not evidence —
+    // that the fleet branch exists to stop making.
+    //
+    // Until then this lane is named rather than accidentally excluded. It was
+    // already excluded, by `!a.image` below, because the pipeline has no name
+    // for a buildpack image at decision time — but that is a refusal that
+    // disappears the moment somebody gives the lane a deterministic tag, and
+    // what it would leave behind is a node running an image nobody built.
+    return { ok: false, reason: "a buildpack image is made by the deploy itself, so there is none to hand a node" };
+  }
   if (!a.image) return { ok: false, reason: "this deploy produced no image to place" };
   return { ok: true };
 }

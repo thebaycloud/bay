@@ -45,6 +45,7 @@ test("what the fleet cannot serve is named, and goes to Cloud Run", () => {
   const cases: Array<[Partial<typeof eligible>, RegExp]> = [
     [{ staticServe: true }, /static/i],
     [{ lane: "runner" }, /runner/i],
+    [{ lane: "buildpack" }, /buildpack/i],
     [{ image: "" }, /image/i],
     [{ serviceless: true }, /route|worker-only/i],
   ];
@@ -102,9 +103,24 @@ test("an app whose build produced no image is not placeable", () => {
   assert.match(r.reason!, /image/i);
 });
 
+test("a buildpack app is not placeable — its image is made by the deploy it is skipping", () => {
+  // This lane used to be allowed here, and was kept off the fleet only by
+  // `image: ""` — the pipeline has no name for a buildpack image at decision
+  // time, because `run deploy --source` builds it and Cloud Run names it. That
+  // is an accident, not a decision: give the lane a deterministic tag and it
+  // becomes eligible again, and what it would place is an image no build in
+  // this deploy produced. The fleet branch runs no `--source`, so there is
+  // nothing to hand a node, and the refusal now says which.
+  const r = fleetEligibility({ ...eligible, lane: "buildpack" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason!, /buildpack/i);
+  // …and it stays refused even when an image name IS supplied, which is the
+  // whole point of naming it rather than leaning on the empty-image check.
+  assert.equal(fleetEligibility({ ...eligible, lane: "buildpack", image: "img" }).ok, false);
+});
+
 test("a container app with an image is placeable", () => {
   assert.equal(fleetEligibility(eligible).ok, true);
-  assert.equal(fleetEligibility({ ...eligible, lane: "buildpack" }).ok, true);
 });
 
 test("the router answering is not the app answering", () => {
