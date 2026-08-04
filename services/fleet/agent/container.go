@@ -189,14 +189,17 @@ func (r *Runtime) imageConfig(img client.Image) (entrypoint, cmd, env []string, 
 // declared env, then resolved secrets. Secrets win because a secret and a plain
 // variable with the same name means someone promoted a value to a secret and the
 // plain one is the stale copy.
-func writeSpec(bundle string, app App, net *SandboxNet, imgEnv []string, argv []string, cwd string,
+func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []string, argv []string, cwd string,
 	secrets map[string]string) error {
 	if cwd == "" {
 		cwd = "/"
 	}
 
 	env := append([]string{}, imgEnv...)
-	env = append(env, fmt.Sprintf("PORT=%d", app.Port))
+	// PORT is set for every kind, not only web. A worker that never binds it is
+	// unaffected, and a framework that reads it at import time — which many do,
+	// before knowing whether it will serve — does not crash on a missing value.
+	env = append(env, fmt.Sprintf("PORT=%d", effectivePort(app, proc)))
 	for k, v := range app.Env {
 		env = append(env, k+"="+v)
 	}
@@ -221,7 +224,7 @@ func writeSpec(bundle string, app App, net *SandboxNet, imgEnv []string, argv []
 			},
 			NoNewPrivileges: true,
 		},
-		Root: &specs.Root{Path: "rootfs", Readonly: false},
+		Root:     &specs.Root{Path: "rootfs", Readonly: false},
 		Hostname: app.Slug,
 		Mounts: []specs.Mount{
 			{Destination: "/proc", Type: "proc", Source: "proc"},
@@ -254,17 +257,17 @@ func writeSpec(bundle string, app App, net *SandboxNet, imgEnv []string, argv []
 			},
 			Resources: &specs.LinuxResources{
 				Memory: &specs.LinuxMemory{
-					Limit: int64ptr(app.MemoryBytes),
+					Limit: int64ptr(proc.MemoryBytes),
 				},
 				CPU: &specs.LinuxCPU{
 					// Shares, not a quota. An idle fleet should let one bursting
 					// app use the box; a quota would make it slow while fifteen
 					// cores sit idle.
-					Shares: uint64ptr(app.CPUShares),
+					Shares: uint64ptr(proc.CPUShares),
 				},
 				Pids: &specs.LinuxPids{Limit: 2048},
 			},
-			CgroupsPath: "/supersonic/" + app.Slug,
+			CgroupsPath: "/supersonic/" + sandboxID(app.Slug, proc),
 		},
 	}
 
@@ -355,9 +358,14 @@ func runscStatus(id string) (runscState, error) {
 	return st, nil
 }
 
-// Start brings one app up: image, rootfs, network, spec, sandbox.
-func (r *Runtime) Start(app App, index int) (*SandboxNet, error) {
-	id := app.Slug
+// Start brings one PROCESS of an app up: image, rootfs, network, spec, sandbox.
+//
+// Every kind takes this path. A worker differs from a web process only in having
+// no port to publish and nothing to health-check, and a cron differs only in
+// being started by a clock and waited on. That is the whole point of the model:
+// one primitive, four policies.
+func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
+	id := sandboxID(app.Slug, proc)
 	bundle := filepath.Join(bundleRoot, id)
 
 	img, err := r.EnsureImage(app.Image)
@@ -366,7 +374,7 @@ func (r *Runtime) Start(app App, index int) (*SandboxNet, error) {
 	}
 
 	// A leftover sandbox under this id makes every later step fail confusingly.
-	r.Stop(app.Slug)
+	r.Stop(id)
 
 	if err := os.MkdirAll(bundle, 0o711); err != nil {
 		return nil, err
@@ -379,12 +387,18 @@ func (r *Runtime) Start(app App, index int) (*SandboxNet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("image config: %w", err)
 	}
+	// The image's own entrypoint is the web process's command by default —
+	// that is what the Dockerfile said to run. Every other kind MUST declare
+	// one, because the image's CMD is the web server and starting a worker with
+	// it would silently run a second copy of the site.
 	argv := append(append([]string{}, entrypoint...), cmd...)
-	if len(app.Command) > 0 {
-		argv = app.Command
+	if len(proc.Command) > 0 {
+		argv = proc.Command
+	} else if proc.Kind != KindWeb {
+		return nil, fmt.Errorf("%s: a %s process must declare a command", id, proc.Kind)
 	}
 	if len(argv) == 0 {
-		return nil, fmt.Errorf("%s: image declares no entrypoint or cmd and the app declares no command", id)
+		return nil, fmt.Errorf("%s: image declares no entrypoint or cmd and the process declares no command", id)
 	}
 
 	// Resolve secrets BEFORE the namespace exists, so a missing binding fails
@@ -396,34 +410,87 @@ func (r *Runtime) Start(app App, index int) (*SandboxNet, error) {
 		return nil, fmt.Errorf("%s: %w", id, err)
 	}
 
-	net, err := SetupSandboxNet(app.Slug, index)
+	net, err := SetupSandboxNet(id, index)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := writeSpec(bundle, app, net, imgEnv, argv, cwd, resolved); err != nil {
-		TeardownSandboxNet(app.Slug)
+	if err := writeSpec(bundle, app, proc, net, imgEnv, argv, cwd, resolved); err != nil {
+		TeardownSandboxNet(id)
 		return nil, err
 	}
 
 	// `run --detach` rather than create-then-start: one call, and the failure
 	// mode we spent the evening on was precisely the gap between those two.
-	if err := runscDetached(bundle, id, app.LogPath); err != nil {
-		TeardownSandboxNet(app.Slug)
+	// One log file per PROCESS, not per app. Sharing one file interleaves a web
+	// server's request log with a worker's output and a migration's, and the
+	// first thing anyone does with these is read them.
+	logPath := processLogPath(app, proc)
+	if err := runscDetached(bundle, id, logPath); err != nil {
+		TeardownSandboxNet(id)
 		return nil, err
 	}
 
 	// Confirm it actually reached running rather than trusting the exit code.
-	deadline := time.Now().Add(20 * time.Second)
+	//
+	// `runsc state` is consulted first but is NOT the only authority. It returns
+	// an error for a short window right after `run --detach` on a sandbox that is
+	// already up, and treating that as failure was costing us the app twice over:
+	// the start was declared failed, the still-running sandbox was left behind,
+	// and every subsequent attempt collided with it ("cannot lock container
+	// metadata file: container already exists") forever. `runsc list` is the
+	// cross-check, and agreeing with either is enough.
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
 	for time.Now().Before(deadline) {
-		if st, err := runscStatus(id); err == nil && st.Status == "running" {
+		st, err := runscStatus(id)
+		if err == nil && st.Status == "running" {
 			return net, nil
+		}
+		if err != nil {
+			lastErr = err
+			for _, known := range r.List() {
+				if known == id {
+					return net, nil
+				}
+			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	st, _ := runscStatus(id)
-	r.Stop(app.Slug)
-	return nil, fmt.Errorf("%s: sandbox did not reach running (last status %q)", id, st.Status)
+	r.Stop(id)
+	return nil, fmt.Errorf("%s: sandbox did not reach running (status %q, last state error: %v)",
+		id, st.Status, lastErr)
+}
+
+// RunToCompletion starts a process and waits for it to exit. `release` and
+// `cron` are both this.
+//
+// A non-zero exit is an error, and for `release` that has to stop the deploy:
+// a migration that failed followed by a web process that starts anyway is how
+// an app comes up against a half-migrated database.
+func (r *Runtime) RunToCompletion(app App, proc Process, index int, timeout time.Duration) error {
+	id := sandboxID(app.Slug, proc)
+	if _, err := r.Start(app, proc, index); err != nil {
+		return err
+	}
+	defer r.Stop(id)
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		st, err := runscStatus(id)
+		if err != nil {
+			// The sandbox is gone. For a short-lived process that usually means
+			// it finished and was reaped, which is success by absence — the
+			// alternative is failing every fast job.
+			return nil
+		}
+		if st.Status == "stopped" {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("%s: did not finish within %s", id, timeout)
 }
 
 // Stop removes a sandbox and everything it holds. Every step tolerates absence:
@@ -443,6 +510,47 @@ func (r *Runtime) Stop(slug string) {
 
 	ctx := r.ctx()
 	_ = r.cd.SnapshotService("").Remove(ctx, slug)
+}
+
+// List returns the sandbox ids runsc currently knows about.
+func (r *Runtime) List() []string {
+	out, err := runsc("list")
+	if err != nil {
+		return nil
+	}
+	ids := []string{}
+	for i, line := range strings.Split(out, "\n") {
+		if i == 0 || strings.TrimSpace(line) == "" {
+			continue // header
+		}
+		f := strings.Fields(line)
+		if len(f) > 0 {
+			ids = append(ids, f[0])
+		}
+	}
+	return ids
+}
+
+// ReapAll removes every sandbox on the node.
+//
+// Called once at startup, before the first reconcile. The agent holds its live
+// set in memory only, so on restart it knows about nothing — and a sandbox that
+// survived its parent is not adoptable: its cgroup, netns slot and routing entry
+// are all gone from the agent's view, and the next start collides with it
+// ("cannot lock container metadata file: container already exists") on every
+// pass, forever.
+//
+// Reaping is safe because desired state is the source of truth: everything that
+// should be running is started again within one reconcile, and anything that
+// should not was leaked. It costs a few seconds of downtime on an agent restart,
+// which is why the systemd unit uses KillMode=process — a routine agent restart
+// does not go through here.
+func (r *Runtime) ReapAll() int {
+	ids := r.List()
+	for _, id := range ids {
+		r.Stop(id)
+	}
+	return len(ids)
 }
 
 func int64ptr(v int64) *int64    { return &v }

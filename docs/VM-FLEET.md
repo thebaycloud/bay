@@ -429,22 +429,34 @@ in `deploy-pipeline.ts` (3,374 today), `lanes.ts` (354), `process-deploy.ts`
 
 ## Order
 
-| # | Work | Days |
-|---|---|---|
-| 0 | **Measure first** (below). Nothing else starts until items 1 and 2 have numbers. | 3 |
-| 1 | Node image: Ubuntu LTS + containerd + runsc (whole tarball) + host `cloud-sql-proxy` + nftables metadata block, baked and reproducible | 3 |
-| 2 | `supersonicd`: reconcile loop over containerd, secret resolution, health, log shipping, drain, exec. Go static binary; pull-based over HTTP with an on-disk cache | 8 |
-| 3 | Placement in the control plane: a table, a function, and `apps.runtime` | 2 |
-| 4 | Router on the node: `services/proxy` + replicated routing table, minus the ID-token path | 4 |
-| 5 | GCLB + Certificate Manager wildcard; `*.supersonic.cv` moves off per-app domain mappings | 2 |
-| 6 | Emit the four process kinds against the agent instead of gcloud; `shutdownGrace`, `visibility` and Procfile `release:` start working | 5 |
-| 7 | Volumes: quota, mounts, `exclusive` file access, Litestream, filesystem snapshots to GCS | 5 |
-| 8 | Static apps onto the fleet; delete the Cloud Run path | 2 |
-| 9 | Cutover: dual-run, wave the fleet, delete the Cloud Run emitters | 4 |
-| 10 | Memory pressure: `memory.high` overcommit, zswap, PSI reclaim loop | 3 |
+| # | Work | Days | Status |
+|---|---|---|---|
+| 0 | **Measure first.** Nothing else starts until density and serving have numbers. | 3 | **done** — see Measured |
+| 1 | Node image: Ubuntu LTS + containerd + runsc (whole tarball) + host `cloud-sql-proxy` + nftables metadata block | 3 | **done** — `image/provision.sh`, idempotent |
+| 2 | `supersonicd`: reconcile loop, secret resolution, health, drain. Go static binary; pull-based with an on-disk cache | 8 | **done** for `web`; log shipping and exec outstanding |
+| 3 | Placement in the control plane: a table, a function, and `apps.runtime` | 2 | **done** — `013_fleet.sql`, `lib/fleet.ts`, `/api/fleet/sync` |
+| 4 | Router on the node + replicated routing table, minus the ID-token path | 4 | **partly** — node-local works; fleet-wide forwarding and the auth/visibility half of `services/proxy` are not moved |
+| 5 | GCLB + Certificate Manager wildcard | 2 | **partly** — LB serves on `8.232.255.172`; the wildcard cert is blocked on DNS |
+| 6 | Emit the four process kinds against the agent instead of gcloud; `shutdownGrace`, `visibility` and Procfile `release:` start working | 5 | **done** in the agent — web, worker, cron and release all run; the deploy pipeline does not emit them yet |
+| 7 | Volumes: quota, mounts, `exclusive` file access, Litestream, filesystem snapshots to GCS | 5 | not started |
+| 8 | Static apps onto the fleet; delete the Cloud Run path | 2 | not started |
+| 9 | Cutover: dual-run, wave the fleet, delete the Cloud Run emitters | 4 | mechanism ready (`fleetctl`, `apps.runtime`); no app cut over |
+| 10 | Memory pressure: `memory.high` overcommit, zswap, PSI reclaim loop | 3 | not needed yet — zero swap in use at 100 apps |
 
 Steps 7 and 10 can slip. Step 0 cannot, and steps 1–2 are what turn this from a
 document into a fleet.
+
+### What is blocked on someone else
+
+- **HTTPS.** A Google-managed wildcard for `*.supersonic.cv` needs a DNS
+  authorization TXT record, and the zone is at Namecheap rather than Cloud DNS.
+  Until that record exists the load balancer is HTTP only.
+- **The DNS cutover itself.** `*.supersonic.cv` resolves to `8.233.7.157` today.
+  Pointing it at `8.232.255.172` is the switch, and it is one record.
+- **Runner-lane apps cannot be placed at all.** They fetch a code bundle from GCS
+  at container start using a metadata token the sandbox is now correctly denied.
+  Each needs a real image before it can move — this is wave-planning work for
+  step 9, and it decides how large the first wave can be.
 
 ## Measured — 2026-08-03, `fleet-lab-1`, n2d-standard-16
 
@@ -479,6 +491,31 @@ Two things this run also settled:
   is now correctly denied. Those apps need a real image before they can be
   placed. This is a migration prerequisite, not a fleet defect, and it belongs in
   the cutover wave planning in step 9.
+
+## What the process model cost, in the end
+
+One primitive and four policies, as promised — and one trap that is worth
+writing down because nothing warns you about it:
+
+**runsc resolves container ids by PREFIX.** Naming the web process `a8ebb` while
+its worker is `a8ebb--ticker` makes `runsc state a8ebb` fail with *"id is
+ambiguous and could refer to multiple containers"*, and `runsc delete --force
+a8ebb` fail the same way **while exiting 0**. The agent concludes the start
+failed, leaves a live sandbox behind, and every later attempt collides with it
+forever. The observable symptom is an app that is running and unreachable, and a
+log that says `container already exists` about a container nothing can address.
+
+So no sandbox id may be a strict prefix of another. Every kind is suffixed —
+including `web` — and ids end in a dot, because process names are
+`[A-Za-z0-9_-]+` and so can never contain one: `a8ebb--web.` cannot be a prefix
+of `a8ebb--webhook.`.
+
+Two smaller ones from the same session: `release` must be keyed on the IMAGE it
+ran for, or it re-runs on every reconcile pass that finds any process not yet up
+— running a customer's migration repeatedly, concurrently with itself. And each
+process needs its own log file; sharing one interleaves a web server's request
+log with a worker's output and a migration's, which is the first thing anyone
+reads.
 
 ## Still to measure
 
