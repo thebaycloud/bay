@@ -464,8 +464,68 @@ Run, unharmed.
 
 The remaining 28 are not blocked on the fleet. 19 have no image at all (static or
 runner lane) and 9 failed verification because they need env or a database they
-were not given — the placement spec carries no `env` or `secrets` yet, and wiring
-the deploy pipeline to emit them is step 6's other half.
+were not given.
+
+### What "they need env or a database" turned out to mean — 2026-08-04
+
+Two different problems wearing one sentence, and only the first was the one we
+thought we had.
+
+**The spec could not say it.** `lib/fleet.ts` declared `AppSpec` with a comment
+promising it was the agent's `App` verbatim. It was not: the agent had `secrets`
+— env var name to Secret Manager id, resolved on the node by its own service
+account so values never touch node disk — and `processes`, all four kinds. The
+control plane's copy had neither. Not a missing feature at either end; a missing
+field in the middle, held together by a comment. Fixed: one declaration in
+`lib/fleet-spec.ts`, and a test that reads `type App struct` out of `main.go` and
+compares the key sets, so the next field the agent grows fails a test instead of
+silently not arriving.
+
+**And carrying it is not sufficient.** `provisionPostgres` writes
+
+```
+DATABASE_URL = postgresql://user:pass@127.0.0.1:5432/db
+```
+
+which resolves only because a Cloud SQL Auth Proxy **sidecar** runs beside the
+app in the same Cloud Run service (`dbContainerArgs`). A node runs one sandbox
+per process and has no sidecar, so the identical url points at a port with
+nothing behind it.
+
+Measured while picking a first canary: of the 23 apps that have any secret at
+all, **not one is on the fleet** — the 19 that moved are precisely the apps with
+nothing to carry. And every app whose secrets are not a database is on the runner
+lane, so today no eligible app exercises `secrets` at all.
+
+The failure shape is why this is a refusal rather than a note. A database-backed
+app placed on a node **starts**, serves its homepage, answers the probe with 200
+— place, verify and flip all pass — and then fails every request that touches
+data. A placement that passes its own check and breaks the app is strictly worse
+than one that never happens. So `fleetEligibility` refuses it by name, in the
+deploy log.
+
+**A per-app Cloud SQL proxy process on the node** is what unblocks the 9. The
+agent already has the primitive — a process is a process — and the node already
+holds `cloudsql.client`. What it needs is a proxy process sharing the app's
+network namespace so `127.0.0.1:5432` means the same thing it means on Cloud Run.
+That is a piece of work, not a flag, and it is the next thing worth doing here.
+
+### Placement moved into the deploy pipeline — 2026-08-04
+
+`chooseNode` had no callers; placement was `migrate.sh` run by hand. It is now
+`lib/fleet-place.ts`, called at the end of a deploy: place → verify → flip, the
+same order and the same reason, with every external thing behind a port so the
+two paths that must not be wrong are testable without a node.
+
+- **A full fleet** (`chooseNode` → `null`) was unhandled anywhere in the repo.
+  The app stays on Cloud Run, where it already is.
+- **Rollback** sets `runtime='cloudrun'`, which drops the placement, and the node
+  stops running it on its next reconcile without being told.
+
+Behind `FLEET_APPS=<slug>` for one app at a time — the shape `BUILDKIT_APPS`
+already uses — or `FLEET_PLACEMENT=1` for all, and skipped entirely when
+`FLEET_LB` is unset. Four refusals, each named in the log: static, runner, no
+image, worker-only (no route to verify through), and a database.
 
 ### What is blocked on someone else
 
