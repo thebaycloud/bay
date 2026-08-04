@@ -869,14 +869,35 @@ gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-
 ```
 
 Expected, in order: attempts numbered `(1/5)` through `(5/5)` with the gaps
-between them growing — 15s, 30s, 60s, 120s — and then the line
-`release has failed 5 times, not retrying — deploy a new image to reset`.
-No further `running release` lines after that.
+between them growing. Attempts land on 10-second reconcile ticks, so the
+delay is rounded up to the next tick — measured on this node:
 
-**If the attempts are still ten seconds apart, the build did not take.** Check
-`sudo strings /opt/agent/supersonicd | grep -c 'not retrying'` — zero means the
-binary is stale, and the log lines you are reading predate the restart. That
-exact confusion cost a debugging cycle on 2026-08-04.
+```
+17:36:18 (1/5)
+17:36:39 (2/5)  +21s
+17:37:10 (3/5)  +31s
+17:38:11 (4/5)  +61s
+17:40:14 (5/5)  +123s
+17:40:24 release has failed 5 times, not retrying — deploy a new image to reset
+```
+
+**The unambiguous signal is the `(n/5)` counter, not the stopwatch.** An old,
+stale binary prints no counter at all — that is what to check for, not
+whether the gaps look close enough to 15/30/60/120.
+
+After the give-up line, do **not** expect it to appear once and then silence.
+It repeats every ~10 seconds indefinitely, because `needRelease` is
+repopulated on every reconcile pass while the web process is still not live —
+measured: 9 lines in 82 seconds, roughly 1 MB/day of log for one given-up
+app. What confirms the retry loop itself has stopped is the absence of
+further `running release` lines — the log does not go quiet, so don't read
+quiet log output as the stop signal.
+
+**If the attempts are still ten seconds apart with no `(n/5)` counter, the
+build did not take.** Check `sudo strings /opt/agent/supersonicd | grep -c
+'not retrying'` — zero means the binary is stale, and the log lines you are
+reading predate the restart. That exact confusion cost a debugging cycle on
+2026-08-04.
 
 - [ ] **Step 4: Ask the node what it has given up on**
 

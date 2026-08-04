@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,24 @@ type Agent struct {
 	// several times, concurrently with itself, and failing with "container
 	// already exists". A release belongs to an IMAGE, so that is the key.
 	released map[string]string
+	// relFail counts consecutive release failures per slug@image: a release
+	// belongs to an IMAGE, so a new deploy is a new key and starts with a clean
+	// count, without anything here having to notice that a deploy happened.
+	//
+	// relRunning marks the ones currently executing off this goroutine, keyed by
+	// bare slug rather than slug@image: the slot and the sandbox id it runs in
+	// are per-slug, and so is the safety property — an app must stay blocked
+	// while ITS release is in flight even if the image changed mid-release, or
+	// a rollback to an already-released image would start the web process while
+	// the previous image's migration is still writing.
+	relFail    *failTracker
+	relRunning map[string]bool
+
+	// startFail counts consecutive failed starts per sandbox id@image (Task 3),
+	// cronFail counts consecutive cron failures per sandbox id (Task 4). Both
+	// are declared here so the struct literal in Step 2 is written once.
+	startFail *failTracker
+	cronFail  *failTracker
 }
 
 // syncCron starts the once-a-minute tick the first time it is needed, and keeps
@@ -194,8 +213,14 @@ func (a *Agent) fireDueCrons(now time.Time) {
 			a.mu.Unlock()
 			log.Printf("%s: cron firing", id)
 			if err := a.rt.RunToCompletion(j.app, j.proc, idx, 30*time.Minute); err != nil {
-				log.Printf("%s: cron failed: %v", id, err)
+				n := a.cronFail.failWith(id, time.Now(), err.Error())
+				// The count is the whole point. One failed run is an incident;
+				// the same one failing every night is a broken job, and on a
+				// node whose logs do not leave it those look identical without
+				// a number.
+				log.Printf("%s: cron failed (%d in a row): %v", id, n, err)
 			} else {
+				a.cronFail.succeed(id)
 				log.Printf("%s: cron finished", id)
 			}
 			a.mu.Lock()
@@ -258,7 +283,11 @@ func main() {
 	}
 
 	a := &Agent{rt: rt, src: src, live: map[string]*live{}, slots: map[int]string{},
-		released: map[string]string{}}
+		released:   map[string]string{},
+		relFail:    newFailTracker(),
+		relRunning: map[string]bool{},
+		startFail:  newFailTracker(),
+		cronFail:   newFailTracker()}
 
 	go a.serve(*addr)
 	go NewRouter(*rootDomain, edgeSecretFromEnv()).Serve(*routerAddr, routesPath)
@@ -371,6 +400,14 @@ func (a *Agent) reconcileOnce() error {
 	}
 	a.mu.Unlock()
 
+	// Which slugs still have at least one process unit, so a release's failure
+	// record is forgotten only once its app is truly gone — not while some
+	// other process of the same app is still desired.
+	survivingSlugs := map[string]bool{}
+	for _, u := range units {
+		survivingSlugs[u.app.Slug] = true
+	}
+
 	// Remove what is no longer wanted, before starting anything new: on a node
 	// near its memory ceiling, starting first would be the difference between a
 	// clean swap and an OOM.
@@ -379,11 +416,39 @@ func (a *Agent) reconcileOnce() error {
 			log.Printf("%s: removing (no longer desired)", id)
 			a.rt.Stop(id)
 			a.mu.Lock()
-			if l, ok := a.live[id]; ok {
+			l, wasLive := a.live[id]
+			if wasLive {
 				delete(a.slots, l.index)
 			}
 			delete(a.live, id)
 			a.mu.Unlock()
+
+			// Forget this id's own failure history: the start key carries the
+			// image, so an exact delete can't find it — remove by prefix.
+			a.startFail.forgetPrefix(id + "@")
+			// The release and cron records belong to the app, not to this one
+			// process — clear them only once no other process of this app
+			// survives, so this doesn't hand a still-live app a fresh five
+			// attempts. Cron sandbox ids never reach `have` (units excludes
+			// KindCron, so a.live never holds one), so an exact-key delete on
+			// `id` here could never match a cron record — remove by the app's
+			// slug prefix instead, matching sandboxID's `slug + "--" + name + "."`
+			// shape.
+			if wasLive && !survivingSlugs[l.app.Slug] {
+				a.relFail.forgetPrefix(l.app.Slug + "@")
+				a.cronFail.forgetPrefix(l.app.Slug + "--")
+			}
+		}
+	}
+
+	// An app whose release gave up never started a process, so it never entered
+	// a.live and the removal loop above never sees it. That is precisely the app
+	// an operator removes after reading "has given up", and without this its
+	// record outlives it in /status with nothing left on the node to explain it.
+	for key := range a.relFail.report() {
+		slug, _, ok := strings.Cut(key, "@")
+		if ok && !survivingSlugs[slug] {
+			a.relFail.forgetPrefix(slug + "@")
 		}
 	}
 
@@ -409,9 +474,28 @@ func (a *Agent) reconcileOnce() error {
 			// actually mean "this is a different program".
 			if l.app.Image == u.app.Image && sameStrings(l.proc.Command, u.proc.Command) {
 				if st, err := runscStatus(id); err == nil && st.Status == "running" {
+					// Forget every image this id ever failed on, not just the
+					// current one — otherwise a bad image's record (e.g.
+					// `id@bad`, fails: 5) outlives the fix and /status keeps
+					// reporting a healthy process as given-up forever.
+					a.startFail.forgetPrefix(id + "@")
 					continue
 				}
-				log.Printf("%s: not running, restarting", id)
+				// It died. Restarting is right; restarting it every ten seconds
+				// forever is not — that is a broken image turning into a
+				// permanent cycle of sandbox creation on a node holding
+				// nineteen working apps.
+				key := id + "@" + u.app.Image
+				switch a.startFail.decide(key, time.Now()) {
+				case actWait:
+					continue
+				case actGiveUp:
+					log.Printf("%s: has died %d times, not restarting — deploy a new image to reset",
+						id, maxAttempts)
+					continue
+				}
+				n := a.startFail.fail(key, time.Now())
+				log.Printf("%s: not running, restarting (%d/%d)", id, n, maxAttempts)
 			} else {
 				log.Printf("%s: image or command changed, restarting", id)
 				// A changed image means the release process has to run again
@@ -429,38 +513,109 @@ func (a *Agent) reconcileOnce() error {
 		todo = append(todo, work{app: u.app, proc: u.proc})
 	}
 
-	// Release runs to completion BEFORE anything else starts, and a failure
-	// stops the app coming up at all. A migration that failed followed by a web
-	// process that starts anyway is how an app comes up against a half-migrated
-	// database.
+	// Release runs to completion BEFORE its app starts, and a failure stops that
+	// app coming up at all. A migration that failed followed by a web process
+	// that starts anyway is how an app comes up against a half-migrated database.
+	//
+	// It runs OFF this goroutine. RunToCompletion carries a 30-minute timeout and
+	// reconcileOnce is the only thing that reconciles any app on this node, so a
+	// synchronous call here let one app's slow release stop the other nineteen.
+	// While it is in flight its own app stays blocked, which is the property that
+	// mattered; nothing else waits.
 	blocked := map[string]bool{}
+	now := time.Now()
 	for slug, app := range needRelease {
+		key := slug + "@" + app.Image
+
 		a.mu.Lock()
+		inFlight := a.relRunning[slug]
 		alreadyRan := a.released[slug] == app.Image
 		a.mu.Unlock()
+
+		// In flight FIRST, and keyed by slug rather than slug@image. A release
+		// running for a DIFFERENT image must still block this app: rolling back
+		// to an image whose release already succeeded would otherwise pass the
+		// alreadyRan check and start the web process while the previous image's
+		// migration is still writing.
+		if inFlight {
+			blocked[slug] = true
+			continue
+		}
 		if alreadyRan {
 			continue
 		}
+
+		switch a.relFail.decide(key, now) {
+		case actWait:
+			blocked[slug] = true
+			continue
+		case actGiveUp:
+			// Logged once per pass rather than once ever: /status already
+			// carries this state via relFail.report(), but a human tailing the
+			// log this way sees it without having to go query /status.
+			log.Printf("%s: release has failed %d times, not retrying — deploy a new image to reset",
+				slug, maxAttempts)
+			blocked[slug] = true
+			continue
+		}
+
+		var rel Process
+		found, extra := false, 0
 		for _, p := range processesOf(app) {
 			if p.Kind != KindRelease {
 				continue
 			}
-			a.mu.Lock()
-			idx := a.slotFor(sandboxID(slug, p))
-			a.mu.Unlock()
-			log.Printf("%s: running release", slug)
-			if err := a.rt.RunToCompletion(app, p, idx, 30*time.Minute); err != nil {
-				log.Printf("%s: release FAILED, not starting the app: %v", slug, err)
-				blocked[slug] = true
-			} else {
-				a.mu.Lock()
-				a.released[slug] = app.Image
-				a.mu.Unlock()
+			if found {
+				extra++
+				continue
 			}
-			a.mu.Lock()
-			delete(a.slots, idx)
-			a.mu.Unlock()
+			rel, found = p, true
 		}
+		if extra > 0 {
+			// Running two concurrently would double-book the slot and the
+			// sandbox id, so only the first runs — but an app that declares two
+			// is misconfigured and must not discover that silently.
+			log.Printf("%s: %d release processes declared, running only %q", slug, extra+1, rel.Name)
+		}
+		if !found {
+			continue
+		}
+
+		blocked[slug] = true
+		a.mu.Lock()
+		a.relRunning[slug] = true
+		idx := a.slotFor(sandboxID(slug, rel))
+		a.mu.Unlock()
+
+		go func(slug, key string, app App, p Process, idx int) {
+			log.Printf("%s: running release", slug)
+			err := a.rt.RunToCompletion(app, p, idx, 30*time.Minute)
+
+			// Record the outcome BEFORE clearing in-flight, so the slug is
+			// never observable as idle-and-unrecorded — a reconcile pass
+			// landing in that window would relaunch with no backoff at all.
+			if err != nil {
+				n := a.relFail.failWith(key, time.Now(), err.Error())
+				log.Printf("%s: release FAILED (%d/%d), not starting the app: %v",
+					slug, n, maxAttempts, err)
+			} else {
+				// Forget every image this slug ever failed a release on, not
+				// just the one that just succeeded — otherwise a bad image's
+				// record (e.g. `slug@bad`, fails: 5) survives a later good
+				// deploy and /status keeps reporting a recovered app as
+				// given-up forever.
+				a.relFail.forgetPrefix(slug + "@")
+				log.Printf("%s: release finished", slug)
+			}
+
+			a.mu.Lock()
+			delete(a.relRunning, slug)
+			delete(a.slots, idx)
+			if err == nil {
+				a.released[slug] = app.Image
+			}
+			a.mu.Unlock()
+		}(slug, key, app, rel, idx)
 	}
 
 	start := make([]work, 0, len(todo))
@@ -652,8 +807,18 @@ func (a *Agent) serve(addr string) {
 		}
 		a.mu.Unlock()
 		sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+		// Processes AND what has stopped being retried. A node that has given up
+		// on something is the one state that is invisible from the outside: the
+		// process is simply absent, which looks the same as never having been
+		// asked for.
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		json.NewEncoder(w).Encode(struct {
+			Processes any                  `json:"processes"`
+			Failures  map[string]FailState `json:"failures"`
+		}{
+			Processes: out,
+			Failures:  mergeFailures(a.relFail, a.startFail, a.cronFail),
+		})
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
@@ -665,6 +830,30 @@ func (a *Agent) serve(addr string) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// mergeFailures flattens the three trackers into one map for /status.
+//
+// The keys are already distinguishable — a release key is slug@image, a start
+// key is id@image, a cron key is a bare sandbox id — but that non-collision
+// guarantee lives entirely outside this package, in what callers choose to
+// pass as keys. A collision is therefore reported loudly rather than silently
+// resolved by last-write-wins.
+func mergeFailures(ts ...*failTracker) map[string]FailState {
+	out := map[string]FailState{}
+	for _, t := range ts {
+		if t == nil {
+			continue
+		}
+		for k, v := range t.report() {
+			if _, dup := out[k]; dup {
+				log.Printf("status: failure key %q reported by two trackers — keeping the first", k)
+				continue
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
 
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {
