@@ -299,3 +299,39 @@ test("no declared path means the root, which is what every app has", async () =>
   await fleetProbe("8.232.255.172", "myapp", { fetchImpl: impl, attempts: 1, delayMs: 0 });
   assert.deepEqual(seen, ["http://8.232.255.172/"]);
 });
+
+/** Records the headers the probe actually sent, which is the whole assertion. */
+function recordingFetch(sent: Record<string, string>[]) {
+  return (async (_url: string, init: RequestInit) => {
+    sent.push({ ...(init.headers as Record<string, string>) });
+    return { status: 200, headers: { get: () => null } } as unknown as Response;
+  }) as unknown as typeof fetch;
+}
+
+test("the probe signs itself when the deploy job has the secret", async () => {
+  // Without this, enforcement makes the fleet UNDEPLOYABLE: the node answers an
+  // unsigned probe 403 with X-Supersonic-Router: unsigned, fleetVerdict reads
+  // the marker as "the router answered, not the app", placeOnFleet rolls the
+  // placement back and every deploy fails. Trimmed, because the secret arrives
+  // from Secret Manager and a newline in a header value throws.
+  const sent: Record<string, string>[] = [];
+  process.env.FLEET_EDGE_SECRET = "  test-only-edge-secret-do-not-log \n";
+  try {
+    await fleetProbe("8.232.255.172", "myapp", { fetchImpl: recordingFetch(sent), attempts: 1, delayMs: 0 });
+  } finally {
+    delete process.env.FLEET_EDGE_SECRET;
+  }
+  assert.equal(sent[0]["x-supersonic-edge"], "test-only-edge-secret-do-not-log");
+  assert.equal(sent[0]["x-supersonic-slug"], "myapp");
+});
+
+test("with no secret the probe sends none, which is how the rollout bootstraps", async () => {
+  // The same property the router and the proxy have: before the secret exists
+  // anywhere, nothing signs and nothing enforces, so the three deploys need not
+  // be simultaneous.
+  const sent: Record<string, string>[] = [];
+  delete process.env.FLEET_EDGE_SECRET;
+  await fleetProbe("8.232.255.172", "myapp", { fetchImpl: recordingFetch(sent), attempts: 1, delayMs: 0 });
+  assert.equal("x-supersonic-edge" in sent[0], false);
+  assert.equal(sent[0]["x-supersonic-slug"], "myapp");
+});

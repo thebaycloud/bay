@@ -183,6 +183,14 @@ export function fleetVerdict(r: { code: number; router?: string }): Eligibility 
  * single-shot probe rolls back healthy apps for being slow, which is the most
  * expensive false negative available here — it is indistinguishable, from the
  * outside, from the fleet simply not working.
+ *
+ * "The way the edge proxy will" now includes signing. The node's router refuses
+ * an unsigned request with 403 and `X-Supersonic-Router: unsigned` once its gate
+ * is on, and `fleetVerdict` reads any router marker as "the router answered, not
+ * the app" — so an unsigned probe would roll back every placement and make the
+ * fleet undeployable the moment enforcement lands. With no secret in the
+ * environment nothing is sent and this behaves exactly as it did, which is the
+ * same bootstrap property both other sides have.
  */
 export async function fleetProbe(
   loadBalancer: string,
@@ -196,12 +204,19 @@ export async function fleetProbe(
   // that needs the database. Its root would answer 200 with no database at all.
   const path = opts.path?.startsWith("/") ? opts.path : `/${opts.path ?? ""}`;
 
+  // Trimmed for the same reason the proxy and the node trim theirs: this value
+  // reaches the deploy job from Secret Manager, `openssl rand` ends its output
+  // with a newline, and a header value containing one throws rather than 403s.
+  const edgeSecret = (process.env.FLEET_EDGE_SECRET ?? "").trim();
+  const headers: Record<string, string> = { "x-supersonic-slug": slug };
+  if (edgeSecret) headers["x-supersonic-edge"] = edgeSecret;
+
   let last: { code: number; router?: string } = { code: 0 };
   for (let i = 0; i < attempts; i++) {
     if (i) await new Promise((r) => setTimeout(r, delayMs));
     try {
       const res = await f(`http://${loadBalancer}${path}`, {
-        headers: { "x-supersonic-slug": slug },
+        headers,
         // A 302 to /login is a working app, and following it would probe
         // whatever the redirect points at instead.
         redirect: "manual",
