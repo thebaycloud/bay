@@ -16,6 +16,7 @@ import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
+import { SCHEDULER_SA } from "@/lib/identities";
 import { rollback } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -695,16 +696,6 @@ async function provisionStorage(slug: string, log: (l: string) => void): Promise
   }
   return bucket;
 }
-
-/**
- * The identity Cloud Scheduler authenticates as when it triggers a cron's job.
- *
- * Defaults to the deployer, which already has run.jobs.run. A dedicated account
- * is better and is a permissions change rather than a code one, so it is an env
- * var rather than a constant to edit.
- */
-const SCHEDULER_SA = process.env.SCHEDULER_SERVICE_ACCOUNT
-  ?? "supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com";
 
 const PROXY_SA = process.env.PROXY_SERVICE_ACCOUNT
   ?? "supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com";
