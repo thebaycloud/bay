@@ -36,6 +36,24 @@ export interface Eligibility {
 }
 
 /**
+ * Whether this deploy should try the fleet at all.
+ *
+ * The same shape as `selectedBuilder`'s BUILDKIT_APPS, and for the same reason:
+ * main deploys straight to production and there is no staging, so the only way
+ * to prove a new path against real traffic is to prove it on ONE app first.
+ * `FLEET_APPS=<slug>[,<slug>]` moves those; `FLEET_PLACEMENT=1` moves everything.
+ *
+ * That matters more here than it did for a builder. The placement spec has just
+ * grown env and secrets, and no app has ever been placed carrying either — the
+ * 19 that moved went with the hardcoded six fields migrate.sh wrote.
+ */
+export function fleetPlacementWanted(env: Record<string, string | undefined>, slug: string): boolean {
+  const canaries = (env.FLEET_APPS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (canaries.includes(slug)) return true;
+  return env.FLEET_PLACEMENT === "1";
+}
+
+/**
  * Whether this app can run on a node at all.
  *
  * Not a policy question — a capability one. Each `no` here is a thing the fleet

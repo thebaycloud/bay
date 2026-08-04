@@ -19,7 +19,7 @@ import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { chooseNode, placeApp, setRuntime } from "@/lib/fleet";
 import { buildAppSpec } from "@/lib/fleet-spec";
-import { fleetEligibility, fleetProbe, placeOnFleet, type Placement } from "@/lib/fleet-place";
+import { fleetEligibility, fleetPlacementWanted, fleetProbe, placeOnFleet, type Placement } from "@/lib/fleet-place";
 import { rollback } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -72,20 +72,13 @@ const REGION = "us-central1";
 const SEAL_APPS = process.env.SEAL_APPS === "1";
 
 /**
- * Whether a deploy tries to put the app on the fleet.
+ * The address of the fleet's load balancer.
  *
- * Off by default, and that is not timidity: every push to main deploys to
- * production and there is no staging, so a new path that runs on every deploy
- * has to be switchable without a build. On, it is additive — the app is deployed
- * to Cloud Run exactly as it was first, and only then is a placement attempted.
- * Cloud Run remains the rollback for as long as this is a dual-run.
- *
- * `FLEET_LB` is the address of the fleet's load balancer. Empty means there is
- * nowhere to send traffic, so placement is skipped no matter what the flag says
- * — an app placed on a node with no route to it is strictly worse than an app
- * left on Cloud Run.
+ * Empty means there is nowhere to send traffic, so placement is skipped whatever
+ * `FLEET_PLACEMENT` and `FLEET_APPS` say — an app placed on a node nothing
+ * routes to is strictly worse than an app left on Cloud Run. Which apps are
+ * placed at all is `fleetPlacementWanted`'s question, not this file's.
  */
-const FLEET_PLACEMENT = process.env.FLEET_PLACEMENT === "1";
 const FLEET_LB = process.env.FLEET_LB ?? "";
 // The identity the prepare step actually runs as, and therefore what must be able
 // to read the app's secrets.
@@ -3291,7 +3284,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     //
     // `chooseNode` finally has a caller.
     let fleetUrl: string | undefined;
-    if (FLEET_PLACEMENT && result.ok) {
+    if (fleetPlacementWanted(process.env, slug) && result.ok) {
       const can = !FLEET_LB
         ? { ok: false, reason: "no fleet load balancer is configured" }
         : fleetEligibility({ lane, image: built ?? "", staticServe: !!staticServe, serviceless });

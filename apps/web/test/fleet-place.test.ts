@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fleetEligibility, fleetVerdict, fleetProbe, placeOnFleet, type PlacementPorts } from "../lib/fleet-place";
+import { fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, type PlacementPorts } from "../lib/fleet-place";
 import type { AppSpec } from "../lib/fleet-spec";
 
 const spec: AppSpec = {
@@ -35,6 +35,17 @@ test("a worker-only app is not placed yet, and the reason is the check, not the 
   const r = fleetEligibility({ ...eligible, serviceless: true });
   assert.equal(r.ok, false);
   assert.match(r.reason!, /no route|worker-only/i);
+});
+
+test("one app can be moved before the default does", () => {
+  // The same shape as BUILDKIT_APPS, for the same reason: main deploys straight
+  // to production, so the only way to prove a new path on real traffic is to
+  // prove it on ONE app first. The spec now carries env and secrets and no app
+  // has ever been placed with those fields — that is exactly what a canary is for.
+  assert.equal(fleetPlacementWanted({ FLEET_PLACEMENT: "1" }, "anything"), true);
+  assert.equal(fleetPlacementWanted({ FLEET_APPS: "avkf5, a8ebb" }, "a8ebb"), true);
+  assert.equal(fleetPlacementWanted({ FLEET_APPS: "avkf5" }, "a8ebb"), false);
+  assert.equal(fleetPlacementWanted({}, "a8ebb"), false);
 });
 
 test("a static app is not placeable, and the reason says why", () => {
