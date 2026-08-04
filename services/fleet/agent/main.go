@@ -113,6 +113,20 @@ type Agent struct {
 	// several times, concurrently with itself, and failing with "container
 	// already exists". A release belongs to an IMAGE, so that is the key.
 	released map[string]string
+	// relFail counts consecutive release failures per slug@image, and relRunning
+	// marks the ones currently executing off this goroutine.
+	//
+	// Both are keyed by slug@image rather than slug: a release belongs to an
+	// IMAGE, so a new deploy is a new key and starts with a clean count, without
+	// anything here having to notice that a deploy happened.
+	relFail    *failTracker
+	relRunning map[string]bool
+
+	// startFail counts consecutive failed starts per sandbox id@image (Task 3),
+	// cronFail counts consecutive cron failures per sandbox id (Task 4). Both
+	// are declared here so the struct literal in Step 2 is written once.
+	startFail *failTracker
+	cronFail  *failTracker
 }
 
 // syncCron starts the once-a-minute tick the first time it is needed, and keeps
@@ -258,7 +272,11 @@ func main() {
 	}
 
 	a := &Agent{rt: rt, src: src, live: map[string]*live{}, slots: map[int]string{},
-		released: map[string]string{}}
+		released:   map[string]string{},
+		relFail:    newFailTracker(),
+		relRunning: map[string]bool{},
+		startFail:  newFailTracker(),
+		cronFail:   newFailTracker()}
 
 	go a.serve(*addr)
 	go NewRouter(*rootDomain, edgeSecretFromEnv()).Serve(*routerAddr, routesPath)
@@ -429,38 +447,86 @@ func (a *Agent) reconcileOnce() error {
 		todo = append(todo, work{app: u.app, proc: u.proc})
 	}
 
-	// Release runs to completion BEFORE anything else starts, and a failure
-	// stops the app coming up at all. A migration that failed followed by a web
-	// process that starts anyway is how an app comes up against a half-migrated
-	// database.
+	// Release runs to completion BEFORE its app starts, and a failure stops that
+	// app coming up at all. A migration that failed followed by a web process
+	// that starts anyway is how an app comes up against a half-migrated database.
+	//
+	// It runs OFF this goroutine. RunToCompletion carries a 30-minute timeout and
+	// reconcileOnce is the only thing that reconciles any app on this node, so a
+	// synchronous call here let one app's slow release stop the other nineteen.
+	// While it is in flight its own app stays blocked, which is the property that
+	// mattered; nothing else waits.
 	blocked := map[string]bool{}
+	now := time.Now()
 	for slug, app := range needRelease {
+		key := slug + "@" + app.Image
+
 		a.mu.Lock()
 		alreadyRan := a.released[slug] == app.Image
+		inFlight := a.relRunning[key]
 		a.mu.Unlock()
+
 		if alreadyRan {
 			continue
 		}
-		for _, p := range processesOf(app) {
-			if p.Kind != KindRelease {
-				continue
-			}
-			a.mu.Lock()
-			idx := a.slotFor(sandboxID(slug, p))
-			a.mu.Unlock()
-			log.Printf("%s: running release", slug)
-			if err := a.rt.RunToCompletion(app, p, idx, 30*time.Minute); err != nil {
-				log.Printf("%s: release FAILED, not starting the app: %v", slug, err)
-				blocked[slug] = true
-			} else {
-				a.mu.Lock()
-				a.released[slug] = app.Image
-				a.mu.Unlock()
-			}
-			a.mu.Lock()
-			delete(a.slots, idx)
-			a.mu.Unlock()
+		if inFlight {
+			blocked[slug] = true
+			continue
 		}
+
+		switch a.relFail.decide(key, now) {
+		case actWait:
+			blocked[slug] = true
+			continue
+		case actGiveUp:
+			// Logged once per pass rather than once ever: until logs leave this
+			// node (phase 1B) this line is the only way a human learns the app
+			// is down on purpose rather than being retried.
+			log.Printf("%s: release has failed %d times, not retrying — deploy a new image to reset",
+				slug, maxAttempts)
+			blocked[slug] = true
+			continue
+		}
+
+		var rel Process
+		found := false
+		for _, p := range processesOf(app) {
+			if p.Kind == KindRelease {
+				rel, found = p, true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+
+		blocked[slug] = true
+		a.mu.Lock()
+		a.relRunning[key] = true
+		idx := a.slotFor(sandboxID(slug, rel))
+		a.mu.Unlock()
+
+		go func(slug, key string, app App, p Process, idx int) {
+			log.Printf("%s: running release", slug)
+			err := a.rt.RunToCompletion(app, p, idx, 30*time.Minute)
+
+			a.mu.Lock()
+			delete(a.relRunning, key)
+			delete(a.slots, idx)
+			if err == nil {
+				a.released[slug] = app.Image
+			}
+			a.mu.Unlock()
+
+			if err != nil {
+				n := a.relFail.failWith(key, time.Now(), err.Error())
+				log.Printf("%s: release FAILED (%d/%d), not starting the app: %v",
+					slug, n, maxAttempts, err)
+			} else {
+				a.relFail.succeed(key)
+				log.Printf("%s: release finished", slug)
+			}
+		}(slug, key, app, rel, idx)
 	}
 
 	start := make([]work, 0, len(todo))
