@@ -46,8 +46,12 @@ export async function forward(
   // check, decideAccess, app_grants, workspace scoping.
   //
   // Never to a Cloud Run target: that upstream is a tenant's app.
-  if (!cloudRun && process.env.FLEET_EDGE_SECRET) {
-    headers["x-supersonic-edge"] = process.env.FLEET_EDGE_SECRET;
+  //
+  // The value arrives already trimmed from config, which is the only place this
+  // env var is read — see the note there for why a stray newline is a 502 for
+  // every fleet app rather than a cosmetic problem.
+  if (!cloudRun && config.edgeSecret) {
+    headers["x-supersonic-edge"] = config.edgeSecret;
   }
 
   const doRequest = target.protocol === "https:" ? httpsRequest : httpRequest;

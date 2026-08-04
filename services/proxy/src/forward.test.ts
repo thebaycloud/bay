@@ -15,6 +15,13 @@ import type { VisitorIdentity } from "./headers";
 // one is already set.
 process.env.AUTH_SECRET ??= "test-only-config-secret-do-not-log";
 const { forward } = await import("./forward");
+// The edge secret is read from the environment ONCE, when config.ts is
+// evaluated — so setting `process.env.FLEET_EDGE_SECRET` from inside a test
+// would be setting it far too late and every assertion below would pass or fail
+// for the wrong reason. The tests drive the config object forward() actually
+// reads. It is the same module instance, because this import resolves to the
+// one forward.ts already loaded. config.test.ts covers the env read itself.
+const { config } = await import("./config");
 
 const visitor: VisitorIdentity = { userId: "usr_1", email: "boris@acme.com", name: "Boris" };
 
@@ -99,7 +106,7 @@ const TEST_EDGE_SECRET = "test-only-edge-secret-do-not-log";
 test("a Cloud Run target receives no edge secret", { timeout: 5000 }, async () => {
   const up = await startUpstream();
   const front = await startFront(`http://fake-svc-abc123-uc.a.run.app:${up.port}`);
-  process.env.FLEET_EDGE_SECRET = TEST_EDGE_SECRET;
+  config.edgeSecret = TEST_EDGE_SECRET;
   // idTokenFor() reaches a real GCP metadata server; irrelevant to this
   // assertion, which is about the edge header, not the ID token.
   process.env.SKIP_ID_TOKEN = "1";
@@ -108,7 +115,7 @@ test("a Cloud Run target receives no edge secret", { timeout: 5000 }, async () =
     const headers = await up.headers;
     assert.equal(headers["x-supersonic-edge"], undefined);
   } finally {
-    delete process.env.FLEET_EDGE_SECRET;
+    config.edgeSecret = "";
     delete process.env.SKIP_ID_TOKEN;
     front.close();
     up.close();
@@ -118,7 +125,7 @@ test("a Cloud Run target receives no edge secret", { timeout: 5000 }, async () =
 test("a fleet-IP target receives no serverless-authorization header", { timeout: 5000 }, async () => {
   const up = await startUpstream();
   const front = await startFront(`http://127.0.0.1:${up.port}`);
-  process.env.FLEET_EDGE_SECRET = TEST_EDGE_SECRET;
+  config.edgeSecret = TEST_EDGE_SECRET;
   // Deliberately NOT setting SKIP_ID_TOKEN here: this test's job is to catch
   // a regression that fires the ID-token branch for a fleet target, and
   // SKIP_ID_TOKEN would mask exactly that by skipping the branch outright
@@ -135,7 +142,25 @@ test("a fleet-IP target receives no serverless-authorization header", { timeout:
     // must carry the fleet secret.
     assert.equal(headers["x-supersonic-edge"], TEST_EDGE_SECRET);
   } finally {
-    delete process.env.FLEET_EDGE_SECRET;
+    config.edgeSecret = "";
+    front.close();
+    up.close();
+  }
+});
+
+test("with no secret configured a fleet target is addressed unsigned", { timeout: 5000 }, async () => {
+  // The bootstrap half of the same property the node has: before the secret is
+  // bound to this service, fleet requests must go out exactly as they did
+  // before this branch — no header, no throw — because the node's gate is off
+  // too and the two deploys are not simultaneous.
+  const up = await startUpstream();
+  const front = await startFront(`http://127.0.0.1:${up.port}`);
+  config.edgeSecret = "";
+  try {
+    await get(front.port);
+    const headers = await up.headers;
+    assert.equal(headers["x-supersonic-edge"], undefined);
+  } finally {
     front.close();
     up.close();
   }
@@ -147,14 +172,14 @@ test("a trailing-dot Cloud Run target receives no edge secret", { timeout: 5000 
   // edge secret.
   const up = await startUpstream();
   const front = await startFront(`http://fake-svc-abc123-uc.a.run.app.:${up.port}`);
-  process.env.FLEET_EDGE_SECRET = TEST_EDGE_SECRET;
+  config.edgeSecret = TEST_EDGE_SECRET;
   process.env.SKIP_ID_TOKEN = "1";
   try {
     await withFakeDns(() => get(front.port));
     const headers = await up.headers;
     assert.equal(headers["x-supersonic-edge"], undefined);
   } finally {
-    delete process.env.FLEET_EDGE_SECRET;
+    config.edgeSecret = "";
     delete process.env.SKIP_ID_TOKEN;
     front.close();
     up.close();

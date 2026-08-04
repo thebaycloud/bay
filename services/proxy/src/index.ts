@@ -112,4 +112,16 @@ const server = createServer((req, res) => {
   });
 });
 attachTunnel(server);
-server.listen(config.port, () => console.log(`proxy listening on :${config.port}`));
+server.listen(config.port, () => {
+  console.log(`proxy listening on :${config.port}`);
+  // Which side of the rollout this revision is on, said once. The silent
+  // failure it catches is `FLEET_EDGE_SECRET=` bound with an empty value — a
+  // plausible botched rotation — which leaves fleet requests unsigned while
+  // everything still answers 200 as long as the node's own gate is also off.
+  // The secret itself is never logged, not even a prefix or a length.
+  console.log(
+    config.edgeSecret
+      ? "edge gate: signing fleet requests with x-supersonic-edge"
+      : "edge gate: OFF (no FLEET_EDGE_SECRET) — fleet requests go unsigned"
+  );
+});
