@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { fleetEligibility, fleetVerdict, fleetProbe, fleetPlacementWanted, placeOnFleet, chooseRuntime, type PlacementPorts } from "../lib/fleet-place";
 import type { AppSpec } from "../lib/fleet-spec";
 import type { Lane } from "../lib/lanes";
+import { classify } from "../lib/deploy-errors";
 
 const spec: AppSpec = {
   slug: "myapp",
@@ -24,6 +25,7 @@ function ports(over: Partial<PlacementPorts> = {}) {
     readRuntime: async () => { calls.push("readRuntime"); return "fleet"; },
     setRuntime: async (slug, rt) => { calls.push(`runtime:${slug}=${rt}`); },
     probe: async () => { calls.push("probe"); return { code: 200 }; },
+    nodeFaultFor: async () => { calls.push("nodeFault"); return null; },
     log: () => {},
   };
   return { calls, p: { ...base, ...over } };
@@ -289,6 +291,9 @@ test("a version that does not answer is replaced by the one that did, on the nod
     "place:myapp@fleet-lab-1:registry/myapp:bad",
     "runtime:myapp=fleet",
     "probe",
+    // The node is asked whose failure this was before anything is restored, so
+    // the log line the operator reads carries the answer too.
+    "nodeFault",
     "place:myapp@fleet-lab-2:registry/myapp:good",
     "runtime:myapp=fleet",
   ]);
@@ -319,6 +324,7 @@ test("a first deploy that fails is unplaced rather than restored to nothing, and
     `place:myapp@fleet-lab-1:${spec.image}`,
     "runtime:myapp=fleet",
     "probe",
+    "nodeFault",
     "unplace:myapp",
     "runtime:myapp=cloudrun",
   ]);
@@ -398,4 +404,126 @@ test("with no secret the probe sends none, which is how the rollout bootstraps",
   await fleetProbe("8.232.255.172", "myapp", { fetchImpl: recordingFetch(sent), attempts: 1, delayMs: 0 });
   assert.equal("x-supersonic-edge" in sent[0], false);
   assert.equal(sent[0]["x-supersonic-slug"], "myapp");
+});
+
+test("a node that blames itself keeps the repair agent away", async () => {
+  // The whole plan is this test. The probe sees silence at the load balancer,
+  // which is what an app crash and a dead node proxy look like from outside;
+  // the node knows which, and says so. classify() reads FLEET_NODE_FAULT as a
+  // platform marker, which rolls back and tells the user without ever reaching
+  // opencodeRepair — an LLM with write access to the customer's repository,
+  // up to 18 steps and 3 rebuild-and-deploy cycles, over an outage we caused.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 0 }; },
+    nodeFaultFor: async () => {
+      calls.push("nodeFault");
+      return { node: "fleet-lab-1", detail: "this node's database path (10.200.0.1:5432) is not answering" };
+    },
+  });
+  const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.match(r.reason ?? "", /FLEET_NODE_FAULT/);
+  // Named, so the operator knows which machine to go and look at, and carrying
+  // the node's own words rather than a summary of them.
+  assert.match(r.reason ?? "", /fleet-lab-1/);
+  assert.match(r.reason ?? "", /10\.200\.0\.1:5432/);
+  // …and this is the assertion that makes the test worth having: the marker
+  // has to survive the trip through classify, not merely appear in a string.
+  assert.equal(classify(r.reason ?? "").blame, "platform");
+});
+
+test("a failure the node does NOT claim still reads as the app's", async () => {
+  // The whole value is in this direction too: a node that took the blame for
+  // everything would hide real app bugs behind a platform verdict, and the
+  // repair agent exists because most failures really are the app's.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 502 }; },
+    nodeFaultFor: async () => { calls.push("nodeFault"); return null; },
+  });
+  const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.ok(!(r.reason ?? "").includes("FLEET_NODE_FAULT"));
+  assert.match(r.reason ?? "", /502/);
+  assert.notEqual(classify(r.reason ?? "").blame, "platform");
+});
+
+test("a node fault does not stop the deploy rolling back", async () => {
+  // Blaming the platform decides who gets told, never what gets restored. The
+  // previous version must go back on the node it was already on, and the
+  // runtime flag with it, exactly as it does for an app fault — the ordered
+  // sequence is asserted because a membership check cannot see that the
+  // restore landed on fleet-lab-2 rather than this deploy's own node.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 0 }; },
+    readPlacement: async () => {
+      calls.push("read");
+      return { node: "fleet-lab-2", spec: { ...spec, image: "registry/myapp:good" } };
+    },
+    readRuntime: async () => { calls.push("readRuntime"); return "cloudrun"; },
+    nodeFaultFor: async () => { calls.push("nodeFault"); return { node: "fleet-lab-1", detail: "proxy down" }; },
+  });
+  const r = await placeOnFleet("myapp", { ...spec, image: "registry/myapp:bad" }, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.deepEqual(calls, [
+    "chooseNode",
+    "read",
+    "readRuntime",
+    "place:myapp@fleet-lab-1:registry/myapp:bad",
+    "runtime:myapp=fleet",
+    "probe",
+    "nodeFault",
+    "place:myapp@fleet-lab-2:registry/myapp:good",
+    "runtime:myapp=cloudrun",
+  ]);
+});
+
+test("a fault lookup that throws does not swallow the rollback", async () => {
+  // This port is a database call inside the one branch that must always
+  // restore. An exception escaping placeOnFleet here would leave the broken
+  // spec placed and the runtime flag on 'fleet' — the deploy failing in the one
+  // way this whole sequence exists to prevent. Not being able to READ a fault
+  // is simply not corroboration.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 0 }; },
+    nodeFaultFor: async () => { calls.push("nodeFault"); throw new Error("connection terminated unexpectedly"); },
+  });
+  const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
+
+  assert.equal(r.placed, false);
+  assert.ok(!(r.reason ?? "").includes("FLEET_NODE_FAULT"));
+  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("runtime:myapp=fleet"));
+});
+
+test("a port that is not wired at all cannot take the rollback with it", async () => {
+  // Not a hypothetical: this is how the case above was found. A missing port
+  // throws a TypeError SYNCHRONOUSLY — there is no promise yet, so a `.catch()`
+  // on the call would never see it, the exception would escape placeOnFleet,
+  // and the broken spec would stay placed with the runtime flag still on
+  // 'fleet'. Asked the way a caller who forgot the port would ask it.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 0 }; },
+  });
+  delete (p as Partial<PlacementPorts>).nodeFaultFor;
+  const r = await placeOnFleet("myapp", spec, "8.232.255.172", p as PlacementPorts);
+
+  assert.equal(r.placed, false);
+  assert.ok(!(r.reason ?? "").includes("FLEET_NODE_FAULT"));
+  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+});
+
+test("a node fault with nothing to add does not trail an empty dash", async () => {
+  // detail is optional — an unclassified fault withholds its text entirely, and
+  // coalesce('') is what reaches here for a row that never had one.
+  const { calls, p } = ports({
+    probe: async () => { calls.push("probe"); return { code: 0 }; },
+    nodeFaultFor: async () => { calls.push("nodeFault"); return { node: "fleet-lab-1", detail: "" }; },
+  });
+  const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
+
+  assert.match(r.reason ?? "", /FLEET_NODE_FAULT/);
+  assert.ok(!/—\s*$/.test(r.reason ?? ""), `reason ends in a dangling dash: ${r.reason}`);
 });

@@ -127,7 +127,13 @@ export function builderRuntimeError(text: string): string | null {
  * Marker constants the pipeline throws with. Matched exactly rather than by
  * pattern, because these are ours and a substring match on them is a promise.
  */
-export const PLATFORM_MARKERS = ["IAM_FAILURE", "AMBIGUOUS_STACK", "Runtime not available"];
+// FLEET_NODE_FAULT is the node's OWN typed verdict that a start failed for a
+// reason belonging to the node — its Cloud SQL proxy not answering, its service
+// account unable to read a secret. It is not derived from a substring of an
+// error here; the node decides and sends a value, and this marker is only how
+// that decision reaches `classify`. Blaming the app for it is what handed a
+// repair agent a customer's repository, with write access, over our own outage.
+export const PLATFORM_MARKERS = ["IAM_FAILURE", "AMBIGUOUS_STACK", "Runtime not available", "FLEET_NODE_FAULT"];
 
 /**
  * How a build failure arrives: a one-line verdict, then up to forty lines of log.

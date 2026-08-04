@@ -46,6 +46,13 @@ export interface PlacementPorts {
   setRuntime: (slug: string, runtime: Runtime) => Promise<void>;
   /** One request at the fleet, addressed the way the edge proxy will address it. */
   probe: (slug: string) => Promise<{ code: number; router?: string }>;
+  /**
+   * Does the node holding this app blame ITSELF for its failure?
+   *
+   * A port rather than a direct import, like everything else the rollback path
+   * touches, so the order below stays checkable without a database.
+   */
+  nodeFaultFor: (slug: string) => Promise<{ node: string; detail: string } | null>;
   log: (line: string) => void;
 }
 
@@ -303,6 +310,39 @@ export async function placeOnFleet(
   //    traffic takes, LB included.
   const verdict = fleetVerdict(await p.probe(slug));
   if (!verdict.ok) {
+    // Whose failure was this? The probe cannot tell — it sees silence at the
+    // load balancer, and silence is what an app crash and a dead node proxy
+    // look like from out here. The node knows, and by now has had the whole
+    // length of the probe's retries to say so on a sync that runs every ten
+    // seconds.
+    //
+    // Corroboration matters in both directions. A false "node" costs one
+    // rolled-back deploy; a false "app" costs a repair run with write access to
+    // a customer's repository. But a node that blamed itself for everything
+    // would hide real app bugs behind a platform verdict, so this fires only on
+    // the node's own typed verdict and never on a guess from the probe's
+    // silence.
+    //
+    // Guarded, and that is not defensive habit: this is a database call, and an
+    // exception escaping here would skip the restore below — the one thing in
+    // this function that must never be skipped, and the reason `fleetProbe`
+    // swallows its own errors too. A fault we could not read is simply not
+    // corroboration.
+    // try/catch rather than `.catch()`, and that is not style. A port that is
+    // missing entirely throws a TypeError SYNCHRONOUSLY, before there is a
+    // promise to attach a handler to — so `.catch()` would let exactly the
+    // unwired-port case through, which is how this was found: a test fixture
+    // that had not been given the new port took the restore down with it.
+    let nf: { node: string; detail: string } | null = null;
+    try {
+      nf = await p.nodeFaultFor(slug);
+    } catch {
+      nf = null;
+    }
+    const reason = nf
+      ? `FLEET_NODE_FAULT: ${nf.node} reports this app cannot start on it${nf.detail ? ` — ${nf.detail}` : ""}`
+      : verdict.reason;
+
     // There is no Cloud Run to fall back to any more, so the fallback is the
     // last version that answered, on the node it was already running on — not
     // this deploy's node, which `placeApp`'s upsert would otherwise treat as a
@@ -311,10 +351,10 @@ export async function placeOnFleet(
     // that does not serve.
     if (previous) {
       await p.placeApp(slug, previous.node, previous.spec);
-      p.log(`· kept the previous version — ${verdict.reason}`);
+      p.log(`· kept the previous version — ${reason}`);
     } else {
       await p.unplaceApp(slug);
-      p.log(`· nothing placed — ${verdict.reason}`);
+      p.log(`· nothing placed — ${reason}`);
     }
     // The runtime flag flipped to 'fleet' above so the probe had something to
     // check. Restoring it — rather than leaving it — matters most on the
@@ -322,7 +362,7 @@ export async function placeOnFleet(
     // say 'fleet', which is what would have silently pointed a node's next
     // reconcile at a placement that no longer exists.
     await p.setRuntime(slug, previousRuntime);
-    return { placed: false, reason: verdict.reason };
+    return { placed: false, reason };
   }
 
   // 3. the address for the flip, which the caller performs. The edge proxy needs
