@@ -25,7 +25,7 @@ opencode run --agent {plan|deploy} --model openai/gpt-5.6-sol --auto --format js
 | model | `--model <provider>/<id>` | `--model <id>` (global arg on `exec`) |
 | no approval prompts | `--auto` | `--sandbox workspace-write` + `-c sandbox_workspace_write.network_access=true` |
 | event stream | `--format json` | `--json` |
-| provider credentials | `opencode.json` in the workspace | `config.toml` under a per-run `CODEX_HOME` |
+| provider credentials | `opencode.json` in the workspace | `config.toml` under a per-run `CODEX_HOME`, `wire_api = "responses"` |
 | per-run isolation | `XDG_DATA_HOME=<tmp>` | `--ephemeral --ignore-user-config` + per-run `CODEX_HOME` |
 | repo without git | — | `--skip-git-repo-check` — **required**, we clone arbitrary repos |
 | structured result | prompt the agent to write `plan.json`, else regex JSON out of prose | `--output-schema <file>` |
@@ -98,31 +98,20 @@ force opencode's workaround onto Codex.
 
 ## The real risks
 
-**1. `gpt-5.6-sol` over the Responses API.** Codex removed `wire_api = "chat"`
-outright:
-
-> `` `wire_api = "chat"` is no longer supported. How to fix: set `wire_api = "responses"` ``
-
-If that model is not Responses-capable on our account, Codex cannot be the
-default and the switch defaults to opencode instead. **Check first — five
-minutes, and it decides the shape of everything below.** This is also the
-strongest argument for keeping the switch: that constraint is OpenAI's to change,
-not ours.
-
-**2. The event schema is different and undocumented in detail.** opencode emits
+**1. The event schema is different and undocumented in detail.** opencode emits
 `{type: tool_use|text|step_finish|error, part:{…}}`. Codex emits
 `thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.*`.
 Every log line, every `changes` entry, the token counts and the loop detector
 read that stream. It cannot be written from documentation — one probe run,
 captured as a fixture, then written against reality.
 
-**3. Network inside the sandbox.** Every sandbox mode blocks network by default,
+**2. Network inside the sandbox.** Every sandbox mode blocks network by default,
 and the repair agent must reach the redeploy bridge and run `gcloud`. Getting
 this wrong looks like an agent that edits files correctly and can never
 redeploy. See "Where this runs" — on a node the bridge is not on loopback either,
 so this is two mistakes that produce one symptom.
 
-**5. A switch nobody flips is a switch that is broken when you need it.** The
+**3. A switch nobody flips is a switch that is broken when you need it.** The
 opencode path will rot silently the first time an event shape changes upstream.
 Both backends run against the same recorded fixtures in the test suite, and the
 suite fails if either stops satisfying the contract. That is the cost of keeping
