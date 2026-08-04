@@ -163,6 +163,35 @@ with project-wide admin. On a node it gets a scoped credential and nothing else.
 None of this is optional work for the switch; it is work the fleet move imposes
 on whichever backend runs. It belongs in step 1, the shared harness.
 
+## Built
+
+Steps 0–3 and 5 are done. Both paths are verified against real runs, not mocks:
+
+| | Result |
+|---|---|
+| Probe | `codex exec --json --output-schema` against a real repo; both streams recorded to `apps/web/test/fixtures/codex-*.jsonl` |
+| Planner | `examples/pgapp` → a correct plan in **20.6s**, including `needsDB: true` from spotting `pg` and `DATABASE_URL` |
+| Repair | `examples/broken` → diagnosed a hardcoded port, edited `server.js`, redeployed, **ok in 26.4s**, 6 steps, 1 redeploy |
+| Suite | 899 passing, `tsc` clean |
+
+`DEPLOY_AGENT` selects the backend and defaults to `codex`. `deploy-pipeline.ts`
+imports the switch, never a backend.
+
+Two things found by writing it that the plan did not predict:
+
+- **Codex does not read `OPENAI_API_KEY` from the environment.** It authenticates
+  from `$CODEX_HOME/auth.json`, seeded by `codex login --with-api-key` over
+  stdin. Without that, every request is `401 Missing bearer` — from a key that
+  works against the API directly.
+- **The same-failure guard has never fired.** Lifting it into `bridge.ts` and
+  testing it showed `repeatedFailures >= 2` needs *three* identical failures,
+  and the default budget of three redeploys always tripped first. It is `>= 1`
+  now, so the message ("the last two deploys failed for the same reason") is
+  true.
+
+Still open: running it on a fleet node (step 6), and the comparison run of both
+backends over the same failures (step 4).
+
 ## Order
 
 **0. Probe.** One `codex exec --json --output-schema` run against a real repo, in
