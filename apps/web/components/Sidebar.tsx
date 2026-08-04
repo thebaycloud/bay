@@ -135,7 +135,7 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
 
   return (
     <aside className="sidebar">
-      <Link href="/" className="side-brand"><span className="logo"><Mark size={14} onDark /></span>SUPERSONIC</Link>
+      <Link href="/" className="side-brand"><span className="logo"><Mark size={15} onDark /></span>SUPERSONIC</Link>
 
       {/*
         Grouped, and labelled. Two unlabelled links in a 232px column read as an
@@ -145,17 +145,17 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
       <nav className="side-nav">
         <div className="side-label">Fleet</div>
         <Link href="/" className={"side-nav-item" + (active === "apps" ? " active" : "")}>
-          <LayoutGrid size={15} />Apps
+          <LayoutGrid size={16} />Apps
           {/* The count belongs where the list is, not only in the page heading. */}
           {fleet.apps.length > 0 && <span className="tail">{fleet.apps.length}</span>}
         </Link>
-        <Link href="/new" className="side-nav-item"><Plus size={15} />New app</Link>
+        <Link href="/new" className="side-nav-item"><Plus size={16} />New app</Link>
 
         <div className="side-label">Manage</div>
-        <Link href="/settings" className={"side-nav-item" + (active === "settings" ? " active" : "")}><Settings size={15} />Settings</Link>
+        <Link href="/settings" className={"side-nav-item" + (active === "settings" ? " active" : "")}><Settings size={16} />Settings</Link>
         {/* /cli has existed and been unreachable from the chrome: the only way
             in was to know the URL. */}
-        <Link href="/cli" className="side-nav-item"><Terminal size={15} />CLI</Link>
+        <Link href="/cli" className="side-nav-item"><Terminal size={16} />CLI</Link>
       </nav>
 
       <div className="side-spacer" />
@@ -172,7 +172,7 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
             <Link key={b.slug} className="dep-strip" href={`/apps/${b.slug}?tab=deployments`}>
               <div className="ds-top">
                 <span className="ds-nm">{b.name || b.slug}</span>
-                <Loader2 size={12} className="spin" />
+                <Loader2 size={13} className="spin" />
               </div>
               <div className="ds-stage">{b.stage || "working…"}</div>
               {/* Indeterminate on purpose: the pipeline reports stages, not a
@@ -225,7 +225,7 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
                 {acct.name && <div className="acct-name">{acct.name}</div>}
                 <div className="acct-email">{acct.email}</div>
               </div>
-              <ChevronUp className="foot-chev" size={13} />
+              <ChevronUp className="foot-chev" size={14} />
             </button>
             {menuOpen && (
               <>
@@ -236,16 +236,16 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
                     it so the two halves are obviously one thing. */}
                 <div className="foot-menu" data-state={closing ? "closed" : "open"}>
                   <Link href="/settings" className="dd-item" onClick={closeMenu}>
-                    <Settings size={14} />Settings
+                    <Settings size={15} />Settings
                   </Link>
                   {confirmOut ? (
                     <>
                       <div className="dd-confirmq">Sign out of Supersonic?</div>
-                      <button className="dd-item dd-danger" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={14} />Yes, sign out</button>
-                      <button className="dd-item" onClick={() => setConfirmOut(false)}><X size={14} />Cancel</button>
+                      <button className="dd-item dd-danger" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={15} />Yes, sign out</button>
+                      <button className="dd-item" onClick={() => setConfirmOut(false)}><X size={15} />Cancel</button>
                     </>
                   ) : (
-                    <button className="dd-item" onClick={() => setConfirmOut(true)}><LogOut size={14} />Sign out</button>
+                    <button className="dd-item" onClick={() => setConfirmOut(true)}><LogOut size={15} />Sign out</button>
                   )}
                 </div>
               </>
@@ -253,7 +253,7 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
           </div>
           <div className="side-acct-plan">
             <span className={"plan-tag" + (onTrial || acct.plan === "pro" ? " pro" : "")}>
-              <Sparkles size={12} />{onTrial ? "Trial" : acct.plan === "pro" ? "Pro" : "Basic"}
+              <Sparkles size={13} />{onTrial ? "Trial" : acct.plan === "pro" ? "Pro" : "Basic"}
             </span>
             {canUpgrade && <button className="btn sm primary" onClick={() => setShowPlans(true)}>Upgrade</button>}
           </div>

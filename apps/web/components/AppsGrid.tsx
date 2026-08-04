@@ -221,7 +221,7 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                       in the corner was a third telling of the same fact. */}
                   <div className="head-acts">
                     <Link className="row-btn primary" href={`/apps/${a.slug}?tab=deployments`}>
-                      <Rocket size={12} />Watch deploy
+                      <Rocket size={13} />Watch deploy
                     </Link>
                   </div>
                 </div>
@@ -253,7 +253,7 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                 <Thumb slug={a.slug} src={a.thumbnail} />
                 <div className="preview-open">
                   <Link className="po-btn primary" href={`/apps/${a.slug}`}>
-                    <SlidersHorizontal size={12} />Manage app
+                    <SlidersHorizontal size={13} />Manage app
                   </Link>
                   <a
                     className="po-btn"
@@ -261,7 +261,7 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                     target="_blank"
                     rel="noreferrer"
                   >
-                    Open website<ArrowUpRight size={13} />
+                    Open website<ArrowUpRight size={14} />
                   </a>
                 </div>
               </div>
@@ -282,10 +282,10 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                       and the address below is already a way to the site. */}
                   <div className="head-acts">
                     <Link className="row-btn primary" href={`/apps/${a.slug}`}>
-                      <SlidersHorizontal size={12} />Manage app
+                      <SlidersHorizontal size={13} />Manage app
                     </Link>
                     <a className="row-btn" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">
-                      Open website<ArrowUpRight size={13} />
+                      Open website<ArrowUpRight size={14} />
                     </a>
                   </div>
                 </div>
@@ -324,9 +324,9 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                 */}
                 <div className="shelf-actions">
                   <div className="seg">
-                    <Link className="act" href={`/apps/${a.slug}?tab=deployments`}><Rocket size={12} />Deployments</Link>
-                    <Link className="act" href={`/apps/${a.slug}?tab=issues`}><TriangleAlert size={12} />Issues</Link>
-                    <Link className="act" href={`/apps/${a.slug}?tab=settings`}><SlidersHorizontal size={12} />Settings</Link>
+                    <Link className="act" href={`/apps/${a.slug}?tab=deployments`}><Rocket size={13} />Deployments</Link>
+                    <Link className="act" href={`/apps/${a.slug}?tab=issues`}><TriangleAlert size={13} />Issues</Link>
+                    <Link className="act" href={`/apps/${a.slug}?tab=settings`}><SlidersHorizontal size={13} />Settings</Link>
                   </div>
                 </div>
               </div>
