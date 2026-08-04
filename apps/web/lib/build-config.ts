@@ -105,7 +105,7 @@ export function cloudBuildIdFrom(line: string): string | null {
  * `cachedBuildConfig` upgrades a secret-needing build to buildkit rather than
  * failing. `static-build.ts` has no secret support at all.
  *
- * Why a build may need one is written down at runnerPrepareConfig's call site:
+ * Why a build may need one is written down inside `runnerPrepareConfig` itself:
  * Prisma 7 evaluates `env('DATABASE_URL')` while loading prisma.config.js on
  * EVERY cli command, so `prisma generate` died on an app whose database the
  * platform had just provisioned. That is the requirement the runner's deletion
