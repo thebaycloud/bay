@@ -19,7 +19,7 @@ import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { chooseNode, placeApp, placementFor, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
 import { buildAppSpec } from "@/lib/fleet-spec";
-import { fleetEligibility, fleetPlacementWanted, fleetProbe, placeOnFleet, type Placement } from "@/lib/fleet-place";
+import { chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
 import { rollback } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -2027,8 +2027,47 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       if (r.kind === "database" && r.reason.includes("kept")) log(`Database: ${r.reason}`);
     }
 
+    // With a Dockerfile, build it ourselves with a registry layer cache and
+    // deploy the image — so an unchanged `npm install` is reused and redeploys
+    // are dramatically faster. Which builder does it is BUILDER's call
+    // (buildkit vs the Kaniko default); see lib/build-config.ts. Without a
+    // Dockerfile, fall back to buildpacks.
+    const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
+    // What a worker or a cron runs. The SAME artifact the web process got — a
+    // worker built separately could differ from the service beside it, which is
+    // the one thing a process model must not allow.
+    //
+    // The buildpack lane has no image at this point: `run deploy --source` builds
+    // one and only Cloud Run knows its name. Building again with `--source` per
+    // worker would pay for the same build a third time (the release job already
+    // pays for it twice, and says so), so the deployed image is read back from
+    // the live service instead — one API call against N builds.
+    const processImage = lane === "runner"
+      ? (runnerLang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE)
+      // A serviceless buildpack app built its image with `builds submit --pack`
+      // under the same name, so there is no service to read it back from and no
+      // need to.
+      : lane === "container" || serviceless ? `${IMAGE}:latest` : undefined;
+
+    // Which runtime this deploy takes, decided here — before anything is
+    // deployed — because `provisionPostgres` right below needs the answer to
+    // hand the app an address it can actually reach. `chooseRuntime` says what
+    // the fleet CAN serve; `fleetPlacementWanted` says what it is ALLOWED to
+    // serve yet. Task 10 drops the second half once one app has proved the
+    // path; until then the first app to prove it is whichever one somebody
+    // happens to deploy.
+    const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless });
+    const toFleet = target.runtime === "fleet" && fleetPlacementWanted(process.env, slug);
+    // The address the database is provisioned at follows `toFleet`, never
+    // `target.runtime` alone. The two differ for exactly the apps this gate
+    // exists for: an app the fleet could serve but is not yet a canary still
+    // deploys to Cloud Run, and handing it FLEET_DB would give that Cloud Run
+    // revision an address it cannot reach — the same failure this whole task
+    // exists to stop, arriving through the back door.
+    const dbAt = toFleet ? FLEET_DB : CLOUD_RUN_DB;
+
     const pgPromise = wants("database") && s.database?.engine === "postgres"
-      ? provisionPostgres(slug, log, CLOUD_RUN_DB).then(
+      ? provisionPostgres(slug, log, dbAt).then(
           (pg) => ({ ok: true as const, pg }),
           (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
         )
@@ -2105,7 +2144,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           cloudsql = r.pg.connectionName;
           // Every spelling of the same endpoint. DATABASE_URL alone is not enough:
           // plenty of apps never read it and require POSTGRES_SERVER or PGHOST.
-          dbEnv = databaseEnv(r.pg);
+          dbEnv = databaseEnv(r.pg, dbAt);
           dbIsolated = r.pg.isolated;
           dbPassword = r.pg.password;
           log("Provisioned the database — connecting through a Cloud SQL proxy");
@@ -2311,27 +2350,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       spaFallback: primaryConfigService?.spaFallback,
     };
 
-    // With a Dockerfile, build it ourselves with a registry layer cache and
-    // deploy the image — so an unchanged `npm install` is reused and redeploys
-    // are dramatically faster. Which builder does it is BUILDER's call
-    // (buildkit vs the Kaniko default); see lib/build-config.ts. Without a
-    // Dockerfile, fall back to buildpacks.
-    const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
-    // What a worker or a cron runs. The SAME artifact the web process got — a
-    // worker built separately could differ from the service beside it, which is
-    // the one thing a process model must not allow.
-    //
-    // The buildpack lane has no image at this point: `run deploy --source` builds
-    // one and only Cloud Run knows its name. Building again with `--source` per
-    // worker would pay for the same build a third time (the release job already
-    // pays for it twice, and says so), so the deployed image is read back from
-    // the live service instead — one API call against N builds.
-    const processImage = lane === "runner"
-      ? (runnerLang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE)
-      // A serviceless buildpack app built its image with `builds submit --pack`
-      // under the same name, so there is no service to read it back from and no
-      // need to.
-      : lane === "container" || serviceless ? `${IMAGE}:latest` : undefined;
     const useDockerBuild = existsSync(join(dir, "Dockerfile"));
     // Slug-aware, so `BUILDKIT_APPS=<slug>` can prove the registry auth on one
     // app before the default moves. Without the slug this reads the global
@@ -2986,9 +3004,43 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       return res;
     };
 
-    log(`Deploying ${slug} to Cloud Run…`);
+    /**
+     * The fleet branch. No Cloud Run service is created at all.
+     *
+     * The image is already built by the time this runs — building is shared, it
+     * is only the delivery that forks. Verification is the load balancer with
+     * the app's own health path, because that is the path real traffic takes and
+     * the one a database-backed app fails on when its database is unreachable.
+     */
+    const runFleetDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
+      if (!FLEET_LB) return { ok: false, error: "no fleet load balancer is configured" };
+      const built = processImage ?? await liveContainerImage(slug);
+      if (!built) return { ok: false, error: "this deploy produced no image to place" };
+
+      const placement = await placeOnFleet(
+        slug,
+        buildAppSpec({
+          slug, image: built, env: extraEnv,
+          secrets: await allAppSecrets(slug, secretRefs),
+          processes, healthPath: primaryHealth.health.path,
+        }),
+        FLEET_LB,
+        {
+          chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
+          probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
+          log,
+        },
+      );
+      return placement.placed
+        ? { ok: true, url: placement.runUrl }
+        : { ok: false, error: placement.reason ?? "the app did not answer from the fleet" };
+    };
+
+    if (target.reason) log(`Deploying ${slug} to Cloud Run — ${target.reason}`);
+    else if (!toFleet) log(`Deploying ${slug} to Cloud Run — the fleet could take it, but it is not a canary yet`);
+    else log(`Deploying ${slug} to the fleet…`);
     const firstAttempt = stages.start(ACTIVATION_STAGE);
-    let result = await runDeploy();
+    let result = toFleet ? await runFleetDeploy() : await runDeploy();
     await stages.end(firstAttempt, result.ok ? "ok" : "failed");
 
     // Did the revision come out carrying what the author asked for?
@@ -3255,9 +3307,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // worker with no image is skipped loudly inside deployProcesses rather than
     // deployed from a source tree that would build a third time.
     //
-    // Read once for both readers below. The fleet placement needs the same image
-    // and the same secrets the processes do, and asking Cloud Run twice for one
-    // answer is how the two quietly stop being the same answer.
+    // On the fleet branch this reads back the same image `runFleetDeploy`
+    // already placed — workers and crons still deploy through Cloud Run
+    // regardless of which runtime serves the web process, so this lookup
+    // still has to happen even when the web process itself did not go there.
     let built: string | null = null;
     let allRefs: SecretRef[] = [];
     if (result.ok && !staticServe) {
@@ -3273,46 +3326,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         env: extraEnv, secrets: allSecrets || null,
         cloudsql, labels: labelPairs, config: primaryConfigService, processes, log,
       })).catch((e) => log(`! processes: ${e instanceof Error ? e.message : String(e)}`));
-    }
-
-    // Onto the fleet, if this app can go and there is somewhere to put it.
-    //
-    // After Cloud Run, never instead of it. The app is already deployed and
-    // verified above, so everything here is an attempt to do better — and every
-    // way it can fail ends with the app still served by Cloud Run. That is what
-    // makes it safe to run on an ordinary deploy rather than as an operation
-    // somebody watches.
-    //
-    // `chooseNode` finally has a caller.
-    let fleetUrl: string | undefined;
-    if (fleetPlacementWanted(process.env, slug) && result.ok) {
-      const can = !FLEET_LB
-        ? { ok: false, reason: "no fleet load balancer is configured" }
-        : fleetEligibility({ lane, image: built ?? "", staticServe: !!staticServe, serviceless });
-      if (!can.ok) {
-        log(`· staying on Cloud Run — ${can.reason}`);
-      } else {
-        // Never fatal. A deploy that has already gone live on Cloud Run must not
-        // be failed by the runtime it was going to move to — the app is up, and
-        // the worst outcome available here is that it stays where it is.
-        const placement = await stages.around("fleet", () => placeOnFleet(
-          slug,
-          buildAppSpec({
-            slug, image: built!, env: extraEnv, secrets: allRefs, processes,
-            healthPath: primaryHealth.health.path,
-          }),
-          FLEET_LB,
-          {
-            chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
-            probe: (s) => fleetProbe(FLEET_LB, s),
-            log,
-          },
-        )).catch((e): Placement => {
-          log(`! fleet: ${e instanceof Error ? e.message : String(e)} — staying on Cloud Run`);
-          return { placed: false };
-        });
-        fleetUrl = placement.runUrl;
-      }
     }
 
     // The two routing models are mutually exclusive: a per-app domain
@@ -3344,10 +3357,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
     setDeploy(slug, { status: "live", url: result.url });
     if (ownerId && ownerWorkspace) {
-      // The flip, and the only write of run_url. `fleetUrl` is present only once
-      // the app has answered from the fleet through the load balancer; every
-      // other path leaves this the Cloud Run url the deploy already proved.
-      await markAppLive(slug, fleetUrl ?? result.url ?? "", null, routes);
+      // The flip, and the only write of run_url. `result.url` is the fleet's
+      // load-balancer address on the fleet branch and the Cloud Run url on the
+      // other — whichever branch ran is the one that proved this address live.
+      await markAppLive(slug, result.url ?? "", null, routes);
       // Not awaited: the deploy is finished, and a thumbnail must never hold it.
       // Skipped entirely for a worker-only app: there is no page to photograph,
       // and asking the shot service for one produces a screenshot of an error
