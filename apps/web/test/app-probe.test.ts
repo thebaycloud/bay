@@ -1,6 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { probeSummary, bodyPreview } from "../lib/app-probe";
+import { probeSummary, bodyPreview, probeCacheUsable, PROBE_TTL_MS } from "../lib/app-probe";
+
+test("a probe is reused briefly, so opening the dashboard does not wake every app", () => {
+  // The lesson this file's neighbour already paid for. The grid used to render
+  // an <iframe> per app — opening the dashboard opened every app on it. A single
+  // request is far cheaper, but it still WAKES a scale-to-zero app, so an
+  // uncached probe turns every dashboard load, and every poll while something is
+  // building, into a cold start per app and a bill for it.
+  const now = 1_000_000;
+  assert.equal(probeCacheUsable({ at: now }, now + 1000), true);
+  assert.equal(probeCacheUsable({ at: now }, now + PROBE_TTL_MS + 1), false);
+  // Nothing cached is not a fresh probe.
+  assert.equal(probeCacheUsable(undefined, now), false);
+});
 
 test("an app that answers 400 is not reported as live", () => {
   // The defect this exists to fix. `epvmx` serves Django's DisallowedHost — it

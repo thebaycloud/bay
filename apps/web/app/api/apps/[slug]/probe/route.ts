@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { describeService } from "@/lib/gcloud";
 import { identityToken } from "@/lib/gcp-rest";
-import { probeSummary, type ProbeResult } from "@/lib/app-probe";
+import { probeSummary, probeCacheUsable, type ProbeResult, type ProbeSummary } from "@/lib/app-probe";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 
@@ -25,10 +25,29 @@ const MAX_BODY = 4096;
  * a customer's app over the network, and putting it in the server render would
  * hold the whole dashboard behind the slowest app on it.
  */
+/**
+ * The last answer per app.
+ *
+ * A probe wakes a scale-to-zero app, so without this every dashboard load — and
+ * every three-second poll while something is building — is a cold start per app.
+ * See PROBE_TTL_MS, and see the comment on the grid's Thumb for the version of
+ * this mistake that was already made and paid for.
+ *
+ * Per instance, which is all it needs to be: it exists to stop ONE person
+ * refreshing from waking their apps repeatedly, and their refreshes land on the
+ * same instance.
+ */
+const cache = new Map<string, { at: number; probe: ProbeResult & ProbeSummary }>();
+
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+
+  // Checked after ownership, never before: a cache hit must not become a way to
+  // read another account's app.
+  const hit = cache.get(slug);
+  if (probeCacheUsable(hit, Date.now())) return Response.json({ probe: hit!.probe, cached: true });
 
   let url: string;
   try {
@@ -65,7 +84,9 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
     result = { code: 0, ms: Date.now() - started };
   }
 
-  return Response.json({ probe: { ...result, ...probeSummary(result) } });
+  const probe = { ...result, ...probeSummary(result) };
+  cache.set(slug, { at: Date.now(), probe });
+  return Response.json({ probe });
 }
 
 /** The first few KB, and never the whole body — a response can be megabytes and a preview is 120 chars. */

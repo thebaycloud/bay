@@ -29,6 +29,26 @@ export interface ProbeSummary {
 const PREVIEW_MAX = 120;
 
 /**
+ * How long one app's answer is reused before asking again.
+ *
+ * This exists because of what the grid already learned once. Each card used to
+ * be an `<iframe src="https://<slug>.supersonic.cv">` — opening the dashboard
+ * opened every app on it. One request is far cheaper than that, but it is not
+ * free in the way that matters: a probe WAKES a scale-to-zero app, so an
+ * uncached one turns every dashboard load — and every three-second poll while
+ * something is building — into a cold start per app, and a bill for it.
+ *
+ * Short enough that the page is not lying about an app that just fell over,
+ * long enough that opening the dashboard twice costs one wake-up.
+ */
+export const PROBE_TTL_MS = 45_000;
+
+/** Whether a stored answer is still worth showing instead of asking again. */
+export function probeCacheUsable(entry: { at: number } | undefined, now: number, ttlMs: number = PROBE_TTL_MS): boolean {
+  return Boolean(entry) && now - entry!.at < ttlMs;
+}
+
+/**
  * The body, when showing it beats showing a picture of it.
  *
  * This is the observation the whole redesign turns on: a screenshot works for a
