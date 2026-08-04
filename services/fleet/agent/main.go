@@ -156,6 +156,26 @@ type Agent struct {
 	faults map[string]ProcessFault
 }
 
+// forgetCronRecords drops this app's cron failure history, by identity.
+//
+// It used to be forgetPrefix(slug + "--"), which is ambiguous: that prefix also
+// matches every key belonging to an app whose slug BEGINS with this one
+// followed by "--", so removing `foo` would take `foo--bar`'s records with it.
+//
+// Nothing produces such a slug today — slugify collapses runs of hyphens to
+// one, and randomSlug emits five alphanumerics — but that rule lives in a
+// TypeScript file in another service, and this key scheme silently depended on
+// it. A slug arriving by any other route (a hand-inserted row, an import, a
+// migration) would have broken it quietly. The app is in hand here, so its cron
+// ids can simply be named.
+func (a *Agent) forgetCronRecords(app App) {
+	for _, p := range processesOf(app) {
+		if p.Kind == KindCron {
+			a.cronFail.succeed(sandboxID(app.Slug, p))
+		}
+	}
+}
+
 // cronBlocked says whether this app's release means its scheduled work must
 // not run right now.
 //
@@ -587,7 +607,7 @@ func (a *Agent) reconcileOnce() error {
 			// shape.
 			if wasLive && !survivingSlugs[l.app.Slug] {
 				a.relFail.forgetPrefix(l.app.Slug + "@")
-				a.cronFail.forgetPrefix(l.app.Slug + "--")
+				a.forgetCronRecords(l.app)
 			}
 		}
 	}
@@ -655,8 +675,10 @@ func (a *Agent) reconcileOnce() error {
 				case actWait:
 					continue
 				case actGiveUp:
-					log.Printf("%s: has died %d times, not restarting — deploy a new image to reset",
-						id, maxAttempts)
+					if a.quiet.allow("died:"+key, time.Now(), giveUpEvery) {
+						log.Printf("%s: has died %d times, not restarting — deploy a new image to reset",
+							id, maxAttempts)
+					}
 					continue
 				}
 				n := a.startFail.fail(key, time.Now())
@@ -735,11 +757,16 @@ func (a *Agent) reconcileOnce() error {
 			blocked[slug] = true
 			continue
 		case actGiveUp:
-			// Logged once per pass rather than once ever: /status already
-			// carries this state via relFail.report(), but a human tailing the
-			// log this way sees it without having to go query /status.
-			log.Printf("%s: release has failed %d times, not retrying — deploy a new image to reset",
-				slug, maxAttempts)
+			// Said repeatedly rather than once ever, because /status is the only
+			// other view and a human tailing the log has to be able to meet this
+			// state without going to query it. But not once per pass: that is
+			// 8,640 lines a day into an append-only file on a disk that does not
+			// survive a stop, measured at ~1 MB/day per given-up app. The key
+			// carries the image, so a new deploy is announced immediately.
+			if a.quiet.allow("release:"+key, now, giveUpEvery) {
+				log.Printf("%s: release has failed %d times, not retrying — deploy a new image to reset",
+					slug, maxAttempts)
+			}
 			blocked[slug] = true
 			continue
 		}
