@@ -720,7 +720,7 @@ backend drains from here.
 - [ ] **Step 5: Create the secret and give it to the proxy**
 
 ```bash
-printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create fleet-edge-secret \
+printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create supersonic-fleet-edge-secret \
   --project supersonic-deploy-prod --data-file=-
 ```
 
@@ -747,7 +747,7 @@ Verify the stored length before going any further. This is cheap and it is the
 only check that catches the problem at the point where it is still free:
 
 ```bash
-gcloud secrets versions access latest --secret fleet-edge-secret \
+gcloud secrets versions access latest --secret supersonic-fleet-edge-secret \
   --project supersonic-deploy-prod | wc -c
 ```
 
@@ -779,7 +779,7 @@ project-wide. Skip this and the next command deploys a revision that cannot read
 the secret and fails to start, taking down the edge for every app at once:
 
 ```bash
-gcloud secrets add-iam-policy-binding fleet-edge-secret \
+gcloud secrets add-iam-policy-binding supersonic-fleet-edge-secret \
   --project supersonic-deploy-prod \
   --member serviceAccount:supersonic-proxy@supersonic-deploy-prod.iam.gserviceaccount.com \
   --role roles/secretmanager.secretAccessor
@@ -788,7 +788,7 @@ gcloud secrets add-iam-policy-binding fleet-edge-secret \
 Verify the binding landed before going further:
 
 ```bash
-gcloud secrets get-iam-policy fleet-edge-secret --project supersonic-deploy-prod \
+gcloud secrets get-iam-policy supersonic-fleet-edge-secret --project supersonic-deploy-prod \
   --format="value(bindings.role,bindings.members)"
 ```
 
@@ -804,7 +804,7 @@ Only now bind it to the service:
 ```bash
 gcloud run services update supersonic-proxy --project supersonic-deploy-prod \
   --region us-central1 \
-  --update-secrets FLEET_EDGE_SECRET=fleet-edge-secret:latest
+  --update-secrets FLEET_EDGE_SECRET=supersonic-fleet-edge-secret:latest
 ```
 
 Watch the revision actually reach serving before continuing — a secret the
@@ -882,7 +882,7 @@ Expected: `supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com`.
 per-secret, exactly as it was for the proxy, so grant it there:
 
 ```bash
-gcloud secrets add-iam-policy-binding fleet-edge-secret \
+gcloud secrets add-iam-policy-binding supersonic-fleet-edge-secret \
   --project supersonic-deploy-prod \
   --member serviceAccount:supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com \
   --role roles/secretmanager.secretAccessor
@@ -893,18 +893,18 @@ Then bind it to the job:
 ```bash
 gcloud run jobs update supersonic-deploy-job --project supersonic-deploy-prod \
   --region us-central1 \
-  --update-secrets FLEET_EDGE_SECRET=fleet-edge-secret:latest
+  --update-secrets FLEET_EDGE_SECRET=supersonic-fleet-edge-secret:latest
 ```
 
 Verify both landed:
 
 ```bash
-gcloud secrets get-iam-policy fleet-edge-secret --project supersonic-deploy-prod \
+gcloud secrets get-iam-policy supersonic-fleet-edge-secret --project supersonic-deploy-prod \
   --format="value(bindings.role,bindings.members)" > /tmp/edge-iam.txt
 cat /tmp/edge-iam.txt
 gcloud run jobs describe supersonic-deploy-job --project supersonic-deploy-prod \
   --region us-central1 --format=json > /tmp/deploy-job-secrets.json
-grep -c fleet-edge-secret /tmp/deploy-job-secrets.json
+grep -c supersonic-fleet-edge-secret /tmp/deploy-job-secrets.json
 ```
 
 Expected: `roles/secretmanager.secretAccessor` listing **both** the proxy and the
@@ -959,7 +959,7 @@ Read the secret onto the node without printing it, append it to `fleet.env`, and
 restart:
 
 ```bash
-gcloud secrets versions access latest --secret fleet-edge-secret \
+gcloud secrets versions access latest --secret supersonic-fleet-edge-secret \
   --project supersonic-deploy-prod > /tmp/edge.txt
 gcloud compute scp /tmp/edge.txt fleet-lab-1:/tmp/edge.txt \
   --zone us-central1-a --project supersonic-deploy-prod
@@ -1199,3 +1199,75 @@ on the node. Anything that can read `/etc/supersonic/fleet.env` as root can
 replay it, and so can anything that can read the proxy's environment. That is the
 same exposure `FLEET_TOKEN` already has, and the real fix for both is a GCE
 instance identity token — named in the spec, not in this phase.
+
+---
+
+## Executed — 2026-08-04
+
+All five tasks are done. What follows is what actually happened, measured rather
+than intended, because the difference is the only thing worth writing down.
+
+**The secret is named `supersonic-fleet-edge-secret`**, not `fleet-edge-secret`.
+Renamed before creation to match `supersonic-auth-secret` and
+`supersonic-pg-password`; the commands above say the real name. Created with
+`printf '%s' "$(openssl rand -hex 32)"` and verified at **64 bytes**, not 65.
+
+**Task 4 Step 3 was not run as written, and running it as written would have
+stopped seventeen of the node's twenty apps.** The live unit on `fleet-lab-1`
+carried `EnvironmentFile=/etc/supersonic/agent.env`, added by hand and never
+present in `provision.sh`, and it is the only source of `FLEET_ENDPOINT` and
+`FLEET_TOKEN`. `provision.sh` rewrites that unit from a heredoc. Without the
+endpoint, `Source.Fetch` reads `/srv/state/desired.json` — 3 apps — instead of
+the cache, and `reconcileOnce` stops what is no longer desired. `provision.sh`
+now writes both `EnvironmentFile=-` lines. On the node the line was added with a
+targeted idempotent `sed` and `daemon-reload`, and `provision.sh` was not run at
+all: it also restarts nftables, which this task did not need.
+
+**`restart-agent.sh` exists on the node but was not used.** It kills every
+sandbox, deletes `routes.json` and `/srv/state/bundles`, tears down namespaces
+and veths, and starts the agent with `nohup` — outside systemd. A plain
+`systemctl restart supersonicd` was enough: `KillMode=process` leaves the
+sandboxes running, so only routing paused.
+
+**Measured before and after, from off-VPC, unauthenticated:**
+
+```
+before   curl -H 'x-supersonic-slug: a8ebb' http://8.232.255.172/
+         → 200, no X-Supersonic-Router header — the APP answered
+after    same request
+         → 403, X-Supersonic-Router: unsigned
+health   http://8.232.255.172/__fleet/healthz → 200 throughout
+real     https://anatf.supersonic.cv/ → 200, app answered, no router marker
+         https://a8ebb.supersonic.cv/ → 401 from the proxy's access layer
+probe    slug + correct edge secret → 200, app answered (fleetProbe would pass)
+         slug + wrong secret        → 403 unsigned
+node     20 routes, 20 healthy after enforcement (18 healthy before)
+```
+
+Both sides announce their own state, which is how each deploy was confirmed
+rather than inferred:
+
+```
+proxy   edge gate: signing fleet requests with x-supersonic-edge
+node    edge gate: enforcing — x-supersonic-edge required on every request but /__fleet/healthz
+```
+
+**Not done:** a full pipeline deploy onto the fleet. It needs a session or a CLI
+token, and minting one by writing to `cli_tokens` was refused — correctly, since
+that is a credential. The path it would exercise is proven by the probe
+simulation above, but the build-and-place half is not.
+
+### Found on the live node, belonging to Phase 2
+
+- **There is no nftables rule for 5432 at all**, and no `input` chain — only
+  `output`, `forward` and a nat `postrouting`. The handoff records this as a rule
+  in the wrong chain; on this node it is absent entirely. `provision.sh` has not
+  been re-run since 3 Aug.
+- **`cloud-sql-proxy` is not the systemd unit.** The unit exists and is inactive;
+  a hand-started process is listening on `127.0.0.1:5432` — loopback only, so
+  `10.200.0.1:5432` answers nothing and a sandbox cannot reach it. Probably
+  started for `fleetctl.sh`, which wants a proxy exactly there.
+- The ruleset **does** parse (`nft -c` → OK) and the metadata-server block **is**
+  loaded — 7 matching rules. That was the scariest open item and it is fine.
+- The node has an external IP (`35.255.177.212`) and `default-allow-ssh` admits
+  `0.0.0.0/0` on tcp:22. Key-only auth, but on a machine running tenant code.
