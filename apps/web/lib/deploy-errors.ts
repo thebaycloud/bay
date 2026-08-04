@@ -61,6 +61,14 @@ const PLATFORM: Array<{ re: RegExp; reason: string }> = [
     reason: "The database name this app would get is already taken on the shared instance. That is a platform naming collision.",
   },
   {
+    // The build worked and pushed; the registry would not say what it pushed.
+    // Placed above the connection rule because it is the specific case, and
+    // above the app rules because there is nothing in a repository that decides
+    // whether Artifact Registry answers a manifest HEAD.
+    re: /image digest could not be resolved/i,
+    reason: "The build pushed an image and the registry would not say which one. That is ours — your code built fine, and deploying the tag anyway would have shipped the previous version.",
+  },
+  {
     // \b around the errno codes is load-bearing: "ModuleNotFoundError"
     // lowercases to "modulenotfounderror", which CONTAINS "enotfound". Without
     // the boundary, a missing import — the most ordinary app error there is, and

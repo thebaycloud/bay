@@ -2927,6 +2927,31 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * A failure comes back as an error string carrying the real Cloud Build log,
      * because that string is what the repair agent is given to work from and
      * `gcloud exited 1` is not something it can fix.
+     *
+     * WHAT IT RETURNS IS A DIGEST, NOT A TAG
+     *
+     * `${IMAGE}:latest` is a constant. Returning it made every deploy after the
+     * first place a spec byte-identical to the one already on the node — and the
+     * agent restarts a sandbox when the image or the command CHANGES
+     * (services/fleet/agent/main.go). An unchanged string is not a change, so it
+     * stopped nothing and pulled nothing; `EnsureImage` would not have saved it
+     * either, because `GetImage("slug:latest")` resolves out of the node's own
+     * content store without asking the registry. The probe then got its 200 from
+     * the sandbox that was already serving, the verdict passed, and the customer
+     * was told their new version had shipped.
+     *
+     * So the tag is resolved to the digest it means AT THIS MOMENT, once, here —
+     * where the build result is produced, so the fleet branch and the Cloud Run
+     * branch cannot end up holding different references to "what this deploy
+     * built". This is the same move `baseImage` already makes forty lines into
+     * the render for the same reason, and the comment there names the defect
+     * class: "the `:latest` defect the version resolver exists to kill".
+     *
+     * It differs from that one in being FATAL. Pinning a base is an improvement
+     * on what shipped before it, so an unresolvable digest there costs
+     * reproducibility and nothing else. Here the tag is not a lesser answer, it
+     * is the bug: falling back to it would place a reference that cannot express
+     * "this is new code" and would hide that behind a deploy reporting success.
      */
     const buildImage = async (): Promise<{ ok: true; image: string } | { ok: false; error: string }> => {
       if (!useDockerBuild && !serviceless) {
@@ -2982,7 +3007,17 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           || (e instanceof Error ? e.message : String(e));
         return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
       }
-      return { ok: true, image: `${IMAGE}:latest` };
+      const digest = await resolveImageDigest(`${IMAGE}:latest`);
+      if (!digest) {
+        // Ours, not the repository's — the build succeeded and pushed. Worded to
+        // match deploy-errors.ts's registry rule so `classify` blames the
+        // platform: sending a repair agent to edit a customer's app over a
+        // registry that would not answer costs ~$12-15 and finds nothing.
+        return { ok: false, error: `the image digest could not be resolved: the build pushed ${IMAGE}:latest, `
+          + `and the registry did not say which image that now names. Deploying the tag instead would silently ship the previous version.` };
+      }
+      log(`Built ${digest.slice(0, 19)}… — deployed by digest, so "the new version" is a fact rather than a tag.`);
+      return { ok: true, image: `${IMAGE}@${digest}` };
     };
 
     const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {

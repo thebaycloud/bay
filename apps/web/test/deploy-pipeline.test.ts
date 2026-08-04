@@ -42,6 +42,15 @@ interface Recorded {
   events: unknown[];
   /** Stage rows the recorder tried to write. */
   stages: { stage: string; outcome: string | null; lane: string }[];
+  /**
+   * Every spec handed to a node, in order.
+   *
+   * The fleet branch's only externally visible product. What it PLACES is the
+   * thing that decides which code the node runs, and it is not derivable from
+   * argv: `gcloud builds submit` says an image was built and says nothing at all
+   * about which reference was then written into the placement row.
+   */
+  placements: { slug: string; node: string; spec: { image: string; memoryBytes: number; cpuShares: number } }[];
 }
 
 /** A `gcloud`/`npm` reply, chosen by what the command line looks like. */
@@ -66,11 +75,27 @@ type Replies = (argv: string[]) => Reply | undefined;
  */
 process.env.RUNNER ??= "1";
 process.env.PLANNER ??= "0";
+/**
+ * Read at module load, so it has to be set before the pipeline is imported.
+ * Without it `runFleetDeploy` refuses before it builds anything and the fleet
+ * branch below would pass by never running.
+ */
+process.env.FLEET_LB ??= "10.0.0.9";
+
+/**
+ * What the registry answers for a tag, switchable per test.
+ *
+ * A digest by default, because that is what a registry does for an image the
+ * build just pushed to it. The null case is its own test: an unresolvable
+ * digest must fail the deploy rather than quietly place a tag.
+ */
+const A_DIGEST = `sha256:${"ab".repeat(32)}`;
+let digestReply: string | null = A_DIGEST;
 
 /** Which build implementation this process is exercising. See `generatedBuild`. */
 const COLLAPSED = process.env.RUNNER === "0";
 
-let active: Recorded = { argv: [], events: [], stages: [] };
+let active: Recorded = { argv: [], events: [], stages: [], placements: [] };
 let activeReplies: Replies = () => ({});
 
 function fakeSpawn() {
@@ -169,10 +194,36 @@ async function install() {
       readObjectText: async () => null,
       writeObject: asyncNoop,
       describeServiceRest: async () => null,
-      // Never a real registry call from a test; null is the "could not resolve"
-      // answer the pipeline is built to tolerate.
-      resolveImageDigest: async () => null,
+      // Never a real registry call from a test. It answers with a digest,
+      // because that is what a registry does — and because the fleet branch now
+      // depends on the answer rather than tolerating its absence.
+      resolveImageDigest: async () => digestReply,
     },
+  });
+
+  // The fleet, without a node, a database or a load balancer.
+  //
+  // Every port `placeOnFleet` is given comes from here, so the placement row
+  // this deploy would have written is capturable — and it is the only evidence
+  // that says which image the node was told to run.
+  mock.module("@/lib/fleet", {
+    namedExports: {
+      chooseNode: async () => "fleet-lab-1",
+      placeApp: async (slug: string, node: string, spec: never) => {
+        active.placements.push({ slug, node, spec });
+      },
+      unplaceApp: asyncNoop,
+      placementFor: async () => null,
+      runtimeOf: async () => "cloudrun",
+      setRuntime: asyncNoop,
+    },
+  });
+  // Additive, for the same reason gcp-rest is: `chooseRuntime`, `placeOnFleet`
+  // and `fleetEligibility` are the logic under test and must stay real. Only
+  // the one function that opens a socket is replaced.
+  const fleetPlace = await import("@/lib/fleet-place");
+  mock.module("@/lib/fleet-place", {
+    namedExports: { ...fleetPlace, fleetProbe: async () => ({ code: 200 }) },
   });
   mock.module("@/lib/thumbnail", { namedExports: { requestThumbnail: noop } });
   mock.module("@/lib/deploy-notify", { namedExports: { notifyDeployFinished: asyncNoop } });
@@ -207,7 +258,7 @@ function input(over: Record<string, unknown> = {}) {
 
 async function run(files: Record<string, string>, over: Record<string, unknown> = {}, replies: Replies = () => ({})) {
   const runDeploy = await loadPipeline();
-  const rec: Recorded = { argv: [], events: [], stages: [] };
+  const rec: Recorded = { argv: [], events: [], stages: [], placements: [] };
   active = rec;
   activeReplies = replies;
   // The pipeline swallows nothing at the top level, so a throw here is a real
@@ -432,6 +483,59 @@ test("a deploy that comes up broken puts the last working version back", NEEDS_M
   } else {
     assert.ok(!rolledBack, "a successful deploy must never roll back");
   }
+});
+
+/**
+ * Run one deploy down the fleet branch.
+ *
+ * `FLEET_APPS` is read per call rather than at load, so it can be set for one
+ * test and taken away again — and it MUST be taken away again, or every test
+ * declared after this one silently changes runtime.
+ */
+async function onFleet(files: Record<string, string>, replies: Replies = detect()) {
+  process.env.FLEET_APPS = "demo";
+  try {
+    return await run(files, {}, replies);
+  } finally {
+    delete process.env.FLEET_APPS;
+  }
+}
+
+test("a fleet deploy places the image by digest, never a moving tag", NEEDS_MOCKS, async () => {
+  // The defect this is here to keep dead: `buildImage` returned the constant
+  // `${IMAGE}:latest`, so the spec placed on the node carried the same string on
+  // every deploy. The agent restarts a sandbox when the image or the command
+  // CHANGES (services/fleet/agent/main.go), an unchanged tag is not a change,
+  // and `EnsureImage` resolves `slug:latest` out of the node's own content store
+  // without asking the registry. So a redeploy stopped nothing, pulled nothing,
+  // and left the previous version serving — while the probe got its 200 from
+  // that old sandbox, the verdict passed, and the dashboard reported the new
+  // version live. A tag is not evidence; a digest is.
+  const rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+
+  assert.ok(rec.placements.length > 0, `nothing was placed; stages were ${rec.stages.map((s) => s.stage).join(", ")}`);
+  const { image } = rec.placements.at(-1)!.spec;
+  assert.doesNotMatch(image, /:latest$/, `a tag was placed, so a redeploy changes nothing on the node: ${image}`);
+  assert.match(image, /@sha256:[0-9a-f]{64}$/, `the placed reference must be immutable, got: ${image}`);
+});
+
+test("a digest that cannot be resolved fails the deploy instead of placing a tag", NEEDS_MOCKS, async () => {
+  // The half of the fix that is easy to leave out. Falling back to `:latest`
+  // when the registry will not answer restores the bug exactly, and hides it
+  // behind a deploy that reports success — which is strictly worse than the
+  // original, because now there is a line of code that looks like a guard.
+  digestReply = null;
+  let rec: Recorded;
+  try {
+    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+  } finally {
+    digestReply = A_DIGEST;
+  }
+
+  assert.equal(rec.placements.length, 0, `nothing may be placed without a digest, placed: ${JSON.stringify(rec.placements.map((p) => p.spec.image))}`);
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.ok(errors.length > 0, "an unresolvable digest must fail the deploy");
+  assert.match(JSON.stringify(errors), /digest/i, `the error must say what could not be resolved — got ${JSON.stringify(errors).slice(0, 400)}`);
 });
 
 test("a sibling's Dockerfile is written for the context it is built in", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
