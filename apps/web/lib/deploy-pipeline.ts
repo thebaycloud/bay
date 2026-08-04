@@ -18,6 +18,7 @@ import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppS
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { chooseNode, placeApp, placementFor, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
+import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
 import { chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
 import { rollback } from "@/lib/gcloud";
@@ -228,7 +229,7 @@ async function fetchContainerError(slug: string): Promise<string | null> {
   try {
     const out = await capture("gcloud", [
       "logging", "read",
-      `resource.type=cloud_run_revision AND resource.labels.service_name=${slug} AND severity>=ERROR`,
+      appLogFilter(slug, { minSeverity: "ERROR" }),
       "--project", PROJECT, "--limit", "25", "--freshness", "10m",
       "--format=value(textPayload)", "--order=asc",
     ]);
