@@ -1,0 +1,24 @@
+-- Whether the app serves HTTP at all.
+--
+-- The platform had no way to say "this app is fine and there is nothing to
+-- open". Every app was assumed to have a web process, so an app that had none
+-- looked exactly like an app whose deploy died: apps.run_url is empty for both,
+-- and the edge read that emptiness as failure. A customer's Telegram bot spent
+-- two days answering its own URL with "This deploy stopped" while the bot ran
+-- normally, and nobody noticed, because a 503 on a URL nobody was meant to open
+-- is invisible until someone opens it.
+--
+-- DEFAULT true, and no backfill. Every app that exists today keeps exactly the
+-- behaviour it has, which is the only safe default: false is a claim that
+-- nothing is wrong, and this migration cannot know that about any existing row.
+--
+-- In particular there is no `UPDATE ... WHERE run_url = ''`. A static app whose
+-- static-service lookup returned null is also written with an empty run_url
+-- (deploy-pipeline.ts), so that backfill would convert a genuinely broken static
+-- app's honest "stalled" into "nothing is wrong" — the exact failure this column
+-- exists to remove, pointed at the wrong apps.
+--
+-- The value is written by markAppLive, so it only ever describes a deploy that
+-- SUCCEEDED, and it outlives a later failure. Readers must check for failure
+-- first.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS has_web boolean NOT NULL DEFAULT true;

@@ -15,6 +15,8 @@ export interface AppRow {
   deploy: { status: string; error: string | null; updatedAt: number | null } | null;
   /** Path-prefix routes when the app has more than one service. Null for the rest. */
   routes: Route[] | null;
+  /** False only for an app that runs no web process — a bot, a queue, a cron. */
+  has_web: boolean;
 }
 
 const CACHE_MS = 30_000;
@@ -86,6 +88,12 @@ export async function lookupApp(slug: string): Promise<AppRow | null> {
     ? {
         ...raw,
         routes: parseRoutes((raw as unknown as { routes?: unknown }).routes),
+        // Normalised here rather than left to spread, because `SELECT a.*` on a
+        // database without the column yields undefined while the type above
+        // promises a boolean — and the edge decides on `has_web === false`.
+        // An absent column must read as "has a web process", which is what
+        // every app was assumed to have before the column existed.
+        has_web: (raw as unknown as { has_web?: unknown }).has_web !== false,
         deploy: raw.deploy_status
           ? {
               status: raw.deploy_status,

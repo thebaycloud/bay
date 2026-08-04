@@ -60,6 +60,18 @@ interface Recorded {
    * on a deploy whose DATABASE_URL named 10.200.0.1.
    */
   repairs: { named: string; placedAgain: boolean; ranCloudRunDeploy: boolean }[];
+  /**
+   * Every `markAppLive` call, with the arguments the pipeline chose.
+   *
+   * `hasWeb` is the whole reason this is captured rather than no-opped. It is
+   * the row the edge reads to decide whether an app with no URL is a healthy
+   * worker or a dead deploy, and it is derived here — from a Procfile, through
+   * readProcesses and isServiceless — not passed in by a test. Asserting it
+   * against a hand-written constant would prove nothing; running the pipeline
+   * and reading what came out the end is the only way this can be wrong and
+   * still fail.
+   */
+  live: { slug: string; runUrl: string; hasWeb: unknown }[];
 }
 
 /** A `gcloud`/`npm` reply, chosen by what the command line looks like. */
@@ -107,7 +119,7 @@ let probeCode = 200;
 /** Which build implementation this process is exercising. See `generatedBuild`. */
 const COLLAPSED = process.env.RUNNER === "0";
 
-let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [] };
+let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [] };
 let activeReplies: Replies = () => ({});
 
 function fakeSpawn() {
@@ -160,7 +172,13 @@ async function install() {
   const asyncNoop = async () => {};
 
   // Postgres.
-  mock.module("@/lib/apps", { namedExports: { createAppRecord: asyncNoop, markAppLive: asyncNoop, markAppFailed: asyncNoop, isFirstDeploy: async () => true } });
+  // `markAppLive` is captured rather than no-opped: its `hasWeb` argument is a
+  // decision the pipeline makes, not a value handed to it, and it is the one the
+  // edge trusts when it decides whether a URL with nothing behind it is broken.
+  const markAppLive = async (slug: string, runUrl: string, _hash?: unknown, _routes?: unknown, hasWeb?: unknown) => {
+    active.live.push({ slug, runUrl, hasWeb });
+  };
+  mock.module("@/lib/apps", { namedExports: { createAppRecord: asyncNoop, markAppLive, markAppFailed: asyncNoop, isFirstDeploy: async () => true } });
   mock.module("@/lib/deploys", { namedExports: { setDeploy: noop } });
   mock.module("@/lib/plan-cache", { namedExports: { planKey: () => null, getCachedPlan: async () => null, putCachedPlan: asyncNoop } });
   mock.module("@/lib/pg-role", { namedExports: { ensureAppRole: asyncNoop, DB_PASSWORD_SECRET: "pw" } });
@@ -300,7 +318,7 @@ function input(over: Record<string, unknown> = {}) {
 
 async function run(files: Record<string, string>, over: Record<string, unknown> = {}, replies: Replies = () => ({})) {
   const runDeploy = await loadPipeline();
-  const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [] };
+  const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [] };
   active = rec;
   activeReplies = replies;
   // The pipeline swallows nothing at the top level, so a throw here is a real
@@ -374,6 +392,45 @@ test("a static site publishes files and builds no image — and must keep doing 
   assert.equal(laneOf(rec), "static");
   assert.ok(!builtAnImage(rec), "a static site must not build a container image");
   assert.ok(rec.argv.some((a) => a.includes("rsync")), "the static lane publishes with storage rsync");
+});
+
+test("a worker-only app records that it has no web process; an ordinary one records that it has", NEEDS_MOCKS, async () => {
+  // hdhxq's exact shape: a Procfile with one `bot` line and no `web` line. The
+  // deploy succeeds, deploys no Cloud Run service, and writes no run_url — and
+  // for two days the edge read that empty run_url as a dead deploy and served a
+  // customer's working Telegram bot a "This deploy stopped" page.
+  //
+  // The assertion is on what the PIPELINE derived, not on a value this test
+  // handed it: the Procfile below goes through readProcesses and isServiceless
+  // to reach markAppLive. Nothing here can agree with the implementation by
+  // construction — if `!serviceless` at the call site were dropped, inverted, or
+  // computed from something else, this fails.
+  const bot = await run(
+    { "Procfile": "bot: python bot.py\n", "bot.py": "print(1)", "requirements.txt": "requests\n" },
+    // `ownerWorkspace` is what gates the go-live write at all: the harness
+    // defaults it to null, under which markAppLive is never reached and every
+    // assertion below would pass by never running.
+    { ownerWorkspace: "ws-1" },
+    detect({ language: "Python", framework: "Telegram bot", startCommand: "python bot.py" }),
+  );
+  assert.deepEqual(
+    bot.live.map((l) => l.hasWeb), [false],
+    `a Procfile with no web line must record has_web=false; markAppLive saw ${JSON.stringify(bot.live)}`,
+  );
+  // And the reason the column is needed at all: there is no URL to fall back on.
+  assert.equal(bot.live[0].runUrl, "", "a worker-only app deploys no service, so it has no run_url");
+
+  // The other direction, from the same producer. Without this the test above
+  // would also pass if markAppLive were simply always told `false`.
+  const web = await run(
+    { "Procfile": "web: node server.js\n", "server.js": "", "package.json": '{"scripts":{"start":"node server.js"}}' },
+    { ownerWorkspace: "ws-1" },
+    detect(),
+  );
+  assert.deepEqual(
+    web.live.map((l) => l.hasWeb), [true],
+    `a Procfile with a web line must record has_web=true; markAppLive saw ${JSON.stringify(web.live)}`,
+  );
 });
 
 test("a pinned runtime the runner cannot serve already builds a generated image", NEEDS_MOCKS, async () => {
