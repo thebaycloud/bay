@@ -54,10 +54,19 @@ access to a customer's checkout, over our own unverified node.
 gcloud run jobs describe supersonic-deploy-job --project supersonic-deploy-prod \
   --region us-central1 --format=json > /tmp/deploy-job-before.json
 grep -o '"name": "FLEET_APPS"[^}]*}' /tmp/deploy-job-before.json
+grep -o '"name": "FLEET_PLACEMENT"[^}]*}' /tmp/deploy-job-before.json
 ```
 
 Expected: a line naming `FLEET_APPS` with the value `t1cyj`. Write that value
 down — restoring it is how this is undone.
+
+**Both greps, not just the first.** `fleetPlacementWanted`
+(`apps/web/lib/fleet-place.ts`) fires on either variable: `FLEET_APPS` names
+canary slugs, and `FLEET_PLACEMENT=1` moves *everything*. Removing one while the
+other is set disarms nothing, and the second is the more dangerous of the two.
+The expected result for `FLEET_PLACEMENT` is no output — it was unset when this
+was written — but that is a thing to confirm, not to assume, because it is a
+one-command change somebody could have made in between.
 
 - [ ] **Step 2: Remove it**
 
@@ -72,9 +81,11 @@ gcloud run jobs update supersonic-deploy-job --project supersonic-deploy-prod \
 gcloud run jobs describe supersonic-deploy-job --project supersonic-deploy-prod \
   --region us-central1 --format=json > /tmp/deploy-job-after.json
 grep -c FLEET_APPS /tmp/deploy-job-after.json
+grep -c FLEET_PLACEMENT /tmp/deploy-job-after.json
 ```
 
-Expected: `0`.
+Expected: `0` from both. If the second was set, remove it the same way
+(`--remove-env-vars FLEET_PLACEMENT`) and re-run this step.
 
 Note the redirect-then-grep rather than a pipe: a pipe here would report grep's
 status, not gcloud's.
@@ -551,7 +562,7 @@ first or none of this runs.
 - Modify: `services/fleet/image/provision.sh` — the `supersonicd.service` unit at :341-365
 
 **Interfaces:**
-- Consumes: `NewRouter(rootDomain, edgeSecret)` from Task 2; `FLEET_EDGE_SECRET` from Task 3.
+- Consumes: `NewRouter(rootDomain, edgeSecret)` from Task 2; `FLEET_EDGE_SECRET` from Task 3, and from `fleetProbe` in `apps/web/lib/fleet-place.ts`, which is why `supersonic-deploy-job` needs the same secret (Step 5b).
 - Produces: nothing further depends on this.
 
 - [ ] **Step 1: Fix SSH**
@@ -599,8 +610,33 @@ gcloud compute scp services/fleet/image/provision.sh fleet-lab-1:/tmp/ \
 gcloud compute scp services/fleet/agent/*.go fleet-lab-1:/opt/agent/ \
   --zone us-central1-a --project supersonic-deploy-prod
 gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
-  --command 'sudo bash /tmp/provision.sh && sudo bash /tmp/restart-agent.sh'
+  --command 'test -f /tmp/restart-agent.sh && sudo bash /tmp/provision.sh && sudo bash /tmp/restart-agent.sh'
 ```
+
+**The `test -f` comes first, and it is not defensive padding.**
+`/tmp/restart-agent.sh` is not in this repository and nothing above `scp`s it —
+it is a script a previous session left on the node, and `/tmp` does not survive a
+reboot. Without the check the chain fails at the *last* link, after
+`provision.sh` has already rewritten the unit file and run `daemon-reload`: the
+node is then left with the new unit description and the old binary still running,
+which is the one state where `systemctl is-active` says `active` and what is
+active is not what the unit now says. Checking first fails before anything has
+been touched.
+
+If it is missing, do its two jobs by hand — build the sources just copied into
+`/opt/agent`, then restart the unit. Take the build command and the output path
+from the unit itself rather than guessing them; `ExecStart` names the binary the
+service actually runs:
+
+```bash
+gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
+  --command 'systemctl cat supersonicd; ls -l /opt/agent'
+```
+
+Then build to exactly that path, `systemctl restart supersonicd`, and confirm
+`systemctl is-active supersonicd` before continuing. A restart that silently ran
+the old binary is indistinguishable from a successful one at every later step in
+this task.
 
 - [ ] **Step 4: Prove nothing broke before going further**
 
@@ -649,10 +685,24 @@ gcloud secrets versions access latest --secret fleet-edge-secret \
 ```
 
 Expected: **64**. If it says 65, destroy the version and create it again — do not
-continue, and do not try to compensate on the node side. Neither the Go
-comparison nor the TypeScript sender trims, deliberately: a byte-exact secret
-fails loudly and is fixed in seconds, whereas trimming would silently absorb a
-misconfigured secret and hide it.
+continue.
+
+**All three sides trim, and this check stays anyway.** `edgeSecretFromEnv` on the
+node, `config.edgeSecret` in the proxy and `fleetProbe` in the deploy job each
+`TrimSpace` the value where they read it, so a stray newline no longer takes the
+fleet down. That is not a reason to skip the length check, because the two catch
+different failures and point at different components:
+
+- The trim makes the *runtime* survive a whitespace mistake. Without it the
+  asymmetry is silent and vicious — Go's header parser strips the received value,
+  so whitespace on the proxy's copy disappears on the wire while the same byte on
+  the node makes the secret unmatchable forever, and nothing in either log shows
+  a difference.
+- This check catches the mistake *at creation*, seconds after it is made, while
+  it is still free — and it catches things the trim cannot, such as a secret that
+  is 33 bytes because a paste was truncated.
+
+Defence in depth here costs one command.
 
 **Grant access BEFORE binding it to the service.** `--update-secrets` does not
 grant anything, and the proxy's service account holds only
@@ -677,8 +727,10 @@ gcloud secrets get-iam-policy fleet-edge-secret --project supersonic-deploy-prod
 
 Expected: `roles/secretmanager.secretAccessor` listing the proxy service account.
 This mirrors `supersonic-auth-secret`, which binds both the proxy and
-`supersonic-deployer@`; the deployer binding is not needed here, because the only
-reader is the proxy and Step 6 reads the value as the operator's own identity.
+`supersonic-deployer@` — and this secret ends up with the same two members, for
+the same reason: Step 5b grants the deployer, because the deploy job probes the
+fleet itself. Step 6 needs no binding of its own; it reads the value as the
+operator's identity.
 
 Only now bind it to the service:
 
@@ -702,8 +754,114 @@ The proxy now sends `x-supersonic-edge`; the router still ignores it. Both
 halves are deployed and nothing is enforced. Confirm apps still serve:
 
 ```bash
-curl -s -m 15 -o /dev/null -w "%{http_code}\n" https://<a-known-live-slug>.supersonic.cv/
+curl -s -m 15 -o /dev/null -w "%{http_code}\n" https://<a-slug-that-is-on-the-fleet>.supersonic.cv/
 ```
+
+**Expect `200`, and the slug must be one that is actually placed on the fleet.**
+Read it from `/srv/state/routes.json` on the node — the same value Step 7 uses.
+This is the step that catches a malformed secret, and it can only catch it on a
+request that reaches the node: a Cloud Run app never sees `x-supersonic-edge` at
+all (`isCloudRunTarget` is the whole point of Task 3), so checking a Cloud Run
+slug here proves the proxy is up and proves nothing about the fleet path. A
+newline that survived into the header throws inside `forward()` and shows up here
+as `502` on a fleet slug while every Cloud Run app is perfectly fine.
+
+- [ ] **Step 5b: Give the deploy job the same secret**
+
+The proxy is not the only thing that talks to the node. `fleetProbe`
+(`apps/web/lib/fleet-place.ts`) is the deploy's own verification request, it goes
+straight at the load balancer, and it runs inside `supersonic-deploy-job`. Once
+Step 6 lands, an unsigned probe gets `403` with `X-Supersonic-Router: unsigned`,
+`fleetVerdict` reads the marker as "the router answered, not the app",
+`placeOnFleet` rolls the placement back and restores the previous runtime —
+**every fleet deploy fails**, describing itself as the app failing to come up.
+This step is what stops that, and it has to happen before enforcement, not after.
+
+The job runs as a **different service account from the proxy**, so the grant in
+Step 5 does not cover it. Verified rather than assumed:
+
+```bash
+gcloud run jobs describe supersonic-deploy-job --project supersonic-deploy-prod \
+  --region us-central1 --format="value(template.template.serviceAccount)"
+```
+
+Expected: `supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com`.
+(If that prints nothing, read it out of the full `--format=json` —
+`serviceAccountName` under the execution template. It was
+`supersonic-deployer@` when this was written.) The secret's IAM policy is
+per-secret, exactly as it was for the proxy, so grant it there:
+
+```bash
+gcloud secrets add-iam-policy-binding fleet-edge-secret \
+  --project supersonic-deploy-prod \
+  --member serviceAccount:supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com \
+  --role roles/secretmanager.secretAccessor
+```
+
+Then bind it to the job:
+
+```bash
+gcloud run jobs update supersonic-deploy-job --project supersonic-deploy-prod \
+  --region us-central1 \
+  --update-secrets FLEET_EDGE_SECRET=fleet-edge-secret:latest
+```
+
+Verify both landed:
+
+```bash
+gcloud secrets get-iam-policy fleet-edge-secret --project supersonic-deploy-prod \
+  --format="value(bindings.role,bindings.members)" > /tmp/edge-iam.txt
+cat /tmp/edge-iam.txt
+gcloud run jobs describe supersonic-deploy-job --project supersonic-deploy-prod \
+  --region us-central1 --format=json > /tmp/deploy-job-secrets.json
+grep -c fleet-edge-secret /tmp/deploy-job-secrets.json
+```
+
+Expected: `roles/secretmanager.secretAccessor` listing **both** the proxy and the
+deployer, and a non-zero count from the grep. A job, unlike a service, does not
+fail visibly when it cannot read a secret at update time — it fails on its next
+execution, which is somebody's deploy.
+
+- [ ] **Step 5c: Find out what the load balancer actually probes**
+
+Do this before enforcement, because getting it wrong is the largest outage in
+this plan and it does not show up in Step 7. Nothing in this repository creates
+the health check, so what it requests is unknown until it is read:
+
+```bash
+gcloud compute backend-services describe fleet-backend --global \
+  --project supersonic-deploy-prod --format="value(healthChecks)"
+gcloud compute health-checks describe <name-from-above> \
+  --project supersonic-deploy-prod \
+  --format="value(type,httpHealthCheck.requestPath,httpHealthCheck.host)"
+```
+
+**Required before proceeding: `requestPath` is `/__fleet/healthz` with no host
+set, or the check is TCP.** That path is handled above the gate in `ServeHTTP`
+and stays open deliberately.
+
+If it probes `/` — especially with a host header naming a real app — it passes
+today, because the router serves it like any other request, and 403s the instant
+Step 6 lands. `fleet-backend` then drains the only node in the group and **all
+nineteen apps go down 10-30 seconds later**, after Step 7's curls have already
+come back clean. That delay is what makes this worth a step of its own: the
+verification would have already told you it worked.
+
+Fix it before Step 6, not after:
+
+```bash
+gcloud compute health-checks update http <name> --project supersonic-deploy-prod \
+  --request-path /__fleet/healthz
+```
+
+and re-read it with the describe above before continuing. Confirm the backend
+reports healthy again before turning the gate on.
+
+The path is the part that must be right. A host header left over from a check
+that used to probe `/` does no harm once the path is `/__fleet/healthz`:
+`ServeHTTP` matches that path before it looks at the gate or at Host at all. It
+is still worth clearing, so the next person reading the check is not misled about
+what it exercises.
 
 - [ ] **Step 6: Turn enforcement on**
 
@@ -717,24 +875,92 @@ gcloud compute scp /tmp/edge.txt fleet-lab-1:/tmp/edge.txt \
   --zone us-central1-a --project supersonic-deploy-prod
 rm -f /tmp/edge.txt
 gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
-  --command 'sudo sh -c "printf \"FLEET_EDGE_SECRET=%s\n\" \"$(cat /tmp/edge.txt)\" >> /etc/supersonic/fleet.env; chmod 600 /etc/supersonic/fleet.env; rm -f /tmp/edge.txt; systemctl restart supersonicd"'
+  --command 'sudo sh -c "sed -i \"/^FLEET_EDGE_SECRET=/d\" /etc/supersonic/fleet.env; printf \"FLEET_EDGE_SECRET=%s\n\" \"$(cat /tmp/edge.txt)\" >> /etc/supersonic/fleet.env; chmod 600 /etc/supersonic/fleet.env; rm -f /tmp/edge.txt; systemctl restart supersonicd"'
 ```
+
+**The `sed -i` delete before the append is what makes this idempotent**, and it
+matters most for the rollback. A bare `>>` run twice — a retry after a network
+blip, a rotation later — leaves two `FLEET_EDGE_SECRET=` lines. systemd's
+`EnvironmentFile` takes the last one, so the file still works and nothing looks
+wrong; but "delete the line and restart" then removes one line and leaves the
+node still enforcing, with the rollback reported as done. Deleting first means
+there is only ever one line to delete.
+
+Confirm exactly one, without printing it:
+
+```bash
+gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
+  --command 'sudo grep -c "^FLEET_EDGE_SECRET=" /etc/supersonic/fleet.env'
+```
+
+Expected: `1`. The count is safe to print; the value is not.
 
 - [ ] **Step 7: Verify the door, both ways**
 
 ```bash
 curl -s -m 10 -o /dev/null -w "health %{http_code}\n" http://8.232.255.172/__fleet/healthz
 curl -s -m 10 -o /dev/null -D - -H "x-supersonic-slug: <a-placed-slug>" http://8.232.255.172/ | grep -i "HTTP/\|X-Supersonic-Router"
-curl -s -m 15 -o /dev/null -w "through the proxy %{http_code}\n" https://<a-placed-slug>.supersonic.cv/
+curl -s -m 15 -o /dev/null -D - https://<a-placed-slug>.supersonic.cv/ > /tmp/proxied.txt
+grep -i "HTTP/\|X-Supersonic-Router" /tmp/proxied.txt
 ```
 
-Expected, in order: `health 200`; `403` with `X-Supersonic-Router: unsigned`; and
-a normal status through the real hostname. The middle line is the gap closing —
-it is the exact request that reached a placed app before this task.
+Expected, in order:
 
-**Rollback if anything is wrong:** delete the `FLEET_EDGE_SECRET` line from
-`/etc/supersonic/fleet.env` and `systemctl restart supersonicd`. Enforcement is
-off again in seconds and the proxy's extra header is ignored.
+1. `health 200`. Below this, the backend drains and every app goes with it.
+2. `403` with `X-Supersonic-Router: unsigned`. This is the gap closing — the
+   exact request that reached a placed app before this task.
+3. **`200` and NO `X-Supersonic-Router` header in the response.** Check the
+   header's absence, not just the status: the marker is the only thing that
+   distinguishes "the app answered" from "the router answered". A `403` here
+   carries `X-Supersonic-Router: unsigned` and means the proxy's copy of the
+   secret does not match the node's; a `404` carrying `miss` means the router
+   answered about an app it does not have. Both are three digits that a
+   `%{http_code}` check would let through as "a normal status".
+
+The third curl dumps headers to a file and greps the file, rather than piping —
+`%{http_code}` alone cannot see the marker, and a pipe would report grep's exit
+status if this ever gates a decision.
+
+**Line 2 alone is not evidence of success.** `403 unsigned` is exactly what the
+node returns when the door is correctly shut against an outsider AND when the two
+copies of the secret have drifted apart — a rotation applied to one side only, a
+whitespace difference, a stale revision. Both look identical from outside. Line 3
+is what tells them apart: it is the same node answering the same slug, reached
+through a proxy that is supposed to hold the matching secret. Line 2 without line
+3 means the door is shut on everybody, including us.
+
+**Rollback:** which half depends on where it went wrong, and doing only one of
+them fixes nothing.
+
+- *The node is refusing the proxy (Step 6 onward).* Take the gate off:
+
+```bash
+gcloud compute ssh fleet-lab-1 --zone us-central1-a --project supersonic-deploy-prod \
+  --command 'sudo sed -i "/^FLEET_EDGE_SECRET=/d" /etc/supersonic/fleet.env && sudo systemctl restart supersonicd && systemctl is-active supersonicd'
+```
+
+Enforcement is off in seconds and the proxy's extra header is ignored. Confirm
+with `sudo grep -c "^FLEET_EDGE_SECRET=" /etc/supersonic/fleet.env` — expected
+`0`.
+
+- *The proxy is failing on fleet requests (Step 5 onward).* A proxy that throws
+  on every fleet-bound request — a malformed secret it cannot put in a header —
+  serves 502 for all nineteen apps and is **not** fixed by turning the node's
+  gate off, because the request never reaches the node. Take the secret off the
+  proxy instead:
+
+```bash
+gcloud run services update supersonic-proxy --project supersonic-deploy-prod \
+  --region us-central1 --remove-secrets FLEET_EDGE_SECRET
+```
+
+  If enforcement is already on, do the node half first or the apps stay down for
+  the opposite reason.
+
+- *Deploys are failing after enforcement (Step 5b was missed or the job's copy is
+  wrong).* Apps keep serving; only new deploys break. Either bind the secret to
+  `supersonic-deploy-job` as Step 5b describes, or take the node's gate off until
+  it is done.
 
 - [ ] **Step 8: Commit the unit change**
 
@@ -826,20 +1052,32 @@ sends a signed identity assertion over the public internet" → Task 3. "Two
 comments that are false" → Task 2 Step 6 (`router.go`) and Task 5
 (`build-config.ts`). No gaps.
 
-**Placeholder scan.** Two placeholders remain and both are deliberate:
-`<a-known-live-slug>` and `<a-placed-slug>` in Task 4. They cannot be resolved
-from the repository — the set of apps on the node lives in `fleet_placements` in
-Postgres or in `/srv/state/routes.json` on the node, and neither is readable
-until Task 4 Step 1 restores SSH. Read one from
-`/srv/state/routes.json` at that point and use it for both.
+**Placeholder scan.** Three placeholders remain and all are deliberate:
+`<a-slug-that-is-on-the-fleet>` and `<a-placed-slug>` in Task 4, which must be
+the *same* slug and must be genuinely placed — a Cloud Run slug is never sent
+`x-supersonic-edge` and so cannot detect a fleet-side break — and
+`<name-from-above>` in Step 5c, which is whatever the backend service names as
+its health check. The slug cannot be resolved from the repository: the set of
+apps on the node lives in `fleet_placements` in Postgres or in
+`/srv/state/routes.json` on the node, and neither is readable until Task 4 Step 1
+restores SSH. Read one from `/srv/state/routes.json` at that point and use it
+everywhere.
 
 **Type consistency.** `NewRouter(rootDomain, edgeSecret string)` is defined in
 Task 2 Step 3 and called in Task 2 Step 5 and Task 4 Step 2's env plumbing.
 `isCloudRunTarget(targetBase: string): boolean` is defined in Task 3 Step 3 and
 used in Step 5. The header is `x-supersonic-edge` in Task 2 Steps 1, 4 and Task 3
 Step 5. The env var is `FLEET_EDGE_SECRET` in Task 2 Step 5, Task 3 Step 5, and
-Task 4 Steps 5-6. The refusal marker is `unsigned` in Task 2 Steps 1 and 4 and
-Task 4 Step 7.
+Task 4 Steps 5, 5b and 6. The refusal marker is `unsigned` in Task 2 Steps 1 and
+4 and Task 4 Step 7.
+
+**Three consumers of the secret, not two.** The proxy signs ordinary traffic
+(Step 5); `supersonic-deploy-job` signs the deploy's own verification probe
+(Step 5b); the node checks both (Step 6). Missing the middle one does not break
+serving — it breaks every future deploy, at the point where `fleetVerdict` reads
+the router's `unsigned` marker as the app having failed to come up. All three
+sides treat an absent secret as "do not enforce, do not sign", which is what lets
+these steps be separate.
 
 **One risk this plan does not remove.** Task 4 Step 6 writes the secret to a file
 on the node. Anything that can read `/etc/supersonic/fleet.env` as root can
