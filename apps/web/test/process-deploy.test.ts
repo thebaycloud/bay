@@ -198,11 +198,11 @@ test("a cron created from the dashboard authenticates with OIDC, not OAuth", () 
 test("the token is minted for the service and the request goes to the path", () => {
   const argv = appPingScheduleArgs(ping);
 
-  // Cloud Run validates `aud` against the SERVICE url — which is why probeApp
-  // mints its token for the bare url and still reaches a health path. Left
-  // unset, Cloud Scheduler uses "the URI specified in target" (its own help),
-  // path included, so the token would be refused by the one service it was
-  // minted for and the cron would 403 with nothing in the app's logs.
+  // The service url is the audience Cloud Run documents, and the one probeApp
+  // already relies on. Cloud Scheduler's own default — "the URI specified in
+  // target", path included — was measured against a sealed app and also
+  // accepted, so this pin buys explicitness rather than a fix: it stops the
+  // cron resting on a tolerance nobody promised.
   assert.equal(valueOf(argv, "--oidc-token-audience"), "https://myapp-abc123-uc.a.run.app");
   assert.equal(valueOf(argv, "--uri"), "https://myapp-abc123-uc.a.run.app/cron/digest");
 });

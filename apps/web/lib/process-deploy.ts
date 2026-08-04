@@ -351,17 +351,17 @@ export interface AppPing {
  * *.googleapis.com: these APIs expect an OAuth token". That function targets one
  * of those APIs. This one targets a customer's private Cloud Run service.
  *
- * The audience is sent explicitly and that is the load-bearing part. Cloud Run
- * validates `aud` against the SERVICE url, which is why `probeApp` mints its
- * token for the bare url and still reaches a health path. Omit the flag and
- * Cloud Scheduler falls back to "the URI specified in target" — the path
- * included — so the token would be refused by the one service it was minted for,
- * and a cron that reads as correctly configured 403s every night with nothing in
- * the app's own logs to say why.
+ * The audience is sent explicitly, and the honest reason is narrower than it
+ * looks. Omitted, Cloud Scheduler falls back to "the URI specified in target"
+ * (its own help) — the path included — and that was measured against a sealed
+ * app and accepted: 200, same as pinning it. So this flag is not what makes the
+ * cron work. It is here because the service url is the audience Cloud Run
+ * DOCUMENTS, and the one `probeApp` already depends on; a path-bearing `aud`
+ * working is tolerance, not a promise, and it would fail silently and nightly.
  *
- * It takes the url and the path rather than the joined uri for the same reason:
- * a caller holding both a uri and an audience holds two strings that must agree,
- * and the day they stop agreeing is a nightly 403 nobody is watching for.
+ * It takes the url and the path rather than the joined uri so those two cannot
+ * describe different services — a caller holding a uri and an audience holds two
+ * strings that must agree, and this is not a disagreement anyone would notice.
  */
 export function appPingScheduleArgs(a: AppPing): string[] {
   const base = a.serviceUrl.replace(/\/+$/, "");
