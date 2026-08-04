@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,20 +17,48 @@ func TestFirstAttemptRunsImmediately(t *testing.T) {
 
 func TestBackoffGrowsAndBlocksUntilItElapses(t *testing.T) {
 	tr := newFailTracker()
+	t0 := time.Unix(1000, 0)
+
+	// One failure: the delay is 15s, so 16s later it may run again.
+	tr.fail("k", t0)
+	if got := tr.decide("k", t0.Add(16*time.Second)); got != actRun {
+		t.Fatalf("16s after ONE failure got %v, want actRun — the first delay should be under 16s", got)
+	}
+
+	// Two failures: the delay is 30s, so the SAME 16s offset must still be waiting.
+	// This is the pair that rules out a constant: no fixed delay can be both
+	// under and over 16 seconds.
+	t1 := t0.Add(16 * time.Second)
+	tr.fail("k", t1)
+	if got := tr.decide("k", t1.Add(16*time.Second)); got != actWait {
+		t.Fatalf("16s after TWO failures got %v, want actWait — the delay did not grow", got)
+	}
+}
+
+func TestConcurrentUseIsSafe(t *testing.T) {
+	tr := newFailTracker()
 	now := time.Unix(1000, 0)
-	tr.fail("k", now)
-
-	if got := tr.decide("k", now.Add(1*time.Second)); got != actWait {
-		t.Fatalf("1s after one failure got %v, want actWait", got)
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("app-%d@sha256:x", i%5)
+			tr.fail(key, now)
+			tr.decide(key, now)
+			tr.report()
+			if i%7 == 0 {
+				tr.succeed(key)
+			}
+		}(i)
 	}
-	if got := tr.decide("k", now.Add(30*time.Second)); got != actRun {
-		t.Fatalf("30s after one failure got %v, want actRun", got)
-	}
-
-	// Second failure must wait longer than the first did.
-	tr.fail("k", now.Add(30*time.Second))
-	if got := tr.decide("k", now.Add(45*time.Second)); got != actWait {
-		t.Fatalf("15s after the second failure got %v, want actWait — backoff did not grow", got)
+	wg.Wait()
+	// Coherence, not an exact count: every surviving record must have a
+	// positive count and a non-zero start time.
+	for k, v := range tr.report() {
+		if v.Fails <= 0 || v.Since.IsZero() {
+			t.Fatalf("incoherent record for %q after concurrent use: %+v", k, v)
+		}
 	}
 }
 

@@ -54,8 +54,10 @@ func (f failAction) String() string {
 type FailState struct {
 	Fails int       `json:"fails"`
 	Since time.Time `json:"since"`
-	// LastError is the most recent failure's message, for a human reading
-	// /status. Empty until a caller supplies one via failWith.
+	// LastError is the most recent NON-EMPTY failure message, for a human
+	// reading /status: failWith keeps the previous message when passed an
+	// empty one, so this can show a stale message for a later failure.
+	// Empty until a caller supplies one via failWith.
 	LastError string `json:"lastError,omitempty"`
 }
 
@@ -76,6 +78,12 @@ func newFailTracker() *failTracker {
 }
 
 // decide says what to do about this key now.
+//
+// decide and a later fail/succeed are separate critical sections, not one
+// transaction. Callers are expected to be the only goroutine acting on a
+// given key — releases are serialised by relRunning, the worker path does
+// both on the reconcile goroutine, and crons use distinct keys. A caller
+// that violates that can double-count one logical failure.
 func (t *failTracker) decide(key string, now time.Time) failAction {
 	t.mu.Lock()
 	defer t.mu.Unlock()
