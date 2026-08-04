@@ -50,7 +50,7 @@ import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, p
 import { deploymentEnv } from "@/lib/framework-env";
 import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
 import { readProcfile } from "@/lib/procfile";
-import { mergeProcfile, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
+import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
 import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
 import { buildEnvelope, assertReached } from "@/lib/envelope";
 import { planResources, type Declared } from "@/lib/resources";
@@ -1945,6 +1945,26 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       log(`No web process — deploying ${processes.length === 1 ? "one process" : `${processes.length} processes`} and no service`);
     }
 
+    // A release declared in config rather than a Procfile has always been run by
+    // lib/release-job.ts as a Cloud Run Job. On the fleet a release is an
+    // ordinary process, so it has to arrive as one. Appended after `serviceless`
+    // is decided: a release process has no `web` kind, and folding it in earlier
+    // would make an app with only a config release — and no Procfile at all —
+    // read as having declared processes with none of them a web server, which is
+    // the "no web process, no service" branch for an app that never asked for one.
+    //
+    // `releaseCmd` rather than a fresh `releaseCommand(primaryConfigService)`
+    // read, deliberately: it is the exact value the Cloud Run branch already
+    // hands to `runRelease` a few hundred lines down, already `inDir`-wrapped for
+    // a monorepo service, and already resolved with config outranking a
+    // Procfile-inferred command (see `detect.test.ts`, "the config outranks
+    // every inferred migration command"). Re-deriving it here from config alone
+    // would silently drop both of those and let the two runtimes disagree about
+    // which command a release even is — the exact bug this task exists to close.
+    if (releaseCmd.trim() && !processes.some((p) => p.name === "release")) {
+      processes.push(resolveProcess("release", { command: releaseCmd }));
+    }
+
     const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
     // The literals the author committed, FIRST — so the platform's own values
     // below win a name they share. A user cannot declare a database variable
@@ -3091,6 +3111,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         buildAppSpec({
           slug, image: image.image, env: extraEnv, secrets,
           processes, healthPath: primaryHealth.health.path,
+          // Belt and suspenders with the append above: `processes` already
+          // carries a synthesised release entry when `releaseCmd` was set, but
+          // `buildAppSpec` only adds a second when a release is not already
+          // present, so passing this too can never double it.
+          releaseCommand: releaseCmd || null,
         }),
         FLEET_LB,
         {
@@ -3107,6 +3132,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     if (target.reason) log(`Deploying ${slug} to Cloud Run — ${target.reason}`);
     else if (!toFleet) log(`Deploying ${slug} to Cloud Run — the fleet could take it, but it is not a canary yet`);
     else log(`Deploying ${slug} to the fleet…`);
+    // `runRelease` — the lib/release-job.ts call — only ever runs from inside
+    // `runDeploy`, below, and this same `toFleet` picks between that and
+    // `runFleetDeploy` two lines down. So a release never runs as a Cloud Run
+    // Job on this branch; it is already inside the AppSpec `runFleetDeploy`
+    // places, and the agent runs it before web and worker start. Said out loud
+    // rather than left to be inferred from which function is not called: the
+    // release and the app can never disagree about which runtime they are on.
+    if (toFleet) log("release runs on the node, before the app starts");
     const firstAttempt = stages.start(ACTIVATION_STAGE);
     let result = toFleet ? await runFleetDeploy() : await runDeploy();
     await stages.end(firstAttempt, result.ok ? "ok" : "failed");

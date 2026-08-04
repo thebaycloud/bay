@@ -58,6 +58,15 @@ export interface SpecInput {
   env: string[];
   secrets: SecretRef[];
   processes: ResolvedProcess[];
+  /**
+   * A release declared in config rather than in a Procfile.
+   *
+   * On Cloud Run these were two different mechanisms — a Procfile line became a
+   * process, and this became a job — so nothing ever needed them to agree. A
+   * node has one primitive, and an app whose migrations never run is an app that
+   * serves its homepage and fails everything else.
+   */
+  releaseCommand?: string | null;
   port?: number;
   memoryBytes?: number;
   cpuShares?: number;
@@ -162,11 +171,20 @@ export function buildAppSpec(i: SpecInput): AppSpec {
   };
   if (Object.keys(env).length) spec.env = env;
   if (Object.keys(secrets).length) spec.secrets = secrets;
+  const declared = i.processes.map(agentProcess);
+  // A release declared in config only ever existed as a Cloud Run Job — nothing
+  // in a Procfile named it, so `declared` would not otherwise contain it. Added
+  // only when no Procfile line already claimed the name "release", the same
+  // precedence the pipeline gives a Procfile-declared process over the inferred
+  // one.
+  if (i.releaseCommand && !declared.some((p) => p.name === "release")) {
+    declared.push({ name: "release", kind: "release", command: shellArgv(i.releaseCommand) });
+  }
   // Absent rather than empty, and the difference is load-bearing: `processesOf`
   // reads a zero-length list as "one implicit web process built from the app's
   // own port and health path". An empty array takes the other branch and places
   // an app that runs nothing.
-  if (i.processes.length) spec.processes = i.processes.map(agentProcess);
+  if (declared.length) spec.processes = declared;
 
   return spec;
 }
