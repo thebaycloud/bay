@@ -12,15 +12,21 @@ package main
 // whole point. A control plane that is down must not be able to stop a node
 // serving traffic for apps that are running on it.
 //
-// What is deliberately NOT here yet: visibility and access control. Private and
+// What is deliberately NOT here: visibility and access control. Private and
 // workspace-scoped apps, `app_grants`, the session cookie and the overlay
-// injection all live in `services/proxy` and are moving here in step 4 of
-// docs/VM-FLEET.md. Until they do, this router refuses to serve anything the
-// control plane has not marked public, so the gap is a closed door rather than
-// an open one.
+// injection all live in `services/proxy`.
+//
+// This router does NOT enforce any of that, and an earlier version of this
+// comment claimed it did — "refuses to serve anything the control plane has not
+// marked public". It never did: `desiredFor` selects on runtime alone and never
+// reads `apps.visibility`, so private apps are placed here like any other. What
+// keeps them private is that every request must come from the edge proxy, which
+// does enforce it. That is what `edgeSecret` below is for, and it is the only
+// thing standing between a placed app and the open internet.
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -113,13 +119,21 @@ func slugFromHost(host, rootDomain string) string {
 type Router struct {
 	table      *routerTable
 	rootDomain string
+	// edgeSecret is what the edge proxy signs its requests with.
+	//
+	// Empty means unenforced, deliberately: it lets this binary reach a node
+	// before the proxy that sets the header, so the two deploys do not have to be
+	// simultaneous. Turning it on is one line in /etc/supersonic/fleet.env and a
+	// restart, and turning it off again is deleting that line.
+	edgeSecret string
 	proxy      *httputil.ReverseProxy
 }
 
-func NewRouter(rootDomain string) *Router {
+func NewRouter(rootDomain, edgeSecret string) *Router {
 	rt := &Router{
 		table:      &routerTable{byslug: map[string]Route{}},
 		rootDomain: rootDomain,
+		edgeSecret: edgeSecret,
 	}
 
 	rt.proxy = &httputil.ReverseProxy{
@@ -183,6 +197,31 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "ok %d routes\n", rt.table.size())
 		return
 	}
+
+	// Everything below this line must come from the edge proxy.
+	//
+	// The health path is handled above and stays open, because the load balancer's
+	// health check cannot carry a secret and failing it drains the node out of the
+	// backend — which takes every app on the fleet down.
+	//
+	// This gate is what the comment at the top of this file used to claim and did
+	// not do. `x-supersonic-slug` is client-supplied and names any app on the
+	// node; the load balancer in front of this port answers the open internet, so
+	// without this anyone could reach a placed app around the proxy's session
+	// check, decideAccess, app_grants and workspace scoping.
+	if rt.edgeSecret != "" {
+		got := r.Header.Get("x-supersonic-edge")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(rt.edgeSecret)) != 1 {
+			w.Header().Set("X-Supersonic-Router", "unsigned")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, page(403, "Not through the front door.",
+				"This node serves the edge proxy only."))
+			return
+		}
+	}
+	// The tenant's app is the one party on this path that must not learn the
+	// secret: with it, an app could reach every other app on the node.
+	r.Header.Del("x-supersonic-edge")
 
 	// `x-supersonic-slug` FIRST, Host second.
 	//

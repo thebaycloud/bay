@@ -261,7 +261,7 @@ func main() {
 		released: map[string]string{}}
 
 	go a.serve(*addr)
-	go NewRouter(*rootDomain).Serve(*routerAddr, routesPath)
+	go NewRouter(*rootDomain, os.Getenv("FLEET_EDGE_SECRET")).Serve(*routerAddr, routesPath)
 
 	// Health runs on its own clock. Folding it into the reconcile pass would tie
 	// how fast the router learns an app is sick to how long a reconcile takes,
