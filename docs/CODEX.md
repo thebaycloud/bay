@@ -116,16 +116,11 @@ Every log line, every `changes` entry, the token counts and the loop detector
 read that stream. It cannot be written from documentation — one probe run,
 captured as a fixture, then written against reality.
 
-**3. Network inside the sandbox.** `workspace-write` blocks network by default,
-and the repair agent must reach the local bridge on `127.0.0.1` and run `gcloud`.
-`-c sandbox_workspace_write.network_access=true` re-enables it. Getting this
-wrong looks like an agent that edits files correctly and can never redeploy.
-
-**4. Landlock inside gVisor.** Only if the deploy job moves onto a fleet node:
-Codex sandboxes with Landlock, which gVisor does not implement. There the outer
-sandbox is the boundary and Codex runs with
-`--dangerously-bypass-approvals-and-sandbox`. Not a concern while the deploy job
-is a Cloud Run Job.
+**3. Network inside the sandbox.** Every sandbox mode blocks network by default,
+and the repair agent must reach the redeploy bridge and run `gcloud`. Getting
+this wrong looks like an agent that edits files correctly and can never
+redeploy. See "Where this runs" — on a node the bridge is not on loopback either,
+so this is two mistakes that produce one symptom.
 
 **5. A switch nobody flips is a switch that is broken when you need it.** The
 opencode path will rot silently the first time an event shape changes upstream.
@@ -133,18 +128,69 @@ Both backends run against the same recorded fixtures in the test suite, and the
 suite fails if either stops satisfying the contract. That is the cost of keeping
 the door open, and it is worth paying only if it is actually paid.
 
+## Where this runs, once Cloud Run is gone
+
+The deploy agent runs in a Cloud Run Job today. It will run in a gVisor sandbox
+on a fleet node, and three things that are free on Cloud Run stop being free.
+
+**It has to be sandboxed, and not because of the model.** The agent runs
+`npm install` on a stranger's repository, and `npm install` runs `postinstall`.
+On a node holding twenty other tenants' apps, that is the whole argument. The
+agent gets a sandbox for the same reason an app does.
+
+**So Codex must not try to sandbox itself.** Its Linux sandbox is Landlock, which
+gVisor does not implement. The answer is not the bypass flag — Codex has a policy
+for exactly this:
+
+```
+-c sandbox_mode=external-sandbox
+```
+
+> *"Indicates the process is already in an external sandbox. Allows full disk
+> access while honoring the provided network setting."*
+
+That keeps Codex's approval semantics intact and lets gVisor be the boundary,
+rather than switching the safety off and hoping.
+
+**The bridge moves off loopback.** `redeploy.sh` curls `127.0.0.1:<port>` today
+because the agent is a subprocess of the process hosting the bridge. In a sandbox
+that address is the sandbox's own loopback and the bridge is not on it. The
+sandbox's gateway is the node bridge — `10.200.0.1` (`agent/network.go`) — so the
+bridge listens there, or `supersonicd` grows a `/redeploy` endpoint and the agent
+is told its address. **This is the single largest change the move imposes on this
+plan**, and it is a change to the shared harness, not to either backend.
+
+**Credentials stop arriving by metadata.** On Cloud Run the job mints tokens from
+the metadata server. A fleet sandbox is deliberately denied that — `provision.sh`
+drops port 80 to `169.254.169.254` for everything but the node's own uid. So the
+agent's credentials must be injected as environment, resolved by `supersonicd`
+from Secret Manager exactly like an app's secrets.
+
+That is strictly better than what we have. Today the agent inherits the deploy
+job's identity, which is the default compute account with `run.admin`,
+`storage.admin` and `artifactregistry.writer` (`CUTOVER.md:385`) — an agent shell
+with project-wide admin. On a node it gets a scoped credential and nothing else.
+
+None of this is optional work for the switch; it is work the fleet move imposes
+on whichever backend runs. It belongs in step 1, the shared harness.
+
 ## Order
 
 **0. Probe.** One `codex exec --json --output-schema` run against a real repo, in
 the control-plane image. Capture the event stream to a fixture; confirm the model
 answers. Nothing starts until this returns. — *half a day*
 
-**1. The seam.** Extract `AgentBackend` and lift the bridge, loop detector,
-`platform.json` and token accounting out of `opencode-deploy.ts` into a shared
-harness. opencode becomes the first implementation, unchanged in behaviour.
-`DeployPlan`, `PartialPlan` and `PlatformFacts` move to their own module — they
-are the platform's types and were never opencode's. Pure refactor; the suite
-should pass untouched. — *1 day*
+**1. The seam, and the bridge's address.** Extract `AgentBackend` and lift the
+bridge, loop detector, `platform.json` and token accounting out of
+`opencode-deploy.ts` into a shared harness. opencode becomes the first
+implementation, unchanged in behaviour. `DeployPlan`, `PartialPlan` and
+`PlatformFacts` move to their own module — they are the platform's types and were
+never opencode's.
+
+While the bridge is being lifted, make its address a parameter rather than
+`127.0.0.1`. That one change is what lets the same harness work in a Cloud Run
+Job today and a fleet sandbox after, and doing it here costs nothing because the
+code is already being moved. — *1 day*
 
 **2. The Codex backend, planner first.** Smaller of the two, no bridge, and it
 gains `--output-schema`. The step-0 fixture is the test. — *1–2 days*
@@ -158,6 +204,12 @@ split are real cases with known-correct answers. — *1 day*
 
 **5. Codex becomes the default.** `DEPLOY_AGENT` defaults to `codex`; opencode
 stays wired, tested, and one env var away. Nothing is deleted. — *half a day*
+
+**6. Run it on a node.** `sandbox_mode=external-sandbox`, the bridge at the node
+gateway, credentials injected rather than minted. Sequenced last because it
+depends on the fleet carrying the deploy workload at all, which is its own piece
+of work — but step 1 is what makes it a configuration change instead of a
+rewrite. — *1–2 days after the fleet takes deploys*
 
 Roughly a week. Step 1 is the one that matters: it is what makes step 5 a
 one-line change and what stops the switch from doubling the maintenance.
