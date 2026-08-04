@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { CodexBackend } from "../lib/agent/codex";
-import type { AgentEvent, RunSpec } from "../lib/agent/types";
+import { CodexBackend } from "../lib/agents/codex";
+import type { AgentEvent, RunSpec } from "../lib/agents/types";
 
 /**
  * These run against RECORDED streams, not against a mock.

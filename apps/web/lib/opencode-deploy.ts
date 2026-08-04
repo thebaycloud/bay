@@ -220,7 +220,7 @@ async function gcloudToken(): Promise<string> {
   });
 }
 
-const AGENT_MD = `---
+export const AGENT_MD = `---
 description: Autonomous deployment engineer that repairs a failed deploy
 mode: primary
 temperature: 0.1
@@ -345,7 +345,7 @@ export class PartialPlan extends Error {
   }
 }
 
-const PLAN_AGENT_MD = `---
+export const PLAN_AGENT_MD = `---
 description: Reads a repo and outputs a deploy plan as JSON
 mode: primary
 temperature: 0
@@ -445,7 +445,7 @@ function describeCall(name: string, detail: string): string {
 }
 
 /** Pull the last well-formed JSON object out of opencode's final text. */
-function extractPlan(text: string): DeployPlan | null {
+export function extractPlan(text: string): DeployPlan | null {
   // opencode may wrap it in prose or a ```json fence; scan for the last balanced {...}.
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidates: string[] = [];
