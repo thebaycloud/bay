@@ -156,22 +156,44 @@ type Agent struct {
 	faults map[string]ProcessFault
 }
 
-// forgetCronRecords drops this app's cron failure history, by identity.
+// forgetStaleCronRecords drops cron failure history for jobs this node is no
+// longer scheduled to run.
 //
-// It used to be forgetPrefix(slug + "--"), which is ambiguous: that prefix also
-// matches every key belonging to an app whose slug BEGINS with this one
-// followed by "--", so removing `foo` would take `foo--bar`'s records with it.
+// The removal loop in reconcileOnce cannot do this, and that is the ghost-record
+// defect: it walks a.live, and a cron process is never IN a.live — `units`
+// excludes KindCron on purpose, because the scheduler owns those. So an app
+// removed after its cron had failed left its record behind forever, in the one
+// view an operator consults to rule things out.
 //
-// Nothing produces such a slug today — slugify collapses runs of hyphens to
-// one, and randomSlug emits five alphanumerics — but that rule lives in a
-// TypeScript file in another service, and this key scheme silently depended on
-// it. A slug arriving by any other route (a hand-inserted row, an import, a
-// migration) would have broken it quietly. The app is in hand here, so its cron
-// ids can simply be named.
-func (a *Agent) forgetCronRecords(app App) {
-	for _, p := range processesOf(app) {
-		if p.Kind == KindCron {
-			a.cronFail.succeed(sandboxID(app.Slug, p))
+// Swept against the scheduled set rather than matched by prefix. The prefix it
+// used to be, slug + "--", also matches every key of an app whose slug BEGINS
+// with this one followed by "--". Nothing produces such a slug today — slugify
+// collapses runs of hyphens and randomSlug emits five alphanumerics — but both
+// rules live in a TypeScript file in another service, and this key scheme
+// silently depended on them.
+func (a *Agent) forgetStaleCronRecords(scheduled map[string]bool) {
+	for id := range a.cronFail.report() {
+		if !scheduled[id] {
+			a.cronFail.succeed(id)
+		}
+	}
+}
+
+// forgetStaleStartRecords drops start failure history for processes this node
+// is no longer asked to run.
+//
+// Newly load-bearing. Until the start path was bounded, a startFail record only
+// ever existed for a process that had been live, and the removal loop could see
+// every one of them. Now a process that has NEVER come up has a record too —
+// that is the whole point of the bound — and the removal loop walks a.live, so
+// it cannot see exactly the records the bound creates. Without this, the app an
+// operator removes after reading "has failed to start 5 times" leaves its record
+// in /status with nothing on the node left to explain it.
+func (a *Agent) forgetStaleStartRecords(desired map[string]bool) {
+	for key := range a.startFail.report() {
+		id, _, ok := strings.Cut(key, "@")
+		if ok && !desired[id] {
+			a.startFail.forgetPrefix(id + "@")
 		}
 	}
 }
@@ -307,10 +329,16 @@ func (a *Agent) syncCron(d Desired) {
 		}()
 	}
 	a.cronJobs = make([]cronJob, 0, len(jobs))
+	scheduled := make(map[string]bool, len(jobs))
 	for _, j := range jobs {
 		a.cronJobs = append(a.cronJobs, cronJob{app: j.app, proc: j.proc, sch: j.sch, loc: j.loc})
+		scheduled[sandboxID(j.app.Slug, j.proc)] = true
 	}
 	a.mu.Unlock()
+
+	// Here, because this is where the scheduled set is known. A cron process is
+	// never in a.live, so the removal loop in reconcileOnce cannot reach these.
+	a.forgetStaleCronRecords(scheduled)
 }
 
 type cronJob struct {
@@ -607,10 +635,17 @@ func (a *Agent) reconcileOnce() error {
 			// shape.
 			if wasLive && !survivingSlugs[l.app.Slug] {
 				a.relFail.forgetPrefix(l.app.Slug + "@")
-				a.forgetCronRecords(l.app)
 			}
 		}
 	}
+
+	// The same hole for start records, which the bound on the start path has just
+	// made reachable — see forgetStaleStartRecords.
+	desiredIDs := make(map[string]bool, len(units))
+	for id := range units {
+		desiredIDs[id] = true
+	}
+	a.forgetStaleStartRecords(desiredIDs)
 
 	// Same shape of hole for the fault set, through a different door: a process
 	// that FAILED to start never entered a.live either, and that is the only
