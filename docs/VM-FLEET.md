@@ -440,11 +440,32 @@ in `deploy-pipeline.ts` (3,374 today), `lanes.ts` (354), `process-deploy.ts`
 | 6 | Emit the four process kinds against the agent instead of gcloud; `shutdownGrace`, `visibility` and Procfile `release:` start working | 5 | **done** in the agent — web, worker, cron and release all run; the deploy pipeline does not emit them yet |
 | 7 | Volumes: quota, mounts, `exclusive` file access, Litestream, filesystem snapshots to GCS | 5 | not started |
 | 8 | Static apps onto the fleet; delete the Cloud Run path | 2 | not started |
-| 9 | Cutover: dual-run, wave the fleet, delete the Cloud Run emitters | 4 | mechanism ready (`fleetctl`, `apps.runtime`); no app cut over |
+| 9 | Cutover: dual-run, wave the fleet, delete the Cloud Run emitters | 4 | **19 apps cut over and serving from the fleet.** Cloud Run emitters still in place — dual-run, as designed |
 | 10 | Memory pressure: `memory.high` overcommit, zswap, PSI reclaim loop | 3 | not needed yet — zero swap in use at 100 apps |
 
 Steps 7 and 10 can slip. Step 0 cannot, and steps 1–2 are what turn this from a
 document into a fleet.
+
+### The cutover, as it actually went
+
+19 of 47 live apps now serve from the fleet. All 19 answer through
+`https://<slug>.supersonic.cv` — the real path, through the real proxy, with the
+proxy's own sign-in gate still enforcing visibility in front of the private ones.
+20 sandboxes on one node, 20/20 healthy, 3.1 GB of 64 GB used.
+
+The edge proxy was not modified. It already forwards `x-supersonic-slug` — that
+is how the shared static server has always known its tenant — so pointing
+`apps.run_url` at the fleet load balancer was the entire change per app.
+
+`services/fleet/migrate.sh` does place → verify → flip, in that order, and only
+that order is safe: an app that does not answer from the fleet is rolled back to
+Cloud Run before anything routes to it. Several were, and they are still on Cloud
+Run, unharmed.
+
+The remaining 28 are not blocked on the fleet. 19 have no image at all (static or
+runner lane) and 9 failed verification because they need env or a database they
+were not given — the placement spec carries no `env` or `secrets` yet, and wiring
+the deploy pipeline to emit them is step 6's other half.
 
 ### What is blocked on someone else
 
