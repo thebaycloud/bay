@@ -89,6 +89,12 @@ export async function unplaceApp(slug: string): Promise<void> {
   await getPool(DB).query(`DELETE FROM fleet_placements WHERE slug = $1`, [slug]);
 }
 
+/** The spec a node is currently running for this app, or null if it has none. */
+export async function placementFor(slug: string): Promise<AppSpec | null> {
+  const r = await getPool(DB).query(`SELECT spec FROM fleet_placements WHERE slug = $1 LIMIT 1`, [slug]);
+  return (r.rows[0]?.spec as AppSpec) ?? null;
+}
+
 /**
  * Pick a node for an app.
  *

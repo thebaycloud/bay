@@ -17,7 +17,7 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
-import { chooseNode, placeApp, setRuntime } from "@/lib/fleet";
+import { chooseNode, placeApp, placementFor, setRuntime, unplaceApp } from "@/lib/fleet";
 import { buildAppSpec } from "@/lib/fleet-spec";
 import { fleetEligibility, fleetPlacementWanted, fleetProbe, placeOnFleet, type Placement } from "@/lib/fleet-place";
 import { rollback } from "@/lib/gcloud";
@@ -3303,7 +3303,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           }),
           FLEET_LB,
           {
-            chooseNode, placeApp, setRuntime,
+            chooseNode, placeApp, unplaceApp, readPlacement: placementFor, setRuntime,
             probe: (s) => fleetProbe(FLEET_LB, s),
             log,
           },

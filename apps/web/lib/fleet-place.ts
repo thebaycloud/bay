@@ -12,9 +12,12 @@ import type { Runtime } from "./fleet";
  *   2. verify   ask the fleet for it directly, over the load balancer
  *   3. flip     only now does apps.run_url point at the fleet
  *
- * A failure at 1 or 2 leaves the app exactly where the deploy left it, still
- * served by Cloud Run, and costs a stopped sandbox. That is what makes this
- * safe to run on every deploy rather than as an operation someone supervises.
+ * A failure at 1 leaves the app placed nowhere new, so nothing changes for it.
+ * A failure at 2 is harder: placing the new spec at step 1 already overwrote
+ * whatever the node was running before, so the version that used to answer is
+ * only recoverable from what was read before that write. There is no Cloud Run
+ * to fall back to any more, so that previous spec — or, on a first deploy, no
+ * placement at all — is what a failed verify restores.
  *
  * Everything the fleet needs from the outside world arrives as a port, so the
  * order above — and the rollback, which is the part that must never be wrong —
@@ -24,6 +27,9 @@ import type { Runtime } from "./fleet";
 export interface PlacementPorts {
   chooseNode: () => Promise<string | null>;
   placeApp: (slug: string, node: string, spec: AppSpec) => Promise<void>;
+  unplaceApp: (slug: string) => Promise<void>;
+  /** What is placed for this app right now, before this deploy overwrites it. */
+  readPlacement: (slug: string) => Promise<AppSpec | null>;
   setRuntime: (slug: string, runtime: Runtime) => Promise<void>;
   /** One request at the fleet, addressed the way the edge proxy will address it. */
   probe: (slug: string) => Promise<{ code: number; router?: string }>;
@@ -205,7 +211,11 @@ export async function placeOnFleet(
     return { placed: false, reason };
   }
 
-  // 1. place. Nothing routes here yet; run_url still points at Cloud Run.
+  // Read BEFORE placing: placing overwrites the row, so after that the version
+  // that was working is only knowable from here.
+  const previous = await p.readPlacement(slug);
+
+  // 1. place. Nothing routes here yet; run_url still points at wherever it did.
   await p.placeApp(slug, node, spec);
   await p.setRuntime(slug, "fleet");
 
@@ -214,11 +224,16 @@ export async function placeOnFleet(
   //    traffic takes, LB included.
   const verdict = fleetVerdict(await p.probe(slug));
   if (!verdict.ok) {
-    // Back before anything routes here. setRuntime('cloudrun') drops the
-    // placement, so the node stops running it on its next reconcile without
-    // being told. The app never stopped being served by Cloud Run.
-    await p.setRuntime(slug, "cloudrun");
-    p.log(`· staying on Cloud Run — ${verdict.reason}`);
+    // There is no Cloud Run to fall back to any more, so the fallback is the
+    // last version that answered. With none — a first deploy — the placement is
+    // dropped rather than left pointing at something that does not serve.
+    if (previous) {
+      await p.placeApp(slug, node, previous);
+      p.log(`· kept the previous version — ${verdict.reason}`);
+    } else {
+      await p.unplaceApp(slug);
+      p.log(`· nothing placed — ${verdict.reason}`);
+    }
     return { placed: false, reason: verdict.reason };
   }
 
