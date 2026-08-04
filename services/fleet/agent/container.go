@@ -319,6 +319,20 @@ func runsc(args ...string) (string, error) {
 // Pointing that file at the app's log is not a workaround; it is where the app's
 // stdout has to go anyway.
 func runscDetached(bundle, id, logPath string) error {
+	// The DIRECTORY, not just the file. O_CREATE makes the file; it does not make
+	// the path to it.
+	//
+	// This belongs here rather than at the call sites because the start path
+	// already did it and the release path did not, and the release runs FIRST.
+	// Observed on 2026-08-04, on the first cold boot this node had ever had:
+	// local SSD does not survive a stop, so /srv came back empty, and an app
+	// declaring a `release` process failed here every 10 seconds forever —
+	// `a.released[slug]` is only set on success, so the reconcile loop retried
+	// it on every pass and the app never started at all. Nineteen apps came
+	// back; that one did not.
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return fmt.Errorf("app log dir: %w", err)
+	}
 	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return fmt.Errorf("open app log: %w", err)
