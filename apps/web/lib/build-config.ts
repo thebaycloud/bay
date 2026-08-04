@@ -99,13 +99,17 @@ export function cloudBuildIdFrom(line: string): string | null {
 /**
  * What a BUILD may read, which is not what the runtime gets.
  *
- * `runnerPrepareConfig` is the only build config in this repo that ever mounted a
- * secret, and it is being deleted. The reason it has to be replaced rather than
- * dropped is written down at its own call site: Prisma 7 evaluates
- * `env('DATABASE_URL')` while loading prisma.config.js on EVERY cli command, so
- * `prisma generate` died on an app whose database the platform had just
- * provisioned. Deleting the runner without porting this regresses the largest
- * language on the platform.
+ * Two build configs mount secrets: `buildkitBuildConfig`, which is the path
+ * production takes (`BUILDER=buildkit`), and `runnerPrepareConfig`, which is
+ * being deleted. `kanikoBuildConfig` refuses them by throwing, and
+ * `cachedBuildConfig` upgrades a secret-needing build to buildkit rather than
+ * failing. `static-build.ts` has no secret support at all.
+ *
+ * Why a build may need one is written down at runnerPrepareConfig's call site:
+ * Prisma 7 evaluates `env('DATABASE_URL')` while loading prisma.config.js on
+ * EVERY cli command, so `prisma generate` died on an app whose database the
+ * platform had just provisioned. That is the requirement the runner's deletion
+ * must not drop — and it does not, because buildkit already carries it.
  *
  * The split between the two fields is a security boundary, not a convenience.
  * `buildArgs` become `--build-arg`, and **`--build-arg` values are visible in
