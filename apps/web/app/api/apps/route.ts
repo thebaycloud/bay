@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { listOwnedApps } from "@/lib/apps";
-import { listActiveDeploys } from "@/lib/deploys";
+import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
 
 /**
@@ -21,7 +21,14 @@ export async function GET() {
   const uid = await currentUserId();
   if (!uid) return Response.json({ apps: [], error: "not signed in" }, { status: 401 });
   try {
-    const [apps, deploys] = await Promise.all([listOwnedApps(uid), listActiveDeploys(uid)]);
+    // The same three reads the server render does. This route is what the
+    // dashboard polls while something is building, and it replaces the whole
+    // list — so anything the first render has and this does not VANISHES from
+    // every row the moment a deploy starts. That is exactly what happened to
+    // the "deployed" line, which the server had and this route did not.
+    const [apps, deploys, last] = await Promise.all([
+      listOwnedApps(uid), listActiveDeploys(uid), lastDeploySummaries(uid),
+    ]);
     const known = new Set(apps.map((a) => a.slug));
     // Deploys that have not written an apps row yet — shown as "building" cards so
     // the dashboard reflects a deploy started anywhere, the CLI included.
@@ -47,6 +54,8 @@ export async function GET() {
           region: "us-central1",
           image: "",
           owner: uid,
+          deployedAt: last[a.slug]?.at,
+          deployMs: last[a.slug]?.durationMs ?? undefined,
           // A row still marked deploying is in flight, and the card should say so
           // rather than showing it as a finished app that happens to be down.
           status: a.status === "deploying" ? ("building" as const) : undefined,

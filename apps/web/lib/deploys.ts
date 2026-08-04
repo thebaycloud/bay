@@ -99,6 +99,73 @@ export async function getDeploy(slug: string): Promise<DeployRow | null> {
   }
 }
 
+/** When an app last finished deploying, and how long that deploy ran. */
+export interface DeploySummary {
+  /** ISO instant the deploy finished. */
+  at: string;
+  /** Wall-clock milliseconds, or null when nothing timed that run. */
+  durationMs: number | null;
+}
+
+/**
+ * The last finished deploy of every app a person owns.
+ *
+ * "Deployed" comes from `deploys`, which keeps one row per slug — the latest.
+ * `finished_at` postdates that table, so a row written before it falls back to
+ * `updated_at`: a terminal deploy's last write IS the moment it finished.
+ *
+ * The duration comes from `deploy_stages`, because `deploys` never recorded a
+ * start — only the end. The stages of one run are recovered by their nearness to
+ * that end rather than by a run id, which the table does not have; a window of
+ * half an hour is longer than any deploy we have measured and shorter than the
+ * gap between two of them in practice. Stages predate this too, so an app that
+ * last deployed before that table shows a date and no duration, which is the
+ * honest answer rather than a computed guess.
+ */
+export async function lastDeploySummaries(ownerId: string): Promise<Record<string, DeploySummary>> {
+  if (!ownerId) return {};
+  const out: Record<string, DeploySummary> = {};
+  try {
+    await ensure();
+    const r = await getPool(DB).query(
+      `SELECT d.slug,
+              to_char(COALESCE(d.finished_at, d.updated_at) AT TIME ZONE 'UTC',
+                      'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
+              EXTRACT(EPOCH FROM (st.ended - st.started)) * 1000 AS ms
+         FROM deploys d
+         LEFT JOIN LATERAL (
+           SELECT min(s.started_at) AS started,
+                  max(COALESCE(s.ended_at, s.started_at)) AS ended
+             FROM deploy_stages s
+            WHERE s.slug = d.slug
+              AND s.started_at > COALESCE(d.finished_at, d.updated_at) - interval '30 minutes'
+              AND s.started_at <= COALESCE(d.finished_at, d.updated_at)
+         ) st ON TRUE
+        WHERE d.owner_id = $1 AND d.status <> 'building'`,
+      [ownerId],
+    );
+    for (const row of r.rows) {
+      if (!row.at) continue;
+      const ms = row.ms === null || row.ms === undefined ? null : Number(row.ms);
+      out[row.slug] = { at: row.at, durationMs: ms !== null && ms > 0 ? Math.round(ms) : null };
+    }
+    return out;
+  } catch {
+    // deploy_stages is a separate migration; a control plane running ahead of it
+    // should still be able to say when an app last deployed.
+    try {
+      const r = await getPool(DB).query(
+        `SELECT slug, to_char(COALESCE(finished_at, updated_at) AT TIME ZONE 'UTC',
+                              'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at
+           FROM deploys WHERE owner_id = $1 AND status <> 'building'`,
+        [ownerId],
+      );
+      for (const row of r.rows) if (row.at) out[row.slug] = { at: row.at, durationMs: null };
+    } catch { /* the dashboard renders without it */ }
+    return out;
+  }
+}
+
 /**
  * How long a deploy may go without reporting before it is presumed dead.
  * Matches the edge's bound (services/proxy/src/edge.ts) on purpose: the

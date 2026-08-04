@@ -10,7 +10,7 @@ import { TrialBanner } from "@/components/TrialBanner";
 import { AppsGrid, type App } from "@/components/AppsGrid";
 import { currentUserId } from "@/lib/session";
 import { listOwnedApps } from "@/lib/apps";
-import { listActiveDeploys } from "@/lib/deploys";
+import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
 
 /**
  * Read the app list here, on the server, so it ships inside the HTML.
@@ -28,7 +28,9 @@ async function initialApps(): Promise<{ apps: App[]; error?: string }> {
   const uid = await currentUserId();
   if (!uid) return { apps: [] };
   try {
-    const [owned, deploys] = await Promise.all([listOwnedApps(uid), listActiveDeploys(uid)]);
+    const [owned, deploys, last] = await Promise.all([
+      listOwnedApps(uid), listActiveDeploys(uid), lastDeploySummaries(uid),
+    ]);
     const known = new Set(owned.map((a) => a.slug));
     const building: App[] = deploys
       .filter((d) => !known.has(d.slug))
@@ -40,6 +42,8 @@ async function initialApps(): Promise<{ apps: App[]; error?: string }> {
     const live: App[] = owned.map((a) => ({
       slug: a.slug, name: a.name, url: a.url, ready: a.ready,
       region: "us-central1", image: "",
+      deployedAt: last[a.slug]?.at,
+      deployMs: last[a.slug]?.durationMs ?? undefined,
       ...(a.status === "deploying" ? { status: "building", stage: "deploying…" } : {}),
     }));
     return { apps: [...building, ...live] };
@@ -53,20 +57,33 @@ export default async function Home() {
 
   return (
     <div className="shell shell-side">
-      <Sidebar active="apps" />
+      {/* The page has already read the list; the rail should not read it a
+          second time to count the same rows. */}
+      <Sidebar active="apps" apps={apps} />
       <div className="main">
         <TrialBanner />
+        {/*
+          New app leads the bar, ahead of search. It was in the far corner and
+          also repeated inside the page, so the one action a new account needs
+          was drawn twice and sat where nothing else on the screen does. One
+          copy, at the start of the line the eye already reads first.
+        */}
         <header className="topbar">
-          <CommandPalette apps={apps} />
-          <div className="spacer" />
           <Bracket>
             <Link href="/new" className="btn primary"><Plus size={13} />New app</Link>
           </Bracket>
+          <CommandPalette apps={apps} />
+          <div className="spacer" />
         </header>
 
+        {/*
+          The decorative rule is gone from this page. It was an empty div whose
+          only job was to draw a line, and with the app list capped at 940px it
+          was a line the width of the window sitting above a column narrower
+          than it. The cards carry their own edges now.
+        */}
         <div className="content">
           <div className="wrap">
-            <div className="ruler reveal" />
             <AppsGrid initial={apps} initialError={error} />
           </div>
         </div>

@@ -2,12 +2,16 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ArrowUpRight, Rocket, TriangleAlert, SlidersHorizontal } from "lucide-react";
 
 export interface App {
   slug: string; name: string; url: string; ready: boolean;
   region: string; image: string; status?: string; stage?: string;
   /** A screenshot captured at deploy time; absent until that pipeline exists. */
   thumbnail?: string;
+  /** ISO instant the last deploy finished, and how long it ran. */
+  deployedAt?: string;
+  deployMs?: number;
 }
 
 /**
@@ -83,12 +87,61 @@ type ProbeState = { verdict: "ok" | "warn" | "down"; label: string; preview: str
  */
 function Status({ ready, probe }: { ready: boolean; probe: ProbeState }) {
   if (probe === undefined) return <span className={`st ${ready ? "live" : "error"}`}><span className="d" />{ready ? "Live" : "Down"}</span>;
-  if (probe === null) return <span className="st unknown"><span className="d" />Unchecked</span>;
+  // A null probe means we could not ASK — the app has no Cloud Run service to
+  // describe, which is true of every static app, since one shared server fronts
+  // them all. "Unchecked" was the word for that, and it said nothing anyone can
+  // act on while replacing the status of an app that is perfectly fine. When the
+  // probe cannot run, `ready` is all we have — exactly as it was before probing
+  // existed — so the weaker claim is shown rather than no claim at all.
+  if (probe === null) return <span className={`st ${ready ? "live" : "error"}`}><span className="d" />{ready ? "Live" : "Down"}</span>;
   const word = probe.verdict === "ok" ? "Live" : probe.verdict === "warn" ? "Refusing" : "Down";
   return (
     <span className={`st ${probe.verdict}`} title={probe.label}>
       <span className="d" />{word}<span className="probe-label">{probe.label}</span>
     </span>
+  );
+}
+
+/** "47s", "3m 12s" — a deploy's wall clock, at the precision anyone reads it at. */
+function duration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * When the app last shipped, and what that cost.
+ *
+ * Formatted after mount, never on the server: the date belongs in the reader's
+ * timezone, and the server's is UTC, so rendering it in the HTML would hand React
+ * two different strings for the same element on every card. The duration has no
+ * timezone and is safe either way — it is the part of this line that survives
+ * server rendering.
+ */
+function Deployed({ at, ms }: { at?: string; ms?: number }) {
+  const [when, setWhen] = useState("");
+
+  useEffect(() => {
+    if (!at) return;
+    const d = new Date(at);
+    if (Number.isNaN(d.getTime())) return;
+    setWhen(d.toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+      ...(d.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+    }));
+  }, [at]);
+
+  // An app deployed before the deploy store existed has no date to show. The
+  // line still occupies its row so the cards keep one shape.
+  if (!at) return <div className="shelf-when">&nbsp;</div>;
+  return (
+    <div className="shelf-when">
+      <span className="sw-k">Last updated</span>
+      {/* Empty for one paint, until the effect above knows the local zone. */}
+      <span className="sw-v">{when || "—"}</span>
+      {ms ? <><span className="sw-sep">·</span><span className="sw-k">Deployed in</span><span className="sw-v">{duration(ms)}</span></> : null}
+    </div>
   );
 }
 
@@ -122,15 +175,13 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
     <>
       <section className="home-hero reveal" style={{ animationDelay: ".03s" }}>
         <div className="eyebrow">/ APPS</div>
+        {/*
+          The heading stands alone. "New app" was here AND in the bar above it,
+          two buttons for one action within 200px of each other; the bar keeps
+          the copy, since it is on every page and this one only on this page.
+        */}
         <div className="hero-row">
           <h1>Your apps</h1>
-          {/*
-            Moved out of the grid. As a card it occupied an app-sized slot in the
-            most valuable corner of the screen and never changed — which is most
-            of the screen when a normal user has two or three apps, and this is
-            the one thing on the page that is not one of theirs.
-          */}
-          <Link href="/new" className="btn-new">New app</Link>
         </div>
         <div className="note">
           {`${apps.length} apps · ${live} live`}
@@ -164,8 +215,15 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
               </Link>
               <div className="shelf-main">
                 <div className="shelf-head">
-                  <Link href={`/apps/${a.slug}?tab=deployments`} className="nm">{a.name || a.slug}</Link>
-                  <span className="st building"><span className="d" />Building</span>
+                  <span className="nm">{a.name || a.slug}</span>
+                  {/* No "Building" badge. The stage line under the name already
+                      says "deploying…", the thumbnail is a spinner, and the word
+                      in the corner was a third telling of the same fact. */}
+                  <div className="head-acts">
+                    <Link className="row-btn primary" href={`/apps/${a.slug}?tab=deployments`}>
+                      <Rocket size={12} />Watch deploy
+                    </Link>
+                  </div>
                 </div>
                 <div className="shelf-host">{a.stage}</div>
               </div>
@@ -186,15 +244,59 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                 A screenshot taken at deploy time replaces it — same origin, one
                 image, no app code executed in the dashboard.
               */}
-              <Link href={`/apps/${a.slug}`} className="shelf-preview" aria-label={`Open ${a.name || a.slug}`}>
+              {/*
+                A screenshot of a running app is a picture of a door, so the
+                hover puts the handles on it: the two places this row can go,
+                named, once the pointer is over the preview.
+              */}
+              <div className="shelf-preview">
                 <Thumb slug={a.slug} src={a.thumbnail} />
-              </Link>
+                <div className="preview-open">
+                  <Link className="po-btn primary" href={`/apps/${a.slug}`}>
+                    <SlidersHorizontal size={12} />Manage app
+                  </Link>
+                  <a
+                    className="po-btn"
+                    href={`https://${a.slug}.supersonic.cv`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open website<ArrowUpRight size={13} />
+                  </a>
+                </div>
+              </div>
               <div className="shelf-main">
                 <div className="shelf-head">
-                  <Link href={`/apps/${a.slug}`} className="nm">{a.name || a.slug}</Link>
+                  {/*
+                    Plain text. As a link it was a third route to the app's own
+                    page and drew a hover the two real buttons beside it did
+                    not — a title that behaves like a control while looking like
+                    a heading. "Manage app" is the labelled way there now.
+                  */}
+                  <span className="nm">{a.name || a.slug}</span>
+                  {/* Beside the name rather than in the far corner: it reads as
+                      the app's subtitle, and the corner is worth more as a
+                      place to act than as a place to label. */}
                   <Status ready={a.ready} probe={probes[a.slug]} />
+                  {/* Manage leads and carries the fill: this is the dashboard,
+                      and the address below is already a way to the site. */}
+                  <div className="head-acts">
+                    <Link className="row-btn primary" href={`/apps/${a.slug}`}>
+                      <SlidersHorizontal size={12} />Manage app
+                    </Link>
+                    <a className="row-btn" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">
+                      Open website<ArrowUpRight size={13} />
+                    </a>
+                  </div>
                 </div>
-                <div className="shelf-host">{a.slug}.supersonic.cv</div>
+                {/*
+                  The address is the app, so it behaves like one: it goes where
+                  it says it goes. It read as a link already — mono, under the
+                  name, a hostname — and did nothing when clicked.
+                */}
+                <a className="shelf-host" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">
+                  {a.slug}.supersonic.cv
+                </a>
                 {/*
                   What it answered, when that says more than a picture of it
                   does. A screenshot works for a site and not for an API: a
@@ -205,18 +307,27 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                 {probes[a.slug]?.preview
                   ? <pre className="shelf-body">{probes[a.slug]!.preview}</pre>
                   : null}
+                {/* Sits with the controls at the foot of the row: it is the
+                    row's last line of status, and the two read as one block. */}
+                <Deployed at={a.deployedAt} ms={a.deployMs} />
                 {/*
                   Actions, which a card had no room for at all — the whole card
                   was one link to one place, so every other destination cost a
                   page load to reach. Real anchors rather than a nested <Link>
                   inside a linked card, which is invalid markup and unreachable
                   by keyboard.
+
+                  Drawn as one segmented control rather than three floating
+                  outlines. Separately they read as labels: a hairline the same
+                  colour as every rule on the page and nothing joining them.
+                  Sharing a frame and an icon apiece makes them a control.
                 */}
                 <div className="shelf-actions">
-                  <a className="act" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">Open ↗</a>
-                  <Link className="act" href={`/apps/${a.slug}?tab=deployments`}>Deployments</Link>
-                  <Link className="act" href={`/apps/${a.slug}?tab=issues`}>Issues</Link>
-                  <Link className="act" href={`/apps/${a.slug}?tab=settings`}>Settings</Link>
+                  <div className="seg">
+                    <Link className="act" href={`/apps/${a.slug}?tab=deployments`}><Rocket size={12} />Deployments</Link>
+                    <Link className="act" href={`/apps/${a.slug}?tab=issues`}><TriangleAlert size={12} />Issues</Link>
+                    <Link className="act" href={`/apps/${a.slug}?tab=settings`}><SlidersHorizontal size={12} />Settings</Link>
+                  </div>
                 </div>
               </div>
             </article>
