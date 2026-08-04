@@ -1,0 +1,172 @@
+import type { ResolvedProcess } from "./processes";
+import type { SecretRef } from "./app-secrets";
+
+/**
+ * The placement spec: everything a node needs to run one app, and nothing else.
+ *
+ * This is the agent's `App` struct (services/fleet/agent/main.go), and
+ * test/fleet-spec.test.ts reads that struct and fails when the two drift. The
+ * comment this replaces claimed the same thing and was wrong — the agent grew
+ * `secrets` and `processes`, the control plane's copy did not, and the result
+ * was a spec that could not express a worker or a database. That is most of why
+ * 9 of 47 apps could not be moved, and a comment was never going to catch it.
+ *
+ * Stored denormalised on the placement row, deliberately. Resolving it per pull
+ * would put the deploy pipeline's whole vocabulary — lanes, frameworks, process
+ * kinds — on the serving path, and the agent would have to learn all of it.
+ * Translation happens once, here, at deploy time.
+ */
+export interface AppSpec {
+  slug: string;
+  image: string;
+  command?: string[];
+  env?: Record<string, string>;
+  /**
+   * Env var name → Secret Manager secret id. A REFERENCE, never a value.
+   *
+   * The node resolves these at start with its own service account. A value here
+   * would put every app's database password in a Postgres table the platform
+   * reads on every reconcile, and on node disk in a world-readable config.
+   */
+  secrets?: Record<string, string>;
+  port: number;
+  memoryBytes: number;
+  cpuShares: number;
+  healthPath?: string;
+  processes?: AgentProcess[];
+}
+
+/** One process, in the agent's vocabulary. Mirrors `Process` in process.go. */
+export interface AgentProcess {
+  name: string;
+  kind: "web" | "worker" | "cron" | "release";
+  command?: string[];
+  port?: number;
+  healthPath?: string;
+  visibility?: "public" | "internal";
+  schedule?: string;
+  timezone?: string;
+  memoryBytes?: number;
+  cpuShares?: number;
+  shutdownGrace?: number;
+}
+
+export interface SpecInput {
+  slug: string;
+  image: string;
+  /** The pipeline's own shape: `K=V` strings. */
+  env: string[];
+  secrets: SecretRef[];
+  processes: ResolvedProcess[];
+  port?: number;
+  memoryBytes?: number;
+  cpuShares?: number;
+  healthPath?: string;
+}
+
+/** What migrate.sh hardcoded, now named. */
+const DEFAULT_PORT = 8080;
+const DEFAULT_MEMORY = 2 * 1024 * 1024 * 1024;
+const DEFAULT_CPU_SHARES = 1024;
+
+/**
+ * `512Mi` → bytes.
+ *
+ * Cloud Run's spelling, which is what the process schema accepts, into the
+ * cgroup's. Anything unparseable returns undefined rather than a guess: the
+ * agent falls back to the app-wide limit for a zero, and a wrong number here is
+ * an OOM kill at 3am that reads as the app's fault.
+ */
+export function memoryBytes(memory: string | undefined): number | undefined {
+  if (!memory) return undefined;
+  const m = /^(\d+(?:\.\d+)?)(Mi|Gi|M|G)?$/.exec(memory.trim());
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  switch (m[2]) {
+    case "Gi": case "G": return Math.round(n * 1024 * 1024 * 1024);
+    case "Mi": case "M": case undefined: return Math.round(n * 1024 * 1024);
+    default: return undefined;
+  }
+}
+
+/**
+ * A start command, as the thing that will actually read it.
+ *
+ * The agent execs argv directly. The Cloud Run path wraps every command in
+ * `/bin/sh -c` (see `shellCommand`), because an app's start command is a shell
+ * line — pipes, `&&`, quoting — and not an argv. Both runtimes have to read one
+ * Procfile line the same way or the runtime becomes part of the app's meaning.
+ */
+function shellArgv(command: string): string[] {
+  return ["/bin/sh", "-c", command];
+}
+
+function agentProcess(p: ResolvedProcess): AgentProcess {
+  const out: AgentProcess = { name: p.name, kind: p.kind };
+  if (p.command) out.command = shellArgv(p.command);
+
+  if (p.kind === "web") {
+    out.port = DEFAULT_PORT;
+    out.healthPath = p.health.path;
+    // Sent only when it is the answer the author gave. `public` is the agent's
+    // default, and stating it changes nothing; `internal` means "do not publish
+    // a route", which is the whole of what an app's private API needs here.
+    if (p.visibility === "internal") out.visibility = "internal";
+    if (p.shutdownGrace) out.shutdownGrace = p.shutdownGrace;
+  }
+  if (p.kind === "worker") {
+    // No port, deliberately: a port is what puts a process in the routing table,
+    // and a bot answering HTTP it never serves is a 502 with the app's name on it.
+    const mem = memoryBytes(p.memory);
+    if (mem) out.memoryBytes = mem;
+    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    if (p.shutdownGrace) out.shutdownGrace = p.shutdownGrace;
+  }
+  if (p.kind === "cron" || p.kind === "release") {
+    const mem = memoryBytes(p.memory);
+    if (mem) out.memoryBytes = mem;
+    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    if (p.schedule) out.schedule = p.schedule;
+    if (p.timezone) out.timezone = p.timezone;
+  }
+  return out;
+}
+
+/**
+ * The pipeline's vocabulary, translated once, into the node's.
+ *
+ * Pure and separate from lib/fleet.ts on purpose: everything here is checkable
+ * against what the agent actually parses without a database, which is the only
+ * reason the drift above was findable at all.
+ */
+export function buildAppSpec(i: SpecInput): AppSpec {
+  const env: Record<string, string> = {};
+  for (const pair of i.env) {
+    // First `=` only. A DATABASE_URL carries `?sslmode=require`, and splitting
+    // on every `=` truncates it into a connection string that fails at runtime
+    // rather than here.
+    const at = pair.indexOf("=");
+    if (at > 0) env[pair.slice(0, at)] = pair.slice(at + 1);
+  }
+
+  const secrets: Record<string, string> = {};
+  for (const r of i.secrets) secrets[r.key] = r.name;
+
+  const spec: AppSpec = {
+    slug: i.slug,
+    image: i.image,
+    port: i.port ?? DEFAULT_PORT,
+    memoryBytes: i.memoryBytes ?? DEFAULT_MEMORY,
+    cpuShares: i.cpuShares ?? DEFAULT_CPU_SHARES,
+    healthPath: i.healthPath ?? "/",
+  };
+  if (Object.keys(env).length) spec.env = env;
+  if (Object.keys(secrets).length) spec.secrets = secrets;
+  // Absent rather than empty, and the difference is load-bearing: `processesOf`
+  // reads a zero-length list as "one implicit web process built from the app's
+  // own port and health path". An empty array takes the other branch and places
+  // an app that runs nothing.
+  if (i.processes.length) spec.processes = i.processes.map(agentProcess);
+
+  return spec;
+}

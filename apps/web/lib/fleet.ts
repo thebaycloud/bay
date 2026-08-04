@@ -13,17 +13,17 @@ const DB = "supersonic_platform";
 
 export type Runtime = "cloudrun" | "fleet";
 
-/** What a node is told to run. This is the agent's `App`, verbatim. */
-export interface AppSpec {
-  slug: string;
-  image: string;
-  command?: string[];
-  env?: Record<string, string>;
-  port: number;
-  memoryBytes: number;
-  cpuShares: number;
-  healthPath?: string;
-}
+/**
+ * What a node is told to run.
+ *
+ * Declared in lib/fleet-spec.ts and re-exported here so the callers that had it
+ * from this module keep working. It used to be declared HERE, as a second copy
+ * of the agent's `App` that a comment promised was verbatim — and it was not:
+ * the agent had `secrets` and `processes` and this did not. One declaration, and
+ * a test that checks it against the Go.
+ */
+import type { AppSpec } from "./fleet-spec";
+export type { AppSpec };
 
 export interface NodeReport {
   name: string;
