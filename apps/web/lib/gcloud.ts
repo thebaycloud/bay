@@ -8,6 +8,7 @@ import { deleteAppSecrets } from "./app-secrets";
 import { runIdsForSlug } from "./deploy-runs";
 import { appPingScheduleArgs } from "./process-deploy";
 import { SCHEDULER_SA } from "./identities";
+import { appLogFilter } from "./log-filter";
 
 const PROJECT = "supersonic-deploy-prod";
 // The one shared Cloud SQL instance every app's database lives on.
@@ -320,7 +321,7 @@ export async function runJob(id: string): Promise<void> {
 export interface AppError { message: string; time: string; }
 
 export async function getErrors(slug: string): Promise<AppError[]> {
-  const filter = `resource.type=cloud_run_revision AND resource.labels.service_name=${slug} AND severity>=ERROR`;
+  const filter = appLogFilter(slug, { minSeverity: "ERROR" });
   try {
     const out = await capture(["logging", "read", filter, "--project", PROJECT, "--limit", "15", "--freshness", "7d", "--format=json"]);
     const arr = JSON.parse(out) as any[];
@@ -342,11 +343,10 @@ export async function getLogs(
   slug: string,
   opts: { limit?: number; severity?: string; freshness?: string } = {}
 ): Promise<LogLine[]> {
-  const parts = [`resource.type=cloud_run_revision`, `resource.labels.service_name=${slug}`];
-  if (opts.severity) parts.push(`severity>=${opts.severity.toUpperCase()}`);
+  const filter = appLogFilter(slug, opts.severity ? { minSeverity: opts.severity } : {});
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
   const out = await capture([
-    "logging", "read", parts.join(" AND "),
+    "logging", "read", filter,
     "--project", PROJECT, "--limit", String(limit),
     "--freshness", opts.freshness ?? "1h", "--format=json",
   ]);

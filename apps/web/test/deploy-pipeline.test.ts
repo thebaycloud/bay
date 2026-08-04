@@ -63,7 +63,7 @@ interface Recorded {
 }
 
 /** A `gcloud`/`npm` reply, chosen by what the command line looks like. */
-type Reply = { stdout?: string; code?: number };
+type Reply = { stdout?: string; stderr?: string; code?: number };
 type Replies = (argv: string[]) => Reply | undefined;
 
 /**
@@ -127,6 +127,7 @@ function fakeSpawn() {
     p.stdin = { on() {}, end() {} };
     setImmediate(() => {
       if (reply.stdout) (p.stdout as EventEmitter).emit("data", Buffer.from(reply.stdout));
+      if (reply.stderr) (p.stderr as EventEmitter).emit("data", Buffer.from(reply.stderr));
       p.emit("close", reply.code ?? 0);
     });
     return p;
@@ -479,6 +480,50 @@ test("a failure says which stage it died in", NEEDS_MOCKS, async () => {
   assert.ok(errors.length > 0, "a failed deploy must emit an error");
   const text = JSON.stringify(errors);
   assert.match(text, /failed during: \w/, `the error must name the stage — got ${text.slice(0, 400)}`);
+});
+
+test("a fleet app's real crash reaches the repair agent, not just the symptom", NEEDS_MOCKS, async () => {
+  // fetchContainerError used to read Cloud Logging with
+  // `--format=value(textPayload)`. A Cloud Run entry carries its text there, but
+  // an entry the ops agent shipped from a fleet node carries it in
+  // `jsonPayload.message` — so for a fleet app the function silently returned
+  // null on every call, and the "didn't start on $PORT" symptom reached the
+  // repair agent with no actual cause attached. That is exactly the guess this
+  // function exists to prevent (see the comment above `fetchContainerError`).
+  const distinctiveCrash = "TypeError: Cannot read properties of undefined (reading 'db')";
+  const rec = await run(
+    { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
+    {},
+    (argv) => {
+      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
+      // The deploy itself fails at container startup — the one path that makes
+      // the pipeline go fetch the container's real crash log.
+      if (argv[1] === "run" && argv[2] === "deploy") {
+        return { code: 1, stderr: "Revision failed to start and listen on the port defined by the PORT=8080\n" };
+      }
+      // The fleet node's log entry for that crash — jsonPayload, not textPayload.
+      if (argv[1] === "logging" && argv[2] === "read") {
+        return { stdout: JSON.stringify([{ jsonPayload: { message: distinctiveCrash } }]) };
+      }
+      return {};
+    },
+  );
+
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.ok(errors.length > 0, "a container that doesn't start on $PORT must still fail the deploy");
+  const text = JSON.stringify(errors);
+  assert.ok(
+    text.includes(distinctiveCrash),
+    `the real crash never reached the repair agent — reading only textPayload returns null for a fleet app; got ${text.slice(0, 500)}`,
+  );
+  // Not just a substring hit on the raw JSON blob: the reader must have actually
+  // parsed the entry and pulled `.message` out of it, not treated the whole
+  // `--format=json` response as one line of text (which happens to still
+  // contain the crash string, so a looser assertion here would pass either way).
+  assert.ok(
+    !text.includes("jsonPayload"),
+    `the log entry was not parsed — its raw JSON leaked into the error instead of just the message; got ${text.slice(0, 500)}`,
+  );
 });
 
 test("a deploy that comes up broken puts the last working version back", NEEDS_MOCKS, async () => {
