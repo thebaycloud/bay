@@ -12,7 +12,10 @@ import type { Runtime } from "./fleet";
  *   2. verify   ask the fleet for it directly, over the load balancer
  *   3. flip     only now does apps.run_url point at the fleet
  *
- * A failure at 1 leaves the app placed nowhere new, so nothing changes for it.
+ * A failure at 1 leaves the app placed nowhere new, so whatever was already on a
+ * node keeps serving. That is the deploy failing safely, not the deploy
+ * succeeding: every `placed: false` below is a failed deploy now, and the caller
+ * treats it as one.
  * A failure at 2 is harder: placing the new spec at step 1 already overwrote
  * whatever the node was running before, and already flipped `apps.runtime` to
  * `fleet` — `desiredFor` will not hand a node anything otherwise — so both the
@@ -206,8 +209,11 @@ export async function fleetProbe(
       last = { code: res.status, router: res.headers.get("x-supersonic-router") ?? undefined };
     } catch {
       // A refused connection is not an answer. Recorded as such rather than
-      // thrown: the caller's decision is the same either way, and throwing here
-      // would fail a deploy that has already succeeded on Cloud Run.
+      // thrown, and the reason is no longer "the deploy already succeeded
+      // elsewhere" — under the fork there is no elsewhere. It is that a thrown
+      // exception here escapes `placeOnFleet` entirely, skipping the restore of
+      // the previous placement and the runtime flag below. `code: 0` is a
+      // verdict, and a verdict is what that restore is driven by.
       last = { code: 0 };
     }
     if (fleetVerdict(last).ok) return last;
@@ -222,10 +228,11 @@ export interface Placement {
   /**
    * The address to publish, present only once the app has answered from it.
    *
-   * Returned rather than written, so `run_url` keeps exactly one writer. Writing
-   * it here would be overwritten moments later by `markAppLive`, which carries
-   * the Cloud Run url this deploy started with — a flip that silently undoes
-   * itself and leaves the app placed on a node nothing routes to.
+   * Returned rather than written, so `run_url` keeps exactly one writer.
+   * `markAppLive` is that writer, and it runs moments after this: writing here
+   * as well would be a value overwritten by whatever the caller passes it — the
+   * kind of flip that silently undoes itself and leaves an app placed on a node
+   * nothing routes to.
    */
   runUrl?: string;
 }
@@ -240,10 +247,17 @@ export async function placeOnFleet(
   if (!node) {
     // The edge case §8b names as unhandled. There is one node today, so "full"
     // means one reboot — and an app deployed during it must not end up placed
-    // nowhere, or placed on a node named null. Staying on Cloud Run is the
-    // correct answer and costs nothing: the app is already live there.
+    // nowhere, or placed on a node named null.
+    //
+    // Under the fork this is a FAILED DEPLOY, and nothing about it is free.
+    // Before the fork the app was already live on Cloud Run and `placed: false`
+    // meant "it stays where it is"; there is no Cloud Run branch behind this one
+    // any more, so what actually happens is that this deploy does not ship. The
+    // version that was already on a node keeps serving, because nothing here
+    // touched it — that is the good half, and it is not the same thing as the
+    // deploy having succeeded.
     const reason = "no node has room (or none reported in the last 90s)";
-    p.log(`· staying on Cloud Run — ${reason}`);
+    p.log(`✕ nowhere to place it — ${reason}. The version already running keeps serving; this deploy has not shipped.`);
     return { placed: false, reason };
   }
 
