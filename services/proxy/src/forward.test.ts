@@ -4,6 +4,7 @@ import dns from "node:dns";
 import http, { type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { VisitorIdentity } from "./headers";
+import { setIdTokenMinter } from "./idtoken";
 
 // forward.ts imports ./config, which throws at module-evaluation time if
 // AUTH_SECRET is unset — a real requirement for the running proxy, unrelated
@@ -107,16 +108,24 @@ test("a Cloud Run target receives no edge secret", { timeout: 5000 }, async () =
   const up = await startUpstream();
   const front = await startFront(`http://fake-svc-abc123-uc.a.run.app:${up.port}`);
   config.edgeSecret = TEST_EDGE_SECRET;
-  // idTokenFor() reaches a real GCP metadata server; irrelevant to this
-  // assertion, which is about the edge header, not the ID token.
-  process.env.SKIP_ID_TOKEN = "1";
+  // Minting reaches a real GCP metadata server; irrelevant to this assertion,
+  // which is about the edge header, not the ID token. Replacing the minter
+  // rather than setting an env var the forwarder reads: the branch under test
+  // must be the one production takes.
+  const restoreMinter = setIdTokenMinter(async () => "test-only-id-token");
   try {
     await withFakeDns(() => get(front.port));
     const headers = await up.headers;
     assert.equal(headers["x-supersonic-edge"], undefined);
+    // …and the credential that MUST be there. Newly assertable: while
+    // SKIP_ID_TOKEN existed this test disabled the very branch it stood next
+    // to, so nothing anywhere proved that a Cloud Run upstream is called as
+    // an authorised invoker. Deleting that branch is now a failing test
+    // rather than a silent 403 for every tenant.
+    assert.equal(headers["x-serverless-authorization"], "Bearer test-only-id-token");
   } finally {
     config.edgeSecret = "";
-    delete process.env.SKIP_ID_TOKEN;
+    restoreMinter();
     front.close();
     up.close();
   }
@@ -126,10 +135,10 @@ test("a fleet-IP target receives no serverless-authorization header", { timeout:
   const up = await startUpstream();
   const front = await startFront(`http://127.0.0.1:${up.port}`);
   config.edgeSecret = TEST_EDGE_SECRET;
-  // Deliberately NOT setting SKIP_ID_TOKEN here: this test's job is to catch
-  // a regression that fires the ID-token branch for a fleet target, and
-  // SKIP_ID_TOKEN would mask exactly that by skipping the branch outright
-  // regardless of cloudRun. If that regression ever exists, idTokenFor()
+  // Deliberately NOT replacing the minter here: this test's job is to catch a
+  // regression that fires the ID-token branch for a FLEET target, and a
+  // stub minter would let that regression through quietly by handing it a token.
+  // Left alone, a regression reaches for the real GCP metadata server and it
   // reaches for the real GCP metadata server and this fails on the 5s test
   // timeout rather than the assertion below — still a failure, just a slower
   // one to diagnose. The `timeout` option keeps that bounded instead of
@@ -173,14 +182,14 @@ test("a trailing-dot Cloud Run target receives no edge secret", { timeout: 5000 
   const up = await startUpstream();
   const front = await startFront(`http://fake-svc-abc123-uc.a.run.app.:${up.port}`);
   config.edgeSecret = TEST_EDGE_SECRET;
-  process.env.SKIP_ID_TOKEN = "1";
+  const restoreMinter = setIdTokenMinter(async () => "test-only-id-token");
   try {
     await withFakeDns(() => get(front.port));
     const headers = await up.headers;
     assert.equal(headers["x-supersonic-edge"], undefined);
   } finally {
     config.edgeSecret = "";
-    delete process.env.SKIP_ID_TOKEN;
+    restoreMinter();
     front.close();
     up.close();
   }
