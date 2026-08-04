@@ -256,6 +256,12 @@ table inet supersonic {
     ip daddr $METADATA tcp dport 53 accept
     ip daddr $METADATA counter drop
 
+    # The Cloud SQL proxy binds 0.0.0.0 because ssbr0 does not exist at boot —
+    # the agent creates it. So the bind is wide and the door is narrow: only
+    # sandbox traffic arriving on the bridge may reach 5432. Without this the
+    # node's VPC address answers Postgres for anything that can route to it.
+    tcp dport 5432 iifname != "ssbr0" drop
+
     # The rest of link-local. Nothing a tenant needs lives here.
     ip daddr 169.254.0.0/16 counter drop
   }
@@ -344,6 +350,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+systemctl enable cloud-sql-proxy >/dev/null 2>&1 || true
 systemctl enable supersonicd >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
