@@ -59,7 +59,7 @@ async function identityToken(audience: string): Promise<string | null> {
  * Request a screenshot. Resolves when the request has been *sent*, not when the
  * picture exists — the caller is a deploy, and it has better things to wait for.
  */
-export async function requestThumbnail(slug: string, runUrl: string): Promise<void> {
+export async function requestThumbnail(slug: string, runUrl: string, visibility?: string): Promise<void> {
   if (!SHOT_SERVICE || !runUrl) return;
   try {
     // The app token is minted for a Cloud Run audience or it is not minted.
@@ -77,6 +77,28 @@ export async function requestThumbnail(slug: string, runUrl: string): Promise<vo
     // cannot work. The request is still made, because whether a fleet app
     // should be screenshotted at all is a decision for whoever gives the shot
     // service a way in.
+    // A fleet app is screenshotted at its PUBLIC address, not at the load
+    // balancer it was deployed onto.
+    //
+    // `runUrl` for a placed app is `http://<lb-ip>`, and the node's router
+    // refuses an unsigned request there. Minting a Google identity token for a
+    // bare IP — which is what this did — hands another service a credential in
+    // our service account's name for an audience that will never check it, and
+    // gets a 403 anyway. So there was no thumbnail for any app on a node.
+    //
+    // `https://<slug>.supersonic.cv` is the address a person opens. It goes
+    // through the edge proxy, which already signs for the node, so the shot
+    // service needs no credential of ours and is handed none.
+    //
+    // Only for a PUBLIC app. A private one answers the sign-in gate, and a
+    // screenshot of a login page filed as an app preview is worse than no
+    // preview — it looks like the app broke.
+    const onFleet = !isCloudRunUrl(runUrl) && !runUrl.includes(".supersonic.cv");
+    if (onFleet && visibility !== "public") {
+      console.log(`thumbnail ${slug}: private app on a node — the shot service would photograph the sign-in page, so nothing was requested`);
+      return;
+    }
+    if (onFleet) runUrl = `https://${slug}.supersonic.cv`;
     const appIsCloudRun = isCloudRunUrl(runUrl);
     const [callerToken, appToken] = await Promise.all([
       identityToken(SHOT_SERVICE),
@@ -84,9 +106,6 @@ export async function requestThumbnail(slug: string, runUrl: string): Promise<vo
       // audience to get in, the same way the deploy probe does.
       appIsCloudRun ? identityToken(new URL(runUrl).origin) : Promise.resolve(null),
     ]);
-    if (!appIsCloudRun) {
-      console.log(`thumbnail ${slug}: fleet app — no app token minted; the shot service cannot sign for the node router yet`);
-    }
     if (!callerToken) {
       console.warn(`thumbnail ${slug}: no caller token — is this running on Cloud Run?`);
       return;

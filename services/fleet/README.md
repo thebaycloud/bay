@@ -253,3 +253,32 @@ sudo systemctl start supersonicd         # adopts the running sandboxes, does no
 Already-running sandboxes keep the bind mount they started with, so they are
 unaffected until their next restart, at which point they get the copied data on
 the new disk. `/srv/apps.preexisting` stays until somebody is sure.
+
+## How many apps can the fleet actually take?
+
+`fleetEligibility` refuses a static app, the runner lane, a buildpack app with no
+Dockerfile, a cron-only app, and anything this deploy produced no image for. The
+number that survives has never been counted, and it is what "moved to the fleet"
+means.
+
+With database access, this answers it exactly:
+
+```sql
+SELECT a.runtime, s.lane, count(*)
+  FROM apps a
+  LEFT JOIN LATERAL (
+    SELECT lane FROM deploy_stages d
+     WHERE d.slug = a.slug AND d.lane <> 'unknown'
+     ORDER BY d.started_at DESC LIMIT 1
+  ) s ON true
+ GROUP BY 1, 2 ORDER BY 3 DESC;
+```
+
+Measured without it on 5 Aug 2026, using "has an image in
+`cloud-run-source-deploy`" as the stand-in for the `!image` / static / runner
+refusals: **33 of the 46 apps that have a Cloud Run service have a container
+image**, and 13 do not. Static apps have no service at all and are not in either
+figure — they are refused by design until step 8 of the plan moves them.
+
+So the fleet can take roughly two thirds of the apps that have ever had a
+service, and the remaining third needs a lane change rather than a fix.

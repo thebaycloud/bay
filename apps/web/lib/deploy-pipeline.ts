@@ -30,7 +30,7 @@ import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv, restateDatabaseAt } from "@/lib/env-merge";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
-import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
+import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
 import { notifyDeployFinished } from "@/lib/deploy-notify";
@@ -3915,7 +3915,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // Skipped entirely for a worker-only app: there is no page to photograph,
       // and asking the shot service for one produces a screenshot of an error
       // that then sits on the dashboard as this app's picture.
-      if (!serviceless) void requestThumbnail(slug, result.url ?? "");
+      if (!serviceless) {
+        // Visibility read here rather than guessed: a private app on a node
+        // would be photographed at its sign-in page, and that is filed as the
+        // app's preview.
+        void getAppBySlug(slug)
+          .then((row) => requestThumbnail(slug, result.url ?? "", row?.visibility))
+          .catch(() => { /* a thumbnail is never worth failing a deploy */ });
+      }
     }
     // A static app's run_url is the shared static server, which is useless to
     // show someone. A worker-only app has no URL at all, and sending the app's
