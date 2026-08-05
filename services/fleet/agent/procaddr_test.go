@@ -74,3 +74,66 @@ func TestOrdinaryValuesAreUntouched(t *testing.T) {
 		}
 	}
 }
+
+// A process that needs a sibling's ADDRESS has to wait for it. The substitution
+// happens once, at start, from what is live at that moment — so a process that
+// starts first gets `${process:redis}` verbatim and hands it to a DNS lookup.
+// Measured on a live deploy: `getaddrinfo ENOTFOUND ${process:redis}`. Client
+// retry does not save it, because the value it was given never changes.
+
+func agentWith(live map[string]*live) *Agent {
+	return &Agent{live: live, quiet: newLogThrottle()}
+}
+
+func TestWaitsForASidecarThatIsNotUpYet(t *testing.T) {
+	app := appWithCache()
+	app.Processes[0].Env = map[string]string{"REDIS_URL": "redis://${process:redis}:6379"}
+	a := agentWith(map[string]*live{})
+
+	if got := a.waitingOn(app, app.Processes[0]); got != "redis" {
+		t.Errorf("should wait for redis, got %q", got)
+	}
+}
+
+func TestStopsWaitingOnceTheSidecarIsLive(t *testing.T) {
+	app := appWithCache()
+	app.Processes[0].Env = map[string]string{"REDIS_URL": "redis://${process:redis}:6379"}
+	a := agentWith(map[string]*live{
+		sandboxID(app.Slug, Process{Name: "redis"}): {net: &SandboxNet{}},
+	})
+
+	if got := a.waitingOn(app, app.Processes[0]); got != "" {
+		t.Errorf("should be ready, waiting on %q", got)
+	}
+}
+
+func TestDoesNotWaitForAProcessThatDoesNotExist(t *testing.T) {
+	// A typo must not hang a process forever. An unknown name is left unresolved
+	// and visible in the app's own error, which is a bug the author can see.
+	app := appWithCache()
+	app.Processes[0].Env = map[string]string{"X": "${process:nosuch}"}
+	a := agentWith(map[string]*live{})
+
+	if got := a.waitingOn(app, app.Processes[0]); got != "" {
+		t.Errorf("an unknown name is not something to wait for, got %q", got)
+	}
+}
+
+func TestAProcessDoesNotWaitForItself(t *testing.T) {
+	app := appWithCache()
+	app.Processes[1].Env = map[string]string{"SELF": "${process:redis}"}
+	a := agentWith(map[string]*live{})
+
+	if got := a.waitingOn(app, app.Processes[1]); got != "" {
+		t.Errorf("a process cannot wait for itself, got %q", got)
+	}
+}
+
+func TestAProcessWithNoEnvNeverWaits(t *testing.T) {
+	// Every app that declares no dependency at all takes this path, so it must
+	// not acquire a reason to be deferred.
+	a := agentWith(map[string]*live{})
+	if got := a.waitingOn(appWithCache(), Process{Name: "web", Kind: KindWeb}); got != "" {
+		t.Errorf("got %q", got)
+	}
+}

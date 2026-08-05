@@ -993,6 +993,25 @@ func (a *Agent) reconcileOnce() error {
 			}
 			needRelease[u.app.Slug] = u.app
 		}
+		// A process that needs a sibling's ADDRESS waits for that sibling.
+		//
+		// The substitution happens at start, from what is live at that moment, so
+		// a process that starts first gets `${process:redis}` verbatim and hands
+		// it to a DNS lookup — measured: `getaddrinfo ENOTFOUND ${process:redis}`.
+		// Client-side retry does not save it, because the value it was given never
+		// changes.
+		//
+		// Deferring is enough and needs no ordering machinery: the sidecar has no
+		// references of its own, so it starts on THIS pass, and the process that
+		// wants it starts on the next one ten seconds later with a real address.
+		// A reference to something that will never be live simply keeps waiting,
+		// which is visible in the log rather than silently broken.
+		if waiting := a.waitingOn(u.app, u.proc); waiting != "" {
+			if a.quiet.allow("waiting:"+id+":"+waiting, time.Now(), giveUpEvery) {
+				log.Printf("%s: waiting for %q to have an address", id, waiting)
+			}
+			continue
+		}
 		todo = append(todo, work{app: u.app, proc: u.proc})
 	}
 
@@ -1439,6 +1458,42 @@ const giveUpEvery = 10 * time.Minute
 // counter and the start counter — and they must agree or a process would carry
 // two independent counts.
 func startKey(id, image string) string { return id + "@" + image }
+
+// waitingOn names the process this one needs an address for and cannot have yet,
+// or "" when everything it references is live.
+//
+// Only the app's OWN processes: a reference across apps is not a thing the spec
+// can express, and treating an unknown name as something to wait for would hang
+// a process forever on a typo.
+func (a *Agent) waitingOn(app App, proc Process) string {
+	if len(proc.Env) == 0 {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, v := range proc.Env {
+		for _, m := range procAddrRef.FindAllStringSubmatch(v, -1) {
+			name := m[1]
+			if name == proc.Name {
+				continue
+			}
+			known := false
+			for _, p := range processesOf(app) {
+				if p.Name == name {
+					known = true
+					break
+				}
+			}
+			if !known {
+				continue
+			}
+			if l, ok := a.live[sandboxID(app.Slug, Process{Name: name})]; !ok || l.net == nil {
+				return name
+			}
+		}
+	}
+	return ""
+}
 
 // sameStringMap compares two env-shaped maps, nil and empty being the same
 // thing — a spec that omits `env` and one that sends `{}` say the same.
