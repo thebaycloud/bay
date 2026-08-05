@@ -267,6 +267,9 @@ test("the wire field the control plane keys absent-vs-empty on is a pointer for 
 });
 
 test("a release does not delete the web process it was appended next to", () => {
+  // The pipeline appends the release to the process list BEFORE calling this,
+  // so the realistic input is a list that already contains it — which is why
+  // the guard cannot be "was the list empty".
   // Found on the fleet's first real placement with a release, p6mx8/goapi.
   //
   // An app whose web process comes from `start` rather than from a Procfile has
@@ -286,6 +289,7 @@ test("a release does not delete the web process it was appended next to", () => 
     secrets: [],
     processes: [],
     releaseCommand: "/app/migrate",
+    serviceless: false,
   });
 
   const kinds = (spec.processes ?? []).map((p) => p.kind);
@@ -328,4 +332,52 @@ test("an app with a Procfile web and a config release gets exactly one web", () 
     releaseCommand: "npm run migrate",
   });
   assert.equal((spec.processes ?? []).filter((p) => p.kind === "web").length, 1);
+});
+
+test("the release the PIPELINE already appended still does not delete the web process", () => {
+  // The shape that actually reached production. deploy-pipeline appends the
+  // release to `processes` itself, so buildAppSpec is handed `[release]` and
+  // its own releaseCommand branch never fires — which is why the first attempt
+  // at this fix, guarding on "was the list empty", did nothing at all.
+  const spec = buildAppSpec({
+    slug: "p6mx8",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("release", { command: "/app/migrate" }) as never],
+    releaseCommand: "/app/migrate",
+    serviceless: false,
+  });
+
+  const kinds = (spec.processes ?? []).map((p) => p.kind);
+  assert.ok(kinds.includes("web"), `the web process was lost: ${JSON.stringify(spec.processes)}`);
+  assert.equal(kinds.filter((k) => k === "release").length, 1, "the release was doubled");
+});
+
+test("a cron-only app is not given a web process it never asked for", () => {
+  // serviceless is true for this one, and that is the whole distinction: a list
+  // with no web and no worker is correct here, and inventing one would place an
+  // app that runs a web server nobody wrote.
+  const spec = buildAppSpec({
+    slug: "cronly",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("nightly", { command: "python digest.py", schedule: "0 3 * * *" }) as never],
+    serviceless: true,
+  });
+  assert.ok(!(spec.processes ?? []).some((p) => p.kind === "web"));
+});
+
+test("a caller that does not say makes this function decide nothing", () => {
+  // serviceless absent means "unknown". Guessing a web process into existence
+  // on a caller's silence is how a bot ends up pretending to be a web server.
+  const spec = buildAppSpec({
+    slug: "unknown",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("release", { command: "/app/migrate" }) as never],
+  });
+  assert.ok(!(spec.processes ?? []).some((p) => p.kind === "web"));
 });

@@ -3206,6 +3206,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // `buildAppSpec` only adds a second when a release is not already
         // present, so passing this too can never double it.
         releaseCommand: releaseCmd || null,
+        // Read at line ~1965, before the release was appended — the one moment
+        // an empty process list still meant "one implicit web process". See the
+        // note in buildAppSpec: by the time it sees the list, that fact is gone
+        // from the list itself.
+        serviceless,
         memoryBytes: memoryBytes(scale.memory),
         cpuShares: cpuShares(scale.cpu),
       });

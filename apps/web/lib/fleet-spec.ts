@@ -67,6 +67,18 @@ export interface SpecInput {
    * serves its homepage and fails everything else.
    */
   releaseCommand?: string | null;
+  /**
+   * Whether this app genuinely has no web process — a bot, a queue consumer, a
+   * cron-only app.
+   *
+   * Read by the pipeline from the process list BEFORE it appends anything to it,
+   * which is the only moment an empty list still means "one implicit web
+   * process". By the time this function sees the list that fact is unrecoverable
+   * from the list itself, so it has to travel separately. Optional, and absent
+   * means "do not decide": a caller that does not know must not have this
+   * function guess a web process into existence.
+   */
+  serviceless?: boolean;
   port?: number;
   memoryBytes?: number;
   cpuShares?: number;
@@ -196,30 +208,39 @@ export function buildAppSpec(i: SpecInput): AppSpec {
   // precedence the pipeline gives a Procfile-declared process over the inferred
   // one.
   if (i.releaseCommand && !declared.some((p) => p.name === "release")) {
-    // The implicit web process has to be made EXPLICIT first, or adding the
-    // release destroys it.
-    //
-    // An empty list means "one implicit web process" — the comment below says so
-    // and `processesOf` implements it. Appending anything makes the list
-    // non-empty, and the agent then runs exactly what is in it: for an app whose
-    // web process came from `start` rather than from a Procfile, that is the
-    // release and nothing else. The app migrates its database and serves
-    // nothing.
-    //
-    // Measured on 5 Aug, on p6mx8/goapi, the first app ever placed on the fleet
-    // with a release: the spec arrived as `[release]`, and the placement was
-    // refused with "this placement declares no long-running process". Before
-    // that check existed the same spec would have been placed and then rolled
-    // back for not answering, which is the same outcome with a worse reason.
-    //
-    // No command on the synthesised entry, deliberately: that is exactly what
-    // `processesOf` builds for the implicit case, and it means the image's own
-    // entrypoint runs — the app's `start`, already baked into the image by the
-    // Dockerfile. Naming a command here would be this function inventing one.
-    if (!declared.length) {
-      declared.push({ name: "web", kind: "web" });
-    }
     declared.push({ name: "release", kind: "release", command: shellArgv(i.releaseCommand) });
+  }
+
+  // The implicit web process, restored when something else has already made the
+  // list non-empty.
+  //
+  // An empty list means ONE IMPLICIT WEB PROCESS — the comment below says so and
+  // `processesOf` implements it. But an app whose web came from `start` rather
+  // than from a Procfile has an empty list, and the pipeline appends its release
+  // to that list before this function is ever called. The list is then
+  // `[release]`: non-empty, so the implicit rule no longer applies, and the
+  // agent runs exactly what is in it. The app migrates its database and serves
+  // nothing.
+  //
+  // Measured on 5 Aug on p6mx8/goapi, the first app ever placed on the fleet
+  // with a release. The spec that reached fleet_placements was `[release]`
+  // alone and placeOnFleet refused to flip: "this placement declares no
+  // long-running process". Before that check existed the same spec would have
+  // been placed and rolled back for not answering — same outcome, and a reason
+  // that points at the app instead of at the spec.
+  //
+  // Gated on `serviceless` because that is the ONLY thing that distinguishes
+  // this from an app which correctly has no web: a bot declares `[bot]`, a
+  // cron-only app declares `[nightly]`, and neither is owed one. The pipeline
+  // decides `serviceless` from the process list BEFORE it appends anything, so
+  // it is the one reading taken while the emptiness still meant something.
+  //
+  // No command on the synthesised entry, deliberately: that is what
+  // `processesOf` builds for the implicit case, and it lets the image's own
+  // entrypoint run — the app's `start`, already baked in by the Dockerfile.
+  // Naming a command here would be this function inventing one.
+  if (i.serviceless === false && declared.length && !declared.some((p) => p.kind === "web" || p.kind === "worker")) {
+    declared.unshift({ name: "web", kind: "web" });
   }
   // Absent rather than empty, and the difference is load-bearing: `processesOf`
   // reads a zero-length list as "one implicit web process built from the app's
