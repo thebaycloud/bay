@@ -81,6 +81,23 @@ interface Recorded {
    * still fail.
    */
   live: { slug: string; runUrl: string; hasWeb: unknown }[];
+  /**
+   * Every secret the pipeline granted a NODE identity read access to.
+   *
+   * Captured rather than no-opped because it is the only evidence that the
+   * grant happened at all, and the failure it guards against is silence: the
+   * node resolves its secrets at start, from its own service account, and a
+   * missing binding produces a 403 inside the release — a place no assertion
+   * about argv or placements can see. The keys are recorded because granting
+   * SOME of an app's secrets is the interesting wrong answer, not granting none.
+   *
+   * `placedSoFar` is how ordering is proven rather than assumed. A grant that
+   * lands AFTER the placement is the p6mx8 failure exactly: the node is already
+   * reconciling the app and resolving its secrets, and the binding arrives to
+   * find the release has died. Two separate arrays cannot express "before"; a
+   * count taken at the moment of the call can.
+   */
+  nodeGrants: { accounts: string[]; keys: string[]; placedSoFar: number }[];
 }
 
 /** A `gcloud`/`npm` reply, chosen by what the command line looks like. */
@@ -111,6 +128,16 @@ process.env.PLANNER ??= "0";
  * branch below would pass by never running.
  */
 process.env.FLEET_LB ??= "10.0.0.9";
+/**
+ * The node identities, also read at module load, and set here for the same
+ * reason `FLEET_LB` is: unset means the grant below is a no-op, and a test that
+ * asserts on a no-op passes whether the code is there or not.
+ *
+ * Two of them, because production will not stay at one node and the list is what
+ * makes that survivable — `chooseNode` runs after the grant, so every node is
+ * granted or the wrong one 403s.
+ */
+process.env.FLEET_NODE_SA ??= "node-a@example.iam.gserviceaccount.com,node-b@example.iam.gserviceaccount.com";
 
 /**
  * What the registry answers for a tag, switchable per test.
@@ -125,10 +152,18 @@ let digestReply: string | null = A_DIGEST;
 /** What the fleet load balancer answers, so a failed verification is reachable. */
 let probeCode = 200;
 
+/**
+ * What Secret Manager holds for the app, switchable per test.
+ *
+ * Empty by default, so every test written before this one keeps exercising the
+ * app it always did: an app with no secrets.
+ */
+let storedSecrets: { key: string; name: string }[] = [];
+
 /** Which build implementation this process is exercising. See `generatedBuild`. */
 const COLLAPSED = process.env.RUNNER === "0";
 
-let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [] };
+let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [], nodeGrants: [] };
 let activeReplies: Replies = () => ({});
 
 function fakeSpawn() {
@@ -218,7 +253,20 @@ async function install() {
   });
 
   // Secret Manager, object storage, the model, and the side effects.
-  mock.module("@/lib/app-secrets", { namedExports: { putAppSecrets: async () => ({ stored: [], skipped: [] }), setSecretsFlag: () => "", grantBuildAccess: asyncNoop, readAppSecret: async () => null, allAppSecrets: async () => [] } });
+  mock.module("@/lib/app-secrets", { namedExports: {
+    putAppSecrets: async () => ({ stored: [], skipped: [] }),
+    setSecretsFlag: () => "",
+    grantBuildAccess: asyncNoop,
+    readAppSecret: async () => null,
+    // What Secret Manager says the app HAS, which is not what this deploy
+    // stored. Switchable per test because the distinction is the whole point of
+    // the grant: an app on its second deploy stores nothing and still has to be
+    // readable by the node.
+    allAppSecrets: async () => storedSecrets,
+    grantNodeAccess: async (refs: { key: string }[], accounts: string[]) => {
+      active.nodeGrants.push({ accounts, keys: refs.map((r) => r.key), placedSoFar: active.placements.length });
+    },
+  } });
   // Spread the real module, then override the parts that reach the network.
   //
   // Replacing it wholesale is how this file failed the moment `resolveImageDigest`
@@ -343,7 +391,7 @@ function input(over: Record<string, unknown> = {}) {
 
 async function run(files: Record<string, string>, over: Record<string, unknown> = {}, replies: Replies = () => ({})) {
   const runDeploy = await loadPipeline();
-  const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [] };
+  const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [], nodeGrants: [] };
   active = rec;
   activeReplies = replies;
   // The pipeline swallows nothing at the top level, so a throw here is a real
@@ -707,6 +755,84 @@ test("a digest that cannot be resolved fails the deploy instead of placing a tag
   const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
   assert.ok(errors.length > 0, "an unresolvable digest must fail the deploy");
   assert.match(JSON.stringify(errors), /digest/i, `the error must say what could not be resolved — got ${JSON.stringify(errors).slice(0, 400)}`);
+});
+
+/**
+ * An app whose secrets already exist, which is every app after its first deploy.
+ *
+ * `putAppSecrets` is mocked to store nothing, on purpose: that is the state the
+ * grant has to work from. A version of this fix that grants what THIS deploy
+ * wrote passes with an empty list here and fails in production on every app that
+ * has ever been deployed twice.
+ */
+const HAS_SECRETS = [
+  { key: "DATABASE_URL", name: "app-demo-DATABASE_URL" },
+  { key: "STRIPE_KEY", name: "app-demo-STRIPE_KEY" },
+];
+
+test("a fleet deploy lets the node read every secret the app has, before placing it", NEEDS_MOCKS, async () => {
+  // The defect: nothing ever granted a NODE anything. `putAppSecrets` grants the
+  // Cloud Run runtime account and `grantBuildAccess` grants the build account,
+  // and on Cloud Run that is every identity there is — the platform mounts the
+  // value from a reference and the app never resolves anything itself. A node
+  // does: services/fleet/agent/secrets.go reads Secret Manager as the node's own
+  // service account at process start.
+  //
+  // It stayed invisible because the twenty apps migrated onto the node by hand
+  // carried specs with no secrets, so the node had never been asked. The first
+  // app that declared a database placed, then died in its release on
+  // `secret app-p6mx8-DATABASE_URL: 403`, and the canary had to be withdrawn.
+  storedSecrets = HAS_SECRETS;
+  let rec: Recorded;
+  try {
+    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+  } finally {
+    storedSecrets = [];
+  }
+
+  assert.ok(rec.placements.length > 0, `nothing was placed, so this test proves nothing; stages were ${rec.stages.map((s) => s.stage).join(", ")}`);
+  assert.equal(rec.nodeGrants.length, 1, `the fleet branch must grant node access exactly once, got ${JSON.stringify(rec.nodeGrants)}`);
+
+  const grant = rec.nodeGrants[0];
+  assert.deepEqual(
+    grant.keys.slice().sort(),
+    ["DATABASE_URL", "STRIPE_KEY"],
+    `every secret the app HAS must be granted, not only what this deploy stored — got ${JSON.stringify(grant.keys)}`,
+  );
+  assert.deepEqual(
+    grant.accounts,
+    ["node-a@example.iam.gserviceaccount.com", "node-b@example.iam.gserviceaccount.com"],
+    `every node identity must be granted, because chooseNode runs later and picks one of them — got ${JSON.stringify(grant.accounts)}`,
+  );
+  assert.equal(
+    grant.placedSoFar, 0,
+    "the grant must land before the placement: after it, the node is already resolving secrets it cannot read",
+  );
+});
+
+test("a Cloud Run deploy grants no node anything", NEEDS_MOCKS, async () => {
+  // The other half, and the reason the grant sits on the fleet branch rather
+  // than in putAppSecrets. Granting at creation time would give the machine that
+  // runs tenant code a binding on every tenant's database password — the
+  // project-wide grant this whole path exists to avoid, written per-secret so it
+  // looks careful.
+  //
+  // Its blind spot, said out loud: `putAppSecrets` is mocked, so a grant written
+  // INSIDE it would be invisible here. What this does catch is the grant escaping
+  // onto the shared path — proven by moving it next to the Cloud Run branch's own
+  // `allAppSecrets` call, where it fails.
+  storedSecrets = HAS_SECRETS;
+  let rec: Recorded;
+  try {
+    rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
+  } finally {
+    storedSecrets = [];
+  }
+
+  assert.equal(
+    rec.nodeGrants.length, 0,
+    `an app that is not a canary must not widen a node's reach; granted ${JSON.stringify(rec.nodeGrants)}`,
+  );
 });
 
 test("a repair of a fleet deploy redeploys to the fleet, and is told so", NEEDS_MOCKS, async () => {
