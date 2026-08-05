@@ -116,18 +116,55 @@ export async function placementFor(slug: string): Promise<{ node: string; spec: 
  * dies. Packing tightly would optimise for the one thing we are not trying to
  * save and give up the one thing we are.
  */
+/**
+ * How far past its own RAM a node may be committed before it stops taking apps.
+ *
+ * Overcommit is the design, not an accident: `memoryBytes` on a placement is a
+ * cgroup ceiling, not a reservation, and apps spend most of their life nowhere
+ * near it. Measured on 5 Aug 2026 — 25 sandboxes on a 64 GiB node, committed to
+ * 50 GiB of limits, actually using about 3.
+ *
+ * So counting commitments strictly would have refused the 26th app on a machine
+ * using 5% of its memory. Four is chosen to be far above what today's fleet
+ * does and still finite: it is a backstop against a node that has been handed
+ * more than it could ever serve, not a scheduler.
+ */
+const MEMORY_OVERCOMMIT = 4;
+
+/**
+ * Which node should take this app.
+ *
+ * This used to count PLACEMENTS, which treats a 4 GiB app and a 256 MiB one as
+ * the same weight, and had no notion of full at all — the only way it returned
+ * null was every node going quiet. Two nodes of different sizes would have been
+ * filled evenly until the smaller one died.
+ *
+ * Now it spreads by committed memory and refuses a node already committed past
+ * `MEMORY_OVERCOMMIT` times its own. Returning null is a FAILED DEPLOY, which is
+ * why the ceiling is deliberately generous: an app refused for capacity that
+ * exists is a worse outcome than a node running hot.
+ */
 export async function chooseNode(): Promise<string | null> {
   const r = await getPool(DB).query(
-    `SELECT n.name, count(p.slug) AS placed
+    `SELECT n.name,
+            n.memory_bytes,
+            COALESCE(SUM((p.spec->>'memoryBytes')::bigint), 0) AS committed
        FROM fleet_nodes n
        LEFT JOIN fleet_placements p ON p.node = n.name
       WHERE n.drain = false
         AND n.last_seen > now() - interval '90 seconds'
-      GROUP BY n.name
-      ORDER BY placed ASC, n.name ASC
-      LIMIT 1`
+      GROUP BY n.name, n.memory_bytes
+      ORDER BY committed ASC, n.name ASC`
   );
-  return r.rows[0]?.name ?? null;
+  for (const row of r.rows) {
+    const memory = Number(row.memory_bytes ?? 0);
+    const committed = Number(row.committed ?? 0);
+    // A node that never reported its size is taken on trust rather than skipped:
+    // refusing to place because a heartbeat lacked a field would be an outage
+    // caused by a missing number.
+    if (!memory || committed < memory * MEMORY_OVERCOMMIT) return row.name as string;
+  }
+  return null;
 }
 
 /** Which runtime an app is on. Unknown apps read as 'cloudrun', the default. */
