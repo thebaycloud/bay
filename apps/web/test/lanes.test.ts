@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import {
   deployArgs, dbContainerArgs, databaseEnv, databaseEnvNames,
   DEFAULT_SCALE, DEFAULT_PORT, withScale, SERVICE_LANES,
-  type Lane, type LaneDeploy, type Scale,
-} from "../lib/lanes";
+  needsServiceRecreate,
+  type Lane, type LaneDeploy, type Scale } from "../lib/lanes";
 
 /**
  * The parity suite.
@@ -287,4 +287,43 @@ test("the probe's timeout is shorter than its period, which Cloud Run enforces",
   assert.ok(n("timeoutSeconds") < n("periodSeconds"), `${probe} would be refused`);
   // And enough total time for the proxy to authorise against Cloud SQL.
   assert.ok(n("periodSeconds") * n("failureThreshold") >= 60);
+});
+
+test("a service that gained a database is recreated, and nothing else is", () => {
+  // Cloud Run cannot rename the container of a live service. A sidecar requires
+  // named containers, so an app that already exists and then gains a database
+  // is undeployable by the ordinary route — measured against the real API on
+  // 5 Aug, including the control that isolates the cause:
+  //
+  //   new service + sidecar                  → deploys
+  //   existing flat service + sidecar        → "exactly one container with an
+  //                                             exposed port"
+  //   existing flat service + named, NO sidecar → the same error, so it is the
+  //                                             naming and not the sidecar
+  //   delete, then deploy with the sidecar   → deploys
+  //
+  // This is the one shape that must trigger it.
+  assert.equal(needsServiceRecreate({ cloudsql: "proj:region:inst", existingScoped: false }), true);
+});
+
+test("a service that already has named containers is left alone", () => {
+  // The runner lane has deployed `--container app` from the start. Deleting one
+  // of those would destroy a working service for no reason at all.
+  assert.equal(needsServiceRecreate({ cloudsql: "proj:region:inst", existingScoped: true }), false);
+});
+
+test("an app with no database is never recreated", () => {
+  // No sidecar, no naming, no transition. Every app without a database keeps
+  // deploying exactly as it did.
+  assert.equal(needsServiceRecreate({ cloudsql: null, existingScoped: false }), false);
+  assert.equal(needsServiceRecreate({ existingScoped: false }), false);
+});
+
+test("a first deploy has nothing to delete, and an unanswerable lookup is not permission to", () => {
+  // `liveContainerShape` returns null for a service that does not exist AND for
+  // a describe that failed. Treating either as `false` would have a transient
+  // API error delete a live service — the worst possible way to be wrong here,
+  // and the reason this is `=== false` rather than a falsy test.
+  assert.equal(needsServiceRecreate({ cloudsql: "proj:region:inst", existingScoped: null }), false);
+  assert.equal(needsServiceRecreate({ cloudsql: "proj:region:inst" }), false);
 });

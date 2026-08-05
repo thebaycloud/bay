@@ -69,6 +69,76 @@ test("marked live with nothing to serve is stalled, not 'hang tight'", () => {
     { page: "stalled" });
 });
 
+test("an app with no web process is not a broken app", () => {
+  // The shape this exists for: an app with one `bot` process and no `web`.
+  //
+  // Checked against the live project on 5 Aug, in two passes, because the first
+  // pass reached the wrong answer and the way it went wrong is worth keeping.
+  //
+  // Pass one looked at the Cloud Run SERVICE named hdhxq and found revision
+  // hdhxq-00004-nwg stuck on HealthCheckContainerError, latestReady None, no
+  // url, no traffic — and its logs from 2 Aug 20:42 saying "[supersonic-run]
+  // FATAL: no run command for this app". No Cloud Run Job either. Every one of
+  // those facts is true, and together they look exactly like a dead app.
+  //
+  // They are a dead ATTEMPT. A worker does not run as a service or as a job: it
+  // runs as a Cloud Run WORKER POOL, which `gcloud run services list` and
+  // `jobs list` do not show, so looking in both and finding nothing reads as
+  // "nothing is running" when the thing is simply somewhere else. hdhxq-bot was
+  // created at 20:59 that same evening — seventeen minutes after the failed
+  // service revision — is Ready=True on revision hdhxq-bot-00003-4jq, and its
+  // own logs record `telegram.ext.Application - INFO - Application started`.
+  // It has logged nothing for a day, which is what an idle polling bot does and
+  // is not evidence of anything.
+  //
+  // So hdhxq IS worker-only and IS running, the 503 was ours, and has_web=false
+  // is right for it. The failed service revision is leftover from the runner
+  // lane that same day and is what made the app look broken to anyone checking.
+  //
+  // The lesson that survives: "no service and no job" is not "not running" on
+  // this platform, and any future check written here must look at worker pools
+  // too.
+  // It went live correctly,
+  // there is no run_url because there is no HTTP service to point at, and the
+  // edge called that "This deploy stopped" for two days on a customer's URL.
+  // Both readings of apps.status reach it — the row could say 'live' with a
+  // finished deploy, or still say 'deploying' behind a deploy nobody updated —
+  // so neither is allowed to gate the answer.
+  assert.deepEqual(
+    edge({ status: "live", buildLive: false, hasWeb: false, deploy: { status: "live", error: null, updatedAt: at(1000) } }),
+    { page: "noweb" });
+  assert.deepEqual(
+    edge({ status: "deploying", buildLive: false, hasWeb: false, deploy: { status: "building", error: null, updatedAt: at(STALE_AFTER_MS + 1000) } }),
+    { page: "noweb" });
+});
+
+test("a worker-only app whose redeploy FAILED still says it failed", () => {
+  // The fail-open this fix could so easily have been. has_web=false is written
+  // by markAppLive, i.e. by the last GOOD deploy, and it outlives a later
+  // failure. Answering "nothing is wrong, it runs as a worker" to the owner of
+  // a bot that stopped building would delete the only signal they had.
+  assert.deepEqual(
+    edge({ status: "failed", buildLive: false, hasWeb: false, deploy: { status: "failed", error: "boom", updatedAt: at(1000) } }),
+    { page: "failed", reason: "boom" });
+  // The deploys row alone is enough, exactly as it is for a web app.
+  assert.deepEqual(
+    edge({ status: "live", buildLive: false, hasWeb: false, deploy: { status: "failed", error: "boom", updatedAt: at(1000) } }),
+    { page: "failed", reason: "boom" });
+});
+
+test("an app whose row predates the has_web column is NOT called a worker", () => {
+  // The other fail-open. On a control plane running ahead of the migration
+  // has_web arrives `undefined`, and `!hasWeb` would tell every stalled and
+  // every building app in the platform that nothing is wrong. Only an explicit
+  // false counts.
+  assert.deepEqual(
+    edge({ status: "live", buildLive: false, hasWeb: undefined, deploy: { status: "live", error: null, updatedAt: at(1000) } }),
+    { page: "stalled" });
+  assert.deepEqual(
+    edge({ status: "live", buildLive: false, hasWeb: true, deploy: { status: "live", error: null, updatedAt: at(1000) } }),
+    { page: "stalled" });
+});
+
 test("an app from before the deploys table keeps its old behaviour", () => {
   // No row to measure staleness against. Declaring such an app dead on the
   // strength of a missing record would be worse than the bug being fixed.

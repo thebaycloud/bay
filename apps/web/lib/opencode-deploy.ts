@@ -1,8 +1,9 @@
 /**
  * Repair a failed deploy with opencode — the drop-in replacement for the bespoke
  * Gemini loop in lib/agent.ts (`repairDeploy`). Same contract, same `redeploy`
- * closure (the REAL Cloud Run pipeline): opencode edits the repo copy and calls
- * `redeploy` to re-run the actual deploy until it comes up live.
+ * closure — the REAL pipeline, on whichever runtime the deploy took, which is
+ * what `runtime` names: opencode edits the repo copy and calls `redeploy` to
+ * re-run the actual deploy until it comes up live.
  *
  * opencode runs as a subprocess; `redeploy` is an in-process closure. They are
  * bridged by a tiny localhost HTTP server: the agent runs `redeploy.sh`, which
@@ -20,6 +21,7 @@ import { homedir, tmpdir } from "node:os";
 import { AddressInfo } from "node:net";
 import { accessToken as restAccessToken } from "./gcp-rest";
 import { isSameFailure } from "./deploy-errors";
+import type { Runtime } from "./fleet";
 
 const PROJECT = process.env.OPENCODE_VERTEX_PROJECT || "supersonic-deploy-prod";
 /**
@@ -272,6 +274,7 @@ Rules:
 - \`runtime\` is present only when the repo asked for a version it did not get. If it is there, an import error or a library incompatibility is very likely THAT and not the app's code.
 - \`ownedEnv\` are names the platform writes. Editing one in the repo changes nothing that runs.
 - \`attached\` is what this app actually has. If the app reads something that is not in that list, the app is asking for a resource it was never given — say so rather than stubbing it.
+- \`runsOn\` is which runtime \`redeploy.sh\` deploys to, and it is not a choice you can change. \`"cloudrun"\` is Google Cloud Run. \`"fleet"\` is our own VM, running the app's container under gVisor — there, the database is reached through a proxy on the host at \`10.200.0.1:5432\`, so a \`DATABASE_URL\`, \`PGHOST\` or \`POSTGRES_HOST\` naming \`10.200.0.1\` is CORRECT. Do not "fix" it to localhost or to a public address. A database that will not connect on \`fleet\` is our proxy, not this repository: stop and report it.
 
 Never replace a credential with a literal to get past a failure. Turning \`os.environ["TOKEN"]\` into \`"dummy"\` makes the process start and the product silently not work, which is worse than the failure you were given. If a value is missing, report it.
 
@@ -635,9 +638,15 @@ export async function opencodeRepair(opts: {
   /** What the platform DID. See PlatformFacts — this is the half it kept guessing at. */
   facts?: PlatformFacts | null;
   redeploy: Redeploy;
+  /**
+   * Which runtime `redeploy` reaches. Required rather than defaulted, for the
+   * same reason it is on `repairDeploy`: the bug was a description that
+   * disagreed with the closure, and a default is how they drift apart again.
+   */
+  runtime: Runtime;
   log: (l: string) => void;
 }): Promise<RepairResult> {
-  const { dir, slug, initialError, plan, facts, redeploy, log } = opts;
+  const { dir, slug, initialError, plan, facts, redeploy, runtime, log } = opts;
   const tokens: TokenUsage = { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
   const changes = new Set<string>();
   let steps = 0, redeploys = 0;
@@ -697,7 +706,8 @@ export async function opencodeRepair(opts: {
   // opencode must NOT run with the repo itself as cwd — session/message creation
   // fails ("createUserMessage → UnknownError") when cwd is a populated repo. Run it
   // in a clean wrapper with the repo symlinked as ./repo; edits there land in `dir`,
-  // which is exactly what `redeploy` (runDeploy) rebuilds.
+  // which is exactly what `redeploy` rebuilds — on the fleet branch as much as on
+  // the Cloud Run one, since both build from that same directory.
   const ws = mkdtempSync(join(tmpdir(), "ss-oc-"));
   // Data dir OUTSIDE the workspace: opencode scans cwd, and its own db folder under
   // cwd trips up session bootstrap.
@@ -718,7 +728,11 @@ export async function opencodeRepair(opts: {
       writeFileSync(join(ws, "deploy-plan.json"), JSON.stringify(plan, null, 2));
     }
     if (facts) {
-      writeFileSync(join(ws, "platform.json"), JSON.stringify(facts, null, 2));
+      // `runsOn` rather than `runtime`, which this file already uses for the
+      // language version pin. Written here rather than asked of the caller
+      // because it is the same value the redeploy closure was chosen by, and
+      // two independent statements of one fact is how they come to disagree.
+      writeFileSync(join(ws, "platform.json"), JSON.stringify({ ...facts, runsOn: runtime }, null, 2));
     }
     const token = await providerToken();
     writeFileSync(join(ws, "opencode.json"), JSON.stringify(opencodeConfig(token), null, 2));

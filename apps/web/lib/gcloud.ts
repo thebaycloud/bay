@@ -3,11 +3,12 @@ import { spawn } from "node:child_process";
 import { randomSlug } from "./slug";
 import { accessToken as restAccessToken, describeServiceRest, listServicesRest, invalidateToken } from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
-import { dbNameForSlug } from "./db";
+import { dbNameForSlug, getPool } from "./db";
 import { deleteAppSecrets } from "./app-secrets";
 import { runIdsForSlug } from "./deploy-runs";
 import { appPingScheduleArgs } from "./process-deploy";
 import { SCHEDULER_SA } from "./identities";
+import { appLogFilter } from "./log-filter";
 
 const PROJECT = "supersonic-deploy-prod";
 // The one shared Cloud SQL instance every app's database lives on.
@@ -351,7 +352,7 @@ export async function runJob(id: string): Promise<void> {
 export interface AppError { message: string; time: string; }
 
 export async function getErrors(slug: string): Promise<AppError[]> {
-  const filter = `resource.type=cloud_run_revision AND resource.labels.service_name=${slug} AND severity>=ERROR`;
+  const filter = appLogFilter(slug, { minSeverity: "ERROR" });
   try {
     const out = await capture(["logging", "read", filter, "--project", PROJECT, "--limit", "15", "--freshness", "7d", "--format=json"]);
     const arr = JSON.parse(out) as any[];
@@ -373,11 +374,10 @@ export async function getLogs(
   slug: string,
   opts: { limit?: number; severity?: string; freshness?: string } = {}
 ): Promise<LogLine[]> {
-  const parts = [`resource.type=cloud_run_revision`, `resource.labels.service_name=${slug}`];
-  if (opts.severity) parts.push(`severity>=${opts.severity.toUpperCase()}`);
+  const filter = appLogFilter(slug, opts.severity ? { minSeverity: opts.severity } : {});
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
   const out = await capture([
-    "logging", "read", parts.join(" AND "),
+    "logging", "read", filter,
     "--project", PROJECT, "--limit", String(limit),
     "--freshness", opts.freshness ?? "1h", "--format=json",
   ]);
@@ -475,6 +475,57 @@ export async function appPackages(slug: string): Promise<string[]> {
   }
 }
 
+/**
+ * Which of these resource names belong to THIS app.
+ *
+ * A multi-service app's resources are named `<slug>-<something>`: `foo-api`,
+ * `foo-worker`, `foo-bot`, `foo-nightly`. So a prefix match is how they are
+ * found — and a prefix match alone is also how another APP gets deleted, because
+ * an app's slug may itself begin with this slug plus a hyphen. `slugify`
+ * collapses runs of hyphens but permits single ones, so `subio` and `subio-2`
+ * can both exist, and on 5 Aug 2026 both did, both live: deleting the first
+ * would have taken the second's Cloud Run service with it, silently.
+ *
+ * The rule that fixes it is the one a human would apply by eye: a name that IS
+ * another app's slug belongs to that app, whatever it starts with. Anything
+ * beginning `<slug>-<something>` where `<slug>-<something>` is not itself an
+ * app is this app's.
+ *
+ * `others` is passed in rather than queried here so the decision is pure and can
+ * be tested without a database — which is the whole reason this is a function
+ * and not four inline filters.
+ */
+export function ownedResourceNames(slug: string, names: string[], others: Set<string>): string[] {
+  return names
+    .map((n) => n.trim())
+    .filter((n) => n && n !== slug && n.startsWith(`${slug}-`) && !others.has(n));
+}
+
+/** Every other app's slug, for the check above. Empty on failure, which makes
+ * the filter fall back to prefix-only rather than deleting nothing at all — the
+ * pre-existing behaviour, not a new way to fail. */
+async function otherAppSlugs(slug: string): Promise<Set<string>> {
+  try {
+    const r = await getPool("supersonic_platform").query(`SELECT slug FROM apps WHERE slug <> $1`, [slug]);
+    return new Set(r.rows.map((row) => row.slug as string));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Delete ONLY the Cloud Run service, leaving everything else the app owns.
+ *
+ * Not `deleteApp`: the database, the secrets, the images, the buckets and the
+ * fleet placement all stay. This exists for one transition Cloud Run does not
+ * otherwise offer — a live service whose container is unnamed cannot be
+ * redeployed with named containers, which a Cloud SQL sidecar requires — so the
+ * service is recreated by the very next command. See `needsServiceRecreate`.
+ */
+export async function deleteRunService(slug: string): Promise<void> {
+  await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]);
+}
+
 export async function deleteApp(slug: string): Promise<void> {
   // Two serving lanes, either of which may be absent:
   //  - container: its own Cloud Run service + optional per-app bucket
@@ -485,12 +536,64 @@ export async function deleteApp(slug: string): Promise<void> {
   // Sibling services from a multi-service app (`<slug>-api`, `<slug>-worker`).
   // Deleting only the primary would leave them running and billing under the name
   // of an app that no longer exists, reachable by nothing.
+  //
+  // Filtered through `ownedResourceNames`, and that is not tidiness. A bare
+  // `startsWith(slug + "-")` also matches the resources of any app whose SLUG
+  // begins with this one plus a hyphen, and that is not hypothetical: on 5 Aug
+  // the platform held both `subio` and `subio-2`, live, and deleting the first
+  // would have taken the second's Cloud Run service with it — a different app,
+  // no warning, no record.
+  const others = await otherAppSlugs(slug);
   try {
     const all = await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
-    for (const name of all.split("\n").map((l) => l.trim()).filter((n) => n.startsWith(`${slug}-`))) {
+    for (const name of ownedResourceNames(slug, all.split("\n"), others)) {
       await capture(["run", "services", "delete", name, "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
     }
   } catch { /* listing failed — the primary is already gone */ }
+
+  // Cloud Run WORKER POOLS. Nothing deleted these, ever.
+  //
+  // A worker-only app — a bot, a queue consumer — has no service and no job: its
+  // process runs in a worker pool named `<slug>-<process>`, which neither
+  // `run services list` nor `run jobs list` shows. So deleting such an app left
+  // a container RUNNING and billing, permanently, with no row anywhere to
+  // explain it and no surface that would ever show it again. Measured: deleting
+  // a worker-only test app left `lleb7-bot` alive.
+  try {
+    const pools = await capture(["beta", "run", "worker-pools", "list", "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
+    for (const name of ownedResourceNames(slug, pools.split("\n"), others)) {
+      await capture(["beta", "run", "worker-pools", "delete", name, "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
+    }
+  } catch { /* no worker pools, or the command is unavailable */ }
+
+  // Cloud Run JOBS: the release job, each cron's job, and the one-off `exec`
+  // job. Left behind they hold configuration and image references for an app
+  // that no longer exists, and the slug space is small enough that the name is
+  // eventually handed to somebody else.
+  try {
+    const jobs = await capture(["run", "jobs", "list", "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
+    const mine = ownedResourceNames(slug, jobs.split("\n"), others).concat(
+      jobs.split("\n").map((l) => l.trim()).filter((n) => n === `ss-exec-${slug}`),
+    );
+    for (const name of new Set(mine)) {
+      await capture(["run", "jobs", "delete", name, "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
+    }
+  } catch { /* no jobs */ }
+
+  // Cloud SCHEDULER jobs — the ones that actually keep firing.
+  //
+  // The worst of the three to leave behind: a cron whose app is gone goes on
+  // waking up on its schedule forever, against a URL that answers 404, writing
+  // a failure into the project's logs every time. Measured: deleting an app
+  // with a `*/10 * * * *` cron left `<slug>-nightly` scheduled and armed.
+  try {
+    const sched = await capture(["scheduler", "jobs", "list", "--location", REGION, "--project", PROJECT, "--format=value(name)"]);
+    // `jobs list` prints fully-qualified names; the last path element is the id.
+    const ids = sched.split("\n").map((l) => l.trim().split("/").pop() ?? "");
+    for (const name of ownedResourceNames(slug, ids, others)) {
+      await capture(["scheduler", "jobs", "delete", name, "--location", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
+    }
+  } catch { /* no schedules */ }
   try { await capture(["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* no mapping */ }
   try { await capture(["storage", "rm", "-r", `gs://supersonicdeploy-${slug}`, "--quiet"]); } catch { /* no per-app bucket */ }
   try { await capture(["storage", "rm", "-r", `gs://${ASSETS_BUCKET}/${slug}`, "--quiet"]); } catch { /* not a static release */ }
@@ -504,7 +607,40 @@ export async function deleteApp(slug: string): Promise<void> {
   // The app's database on the shared instance. Left behind, these accumulate
   // silently until a five-character slug is reused and the new app finds
   // somebody else's tables already in it.
-  try { await capture(["sql", "databases", "delete", dbNameForSlug(slug), "--instance", PG_INSTANCE, "--project", PROJECT, "--quiet"]); } catch { /* never had one */ }
+  //
+  // This call DOES NOT WORK for a provisioned database and never has, and the
+  // catch is why nobody knew. Measured on 5 Aug:
+  //
+  //   ERROR: (gcloud.sql.databases.delete) HTTPError 400: Invalid request:
+  //   failed to delete database "icflz". Detail: pq: must be owner of database
+  //   icflz. (Please use psql client to delete database that is not owned by
+  //   "cloudsqlsuperuser")
+  //
+  // Provisioning gives each app its own role and makes that role the owner —
+  // which is the isolation the deploy log advertises, "no other app can reach
+  // it" — and gcloud connects as cloudsqlsuperuser, which is not it. So every
+  // delete since databases existed has left the customer's data on the
+  // instance. Five such databases were on it when this was written.
+  //
+  // Doing it properly means taking ownership over SQL first (GRANT the app's
+  // role to the connecting user, ALTER DATABASE ... OWNER TO, then DROP) and is
+  // deliberately NOT added here by the same change that discovered it: it is a
+  // destructive path against shared production and it must be written by
+  // someone who can watch it run once. What changes now is that the failure
+  // stops being invisible.
+  try {
+    await capture(["sql", "databases", "delete", dbNameForSlug(slug), "--instance", PG_INSTANCE, "--project", PROJECT, "--quiet"]);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // An app that never had a database is the ordinary case and says so; a
+    // failure for any other reason is a customer's data staying on a shared
+    // instance after they asked for it to be gone, and that gets said out loud.
+    if (/not found|does not exist/i.test(msg)) {
+      // nothing to delete
+    } else {
+      console.error(`deleteApp ${slug}: database ${dbNameForSlug(slug)} NOT deleted — ${msg.slice(0, 300)}`);
+    }
+  }
 
   // The app's secrets. Left behind they are live credentials belonging to an app
   // that no longer exists, and the slug space is small enough that the name will

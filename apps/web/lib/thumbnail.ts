@@ -22,6 +22,25 @@ export function thumbnailObject(slug: string): string {
  * absent locally — where the whole call is skipped anyway, because SHOT_SERVICE_URL
  * is unset.
  */
+/**
+ * Is this app's address a Cloud Run one?
+ *
+ * A copy of `isCloudRunTarget` in services/proxy/src/upstream.ts, because these
+ * are separate deployables with no module in common. It is written to fail in
+ * the opposite direction, deliberately: over there `false` selects the fleet's
+ * edge secret, so a Cloud Run host that failed the check would send the wrong
+ * credential to a tenant. Here `false` selects "mint nothing", so anything this
+ * cannot parse is simply never handed a Google-signed token.
+ */
+export function isCloudRunUrl(u: string): boolean {
+  try {
+    const hostname = new URL(u).hostname.replace(/\.$/, "");
+    return hostname === "run.app" || hostname.endsWith(".run.app");
+  } catch {
+    return false;
+  }
+}
+
 async function identityToken(audience: string): Promise<string | null> {
   try {
     const r = await fetch(
@@ -43,12 +62,31 @@ async function identityToken(audience: string): Promise<string | null> {
 export async function requestThumbnail(slug: string, runUrl: string): Promise<void> {
   if (!SHOT_SERVICE || !runUrl) return;
   try {
+    // The app token is minted for a Cloud Run audience or it is not minted.
+    //
+    // A fleet app's runUrl is the fleet load balancer — a bare IP, which is no
+    // Google audience and verifies nothing. Minting an identity token for it is
+    // the defect phase 0 fixed in forward.ts, still here because it fell
+    // outside that spec's scope: it hands another service a Google-signed
+    // credential in our service account's name, for an audience that will never
+    // check it.
+    //
+    // What the node's router actually wants is `x-supersonic-edge`, which the
+    // screenshot service has no way to send today. So a fleet app gets no
+    // thumbnail — said out loud below rather than disguised as a token that
+    // cannot work. The request is still made, because whether a fleet app
+    // should be screenshotted at all is a decision for whoever gives the shot
+    // service a way in.
+    const appIsCloudRun = isCloudRunUrl(runUrl);
     const [callerToken, appToken] = await Promise.all([
       identityToken(SHOT_SERVICE),
       // The app is sealed; the screenshotter needs a token for the app's own
       // audience to get in, the same way the deploy probe does.
-      identityToken(new URL(runUrl).origin),
+      appIsCloudRun ? identityToken(new URL(runUrl).origin) : Promise.resolve(null),
     ]);
+    if (!appIsCloudRun) {
+      console.log(`thumbnail ${slug}: fleet app — no app token minted; the shot service cannot sign for the node router yet`);
+    }
     if (!callerToken) {
       console.warn(`thumbnail ${slug}: no caller token — is this running on Cloud Run?`);
       return;

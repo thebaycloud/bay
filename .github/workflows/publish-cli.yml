@@ -16,6 +16,37 @@
 # already how a release is declared here, and a second ritual is a second thing
 # to forget. Publishing an unchanged version is a no-op, so an ordinary push
 # costs one npm query and stops.
+# STATE ON 5 AUG 2026 — read this before assuming the CLI on npm is current.
+#
+# It is not. npm serves 0.9.1, published 30 Jul; this repository is at 0.10.0.
+# Six days of CLI-side fixes have been invisible to anyone installing it, which
+# is the exact gap the comment above says this workflow was written to close.
+#
+# TWO faults, stacked, and the first hid the second:
+#
+#   1. The `Test` step failed on every run from at least 2 Aug — six consecutive
+#      failures — on `every vendored bundle was built from the source that is
+#      here now`. vendor/resolve.js had drifted from apps/web/lib/resolve.ts.
+#      Fixed on 5 Aug by running `npm run bundle` in packages/cli. While it was
+#      red, `Publish if the version is new` was skipped every time, so nothing
+#      downstream had ever been exercised.
+#
+#   2. With the gate open, the publish itself fails:
+#
+#        npm error code E404
+#        npm error 404 Not Found - PUT https://registry.npmjs.org/supersonic-cli
+#        npm error 404  'supersonic-cli@0.10.0' is not in this registry.
+#
+#      A 404 on PUT is npm's answer for "you may not write this package": the
+#      NPM_TOKEN in this repository's secrets does not have publish rights to
+#      supersonic-cli, or is not the account that owns it. Nobody could have
+#      seen this while the test gate was red.
+#
+# So the remaining work is a credential, not code: issue an automation token on
+# the account that owns supersonic-cli and replace NPM_TOKEN. Until then this
+# workflow will keep going red at the publish step — which is the honest
+# outcome, and better than the six silent green-then-skipped runs it replaces.
+
 name: Publish CLI
 
 on:

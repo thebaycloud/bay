@@ -17,6 +17,8 @@
  * so a fifth lane cannot be added without showing up in the assertions.
  */
 
+import { CLOUD_RUN_DB, type DbAddress } from "./db-address";
+
 /** Which strategy builds and runs a service. Derived by the resolver, never authored. */
 export type Lane = "static" | "runner" | "container" | "buildpack";
 
@@ -42,8 +44,13 @@ export const ALL_LANES: Lane[] = ["static", ...SERVICE_LANES];
  */
 export const DEFAULT_PORT = 8080;
 
-export const DB_HOST = "127.0.0.1";
-export const DB_PORT = "5432";
+/**
+ * Kept as names because dbContainerArgs and proxyWait are Cloud Run's sidecar
+ * and mean loopback specifically. Anything that can run on either runtime takes
+ * a DbAddress instead.
+ */
+export const DB_HOST = CLOUD_RUN_DB.host;
+export const DB_PORT = CLOUD_RUN_DB.port;
 /**
  * Where the proxy answers health checks, as opposed to database traffic.
  *
@@ -72,14 +79,17 @@ const CLOUD_SQL_PROXY_IMAGE = process.env.CLOUD_SQL_PROXY_IMAGE
  * against 17, and every name missing from the shorter one was a user value the
  * platform silently overwrote.
  */
-export function databaseEnv(db: { databaseUrl: string; user: string; password: string; dbName: string }): string[] {
+export function databaseEnv(
+  db: { databaseUrl: string; user: string; password: string; dbName: string },
+  at: DbAddress = CLOUD_RUN_DB,
+): string[] {
   return [
     `DATABASE_URL=${db.databaseUrl}`,
-    `POSTGRES_SERVER=${DB_HOST}`, `POSTGRES_HOST=${DB_HOST}`, `POSTGRES_PORT=${DB_PORT}`,
+    `POSTGRES_SERVER=${at.host}`, `POSTGRES_HOST=${at.host}`, `POSTGRES_PORT=${at.port}`,
     `POSTGRES_USER=${db.user}`, `POSTGRES_PASSWORD=${db.password}`, `POSTGRES_DB=${db.dbName}`,
-    `PGHOST=${DB_HOST}`, `PGPORT=${DB_PORT}`,
+    `PGHOST=${at.host}`, `PGPORT=${at.port}`,
     `PGUSER=${db.user}`, `PGPASSWORD=${db.password}`, `PGDATABASE=${db.dbName}`,
-    `DB_HOST=${DB_HOST}`, `DB_PORT=${DB_PORT}`,
+    `DB_HOST=${at.host}`, `DB_PORT=${at.port}`,
     `DB_USER=${db.user}`, `DB_PASSWORD=${db.password}`, `DB_NAME=${db.dbName}`,
   ];
 }
@@ -295,6 +305,45 @@ export interface LaneDeploy {
  *
  * A parity fix should not smuggle in a migration for services that were working.
  */
+/**
+ * Must this service be DELETED before it can be deployed?
+ *
+ * Cloud Run cannot rename the container of a live service. A service whose
+ * revision holds an unnamed container refuses every deploy that names one, and
+ * a sidecar forces naming — so an app that already exists and then gains a
+ * database becomes undeployable, permanently, by the ordinary route.
+ *
+ * Measured on 5 Aug 2026 against the real API, four deploys, because the error
+ * says nothing about renaming and reads like a flag mistake:
+ *
+ *   new service + app container + sidecar          → deploys
+ *   EXISTING flat service + app container + sidecar → ERROR: (gcloud.run.deploy)
+ *       spec.template.spec.containers: Revision template should contain
+ *       exactly one container with an exposed port.
+ *   EXISTING flat service + named app, NO sidecar   → same error, so it is the
+ *       naming and not the sidecar
+ *   delete, then deploy with the sidecar            → deploys
+ *
+ * So deletion is not a workaround here, it is the only transition Cloud Run
+ * offers, and this is what p6mx8 hit: `Deployment failed` on a lane that had
+ * worked for it a week earlier, with a message that points at ports.
+ *
+ * Deliberately narrow. It is true ONLY when a sidecar is required AND a live
+ * service exists AND its containers are unnamed. `null` — no service, or the
+ * API could not be asked — is not `false`: a first deploy has nothing to
+ * delete, and a failed lookup must never authorise deleting a service on a
+ * guess.
+ *
+ * What deletion costs, and why it is acceptable exactly here: the revision
+ * history goes, so `supersonic rollback` has nothing to roll back to for one
+ * deploy. The alternative is an app that cannot deploy at all, and the service
+ * is recreated in the same command with its invoker bindings and domain mapping
+ * re-established by the steps that already follow every deploy.
+ */
+export function needsServiceRecreate(d: { cloudsql?: string | null; existingScoped?: boolean | null }): boolean {
+  return Boolean(d.cloudsql) && d.existingScoped === false;
+}
+
 export function deployArgs(d: LaneDeploy): string[] {
   if (d.lane === "static") {
     throw new Error("the static lane publishes to GCS and deploys no Cloud Run service");

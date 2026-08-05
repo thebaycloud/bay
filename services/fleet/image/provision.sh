@@ -259,6 +259,27 @@ table inet supersonic {
     # The rest of link-local. Nothing a tenant needs lives here.
     ip daddr 169.254.0.0/16 counter drop
   }
+
+  chain input {
+    type filter hook input priority 0; policy accept;
+
+    # The Cloud SQL proxy binds 0.0.0.0 because ssbr0 does not exist at boot —
+    # the agent creates it. So the bind is wide and the door is narrow: only a
+    # sandbox, or the host itself, may reach 5432.
+    #
+    # INPUT, and the hook is the whole rule. The proxy's socket is on this host,
+    # so a sandbox's packet to 10.200.0.1:5432 is addressed to a LOCAL address
+    # and the kernel delivers it here. `forward` sees only packets being routed
+    # onward, which is exactly why the metadata block belongs there —
+    # 169.254.169.254 is never a local address. The same line in `forward`
+    # matches nothing at all, and a rule that matches nothing reads precisely
+    # like a rule that works.
+    #
+    # `lo` stays open so someone debugging on the node can still reach Postgres;
+    # a sandbox has its own network namespace and cannot use the host's loopback
+    # to get here.
+    tcp dport 5432 iifname != { "lo", "ssbr0" } drop
+  }
 }
 EOF
 systemctl enable nftables
@@ -308,6 +329,67 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# 7a. Log shipping
+#
+# App stdout and stderr land in /srv/apps/<slug>/<process>.log, written by the
+# agent. Without this they stay there: `supersonic logs` filters Cloud Logging
+# for cloud_run_revision, so an app on a node produces nothing at all — not an
+# error, nothing. Three separate incidents on 2026-08-04 were diagnosable only
+# over ssh, and one of them had been looping unnoticed for hours.
+#
+# The agent's own log ships too, deliberately. Every one of those incidents was
+# read from /var/log/supersonicd.log rather than from an app's output: it is the
+# file that says WHY an app is not running.
+#
+# No IAM step here — the node's service account already holds
+# roles/logging.logWriter. If entries stop arriving, check that first anyway: it
+# is the one dependency this section does not create for itself.
+# ---------------------------------------------------------------------------
+
+if ! systemctl list-unit-files 2>/dev/null | grep -q '^google-cloud-ops-agent'; then
+  log "installing google-cloud-ops-agent"
+  curl -fsSL -o /tmp/add-google-cloud-ops-agent-repo.sh \
+    https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+  bash /tmp/add-google-cloud-ops-agent-repo.sh --also-install
+  rm -f /tmp/add-google-cloud-ops-agent-repo.sh
+fi
+
+mkdir -p /etc/google-cloud-ops-agent
+cat > /etc/google-cloud-ops-agent/config.yaml <<'EOF'
+logging:
+  receivers:
+    supersonic_apps:
+      type: files
+      # Without this an entry carries NOTHING that says which app it came from:
+      # resource.type is gce_instance, resource.labels are instance/zone/project,
+      # and logName is the receiver name — identical for all twenty apps. Measured
+      # on 2026-08-04 before this line was added. With it, each entry gets
+      # labels."agent.googleapis.com/log_file_path" = /srv/apps/<slug>/<proc>.log,
+      # which is the only discriminator that exists.
+      record_log_file_path: true
+      include_paths:
+        - /srv/apps/*/*.log
+    supersonic_agent:
+      type: files
+      # Without this an entry carries NOTHING that says which app it came from:
+      # resource.type is gce_instance, resource.labels are instance/zone/project,
+      # and logName is the receiver name — identical for all twenty apps. Measured
+      # on 2026-08-04 before this line was added. With it, each entry gets
+      # labels."agent.googleapis.com/log_file_path" = /srv/apps/<slug>/<proc>.log,
+      # which is the only discriminator that exists.
+      record_log_file_path: true
+      include_paths:
+        - /var/log/supersonicd.log
+  service:
+    pipelines:
+      supersonic:
+        receivers: [supersonic_apps, supersonic_agent]
+EOF
+
+systemctl enable google-cloud-ops-agent >/dev/null 2>&1 || true
+systemctl restart google-cloud-ops-agent || true
+
+# ---------------------------------------------------------------------------
 # 7b. The agent
 #
 # A node that reboots must come back serving without anyone logging in. Local
@@ -329,6 +411,23 @@ Type=simple
 # Root, because it creates network namespaces, mounts snapshots and drives
 # runsc. The tenant boundary is the sandbox, not this process.
 User=root
+# BOTH files, and both optional (`-`), because this heredoc REPLACES the unit
+# every time provision.sh runs.
+#
+# agent.env holds FLEET_ENDPOINT and FLEET_TOKEN. It was added to the live unit
+# by hand and was never in this file, so re-provisioning fleet-lab-1 without
+# this line would have restarted the agent with no control plane to ask. That
+# does not fail loudly: `Source.Fetch` treats an empty Endpoint as "this node
+# has no control plane" and reads /srv/state/desired.json instead — deliberately
+# NOT the cache, which is the fallback for a control plane that is merely
+# unreachable. On 2026-08-04 that local file listed 3 apps while the control
+# plane listed 20, and reconcileOnce stops what is no longer desired before it
+# starts anything. Seventeen apps would have gone down, quietly, as a
+# side effect of running this script.
+#
+# fleet.env is where the rollout writes FLEET_EDGE_SECRET.
+EnvironmentFile=-/etc/supersonic/agent.env
+EnvironmentFile=-/etc/supersonic/fleet.env
 ExecStart=/opt/agent/supersonicd -interval 10s
 Restart=always
 RestartSec=5
@@ -344,6 +443,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+systemctl enable cloud-sql-proxy >/dev/null 2>&1 || true
 systemctl enable supersonicd >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------

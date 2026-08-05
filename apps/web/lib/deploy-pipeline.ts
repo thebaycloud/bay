@@ -20,10 +20,11 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
-import { chooseNode, placeApp, setRuntime } from "@/lib/fleet";
-import { buildAppSpec } from "@/lib/fleet-spec";
-import { fleetEligibility, fleetPlacementWanted, fleetProbe, placeOnFleet, type Placement } from "@/lib/fleet-place";
-import { rollback } from "@/lib/gcloud";
+import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
+import { appLogFilter } from "@/lib/log-filter";
+import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
+import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
+import { rollback, deleteRunService } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv } from "@/lib/env-merge";
@@ -42,7 +43,8 @@ import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
-import { deployArgs, databaseEnv, DB_HOST, DB_PORT, withScale, type Lane, type Scale } from "@/lib/lanes";
+import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
+import { deployArgs, databaseEnv, needsServiceRecreate, DB_HOST, DB_PORT, withScale, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -52,7 +54,7 @@ import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, p
 import { deploymentEnv } from "@/lib/framework-env";
 import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
 import { readProcfile } from "@/lib/procfile";
-import { mergeProcfile, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
+import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
 import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
 import { buildEnvelope, assertReached } from "@/lib/envelope";
 import { planResources, type Declared } from "@/lib/resources";
@@ -230,11 +232,18 @@ async function fetchContainerError(slug: string): Promise<string | null> {
   try {
     const out = await capture("gcloud", [
       "logging", "read",
-      `resource.type=cloud_run_revision AND resource.labels.service_name=${slug} AND severity>=ERROR`,
+      appLogFilter(slug, { minSeverity: "ERROR" }),
       "--project", PROJECT, "--limit", "25", "--freshness", "10m",
-      "--format=value(textPayload)", "--order=asc",
+      "--format=json", "--order=asc",
     ]);
-    const lines = out.split("\n").map((l) => l.trim()).filter(Boolean)
+    // Both runtimes, because they differ: a Cloud Run entry carries textPayload,
+    // and an entry the ops agent shipped from a node carries jsonPayload.message.
+    // Reading only textPayload returned null for every fleet app while looking
+    // exactly like an app that logged nothing.
+    const lines = (JSON.parse(out) as any[])
+      .map((e) => String(e.textPayload ?? e.jsonPayload?.message ?? ""))
+      .map((l) => l.trim())
+      .filter(Boolean)
       .filter((l) => !/STARTUP (TCP|HTTP) probe|Default STARTUP|Connection failed with status/i.test(l));
     const signal = lines.filter((l) => /error|exception|throw|cannot|not initialize|not found|refused|denied|undefined|EADDR|traceback|fatal|missing|required/i.test(l));
     const pick = (signal.length ? signal : lines).slice(0, 12);
@@ -432,6 +441,17 @@ async function liveContainerImage(service: string): Promise<string | null> {
 }
 
 /**
+ * What this app declares to Cloud Run when the fleet is running it: nothing.
+ *
+ * Named rather than written inline as `[]`, because an empty array at a call
+ * site reads like an omission and this is a decision. `planProcesses` plans no
+ * steps for it, and the orphan pass then removes every worker-pool and job the
+ * app has on Cloud Run — which is the whole point. Two live copies of one
+ * process is the defect class the fleet fork exists to end.
+ */
+const FLEET_OWNS_PROCESSES: ResolvedProcess[] = [];
+
+/**
  * Deploy the app's workers and crons, and remove the ones it no longer declares.
  *
  * The imperative half of the process model. Every decision is made by the pure
@@ -600,7 +620,7 @@ async function databaseExists(slug: string): Promise<boolean> {
 }
 
 /** Create a per-app database on the shared Cloud SQL instance and return a socket DATABASE_URL. */
-function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
+function provisionPostgres(slug: string, log: (l: string) => void, at: DbAddress): Promise<{ databaseUrl: string; connectionName: string; user: string; password: string; dbName: string; isolated: boolean }> {
   let cfg;
   try { cfg = pgConfig(); } catch (e) { return Promise.reject(e); }
   // Same helper the delete path uses, so an app's database can always be found
@@ -623,7 +643,7 @@ function provisionPostgres(slug: string, log: (l: string) => void): Promise<{ da
       // cannot express a socket at all: `PostgresDsn.build(host="/cloudsql/…")`
       // is REJECTED outright (verified), so a socket left every such app unable
       // to reach a database the platform had already created for it.
-      const databaseUrl = `postgresql://${role.user}:${role.password}@${DB_HOST}:${DB_PORT}/${dbName}`;
+      const databaseUrl = databaseUrlFor(role, dbName, at);
       return { databaseUrl, connectionName: cfg.connectionName, user: role.user, password: role.password, dbName, isolated: role.isolated };
     });
 }
@@ -779,23 +799,55 @@ async function idTokenFor(audience: string): Promise<string> {
 //
 // The judgement about what counts as working lives in lib/verify-app.ts; this
 // is only the part that needs the deployer's credentials.
-async function probeApp(
+export async function probeApp(
   url: string,
   log: (l: string) => void,
   sealed: boolean,
   health?: { health: HealthConfig; strict: boolean; spaFallback?: boolean },
+  // Seams, for the test below. Nothing in production passes either.
+  opts: { mint?: (audience: string) => Promise<string>; sleepImpl?: (ms: number) => Promise<void> } = {},
 ): Promise<{ ok: boolean; reason?: string }> {
   // A sealed app cannot be reached without a token, so mint it outside the check
   // below: a token failure means the check did not happen, and saying so beats
   // returning a pass we never verified. A public app needs no token at all.
+  //
+  // It said that and then returned `{ ok: true }` — a pass it had never
+  // verified. So a deploy whose app never came up shipped, was marked live, and
+  // reported "verified" to everything downstream, on the strength of a check
+  // that did not run. The comment was right and the code did the opposite.
+  //
+  // Retried first, because most of what breaks here is transient. A single
+  // metadata hiccup is not evidence about the app, and turning one into a
+  // failed deploy would trade a silent false pass for a noisy false failure.
+  //
+  // Then FAILED, not skipped — and marked IAM_FAILURE, which is already in
+  // PLATFORM_MARKERS. That routing is what makes failing closed safe here:
+  // `classify` reads the marker, blames the platform, rolls back and tells the
+  // user, and never hands the repair agent a customer's repository over a
+  // credential of ours. Without the marker this same change would send an LLM
+  // to "fix" a repo that has nothing wrong with it.
   let auth: Record<string, string> = {};
   if (sealed) {
-    try {
-      auth = { Authorization: `Bearer ${await idTokenFor(url)}` };
-    } catch (e) {
-      log(`! response check skipped — no ID token (${e instanceof Error ? e.message : String(e)})`);
-      return { ok: true };
+    const mint = opts.mint ?? idTokenFor;
+    const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    let lastErr = "";
+    let token = "";
+    for (let i = 0; i < 3 && !token; i++) {
+      if (i) await sleep(1000 * i);
+      try {
+        token = await mint(url);
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : String(e);
+      }
     }
+    if (!token) {
+      log(`! could not mint an ID token to check ${url} after 3 attempts — ${lastErr}`);
+      return {
+        ok: false,
+        reason: `IAM_FAILURE: could not mint an ID token to check this app, so the deploy was never verified — ${lastErr}`,
+      };
+    }
+    auth = { Authorization: `Bearer ${token}` };
   }
   return verifyApp({
     url,
@@ -1325,7 +1377,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
         if (ownerId && ownerWorkspace) {
           const staticUrl = (await staticServiceUrl()) ?? "";
-          await markAppLive(slug, staticUrl, prebuiltHash || null);
+          // A static site is nothing but a web page, so `true` — and `null` for
+          // routes, which this call never had and must not acquire by having a
+          // later argument slide into its place.
+          await markAppLive(slug, staticUrl, prebuiltHash || null, null, true);
           void requestThumbnail(slug, staticUrl);
         }
       });
@@ -1947,6 +2002,26 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       log(`No web process — deploying ${processes.length === 1 ? "one process" : `${processes.length} processes`} and no service`);
     }
 
+    // A release declared in config rather than a Procfile has always been run by
+    // lib/release-job.ts as a Cloud Run Job. On the fleet a release is an
+    // ordinary process, so it has to arrive as one. Appended after `serviceless`
+    // is decided: a release process has no `web` kind, and folding it in earlier
+    // would make an app with only a config release — and no Procfile at all —
+    // read as having declared processes with none of them a web server, which is
+    // the "no web process, no service" branch for an app that never asked for one.
+    //
+    // `releaseCmd` rather than a fresh `releaseCommand(primaryConfigService)`
+    // read, deliberately: it is the exact value the Cloud Run branch already
+    // hands to `runRelease` a few hundred lines down, already `inDir`-wrapped for
+    // a monorepo service, and already resolved with config outranking a
+    // Procfile-inferred command (see `detect.test.ts`, "the config outranks
+    // every inferred migration command"). Re-deriving it here from config alone
+    // would silently drop both of those and let the two runtimes disagree about
+    // which command a release even is — the exact bug this task exists to close.
+    if (releaseCmd.trim() && !processes.some((p) => p.name === "release")) {
+      processes.push(resolveProcess("release", { command: releaseCmd }));
+    }
+
     const extraEnv: string[] = url ? [`SUPERSONIC_REPO=${url}`] : [];
     // The literals the author committed, FIRST — so the platform's own values
     // below win a name they share. A user cannot declare a database variable
@@ -2029,8 +2104,60 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       if (r.kind === "database" && r.reason.includes("kept")) log(`Database: ${r.reason}`);
     }
 
+    // With a Dockerfile, build it ourselves with a registry layer cache and
+    // deploy the image — so an unchanged `npm install` is reused and redeploys
+    // are dramatically faster. Which builder does it is BUILDER's call
+    // (buildkit vs the Kaniko default); see lib/build-config.ts. Without a
+    // Dockerfile, fall back to buildpacks.
+    const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
+    // What a worker or a cron runs. The SAME artifact the web process got — a
+    // worker built separately could differ from the service beside it, which is
+    // the one thing a process model must not allow.
+    //
+    // The buildpack lane has no image at this point: `run deploy --source` builds
+    // one and only Cloud Run knows its name. Building again with `--source` per
+    // worker would pay for the same build a third time (the release job already
+    // pays for it twice, and says so), so the deployed image is read back from
+    // the live service instead — one API call against N builds.
+    const processImage = lane === "runner"
+      ? (runnerLang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE)
+      // A serviceless buildpack app built its image with `builds submit --pack`
+      // under the same name, so there is no service to read it back from and no
+      // need to.
+      : lane === "container" || serviceless ? `${IMAGE}:latest` : undefined;
+
+    // Which runtime this deploy takes, decided here — before anything is
+    // deployed — because `provisionPostgres` right below needs the answer to
+    // hand the app an address it can actually reach. `chooseRuntime` says what
+    // the fleet CAN serve; `fleetPlacementWanted` says what it is ALLOWED to
+    // serve yet. Task 10 drops the second half once one app has proved the
+    // path; until then the first app to prove it is whichever one somebody
+    // happens to deploy.
+    //
+    // Read fresh rather than reusing `hasDockerfile` above: that read happened
+    // before the SPA and Next.js fallback Dockerfiles (just above this block)
+    // were written, so an app can have gained one since. The lane label was
+    // fixed even earlier and does not update either way — this is the checkout
+    // telling the truth about how the app will actually be built.
+    const hasDockerfileNow = existsSync(join(dir, "Dockerfile"));
+    // `workers` is what makes "worker-only" placeable and "cron-only" not. The
+    // node confirms a process it is RUNNING, and a cron is never running — the
+    // agent's reconcile excludes it, because the scheduler owns it — so an app
+    // whose only declared process is scheduled has nothing a node could report
+    // and every deploy of it would roll back.
+    const workerCount = processes.filter((pr) => pr.kind === "worker").length;
+    const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless, hasDockerfile: hasDockerfileNow, workers: workerCount });
+    const toFleet = target.runtime === "fleet" && fleetPlacementWanted(process.env, slug);
+    // The address the database is provisioned at follows `toFleet`, never
+    // `target.runtime` alone. The two differ for exactly the apps this gate
+    // exists for: an app the fleet could serve but is not yet a canary still
+    // deploys to Cloud Run, and handing it FLEET_DB would give that Cloud Run
+    // revision an address it cannot reach — the same failure this whole task
+    // exists to stop, arriving through the back door.
+    const dbAt = toFleet ? FLEET_DB : CLOUD_RUN_DB;
+
     const pgPromise = wants("database") && s.database?.engine === "postgres"
-      ? provisionPostgres(slug, log).then(
+      ? provisionPostgres(slug, log, dbAt).then(
           (pg) => ({ ok: true as const, pg }),
           (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
         )
@@ -2107,7 +2234,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           cloudsql = r.pg.connectionName;
           // Every spelling of the same endpoint. DATABASE_URL alone is not enough:
           // plenty of apps never read it and require POSTGRES_SERVER or PGHOST.
-          dbEnv = databaseEnv(r.pg);
+          dbEnv = databaseEnv(r.pg, dbAt);
           dbIsolated = r.pg.isolated;
           dbPassword = r.pg.password;
           log("Provisioned the database — connecting through a Cloud SQL proxy");
@@ -2313,28 +2440,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       spaFallback: primaryConfigService?.spaFallback,
     };
 
-    // With a Dockerfile, build it ourselves with a registry layer cache and
-    // deploy the image — so an unchanged `npm install` is reused and redeploys
-    // are dramatically faster. Which builder does it is BUILDER's call
-    // (buildkit vs the Kaniko default); see lib/build-config.ts. Without a
-    // Dockerfile, fall back to buildpacks.
-    const IMAGE = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${slug}`;
-    // What a worker or a cron runs. The SAME artifact the web process got — a
-    // worker built separately could differ from the service beside it, which is
-    // the one thing a process model must not allow.
-    //
-    // The buildpack lane has no image at this point: `run deploy --source` builds
-    // one and only Cloud Run knows its name. Building again with `--source` per
-    // worker would pay for the same build a third time (the release job already
-    // pays for it twice, and says so), so the deployed image is read back from
-    // the live service instead — one API call against N builds.
-    const processImage = lane === "runner"
-      ? (runnerLang === "python" ? RUNNER_PYTHON_IMAGE : RUNNER_NODE_IMAGE)
-      // A serviceless buildpack app built its image with `builds submit --pack`
-      // under the same name, so there is no service to read it back from and no
-      // need to.
-      : lane === "container" || serviceless ? `${IMAGE}:latest` : undefined;
-    const useDockerBuild = existsSync(join(dir, "Dockerfile"));
+    const useDockerBuild = hasDockerfileNow;
     // Slug-aware, so `BUILDKIT_APPS=<slug>` can prove the registry auth on one
     // app before the default moves. Without the slug this reads the global
     // `BUILDER` exactly as it did.
@@ -2866,11 +2972,146 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       }
     };
 
+    /**
+     * Build the app's image. The ONE place in this file that does.
+     *
+     * It is defined before the fork because both runtimes need it, and it is one
+     * function rather than two because a second copy of "submit the build, read
+     * the log back if it fails" is a worse outcome than the bug it would fix.
+     *
+     * The bug it does fix: this used to sit inside `runDeploy`, and
+     * `runFleetDeploy` never calls `runDeploy`. So the fleet branch resolved its
+     * image as `processImage` — the literal string `${IMAGE}:latest`, a tag name
+     * and not evidence that a build ran — and placed it. A first-ever fleet
+     * deploy failed on an image that was never pushed; every redeploy after that
+     * resolved the tag to whatever the last Cloud Run build had left there,
+     * placed it successfully, and marked the app live. The customer's new code
+     * was reported shipped and the fleet went on serving the previous version.
+     * A thing accepted, confirmed, and then not applied is the one failure this
+     * platform is built not to have, and the silent one is the worse half.
+     *
+     * The `build` stage is recorded here, so it is recorded once per deploy on
+     * whichever branch runs — the Dockerfile lane never recorded it at all
+     * before, which is the other half of "not zero times, not twice".
+     *
+     * A failure comes back as an error string carrying the real Cloud Build log,
+     * because that string is what the repair agent is given to work from and
+     * `gcloud exited 1` is not something it can fix.
+     *
+     * WHAT IT RETURNS IS A DIGEST, NOT A TAG
+     *
+     * `${IMAGE}:latest` is a constant. Returning it made every deploy after the
+     * first place a spec byte-identical to the one already on the node — and the
+     * agent restarts a sandbox when the image or the command CHANGES
+     * (services/fleet/agent/main.go). An unchanged string is not a change, so it
+     * stopped nothing and pulled nothing; `EnsureImage` would not have saved it
+     * either, because `GetImage("slug:latest")` resolves out of the node's own
+     * content store without asking the registry. The probe then got its 200 from
+     * the sandbox that was already serving, the verdict passed, and the customer
+     * was told their new version had shipped.
+     *
+     * So the tag is resolved to the digest it means AT THIS MOMENT, once, here —
+     * where the build result is produced, so the fleet branch and the Cloud Run
+     * branch cannot end up holding different references to "what this deploy
+     * built". This is the same move `baseImage` already makes forty lines into
+     * the render for the same reason, and the comment there names the defect
+     * class: "the `:latest` defect the version resolver exists to kill".
+     *
+     * It differs from that one in being FATAL. Pinning a base is an improvement
+     * on what shipped before it, so an unresolvable digest there costs
+     * reproducibility and nothing else. Here the tag is not a lesser answer, it
+     * is the bug: falling back to it would place a reference that cannot express
+     * "this is new code" and would hide that behind a deploy reporting success.
+     */
+    const buildImage = async (): Promise<{ ok: true; image: string } | { ok: false; error: string }> => {
+      if (!useDockerBuild && !serviceless) {
+        // Only the buildpack lane reaches here: its image is produced as a side
+        // effect of `run deploy --source` and named by Cloud Run, so there is
+        // nothing to build ahead of the delivery. `runDeploy` knows that and
+        // never asks; `fleetEligibility` refuses the lane outright for the same
+        // reason. This is the answer if a third caller ever appears, and it is a
+        // refusal rather than a shrug — placing an image nobody built is exactly
+        // what this function was extracted to prevent.
+        return { ok: false, error: "this lane has no image of its own to build before the deploy" };
+      }
+      // Kept for the error path. `gcloud builds submit` reports the failure in
+      // its own output long before the build log is fetchable, and the last
+      // lines of it are the only diagnosis available when the log read fails.
+      const btail: string[] = [];
+      const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
+      try {
+        await stages.around("build", async () => {
+          const args = useDockerBuild
+            ? ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()]
+            // The one lane where skipping the Cloud Run deploy would skip the
+            // BUILD: buildpacks run inside `run deploy --source`, so with no
+            // service there is nothing to produce an image. `builds submit
+            // --pack` is the same builder without the deploy, which is exactly
+            // what a worker-only app needs.
+            //
+            // NOT `--source` on the worker pool itself, though it accepts one:
+            // that would rebuild the app once per process, on a lane whose
+            // release job already pays for the build twice and says so.
+            //
+            // No `--service-account` here, and it is not an oversight. This is
+            // the one submit that writes no cloudbuild.yaml, so it has no
+            // `logging: CLOUD_LOGGING_ONLY` — and Cloud Build REFUSES a
+            // user-specified build account unless a logging destination is set,
+            // which would turn a scoped identity into a failed deploy. The
+            // buildpack lane is what step 4 deletes anyway; it keeps the default
+            // account until it goes.
+            : ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`];
+          if (useDockerBuild) log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
+          else log("Building with buildpacks — no service to deploy, so the image is built directly…");
+          const hb = setInterval(() => log("building…"), 8000);
+          builds.reset();
+          try {
+            await run("gcloud", args, onBuild);
+          } finally { clearInterval(hb); }
+        });
+      } catch (e) {
+        const buildLog = await builds.error();
+        const reason = buildLog
+          || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
+          || btail.slice(-6).join("\n")
+          || (e instanceof Error ? e.message : String(e));
+        return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
+      }
+      const digest = await resolveImageDigest(`${IMAGE}:latest`);
+      if (!digest) {
+        // Ours, not the repository's — the build succeeded and pushed. Worded to
+        // match deploy-errors.ts's registry rule so `classify` blames the
+        // platform: sending a repair agent to edit a customer's app over a
+        // registry that would not answer costs ~$12-15 and finds nothing.
+        return { ok: false, error: `the image digest could not be resolved: the build pushed ${IMAGE}:latest, `
+          + `and the registry did not say which image that now names. Deploying the tag instead would silently ship the previous version.` };
+      }
+      log(`Built ${digest.slice(0, 19)}… — deployed by digest, so "the new version" is a fact rather than a tag.`);
+      return { ok: true, image: `${IMAGE}@${digest}` };
+    };
+
     const runDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
       if (staticServe) return runStatic(staticServe);
       // Read once, before any lane runs: the container shape belongs to the
       // service that already exists, and every lane below has to agree with it.
       const existingScoped = await liveContainerShape(slug);
+      // Cloud Run cannot rename the container of a live service, and a Cloud SQL
+      // sidecar requires named ones — so an app that already exists and then
+      // gains a database is undeployable until its service is recreated. The
+      // measurements are in `needsServiceRecreate`'s own comment; the short
+      // version is that every other transition was tried against the real API
+      // and rejected, including naming the container with no sidecar at all.
+      if (needsServiceRecreate({ cloudsql, existingScoped })) {
+        log("This app gained a database, and Cloud Run cannot add one to a service that was built without it — recreating the service. Its url and revision history are replaced; the database, the secrets and the images are not touched.");
+        try {
+          await deleteRunService(slug);
+        } catch (e) {
+          // Not fatal, and not silent. The deploy below fails on its own with
+          // the container error, which is the same outcome; saying why here is
+          // what stops the next reader chasing an imaginary port problem.
+          log(`! could not recreate the service — the deploy below will fail on the container shape: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`);
+        }
+      }
       if (runnerLang && runnerObject) {
         // No image is built. A one-time prepare step installs deps + builds on
         // the runner image (warm cache) and uploads a ready-to-run bundle; the
@@ -2909,62 +3150,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         }));
       }
       if (useDockerBuild) {
-        log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
-        const hb = setInterval(() => log("building…"), 8000);
-        const btail: string[] = [];
-        const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
-        builds.reset();
-        try {
-          await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()], onBuild);
-        } catch {
-          clearInterval(hb);
-          const buildLog = await builds.error();
-          const reason = buildLog
-            || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
-            || btail.slice(-6).join("\n");
-          return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
-        }
-        clearInterval(hb);
-        const relC = await runRelease({ lane: "container", service: slug, image: `${IMAGE}:latest`, env: extraEnv, release: releaseCmd });
+        const image = await buildImage();
+        if (!image.ok) return { ok: false, error: image.error };
+        const relC = await runRelease({ lane: "container", service: slug, image: image.image, env: extraEnv, release: releaseCmd });
         if (!relC.ok) return { ok: false, error: relC.error };
         return attempt(deployArgs({
           lane: "container", service: slug, serviceFlags: deployFlags, appFlags,
-          image: `${IMAGE}:latest`, scale, cloudsql, existingScoped,
+          image: image.image, scale, cloudsql, existingScoped,
         }));
       }
       if (serviceless) {
-        // The one lane where skipping the deploy would skip the BUILD: buildpacks
-        // run inside `run deploy --source`, so with no service there is nothing to
-        // produce an image. `builds submit --pack` is the same builder without the
-        // deploy, which is exactly what a worker-only app needs.
-        //
-        // NOT `--source` on the worker pool itself, though it accepts one: that
-        // would rebuild the app once per process, on a lane whose release job
-        // already pays for the build twice and says so.
-        try {
-          await stages.around("build", async () => {
-            log("Building with buildpacks — no service to deploy, so the image is built directly…");
-            const hb = setInterval(() => log("building…"), 8000);
-            builds.reset();
-            try {
-              // No `--service-account` here, and it is not an oversight. This is
-              // the one submit that writes no cloudbuild.yaml, so it has no
-              // `logging: CLOUD_LOGGING_ONLY` — and Cloud Build REFUSES a
-              // user-specified build account unless a logging destination is
-              // set, which would turn a scoped identity into a failed deploy.
-              // The buildpack lane is what step 4 deletes anyway; it keeps the
-              // default account until it goes.
-              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`], buildLine);
-            } finally { clearInterval(hb); }
-          });
-        } catch (e) {
-          const buildLog = await builds.error();
-          return { ok: false, error: `Build failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
-        }
+        const image = await buildImage();
+        if (!image.ok) return { ok: false, error: image.error };
         // Released against the image that now exists, not against the source —
         // otherwise the release job pays for a second buildpack build of bytes it
         // has already built.
-        const relS = await runRelease({ lane: "container", service: slug, image: `${IMAGE}:latest`, env: extraEnv, release: releaseCmd });
+        const relS = await runRelease({ lane: "container", service: slug, image: image.image, env: extraEnv, release: releaseCmd });
         if (!relS.ok) return { ok: false, error: relS.error };
         return { ok: true };
       }
@@ -2988,9 +3189,156 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       return res;
     };
 
-    log(`Deploying ${slug} to Cloud Run…`);
+    /**
+     * The fleet branch. No Cloud Run service is created at all.
+     *
+     * It builds through `buildImage`, the same closure `runDeploy` builds
+     * through — building is shared, it is only the delivery that forks — and it
+     * places the reference that build returned rather than the tag the deploy
+     * expected it to write. Those are not the same thing, and treating them as
+     * the same is how this branch spent Task 7 placing the previous version of
+     * the customer's code while reporting the new one live.
+     *
+     * A failed build is a failed deploy here exactly as it is on the Cloud Run
+     * side, carrying the build's own error. There is no placement attempt after
+     * one: a node given an image that does not exist fails later, further from
+     * the cause, and a node given a STALE image does not fail at all.
+     *
+     * Verification is the load balancer with the app's own health path, because
+     * that is the path real traffic takes and the one a database-backed app
+     * fails on when its database is unreachable.
+     */
+    /**
+     * The spec this deploy actually placed, kept for `assertReached`.
+     *
+     * Null on the Cloud Run branch and on a fleet deploy that never got as far
+     * as placing. It is read only on success, so a failed verify — which
+     * restores the PREVIOUS placement — never reports this one as the outcome.
+     */
+    let placedSpec: AppSpec | null = null;
+
+    const runFleetDeploy = async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
+      if (!FLEET_LB) return { ok: false, error: "no fleet load balancer is configured" };
+      const image = await buildImage();
+      if (!image.ok) return { ok: false, error: image.error };
+
+      // EVERY secret the app has, read before the stage opens so the stage
+      // measures the placement rather than a Secret Manager round trip. Not
+      // just the ones this deploy stored: a node is handed the whole set at
+      // once, so a secret not passed is a secret the app loses.
+      const secrets = await allAppSecrets(slug, secretRefs);
+
+      // The `fleet` stage — placing the app on a node and checking it answers
+      // from there — written from inside the branch that does the work.
+      //
+      // It went missing when the additive block that used to write it was
+      // deleted, and nothing noticed: `stage-names.ts` still declares it in
+      // LANE_KNOWN_STAGES, and a declared name that nothing writes does not
+      // fail anything. It produces a table with no fleet rows in it, which
+      // reads as "no app was ever placed" rather than as a missing emitter —
+      // the same shape of defect the whole vocabulary file exists to prevent.
+      // The size the author asked for, carried to the node.
+      //
+      // `buildAppSpec` used to default every app to 2 GiB / 1024 shares no
+      // matter what `scale:` said, and the check that should have caught it was
+      // the one throwing a false alarm two hundred lines below. An app declaring
+      // `memory: 4Gi` declares it because it OOMs at 2Gi — placing it at 2Gi
+      // anyway is an OOM kill on a deploy that reported success, which is the
+      // same shape of defect as the tag placement above.
+      //
+      // `scale` is `withScale(...)`, so these are never undefined and the `??`
+      // defaults inside `buildAppSpec` are not what keeps an undeclared app at
+      // the 2 GiB floor — DEFAULT_SCALE is. That floor exists because Cloud
+      // Run's 512Mi OOM-killed a real Node app at 564Mi before it bound $PORT.
+      const placing = buildAppSpec({
+        slug, image: image.image, env: extraEnv, secrets,
+        processes, healthPath: primaryHealth.health.path,
+        // Belt and suspenders with the append above: `processes` already
+        // carries a synthesised release entry when `releaseCmd` was set, but
+        // `buildAppSpec` only adds a second when a release is not already
+        // present, so passing this too can never double it.
+        releaseCommand: releaseCmd || null,
+        // Read at line ~1965, before the release was appended — the one moment
+        // an empty process list still meant "one implicit web process". See the
+        // note in buildAppSpec: by the time it sees the list, that fact is gone
+        // from the list itself.
+        serviceless,
+        memoryBytes: memoryBytes(scale.memory),
+        cpuShares: cpuShares(scale.cpu),
+      });
+      placedSpec = placing;
+
+      // The half of `scale` a node has no primitive for, said out loud.
+      //
+      // Only the fields the author actually wrote, so an app that declared
+      // nothing hears nothing. Three of the four are honoured by construction
+      // and one is genuinely not, and the difference is exactly what an owner
+      // needs to know — a single "some fields are ignored" would be as useless
+      // as silence.
+      const declaredScale = primaryConfigService?.scale;
+      if (declaredScale) {
+        const byConstruction = [
+          declaredScale.maxInstances !== undefined && "maxInstances (the node runs one instance, which is under any ceiling)",
+          declaredScale.timeout !== undefined && "timeout (nothing on the node cuts a request short)",
+          declaredScale.cpuBoost !== undefined && "cpuBoost (a resident process has its full CPU share from the first instant)",
+        ].filter(Boolean) as string[];
+        if (byConstruction.length) log(`scale on the fleet: ${byConstruction.join("; ")}.`);
+        if (declaredScale.concurrency !== undefined) {
+          log(`! scale.concurrency=${declaredScale.concurrency} is NOT enforced on the fleet — the node does not cap in-flight requests the way Cloud Run does. `
+            + `Your app has to limit its own concurrency.`);
+        }
+      }
+
+      const placement = await stages.around("fleet", () => placeOnFleet(
+        slug,
+        placing,
+        FLEET_LB,
+        {
+          chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
+          probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
+          runningOnNode: (s, n, sp) => awaitRunning(s, n, sp, runningOnNode),
+          nodeFaultFor,
+          log,
+        },
+      ));
+      return placement.placed
+        ? { ok: true, url: placement.runUrl }
+        : { ok: false, error: placement.reason ?? "the app did not answer from the fleet" };
+    };
+
+    if (target.reason) log(`Deploying ${slug} to Cloud Run — ${target.reason}`);
+    else if (!toFleet) log(`Deploying ${slug} to Cloud Run — the fleet could take it, but it is not a canary yet`);
+    else log(`Deploying ${slug} to the fleet…`);
+    // `runRelease` — the lib/release-job.ts call — only ever runs from inside
+    // `runDeploy`, below, and this same `toFleet` picks between that and
+    // `runFleetDeploy` two lines down. So a release never runs as a Cloud Run
+    // Job on this branch; it is already inside the AppSpec `runFleetDeploy`
+    // places, and the agent runs it before web and worker start. Said out loud
+    // rather than left to be inferred from which function is not called: the
+    // release and the app can never disagree about which runtime they are on.
+    if (toFleet) log("release runs on the node, before the app starts");
+    /**
+     * What a repair agent's `redeploy` tool actually does.
+     *
+     * The SAME branch this deploy took, and it has to be, because the deploy has
+     * already committed to a runtime in ways nothing downstream can undo.
+     * `dbAt` resolved to FLEET_DB above, so `DATABASE_URL`, `PGHOST` and
+     * `POSTGRES_HOST` all name 10.200.0.1 — the sandbox bridge gateway, an
+     * address no Cloud Run revision can route to. A repair that redeployed to
+     * Cloud Run therefore produced an app that starts, serves its homepage,
+     * answers the probe 200 and fails every request that touches data. On a
+     * repeat it was worse: `placeOnFleet` had already restored the previous
+     * placement, so the node went on serving the old version while `markAppLive`
+     * wrote a Cloud Run url over the top of it — two live runtimes for one app,
+     * which is the defect class this whole piece exists to end.
+     *
+     * A human ruled that the repair agent keeps running on fleet failures (see
+     * the ledger, Task 9). This is not that fuse. It is the agent redeploying to
+     * where the app lives.
+     */
+    const redeploy = toFleet ? runFleetDeploy : runDeploy;
     const firstAttempt = stages.start(ACTIVATION_STAGE);
-    let result = await runDeploy();
+    let result = toFleet ? await runFleetDeploy() : await runDeploy();
     await stages.end(firstAttempt, result.ok ? "ok" : "failed");
 
     // Did the revision come out carrying what the author asked for?
@@ -3016,6 +3364,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         releaseCommand: releaseCmd,
         argv: lastArgv,
         hasDatabase: Boolean(databaseUrl),
+        // What the fleet branch produced instead of an argv. Null on the Cloud
+        // Run branch, where `lastArgv` is the evidence — see DeployOutcome.
+        placed: placedSpec,
       });
     }
     if (!result.ok) {
@@ -3132,7 +3483,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const repair = stages.start("repair-agent");
       const fixed = useAgent
         ? await agentRepair({
-            dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy: runDeploy, log,
+            dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy, log,
+            // Named, not inferred: the agent is told which runtime its
+            // `redeploy` reaches, so its prompt cannot describe one while the
+            // closure runs the other.
+            runtime: toFleet ? "fleet" : "cloudrun",
             // What the platform DID, not only what it planned. Without this the
             // agent reads every failure as the app's fault, because the repo is
             // the only surface it can change — which is how a Telegram bot got an
@@ -3149,7 +3504,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
               attached: resourcePlan.attach.map((r) => r.kind),
             },
           })
-        : await repairDeploy({ dir, slug, initialError: result.error ?? "unknown", redeploy: runDeploy, log });
+        : await repairDeploy({
+            dir, slug, initialError: result.error ?? "unknown", redeploy, log,
+            runtime: toFleet ? "fleet" : "cloudrun",
+          });
       await stages.end(repair, fixed.ok ? "ok" : "failed");
       if (fixed.ok) {
         result = { ok: true, url: fixed.url };
@@ -3260,9 +3618,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // worker with no image is skipped loudly inside deployProcesses rather than
     // deployed from a source tree that would build a third time.
     //
-    // Read once for both readers below. The fleet placement needs the same image
-    // and the same secrets the processes do, and asking Cloud Run twice for one
-    // answer is how the two quietly stop being the same answer.
+    // On the fleet branch this reads back the same image `runFleetDeploy`
+    // already placed — workers and crons still deploy through Cloud Run
+    // regardless of which runtime serves the web process, so this lookup
+    // still has to happen even when the web process itself did not go there.
     let built: string | null = null;
     let allRefs: SecretRef[] = [];
     if (result.ok && !staticServe) {
@@ -3276,48 +3635,23 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       await stages.around("processes", () => deployProcesses({
         slug, dir, lane, image: built ?? undefined,
         env: extraEnv, secrets: allSecrets || null,
-        cloudsql, labels: labelPairs, config: primaryConfigService, processes, log,
+        cloudsql, labels: labelPairs, config: primaryConfigService,
+        // The node owns this app's workers and crons, so Cloud Run must own
+        // neither — and passing NO processes is how that is said, because the
+        // orphan pass inside `deployProcesses` then deletes the worker-pools and
+        // jobs this app already has there. Nothing new is needed for the
+        // removal; that machinery exists and this is exactly what it is for.
+        //
+        // Until now this ran unguarded, and for a web app on the fleet the
+        // duplicate workers were the documented status quo. For a WORKER-ONLY
+        // app they are not survivable: the entire app would run twice — a
+        // Telegram bot double-polling getUpdates, a queue consumer
+        // double-consuming — and the new verdict would truthfully report the
+        // node running it while the Cloud Run copy ran beside it. The guard
+        // belongs in the slice that first makes an app depend on the node alone.
+        processes: toFleet ? FLEET_OWNS_PROCESSES : processes,
+        log,
       })).catch((e) => log(`! processes: ${e instanceof Error ? e.message : String(e)}`));
-    }
-
-    // Onto the fleet, if this app can go and there is somewhere to put it.
-    //
-    // After Cloud Run, never instead of it. The app is already deployed and
-    // verified above, so everything here is an attempt to do better — and every
-    // way it can fail ends with the app still served by Cloud Run. That is what
-    // makes it safe to run on an ordinary deploy rather than as an operation
-    // somebody watches.
-    //
-    // `chooseNode` finally has a caller.
-    let fleetUrl: string | undefined;
-    if (fleetPlacementWanted(process.env, slug) && result.ok) {
-      const can = !FLEET_LB
-        ? { ok: false, reason: "no fleet load balancer is configured" }
-        : fleetEligibility({ lane, image: built ?? "", staticServe: !!staticServe, serviceless, cloudsql });
-      if (!can.ok) {
-        log(`· staying on Cloud Run — ${can.reason}`);
-      } else {
-        // Never fatal. A deploy that has already gone live on Cloud Run must not
-        // be failed by the runtime it was going to move to — the app is up, and
-        // the worst outcome available here is that it stays where it is.
-        const placement = await stages.around("fleet", () => placeOnFleet(
-          slug,
-          buildAppSpec({
-            slug, image: built!, env: extraEnv, secrets: allRefs, processes,
-            healthPath: primaryHealth.health.path,
-          }),
-          FLEET_LB,
-          {
-            chooseNode, placeApp, setRuntime,
-            probe: (s) => fleetProbe(FLEET_LB, s),
-            log,
-          },
-        )).catch((e): Placement => {
-          log(`! fleet: ${e instanceof Error ? e.message : String(e)} — staying on Cloud Run`);
-          return { placed: false };
-        });
-        fleetUrl = placement.runUrl;
-      }
     }
 
     // The two routing models are mutually exclusive: a per-app domain
@@ -3348,11 +3682,56 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       await createDomainMapping(slug, log);
     }
     setDeploy(slug, { status: "live", url: result.url });
+
+    // A deploy that went to Cloud Run says so, and that had no writer.
+    //
+    // `setRuntime` was only ever called by placeOnFleet and by its rollback, so
+    // an app that had been placed on the fleet and then deployed to Cloud Run
+    // kept `runtime = 'fleet'` AND kept its placement row. `desiredFor` hands a
+    // node every placement whose app reads 'fleet', so the node went on running
+    // a second copy of an app Cloud Run was already serving — two live runtimes
+    // for one app, which is the defect class this whole move exists to end,
+    // arriving through the one door nobody had closed.
+    //
+    // Seen on p6mx8 the moment it was withdrawn from the canary: Cloud Run
+    // served it while fleet-lab-1 kept failing its release every few minutes
+    // against secrets it cannot read.
+    //
+    // OUTSIDE the owner/workspace guard below, deliberately. That guard is
+    // there because run_url and the app row are owner-scoped; WHERE AN APP RUNS
+    // is not. An app whose workspace is unknown must still stop being handed to
+    // a node.
+    //
+    // Unconditional on this branch rather than guarded by a read: for an app
+    // that was always on Cloud Run both statements are no-ops, and a guard
+    // would cost the same query it saves. setRuntime('cloudrun') drops the
+    // placement itself, so the node stops on its next reconcile without being
+    // told anything.
+    if (!toFleet) await setRuntime(slug, "cloudrun");
+
     if (ownerId && ownerWorkspace) {
-      // The flip, and the only write of run_url. `fleetUrl` is present only once
-      // the app has answered from the fleet through the load balancer; every
-      // other path leaves this the Cloud Run url the deploy already proved.
-      await markAppLive(slug, fleetUrl ?? result.url ?? "", null, routes);
+      // The flip, and the only write of run_url. `result.url` is the fleet's
+      // load-balancer address on the fleet branch and the Cloud Run url on the
+      // other — whichever branch ran is the one that proved this address live.
+      // `!serviceless` is the same fact the repair agent is already told at the
+      // top of this file and that declaredNeeds.web is already computed from —
+      // this is where it finally gets persisted, so the edge can stop calling a
+      // working bot a failed deploy.
+      // A deploy that went to Cloud Run says so, and that had no writer.
+      //
+      // `setRuntime` was only ever called by placeOnFleet and by its rollback,
+      // so an app that had been placed on the fleet and then deployed to Cloud
+      // Run kept `runtime = 'fleet'` and kept its placement row. `desiredFor`
+      // hands a node every placement whose app reads 'fleet', so the node went
+      // on trying to run a copy of an app Cloud Run was already serving — two
+      // live runtimes for one app, which is the defect class this whole move
+      // exists to end, arriving through the one door nobody had closed.
+      //
+      // Seen on p6mx8 the moment it was withdrawn from the canary: Cloud Run
+      // served it, and fleet-lab-1 kept failing its release every few minutes
+      // against secrets it cannot read.
+      //
+      await markAppLive(slug, result.url ?? "", null, routes, !serviceless);
       // Not awaited: the deploy is finished, and a thumbnail must never hold it.
       // Skipped entirely for a worker-only app: there is no page to photograph,
       // and asking the shot service for one produces a screenshot of an error

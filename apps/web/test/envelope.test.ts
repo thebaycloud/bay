@@ -192,6 +192,34 @@ test("a declared scale that never reached the argv fails the deploy", () => {
   assert.doesNotThrow(() => assertReached(e, outcome({ argv: ["--memory", "4Gi", "--timeout=1200"] })));
 });
 
+test("a declared scale is checked against the PLACEMENT when there is one", () => {
+  // The fleet branch never calls `attempt()`, so `argv` is `[]` there. `scale`
+  // read it anyway, with none of the `!hasRevision` guard its neighbours carry,
+  // and threw AFTER the placement had succeeded: the app was live on a node, the
+  // deploy row said failed, `run_url` still pointed at the old address, and the
+  // owner was told it was a platform bug. It half was — `buildAppSpec` really
+  // did ignore the declared scale — which is why the guard alone is not the fix.
+  const scale = { ...DEFAULT_SCALE, memory: "4Gi", cpu: 2 };
+  const e = buildEnvelope(service({ scale, declared: ["scale"] }), app);
+  assert.doesNotThrow(() => assertReached(e, outcome({
+    argv: [], placed: { memoryBytes: 4 * 1024 * 1024 * 1024, cpuShares: 2048 },
+  })));
+  // And it is a real check on that branch, not a way of passing: a node handed
+  // the platform default while the author asked for 4Gi is the OOM kill this
+  // exists to stop.
+  assert.throws(() => assertReached(e, outcome({
+    argv: [], placed: { memoryBytes: 2 * 1024 * 1024 * 1024, cpuShares: 1024 },
+  })), /did not apply: scale/);
+});
+
+test("a lane with neither a revision nor a placement cannot be asked about scale", () => {
+  // The guard `env`, `secrets` and `uses` already had. An unverifiable field
+  // reported as a failure is the same defect as an ignored one, pointing the
+  // other way.
+  const e = buildEnvelope(service({ scale: { ...DEFAULT_SCALE, memory: "4Gi" }, declared: ["scale"] }), app);
+  assert.doesNotThrow(() => assertReached(e, outcome({ hasRevision: false, argv: [] })));
+});
+
 test("a new schema field with no known effect fails loudly rather than passing", () => {
   // The list of effects can drift like any list. It drifts LOUDLY: adding a
   // field without teaching this what it does stops the first deploy declaring

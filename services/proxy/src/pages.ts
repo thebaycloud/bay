@@ -110,6 +110,23 @@ export function pageStalled(slug: string): string {
 <p class="note">Deploying again is usually all it takes: <code>supersonic deploy</code>.</p>`);
 }
 
+/**
+ * Shown when the app has no web process at all — a bot, a queue consumer, a
+ * cron. It deployed correctly and there is simply nothing here to open.
+ *
+ * Deliberately does NOT reload itself, for pageFailed's reason inverted:
+ * nothing is coming because nothing is missing.
+ *
+ * Says nothing about which processes the app runs, and does not suggest
+ * `supersonic deploy`. This is served before the auth gate at index.ts, exactly
+ * as pageStalled is, so a stranger walking subdomains reads it too — and the
+ * one thing they must not be told is a redeploy would help. It would not.
+ */
+export function pageNoWeb(slug: string): string {
+  return shell("Nothing to open", `<h1>This app has no web page</h1>
+<p><code>${escapeHtml(slug)}</code> runs in the background, so there's nothing to open here.</p>`);
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);

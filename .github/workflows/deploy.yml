@@ -38,6 +38,59 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      # The schema moves with the code, in the same run, BEFORE it.
+      #
+      # It did not, and that is a hole this pipeline had rather than an oversight
+      # of anyone's: `db/migrate.ts` was run by hand, so a commit whose code
+      # needed a new table reached production before the table did. Measured on
+      # 5 Aug — control plane 00270 shipped a query against fleet_process_faults
+      # three minutes before a human ran the migration, and logged
+      # `relation "fleet_process_faults" does not exist` every ten seconds in
+      # between. The guard around that write is why it was three minutes of noise
+      # and not an outage; the next migration is not required to be so lucky.
+      #
+      # BEFORE the build, so a migration that fails stops the deploy instead of
+      # landing code whose schema is missing. That is the safe direction: every
+      # file in db/ is additive and idempotent by rule, and migrate.ts applies
+      # all of them in filename order on every run, so applying them ahead of the
+      # code that uses them is exactly what the rule was written for.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Apply database migrations
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+          # The proxy authenticates with the same OIDC identity this job already
+          # holds — google-github-actions/auth wrote ADC above — so no key and no
+          # password reach this step for the CONNECTION. The password below is a
+          # separate thing: it is Postgres's own, read from Secret Manager into
+          # one command's environment and never written to a file or a log.
+          curl -sSL -o cloud-sql-proxy             https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.0/cloud-sql-proxy.linux.amd64
+          chmod +x cloud-sql-proxy
+          ./cloud-sql-proxy --port 5433 supersonic-deploy-prod:us-central1:supersonic-shared-pg &
+
+          # Wait for the listener rather than sleeping a guessed number of
+          # seconds: a fixed sleep is either too short on a slow runner (the
+          # deploy fails for no reason) or wasted on every run.
+          # /dev/tcp rather than nc: it is bash itself, so this depends on
+          # nothing the runner image has to keep providing.
+          up=0
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then up=1; break; fi
+            sleep 1
+          done
+          if [ "$up" != "1" ]; then echo "cloud-sql-proxy never listened on 5433"; exit 1; fi
+
+          PG_PASSWORD="$(gcloud secrets versions access latest \
+            --secret supersonic-pg-password --project supersonic-deploy-prod)" \
+            npx tsx db/migrate.ts
+
       # The build and the Cloud Run deploy both live in cloudbuild.yaml, so a hand-run
       # deploy and this one are the same thing and cannot drift apart.
       - name: Build and deploy

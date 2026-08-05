@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSameFailure } from "../deploy-errors";
+import type { Runtime } from "../fleet";
 import { startBridge, redeployScript, type Redeploy } from "./bridge";
 import { CodexBackend } from "./codex";
 import { runAgent } from "./harness";
@@ -155,12 +156,22 @@ export async function agentRepair(opts: {
   plan?: DeployPlan | null;
   facts?: PlatformFacts | null;
   redeploy: Redeploy;
+  /**
+   * Which runtime `redeploy` actually reaches.
+   *
+   * Named and passed rather than inferred, for the reason the pipeline's call
+   * site gives: the closure and the prompt must not be able to describe
+   * different runtimes. It travels no further than `platform.json` here —
+   * `AGENT_MD` already carries the rule that reads it, so both backends get the
+   * same instruction from the same string.
+   */
+  runtime: Runtime;
   log: (l: string) => void;
   timeoutMs?: number;
 }): Promise<RepairResult> {
   if (agentName() === "opencode") return opencodeRepair(opts);
 
-  const { dir, slug, initialError, plan, facts, redeploy, log } = opts;
+  const { dir, slug, initialError, plan, facts, redeploy, runtime, log } = opts;
   const timeoutMs = opts.timeoutMs ?? Number(process.env.REPAIR_TIMEOUT_MS || 900000);
   const ws = mkdtempSync(join(tmpdir(), "ss-repair-"));
 
@@ -184,7 +195,11 @@ export async function agentRepair(opts: {
     // fake .env, sed-ed a migrate script out of package.json, and once burned
     // 287k tokens writing an application around what was actually an IAM grant.
     if (plan) writeFileSync(join(ws, "deploy-plan.json"), JSON.stringify(plan, null, 2));
-    if (facts) writeFileSync(join(ws, "platform.json"), JSON.stringify(facts, null, 2));
+    // `runsOn`, not `runtime`: `PlatformFacts` already spends that name on the
+    // language runtime a repo pinned, and AGENT_MD's rule is written against
+    // `runsOn`. The same spelling the opencode path writes, because the two
+    // backends read the identical instruction string.
+    if (facts) writeFileSync(join(ws, "platform.json"), JSON.stringify({ ...facts, runsOn: runtime }, null, 2));
     writeFileSync(join(ws, "redeploy.sh"), redeployScript(bridge.url));
 
     const backend = backendFor("codex");

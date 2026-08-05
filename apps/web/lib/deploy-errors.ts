@@ -61,6 +61,14 @@ const PLATFORM: Array<{ re: RegExp; reason: string }> = [
     reason: "The database name this app would get is already taken on the shared instance. That is a platform naming collision.",
   },
   {
+    // The build worked and pushed; the registry would not say what it pushed.
+    // Placed above the connection rule because it is the specific case, and
+    // above the app rules because there is nothing in a repository that decides
+    // whether Artifact Registry answers a manifest HEAD.
+    re: /image digest could not be resolved/i,
+    reason: "The build pushed an image and the registry would not say which one. That is ours — your code built fine, and deploying the tag anyway would have shipped the previous version.",
+  },
+  {
     // \b around the errno codes is load-bearing: "ModuleNotFoundError"
     // lowercases to "modulenotfounderror", which CONTAINS "enotfound". Without
     // the boundary, a missing import — the most ordinary app error there is, and
@@ -119,7 +127,13 @@ export function builderRuntimeError(text: string): string | null {
  * Marker constants the pipeline throws with. Matched exactly rather than by
  * pattern, because these are ours and a substring match on them is a promise.
  */
-export const PLATFORM_MARKERS = ["IAM_FAILURE", "AMBIGUOUS_STACK", "Runtime not available"];
+// FLEET_NODE_FAULT is the node's OWN typed verdict that a start failed for a
+// reason belonging to the node — its Cloud SQL proxy not answering, its service
+// account unable to read a secret. It is not derived from a substring of an
+// error here; the node decides and sends a value, and this marker is only how
+// that decision reaches `classify`. Blaming the app for it is what handed a
+// repair agent a customer's repository, with write access, over our own outage.
+export const PLATFORM_MARKERS = ["IAM_FAILURE", "AMBIGUOUS_STACK", "Runtime not available", "FLEET_NODE_FAULT"];
 
 /**
  * How a build failure arrives: a one-line verdict, then up to forty lines of log.

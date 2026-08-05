@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,16 +37,21 @@ import (
 const (
 	resolvConfPath = "/run/supersonic/resolv.conf"
 	statePath      = "/srv/state/desired.json"
-	routesPath     = "/srv/state/routes.json"
 	dataRoot       = "/srv/apps"
 )
 
+// routesPath is where the routing table is published for the router to read.
+//
+// A var rather than a const only so a test can drive reconcileOnce without
+// writing to /srv on the machine running it. Nothing in the agent reassigns it.
+var routesPath = "/srv/state/routes.json"
+
 // App is one thing this node has been told to run.
 type App struct {
-	Slug        string            `json:"slug"`
-	Image       string            `json:"image"`
-	Command     []string          `json:"command,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
+	Slug    string            `json:"slug"`
+	Image   string            `json:"image"`
+	Command []string          `json:"command,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 	// Secrets maps an environment variable name to a Secret Manager secret id.
 	// Resolved at start; the values never touch node disk or config.json.
 	Secrets     map[string]string `json:"secrets,omitempty"`
@@ -90,6 +96,21 @@ type live struct {
 	index int
 	ok    bool
 	since time.Time
+	// confirmed is the last time this process was OBSERVED running — not the
+	// last time the agent believed it was.
+	//
+	// The distinction is the whole value of the field. `a.live` is a memory
+	// belief: an entry is written on a successful start and removed on a pass
+	// that notices the process gone, so between those two it says "running"
+	// about a process that may have died seconds ago. Reporting that as a
+	// positive signal would pass a deploy for a worker that crashed on boot.
+	//
+	// Only two places write it, and both have just watched runsc say "running":
+	// Start's own poll (container.go), and reconcileOnce's liveness check. When
+	// neither runs, this ages out and the process stops being reported — a node
+	// that has stopped reconciling says nothing rather than vouching from
+	// memory.
+	confirmed time.Time
 }
 
 type Agent struct {
@@ -101,7 +122,7 @@ type Agent struct {
 	// and each publishes on completion, so without this two goroutines share one
 	// temp path and the rename can land a half-written file — a node briefly
 	// serving 502s for every app it holds.
-	writeMu sync.Mutex
+	writeMu  sync.Mutex
 	slots    map[int]string
 	desired  Desired
 	cron     *cronRunner
@@ -113,6 +134,248 @@ type Agent struct {
 	// several times, concurrently with itself, and failing with "container
 	// already exists". A release belongs to an IMAGE, so that is the key.
 	released map[string]string
+	// relFail counts consecutive release failures per slug@image: a release
+	// belongs to an IMAGE, so a new deploy is a new key and starts with a clean
+	// count, without anything here having to notice that a deploy happened.
+	//
+	// relRunning marks the ones currently executing off this goroutine, keyed by
+	// bare slug rather than slug@image: the slot and the sandbox id it runs in
+	// are per-slug, and so is the safety property — an app must stay blocked
+	// while ITS release is in flight even if the image changed mid-release, or
+	// a rollback to an already-released image would start the web process while
+	// the previous image's migration is still writing.
+	relFail    *failTracker
+	relRunning map[string]bool
+
+	// startFail counts consecutive failed starts per sandbox id@image (Task 3),
+	// cronFail counts consecutive cron failures per sandbox id (Task 4). Both
+	// are declared here so the struct literal in Step 2 is written once.
+	startFail *failTracker
+	cronFail  *failTracker
+
+	// blocked is the set of apps whose release means nothing else of theirs may
+	// run: its release is in flight, backing off, or has given up. Computed by
+	// reconcileOnce and PUBLISHED here because the cron tick runs on its own
+	// clock, off that goroutine, and needs the same answer rather than a second
+	// implementation of it.
+	blocked map[string]bool
+
+	// quiet keeps the states that persist — a release or a start that has given
+	// up, a cron blocked by its own release — legible without writing them to
+	// the node's append-only log on every ten-second pass.
+	quiet *logThrottle
+
+	// faults is the most recent start failure per sandbox id, retained rather
+	// than logged and dropped. Cleared when that id next starts successfully,
+	// and when it stops being desired at all.
+	//
+	// The trackers next to it count; this remembers WHY, and whose fault it was.
+	// A count tells an operator reading /status that something is wrong; only
+	// this tells the control plane that the something was ours, which is what
+	// keeps a repair agent out of a customer's repository over our own outage.
+	faults map[string]ProcessFault
+}
+
+// forgetStaleCronRecords drops cron failure history for jobs this node is no
+// longer scheduled to run.
+//
+// The removal loop in reconcileOnce cannot do this, and that is the ghost-record
+// defect: it walks a.live, and a cron process is never IN a.live — `units`
+// excludes KindCron on purpose, because the scheduler owns those. So an app
+// removed after its cron had failed left its record behind forever, in the one
+// view an operator consults to rule things out.
+//
+// Swept against the scheduled set rather than matched by prefix. The prefix it
+// used to be, slug + "--", also matches every key of an app whose slug BEGINS
+// with this one followed by "--". Nothing produces such a slug today — slugify
+// collapses runs of hyphens and randomSlug emits five alphanumerics — but both
+// rules live in a TypeScript file in another service, and this key scheme
+// silently depended on them.
+func (a *Agent) forgetStaleCronRecords(scheduled map[string]bool) {
+	for id := range a.cronFail.report() {
+		if !scheduled[id] {
+			a.cronFail.succeed(id)
+		}
+	}
+}
+
+// forgetStaleStartRecords drops start failure history for processes this node
+// is no longer asked to run.
+//
+// Newly load-bearing. Until the start path was bounded, a startFail record only
+// ever existed for a process that had been live, and the removal loop could see
+// every one of them. Now a process that has NEVER come up has a record too —
+// that is the whole point of the bound — and the removal loop walks a.live, so
+// it cannot see exactly the records the bound creates. Without this, the app an
+// operator removes after reading "has failed to start 5 times" leaves its record
+// in /status with nothing on the node left to explain it.
+func (a *Agent) forgetStaleStartRecords(desired map[string]bool) {
+	for key := range a.startFail.report() {
+		id, _, ok := strings.Cut(key, "@")
+		if ok && !desired[id] {
+			a.startFail.forgetPrefix(id + "@")
+		}
+	}
+}
+
+// cronBlocked says whether this app's release means its scheduled work must
+// not run right now.
+//
+// Two sources, and both are needed. `relRunning` is live and exact — a release
+// executing on another goroutine this instant. `blocked` is reconcileOnce's
+// answer, at most one pass (ten seconds) old, and it additionally covers a
+// release that is backing off or has given up: in both of those the app's own
+// processes are NOT running, and a scheduled job is not more entitled to the
+// database than the app is.
+//
+// Being ten seconds stale can only ever hold a cron back, never let one
+// through: a release that starts does so inside reconcileOnce, which sets both
+// in the same pass.
+func (a *Agent) cronBlocked(slug string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.relRunning[slug] || a.blocked[slug]
+}
+
+// mayStart says whether a start may be attempted for this process right now.
+//
+// This is the bound that was missing. `a.live` only gains an entry on SUCCESS,
+// so a process whose start FAILS is never `running` on any later pass and never
+// reached the restart counter — it was re-attempted every ten seconds, forever,
+// with nothing counting it. That is the same unbounded-retry shape 1A closed on
+// the release path and the restart path, through the one door left open, and it
+// is the one an app that cannot start at all falls into.
+func (a *Agent) mayStart(id, image string, now time.Time) bool {
+	key := startKey(id, image)
+	switch a.startFail.decide(key, now) {
+	case actWait:
+		return false
+	case actGiveUp:
+		if a.quiet.allow("start:"+key, now, giveUpEvery) {
+			log.Printf("%s: has failed to start %d times, not trying again — deploy a new image to reset",
+				id, maxAttempts)
+		}
+		return false
+	}
+	return true
+}
+
+// recordStartFailure counts one failed start and keeps its reason.
+//
+// The count is what mayStart reads on the next pass. The fault is what the
+// control plane reads, and it deliberately OUTLIVES the give-up: a process
+// nobody is retrying any more is still a process that is failing, and going
+// quiet about it is how a node fault turns back into the app's fault.
+//
+// Not cleared on a successful start. The record is cleared where it always was
+// — on a later pass that finds the process still running — because "it started"
+// and "it is still up ten seconds later" are different facts, and clearing on
+// the first would destroy the bound on a process that starts fine and then
+// exits immediately.
+func (a *Agent) recordStartFailure(id string, app App, proc Process, err error, now time.Time) {
+	n := a.startFail.failWith(startKey(id, app.Image), now, err.Error())
+	log.Printf("%s: start failed (%d/%d): %v", id, n, maxAttempts, err)
+
+	fault := classifyStartError(err)
+	a.mu.Lock()
+	a.faults[id] = ProcessFault{
+		Slug: app.Slug, Process: proc.Name,
+		Fault: fault, Detail: faultDetail(fault, err),
+	}
+	a.mu.Unlock()
+}
+
+// reportFaults answers the sync with what is currently failing on this node.
+//
+// A copy under the lock, never the map itself: the caller marshals it on the
+// sync goroutine while starts write to it, and handing out the live map is a
+// data race with a JSON encoder on one end.
+func (a *Agent) reportFaults() []ProcessFault {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]ProcessFault, 0, len(a.faults))
+	for _, f := range a.faults {
+		out = append(out, f)
+	}
+	// Stable order so two syncs that say the same thing look the same, in a log
+	// and in a diff.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Slug != out[j].Slug {
+			return out[i].Slug < out[j].Slug
+		}
+		return out[i].Process < out[j].Process
+	})
+	return out
+}
+
+// confirmWindow is how old an observation may be and still be reported as
+// "running".
+//
+// Three reconcile passes. One missed pass is ordinary — a slow control plane, a
+// node under load — and expiring on it would fail deploys for nothing. Three
+// missed passes is a node that has stopped reconciling, and the report going
+// quiet is exactly right then: a control plane reading silence rolls the deploy
+// back, which is the safe direction. Deliberately shorter than the 90 seconds
+// nodeFaultFor allows a fault row, because this steers a deploy to PASS and a
+// fault only ever steers one to fail.
+const confirmWindow = 30 * time.Second
+
+// confirmRunning records that this process was just seen running.
+//
+// Takes the lock and re-reads the map rather than writing through a pointer the
+// caller already holds: reconcileOnce reads `a.live[id]` outside the lock, and
+// by the time the runsc check comes back the entry may have been replaced by a
+// restart. Stamping the pointer it read would then vouch for a process that is
+// no longer the one in the map, and would race the sync goroutine reading the
+// same field.
+func (a *Agent) confirmRunning(id string, now time.Time) {
+	a.mu.Lock()
+	if l, ok := a.live[id]; ok {
+		l.confirmed = now
+	}
+	a.mu.Unlock()
+}
+
+// reportRunning answers the sync with what this node is confirmed to be running.
+//
+// The counterpart to reportFaults, and it answers the question a worker-only app
+// makes unanswerable any other way: a bot publishes no route, so there is no
+// HTTP probe that can tell "the node started it" from "the node has not got to
+// it yet". Only a process the node has WATCHED reach running appears here.
+//
+// Values, never the *live pointers: the caller marshals this on the sync
+// goroutine while reconcile writes to those same structs, and handing out
+// pointers puts a JSON encoder on one end of a data race. Command is copied for
+// the same reason — a shared backing array is shared state whether or not the
+// header is.
+func (a *Agent) reportRunning() []ProcessState {
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]ProcessState, 0, len(a.live))
+	for _, l := range a.live {
+		// A process nobody has confirmed lately is not reported at all. Stale
+		// beats wrong here: no row fails the deploy, and a wrong row passes one.
+		if l.confirmed.IsZero() || now.Sub(l.confirmed) > confirmWindow {
+			continue
+		}
+		s := ProcessState{
+			Slug: l.app.Slug, Process: l.proc.Name, Image: l.app.Image,
+		}
+		if len(l.proc.Command) > 0 {
+			s.Command = append([]string(nil), l.proc.Command...)
+		}
+		out = append(out, s)
+	}
+	// Stable order so two syncs that say the same thing look the same, in a log
+	// and in a diff. Same rule as reportFaults.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Slug != out[j].Slug {
+			return out[i].Slug < out[j].Slug
+		}
+		return out[i].Process < out[j].Process
+	})
+	return out
 }
 
 // syncCron starts the once-a-minute tick the first time it is needed, and keeps
@@ -156,10 +419,16 @@ func (a *Agent) syncCron(d Desired) {
 		}()
 	}
 	a.cronJobs = make([]cronJob, 0, len(jobs))
+	scheduled := make(map[string]bool, len(jobs))
 	for _, j := range jobs {
 		a.cronJobs = append(a.cronJobs, cronJob{app: j.app, proc: j.proc, sch: j.sch, loc: j.loc})
+		scheduled[sandboxID(j.app.Slug, j.proc)] = true
 	}
 	a.mu.Unlock()
+
+	// Here, because this is where the scheduled set is known. A cron process is
+	// never in a.live, so the removal loop in reconcileOnce cannot reach these.
+	a.forgetStaleCronRecords(scheduled)
 }
 
 type cronJob struct {
@@ -184,6 +453,35 @@ func (a *Agent) fireDueCrons(now time.Time) {
 			continue
 		}
 		id := sandboxID(j.app.Slug, j.proc)
+
+		// The same gate the web and worker processes have, which this path did
+		// not: a scheduled job must not run while its app's release is in
+		// flight, or has not succeeded for the image the node is holding.
+		//
+		// This is the rollback defect 1A fixed, through a different door. A
+		// nightly export firing into a database whose migration is halfway
+		// applied is worse than a nightly export that does not run — and it is
+		// the same customer data either way. `relRunning` is the live, precise
+		// half; `blocked` also covers a release that is backing off or has
+		// given up, in which case the app's own processes are not running and
+		// its scheduled work has no business running either.
+		//
+		// Checked BEFORE shouldFire so the minute is not consumed: shouldFire
+		// records "this (job, minute) has fired". A cron for 03:00 that was
+		// blocked at 03:00 must not run at 03:07 instead — by then it is not
+		// the job that was scheduled.
+		if a.cronBlocked(j.app.Slug) {
+			// Throttled, because a release that has given up would otherwise
+			// write this line every minute forever. Silence is not an option
+			// either: a nightly job that quietly stopped running is the kind of
+			// failure nobody notices until the month-end report is empty.
+			if a.quiet.allow("cron-blocked:"+id, now, giveUpEvery) {
+				log.Printf("%s: cron %s NOT fired — this app's release is in flight or has not succeeded; "+
+					"running it now could write into a half-applied migration", j.app.Slug, j.proc.Name)
+			}
+			continue
+		}
+
 		if !runner.shouldFire(id, local) {
 			continue
 		}
@@ -194,8 +492,14 @@ func (a *Agent) fireDueCrons(now time.Time) {
 			a.mu.Unlock()
 			log.Printf("%s: cron firing", id)
 			if err := a.rt.RunToCompletion(j.app, j.proc, idx, 30*time.Minute); err != nil {
-				log.Printf("%s: cron failed: %v", id, err)
+				n := a.cronFail.failWith(id, time.Now(), err.Error())
+				// The count is the whole point. One failed run is an incident;
+				// the same one failing every night is a broken job, and on a
+				// node whose logs do not leave it those look identical without
+				// a number.
+				log.Printf("%s: cron failed (%d in a row): %v", id, n, err)
 			} else {
+				a.cronFail.succeed(id)
 				log.Printf("%s: cron finished", id)
 			}
 			a.mu.Lock()
@@ -258,10 +562,25 @@ func main() {
 	}
 
 	a := &Agent{rt: rt, src: src, live: map[string]*live{}, slots: map[int]string{},
-		released: map[string]string{}}
+		released:   map[string]string{},
+		relFail:    newFailTracker(),
+		relRunning: map[string]bool{},
+		startFail:  newFailTracker(),
+		cronFail:   newFailTracker(),
+		quiet:      newLogThrottle(),
+		blocked:    map[string]bool{},
+		faults:     map[string]ProcessFault{}}
+
+	// Wired only when there is a control plane to report to. Leaving it nil on
+	// the lab path is deliberate: nil means "this node does not report", which
+	// the control plane must not confuse with "this node reports nothing wrong".
+	if src.Endpoint != "" {
+		src.Report = a.reportFaults
+		src.ReportRunning = a.reportRunning
+	}
 
 	go a.serve(*addr)
-	go NewRouter(*rootDomain).Serve(*routerAddr, routesPath)
+	go NewRouter(*rootDomain, edgeSecretFromEnv()).Serve(*routerAddr, routesPath)
 
 	// Health runs on its own clock. Folding it into the reconcile pass would tie
 	// how fast the router learns an app is sick to how long a reconcile takes,
@@ -371,6 +690,14 @@ func (a *Agent) reconcileOnce() error {
 	}
 	a.mu.Unlock()
 
+	// Which slugs still have at least one process unit, so a release's failure
+	// record is forgotten only once its app is truly gone — not while some
+	// other process of the same app is still desired.
+	survivingSlugs := map[string]bool{}
+	for _, u := range units {
+		survivingSlugs[u.app.Slug] = true
+	}
+
 	// Remove what is no longer wanted, before starting anything new: on a node
 	// near its memory ceiling, starting first would be the difference between a
 	// clean swap and an OOM.
@@ -379,11 +706,60 @@ func (a *Agent) reconcileOnce() error {
 			log.Printf("%s: removing (no longer desired)", id)
 			a.rt.Stop(id)
 			a.mu.Lock()
-			if l, ok := a.live[id]; ok {
+			l, wasLive := a.live[id]
+			if wasLive {
 				delete(a.slots, l.index)
 			}
 			delete(a.live, id)
 			a.mu.Unlock()
+
+			// Forget this id's own failure history: the start key carries the
+			// image, so an exact delete can't find it — remove by prefix.
+			a.startFail.forgetPrefix(id + "@")
+			// The release and cron records belong to the app, not to this one
+			// process — clear them only once no other process of this app
+			// survives, so this doesn't hand a still-live app a fresh five
+			// attempts. Cron sandbox ids never reach `have` (units excludes
+			// KindCron, so a.live never holds one), so an exact-key delete on
+			// `id` here could never match a cron record — remove by the app's
+			// slug prefix instead, matching sandboxID's `slug + "--" + name + "."`
+			// shape.
+			if wasLive && !survivingSlugs[l.app.Slug] {
+				a.relFail.forgetPrefix(l.app.Slug + "@")
+			}
+		}
+	}
+
+	// The same hole for start records, which the bound on the start path has just
+	// made reachable — see forgetStaleStartRecords.
+	desiredIDs := make(map[string]bool, len(units))
+	for id := range units {
+		desiredIDs[id] = true
+	}
+	a.forgetStaleStartRecords(desiredIDs)
+
+	// Same shape of hole for the fault set, through a different door: a process
+	// that FAILED to start never entered a.live either, and that is the only
+	// kind of process this map ever holds. So the removal loop above can never
+	// clear one, and an app deleted after it failed to start would go on being
+	// reported as failing by a node that no longer holds it. Sweep against what
+	// is still desired instead.
+	a.mu.Lock()
+	for id := range a.faults {
+		if _, wanted := units[id]; !wanted {
+			delete(a.faults, id)
+		}
+	}
+	a.mu.Unlock()
+
+	// An app whose release gave up never started a process, so it never entered
+	// a.live and the removal loop above never sees it. That is precisely the app
+	// an operator removes after reading "has given up", and without this its
+	// record outlives it in /status with nothing left on the node to explain it.
+	for key := range a.relFail.report() {
+		slug, _, ok := strings.Cut(key, "@")
+		if ok && !survivingSlugs[slug] {
+			a.relFail.forgetPrefix(slug + "@")
 		}
 	}
 
@@ -408,10 +784,38 @@ func (a *Agent) reconcileOnce() error {
 			// would restart on every irrelevant field; these two are what
 			// actually mean "this is a different program".
 			if l.app.Image == u.app.Image && sameStrings(l.proc.Command, u.proc.Command) {
-				if st, err := runscStatus(id); err == nil && st.Status == "running" {
+				if st, err := runscStatusFn(id); err == nil && st.Status == "running" {
+					// Forget every image this id ever failed on, not just the
+					// current one — otherwise a bad image's record (e.g.
+					// `id@bad`, fails: 5) outlives the fix and /status keeps
+					// reporting a healthy process as given-up forever.
+					a.startFail.forgetPrefix(id + "@")
+					// The observation this pass just made, kept rather than
+					// thrown away. It costs nothing — the subprocess has already
+					// run and already answered — and it is the only thing that
+					// keeps a worker's report alive between deploys. Under the
+					// `err == nil && running` branch on purpose: a process runsc
+					// will not vouch for must age out, not be re-stamped.
+					a.confirmRunning(id, time.Now())
 					continue
 				}
-				log.Printf("%s: not running, restarting", id)
+				// It died. Restarting is right; restarting it every ten seconds
+				// forever is not — that is a broken image turning into a
+				// permanent cycle of sandbox creation on a node holding
+				// nineteen working apps.
+				key := startKey(id, u.app.Image)
+				switch a.startFail.decide(key, time.Now()) {
+				case actWait:
+					continue
+				case actGiveUp:
+					if a.quiet.allow("died:"+key, time.Now(), giveUpEvery) {
+						log.Printf("%s: has died %d times, not restarting — deploy a new image to reset",
+							id, maxAttempts)
+					}
+					continue
+				}
+				n := a.startFail.fail(key, time.Now())
+				log.Printf("%s: not running, restarting (%d/%d)", id, n, maxAttempts)
 			} else {
 				log.Printf("%s: image or command changed, restarting", id)
 				// A changed image means the release process has to run again
@@ -424,44 +828,148 @@ func (a *Agent) reconcileOnce() error {
 			delete(a.live, id)
 			a.mu.Unlock()
 		} else {
+			// A process that has NEVER come up needs the same bound as one that
+			// came up and died, and did not have it.
+			//
+			// `a.live` only gains an entry on SUCCESS. So a process whose start
+			// fails is not `running` on this pass or any later one, never reaches
+			// the counter above, and was re-attempted every ten seconds forever
+			// with nothing counting — the third unbounded retry loop, through the
+			// one door 1A left open. It closed the release loop and the restart
+			// loop; this is the start loop, and it is the one an app that cannot
+			// start at all falls into.
+			//
+			// Same key shape as the restart counter, `id@image`, so a new deploy
+			// is a new key and clears the state without this code having to
+			// notice that a deploy happened. A process that both died AND then
+			// would not restart is counted by both paths in the same pass and so
+			// reaches the cap sooner; that is the safe direction to be wrong in,
+			// and it is more broken, not less.
+			if !a.mayStart(id, u.app.Image, time.Now()) {
+				continue
+			}
 			needRelease[u.app.Slug] = u.app
 		}
 		todo = append(todo, work{app: u.app, proc: u.proc})
 	}
 
-	// Release runs to completion BEFORE anything else starts, and a failure
-	// stops the app coming up at all. A migration that failed followed by a web
-	// process that starts anyway is how an app comes up against a half-migrated
-	// database.
+	// Release runs to completion BEFORE its app starts, and a failure stops that
+	// app coming up at all. A migration that failed followed by a web process
+	// that starts anyway is how an app comes up against a half-migrated database.
+	//
+	// It runs OFF this goroutine. RunToCompletion carries a 30-minute timeout and
+	// reconcileOnce is the only thing that reconciles any app on this node, so a
+	// synchronous call here let one app's slow release stop the other nineteen.
+	// While it is in flight its own app stays blocked, which is the property that
+	// mattered; nothing else waits.
 	blocked := map[string]bool{}
+	now := time.Now()
 	for slug, app := range needRelease {
+		key := slug + "@" + app.Image
+
 		a.mu.Lock()
+		inFlight := a.relRunning[slug]
 		alreadyRan := a.released[slug] == app.Image
 		a.mu.Unlock()
+
+		// In flight FIRST, and keyed by slug rather than slug@image. A release
+		// running for a DIFFERENT image must still block this app: rolling back
+		// to an image whose release already succeeded would otherwise pass the
+		// alreadyRan check and start the web process while the previous image's
+		// migration is still writing.
+		if inFlight {
+			blocked[slug] = true
+			continue
+		}
 		if alreadyRan {
 			continue
 		}
+
+		switch a.relFail.decide(key, now) {
+		case actWait:
+			blocked[slug] = true
+			continue
+		case actGiveUp:
+			// Said repeatedly rather than once ever, because /status is the only
+			// other view and a human tailing the log has to be able to meet this
+			// state without going to query it. But not once per pass: that is
+			// 8,640 lines a day into an append-only file on a disk that does not
+			// survive a stop, measured at ~1 MB/day per given-up app. The key
+			// carries the image, so a new deploy is announced immediately.
+			if a.quiet.allow("release:"+key, now, giveUpEvery) {
+				log.Printf("%s: release has failed %d times, not retrying — deploy a new image to reset",
+					slug, maxAttempts)
+			}
+			blocked[slug] = true
+			continue
+		}
+
+		var rel Process
+		found, extra := false, 0
 		for _, p := range processesOf(app) {
 			if p.Kind != KindRelease {
 				continue
 			}
-			a.mu.Lock()
-			idx := a.slotFor(sandboxID(slug, p))
-			a.mu.Unlock()
-			log.Printf("%s: running release", slug)
-			if err := a.rt.RunToCompletion(app, p, idx, 30*time.Minute); err != nil {
-				log.Printf("%s: release FAILED, not starting the app: %v", slug, err)
-				blocked[slug] = true
-			} else {
-				a.mu.Lock()
-				a.released[slug] = app.Image
-				a.mu.Unlock()
+			if found {
+				extra++
+				continue
 			}
-			a.mu.Lock()
-			delete(a.slots, idx)
-			a.mu.Unlock()
+			rel, found = p, true
 		}
+		if extra > 0 {
+			// Running two concurrently would double-book the slot and the
+			// sandbox id, so only the first runs — but an app that declares two
+			// is misconfigured and must not discover that silently.
+			log.Printf("%s: %d release processes declared, running only %q", slug, extra+1, rel.Name)
+		}
+		if !found {
+			continue
+		}
+
+		blocked[slug] = true
+		a.mu.Lock()
+		a.relRunning[slug] = true
+		idx := a.slotFor(sandboxID(slug, rel))
+		a.mu.Unlock()
+
+		go func(slug, key string, app App, p Process, idx int) {
+			log.Printf("%s: running release", slug)
+			err := a.rt.RunToCompletion(app, p, idx, 30*time.Minute)
+
+			// Record the outcome BEFORE clearing in-flight, so the slug is
+			// never observable as idle-and-unrecorded — a reconcile pass
+			// landing in that window would relaunch with no backoff at all.
+			if err != nil {
+				n := a.relFail.failWith(key, time.Now(), err.Error())
+				log.Printf("%s: release FAILED (%d/%d), not starting the app: %v",
+					slug, n, maxAttempts, err)
+			} else {
+				// Forget every image this slug ever failed a release on, not
+				// just the one that just succeeded — otherwise a bad image's
+				// record (e.g. `slug@bad`, fails: 5) survives a later good
+				// deploy and /status keeps reporting a recovered app as
+				// given-up forever.
+				a.relFail.forgetPrefix(slug + "@")
+				log.Printf("%s: release finished", slug)
+			}
+
+			a.mu.Lock()
+			delete(a.relRunning, slug)
+			delete(a.slots, idx)
+			if err == nil {
+				a.released[slug] = app.Image
+			}
+			a.mu.Unlock()
+		}(slug, key, app, rel, idx)
 	}
+
+	// Publish, so the cron tick can ask the same question. Taken here rather
+	// than inside the loop above: `blocked` is only complete once every release
+	// has been considered, and a half-built set would let a cron through for an
+	// app whose release had not been reached yet.
+	a.mu.Lock()
+	a.blocked = blocked
+	a.mu.Unlock()
 
 	start := make([]work, 0, len(todo))
 	for _, t := range todo {
@@ -518,7 +1026,17 @@ func (a *Agent) startMany(items []work) {
 			started := time.Now()
 			net, err := a.rt.Start(app, proc, idx)
 			if err != nil {
-				log.Printf("%s: start failed: %v", id, err)
+				// Counted, which it was not before. The reconcile loop reads this
+				// on the next pass and stops re-attempting a start that cannot
+				// succeed; without the count it re-attempted forever.
+				//
+				// NOT cleared on success here, deliberately. The record is
+				// cleared where it always was — on a later pass that finds the
+				// process still running — because "it started" and "it is still
+				// up ten seconds later" are different facts, and clearing on the
+				// first would destroy the bound on a process that starts fine
+				// and then exits immediately.
+				a.recordStartFailure(id, app, proc, err, time.Now())
 				a.mu.Lock()
 				delete(a.slots, idx)
 				a.mu.Unlock()
@@ -531,7 +1049,18 @@ func (a *Agent) startMany(items []work) {
 			}
 
 			a.mu.Lock()
-			a.live[id] = &live{app: app, proc: proc, net: net, index: idx, since: time.Now()}
+			// `confirmed` is set here and not left zero, because Start does not
+			// return until it has polled `runsc state` to "running" itself
+			// (container.go) — so this IS an observation, made moments ago, not
+			// a belief. Leaving it zero would mean a worker's first report waited
+			// for the next reconcile pass, which is up to ten seconds of a deploy
+			// timeout spent on a process that is already up.
+			a.live[id] = &live{app: app, proc: proc, net: net, index: idx,
+				since: time.Now(), confirmed: time.Now()}
+			// Same critical section as the live entry on purpose. A process that
+			// is running is not failing, and leaving the two facts to be written
+			// separately is a window in which the node reports both.
+			delete(a.faults, id)
 			a.mu.Unlock()
 
 			// Publish immediately. An app that is serving and absent from the
@@ -652,8 +1181,18 @@ func (a *Agent) serve(addr string) {
 		}
 		a.mu.Unlock()
 		sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+		// Processes AND what has stopped being retried. A node that has given up
+		// on something is the one state that is invisible from the outside: the
+		// process is simply absent, which looks the same as never having been
+		// asked for.
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		json.NewEncoder(w).Encode(struct {
+			Processes any                  `json:"processes"`
+			Failures  map[string]FailState `json:"failures"`
+		}{
+			Processes: out,
+			Failures:  mergeFailures(a.relFail, a.startFail, a.cronFail),
+		})
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
@@ -665,6 +1204,44 @@ func (a *Agent) serve(addr string) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// mergeFailures flattens the three trackers into one map for /status.
+//
+// The keys are already distinguishable — a release key is slug@image, a start
+// key is id@image, a cron key is a bare sandbox id — but that non-collision
+// guarantee lives entirely outside this package, in what callers choose to
+// pass as keys. A collision is therefore reported loudly rather than silently
+// resolved by last-write-wins.
+func mergeFailures(ts ...*failTracker) map[string]FailState {
+	out := map[string]FailState{}
+	for _, t := range ts {
+		if t == nil {
+			continue
+		}
+		for k, v := range t.report() {
+			if _, dup := out[k]; dup {
+				log.Printf("status: failure key %q reported by two trackers — keeping the first", k)
+				continue
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// giveUpEvery is how often a state that is not going to change on its own is
+// repeated into the node's log. Ten minutes is 144 lines a day instead of
+// 8,640, and still soon enough that a human tailing the log meets it.
+const giveUpEvery = 10 * time.Minute
+
+// startKey is the failure key for one process on one image.
+//
+// The image is IN the key on purpose: a new deploy is a new key, so a fix
+// clears the give-up state without anything here having to notice that a deploy
+// happened. Written once, here, because two paths now build it — the restart
+// counter and the start counter — and they must agree or a process would carry
+// two independent counts.
+func startKey(id, image string) string { return id + "@" + image }
 
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {

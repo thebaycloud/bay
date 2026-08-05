@@ -58,6 +58,27 @@ export interface SpecInput {
   env: string[];
   secrets: SecretRef[];
   processes: ResolvedProcess[];
+  /**
+   * A release declared in config rather than in a Procfile.
+   *
+   * On Cloud Run these were two different mechanisms — a Procfile line became a
+   * process, and this became a job — so nothing ever needed them to agree. A
+   * node has one primitive, and an app whose migrations never run is an app that
+   * serves its homepage and fails everything else.
+   */
+  releaseCommand?: string | null;
+  /**
+   * Whether this app genuinely has no web process — a bot, a queue consumer, a
+   * cron-only app.
+   *
+   * Read by the pipeline from the process list BEFORE it appends anything to it,
+   * which is the only moment an empty list still means "one implicit web
+   * process". By the time this function sees the list that fact is unrecoverable
+   * from the list itself, so it has to travel separately. Optional, and absent
+   * means "do not decide": a caller that does not know must not have this
+   * function guess a web process into existence.
+   */
+  serviceless?: boolean;
   port?: number;
   memoryBytes?: number;
   cpuShares?: number;
@@ -90,6 +111,22 @@ export function memoryBytes(memory: string | undefined): number | undefined {
 }
 
 /**
+ * A CPU count → the cgroup's share weight.
+ *
+ * One CPU is 1024 shares — what migrate.sh hardcoded and what DEFAULT_CPU_SHARES
+ * still means. Fractional counts are valid in the schema and on Cloud Run, so
+ * 0.5 is 512 rather than a rejection.
+ *
+ * Zero, negative and non-finite return undefined for the same reason
+ * `memoryBytes` does: the agent reads a zero as "use the app-wide limit", and a
+ * wrong number here is a throttled app at 3am that reads as the app's fault.
+ */
+export function cpuShares(cpu: number | undefined): number | undefined {
+  if (cpu === undefined || !Number.isFinite(cpu) || cpu <= 0) return undefined;
+  return Math.round(cpu * DEFAULT_CPU_SHARES);
+}
+
+/**
  * A start command, as the thing that will actually read it.
  *
  * The agent execs argv directly. The Cloud Run path wraps every command in
@@ -119,13 +156,15 @@ function agentProcess(p: ResolvedProcess): AgentProcess {
     // and a bot answering HTTP it never serves is a 502 with the app's name on it.
     const mem = memoryBytes(p.memory);
     if (mem) out.memoryBytes = mem;
-    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    const shares = cpuShares(p.cpu);
+    if (shares) out.cpuShares = shares;
     if (p.shutdownGrace) out.shutdownGrace = p.shutdownGrace;
   }
   if (p.kind === "cron" || p.kind === "release") {
     const mem = memoryBytes(p.memory);
     if (mem) out.memoryBytes = mem;
-    if (p.cpu) out.cpuShares = Math.round(p.cpu * DEFAULT_CPU_SHARES);
+    const shares = cpuShares(p.cpu);
+    if (shares) out.cpuShares = shares;
     if (p.schedule) out.schedule = p.schedule;
     if (p.timezone) out.timezone = p.timezone;
   }
@@ -162,11 +201,52 @@ export function buildAppSpec(i: SpecInput): AppSpec {
   };
   if (Object.keys(env).length) spec.env = env;
   if (Object.keys(secrets).length) spec.secrets = secrets;
+  const declared = i.processes.map(agentProcess);
+  // A release declared in config only ever existed as a Cloud Run Job — nothing
+  // in a Procfile named it, so `declared` would not otherwise contain it. Added
+  // only when no Procfile line already claimed the name "release", the same
+  // precedence the pipeline gives a Procfile-declared process over the inferred
+  // one.
+  if (i.releaseCommand && !declared.some((p) => p.name === "release")) {
+    declared.push({ name: "release", kind: "release", command: shellArgv(i.releaseCommand) });
+  }
+
+  // The implicit web process, restored when something else has already made the
+  // list non-empty.
+  //
+  // An empty list means ONE IMPLICIT WEB PROCESS — the comment below says so and
+  // `processesOf` implements it. But an app whose web came from `start` rather
+  // than from a Procfile has an empty list, and the pipeline appends its release
+  // to that list before this function is ever called. The list is then
+  // `[release]`: non-empty, so the implicit rule no longer applies, and the
+  // agent runs exactly what is in it. The app migrates its database and serves
+  // nothing.
+  //
+  // Measured on 5 Aug on p6mx8/goapi, the first app ever placed on the fleet
+  // with a release. The spec that reached fleet_placements was `[release]`
+  // alone and placeOnFleet refused to flip: "this placement declares no
+  // long-running process". Before that check existed the same spec would have
+  // been placed and rolled back for not answering — same outcome, and a reason
+  // that points at the app instead of at the spec.
+  //
+  // Gated on `serviceless` because that is the ONLY thing that distinguishes
+  // this from an app which correctly has no web: a bot declares `[bot]`, a
+  // cron-only app declares `[nightly]`, and neither is owed one. The pipeline
+  // decides `serviceless` from the process list BEFORE it appends anything, so
+  // it is the one reading taken while the emptiness still meant something.
+  //
+  // No command on the synthesised entry, deliberately: that is what
+  // `processesOf` builds for the implicit case, and it lets the image's own
+  // entrypoint run — the app's `start`, already baked in by the Dockerfile.
+  // Naming a command here would be this function inventing one.
+  if (i.serviceless === false && declared.length && !declared.some((p) => p.kind === "web" || p.kind === "worker")) {
+    declared.unshift({ name: "web", kind: "web" });
+  }
   // Absent rather than empty, and the difference is load-bearing: `processesOf`
   // reads a zero-length list as "one implicit web process built from the app's
   // own port and health path". An empty array takes the other branch and places
   // an app that runs nothing.
-  if (i.processes.length) spec.processes = i.processes.map(agentProcess);
+  if (declared.length) spec.processes = declared;
 
   return spec;
 }

@@ -1,7 +1,8 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, type VisitorIdentity } from "./headers";
-import { idTokenFor } from "./idtoken";
+import { mintIdToken } from "./idtoken";
+import { isCloudRunTarget } from "./upstream";
 import { config } from "./config";
 import { injectOverlay, isHtmlDocument } from "./inject";
 import { page502 } from "./pages";
@@ -32,8 +33,31 @@ export async function forward(
   //
   // Cloud Run reads this header first when it is present and leaves Authorization
   // untouched for the container, which is the entire reason it exists.
-  if (!process.env.SKIP_ID_TOKEN) {
-    headers["x-serverless-authorization"] = `Bearer ${await idTokenFor(new URL(targetBase).origin)}`;
+  const cloudRun = isCloudRunTarget(targetBase);
+
+  //
+  // No SKIP_ID_TOKEN any more. That was a production branch on this line that
+  // existed for a test's benefit, and set in a real environment it would have
+  // stripped this header from every Cloud Run upstream at once — every tenant's
+  // app 403ing, with nothing here saying why. The test that needed to avoid the
+  // metadata server now replaces the minter instead. See idtoken.ts.
+  if (cloudRun) {
+    headers["x-serverless-authorization"] = `Bearer ${await mintIdToken(new URL(targetBase).origin)}`;
+  }
+
+  // The fleet's node router trusts `x-supersonic-slug` to name the app. That
+  // trust used to rest on the port being unreachable, and it is not: the fleet
+  // load balancer answers the open internet, so without this header anyone could
+  // name any slug and reach a placed app around everything above — the session
+  // check, decideAccess, app_grants, workspace scoping.
+  //
+  // Never to a Cloud Run target: that upstream is a tenant's app.
+  //
+  // The value arrives already trimmed from config, which is the only place this
+  // env var is read — see the note there for why a stray newline is a 502 for
+  // every fleet app rather than a cosmetic problem.
+  if (!cloudRun && config.edgeSecret) {
+    headers["x-supersonic-edge"] = config.edgeSecret;
   }
 
   const doRequest = target.protocol === "https:" ? httpsRequest : httpRequest;

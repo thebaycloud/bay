@@ -32,7 +32,9 @@ export type EdgeAction =
   /** 503: the deploy failed, and we know why. */
   | { page: "failed"; reason: string | null }
   /** 503: a deploy was running and then stopped saying anything. */
-  | { page: "stalled" };
+  | { page: "stalled" }
+  /** 404: the app deployed fine and has no web process. Nothing is wrong. */
+  | { page: "noweb" };
 
 export interface EdgeInput {
   /** The app has a published build to forward to. */
@@ -43,6 +45,12 @@ export interface EdgeInput {
   status: "deploying" | "live" | "failed";
   /** The latest deploy record, or null for an app that predates the table. */
   deploy: { status: string; error: string | null; updatedAt: number | null } | null;
+  /**
+   * apps.has_web — false only for an app that declared its processes and did
+   * not declare a `web` one. Optional, and absent means "not known": a row that
+   * predates the column must keep every answer it had before.
+   */
+  hasWeb?: boolean;
   now: number;
   /** How long a deploy may go without progress before it is presumed dead. */
   staleAfterMs?: number;
@@ -60,7 +68,7 @@ export interface EdgeInput {
 export const STALE_AFTER_MS = 15 * 60_000;
 
 export function decideEdge(input: EdgeInput): EdgeAction {
-  const { buildLive, tunnelUp, status, deploy, now } = input;
+  const { buildLive, tunnelUp, status, deploy, hasWeb, now } = input;
   const staleAfterMs = input.staleAfterMs ?? STALE_AFTER_MS;
 
   // A landed build outranks a preview of it. The tunnel exists for the deploy
@@ -74,6 +82,21 @@ export function decideEdge(input: EdgeInput): EdgeAction {
   // "it failed", and "it stopped" — and which one it is has to be argued for.
   const failed = status === "failed" || deploy?.status === "failed";
   if (failed) return { page: "failed", reason: deploy?.error ?? null };
+
+  // An app with no web process to point at. Nothing is wrong with it, and every
+  // answer below this line would say there is: a Telegram bot spent two days
+  // telling its customer's visitors "This deploy stopped" while the bot ran.
+  //
+  // Deliberately BELOW the failed check, not above it. `has_web` is written by
+  // markAppLive, so it carries the shape of the last deploy that SUCCEEDED and
+  // outlives a later failure. A worker-only app whose redeploy died must be
+  // reported as failed; "it runs as a worker, nothing is wrong" would erase the
+  // only signal its owner had.
+  //
+  // `=== false`, never `!hasWeb`. On a control plane running ahead of the
+  // migration this arrives undefined, and treating that as "no web" would tell
+  // every stalled and every building app in the platform that it is fine.
+  if (hasWeb === false) return { page: "noweb" };
 
   // No deploy record at all: an app from before the table existed. Nothing to
   // measure staleness against, so this keeps the old behaviour rather than

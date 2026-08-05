@@ -68,6 +68,10 @@ const r = await agentRepair({
   // Each redeploy uses a fresh port, so a stale listener cannot make a broken
   // app look fixed.
   redeploy: () => tryRun(8100 + attempt++),
+  // This harness runs the app locally, so neither runtime is literally true.
+  // "cloudrun" is the honest choice of the two: it is the one whose prompt says
+  // nothing about a database at 10.200.0.1, which there is none of here.
+  runtime: "cloudrun",
   log: (l) => console.log("   " + l),
   timeoutMs: 300000,
 });

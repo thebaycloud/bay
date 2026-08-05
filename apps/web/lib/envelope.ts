@@ -1,6 +1,7 @@
 import type { ResolvedApp, ResolvedService } from "./resolve";
 import type { Lane, Scale } from "./lanes";
 import type { HealthConfig } from "./app-config";
+import { memoryBytes, cpuShares } from "./fleet-spec";
 
 /**
  * The one object a lane is given, and the proof that it read it.
@@ -214,6 +215,22 @@ export interface DeployOutcome {
   argv: string[];
   /** Whether provisioning actually produced a database for this app. */
   hasDatabase: boolean;
+  /**
+   * The size the node was actually handed, when this deploy placed on the fleet.
+   *
+   * Null on every other path, where argv is the evidence instead. The fleet
+   * branch never calls `attempt()`, so `argv` is `[]` on it — and `scale` read
+   * `argv` with no guard while `env`, `secrets` and `uses` all short-circuit on
+   * `!hasRevision`. The result was an exception thrown AFTER a successful
+   * placement: the app was live on a node, the outer catch wrote `status:
+   * failed`, `markAppLive` never ran so `run_url` still pointed at the old
+   * address, and the owner was told "That is a platform bug".
+   *
+   * A placement is the STRONGER evidence, not a weaker substitute for argv. It
+   * is the row the agent reads to decide the cgroup limits, so it is the outcome
+   * itself rather than a command that might produce one.
+   */
+  placed?: { memoryBytes: number; cpuShares: number } | null;
 }
 
 const carries = (o: DeployOutcome, n: string, fromSecret: boolean) =>
@@ -247,7 +264,22 @@ const REACHED: Partial<Record<keyof ServiceEnvelope, (e: ServiceEnvelope, o: Dep
     if (e.dbUrlName) return !o.hasRevision || carries(o, e.dbUrlName, true);
     return o.hasDatabase;
   },
-  scale: (e, o) => o.argv.includes(e.scale.memory) && o.argv.includes(`--timeout=${e.scale.timeout}`),
+  // Two runtimes, two pieces of evidence, and neither is optional.
+  //
+  // On a node, `memory` and `cpu` are the whole of what `scale` means: the
+  // placement row carries them as cgroup limits and the agent enforces them.
+  // The other four are Cloud Run's autoscaler, which the fleet does not have —
+  // `runFleetDeploy` names them in the log rather than dropping them silently,
+  // and none of them can be read back from a placement because none of them was
+  // ever written to one.
+  //
+  // The `!o.hasRevision` tail is the guard the neighbours above already carry.
+  // Without it this threw on the static lane's sibling case and, far worse, on
+  // every fleet deploy — see DeployOutcome.placed.
+  scale: (e, o) => {
+    if (o.placed) return o.placed.memoryBytes === memoryBytes(e.scale.memory) && o.placed.cpuShares === cpuShares(e.scale.cpu);
+    return !o.hasRevision || (o.argv.includes(e.scale.memory) && o.argv.includes(`--timeout=${e.scale.timeout}`));
+  },
   // Read by the verifier after the revision is live rather than by the argv, so
   // its effect is not visible here. Present so it is not reported unverifiable.
   health: () => true,

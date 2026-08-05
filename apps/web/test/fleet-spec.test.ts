@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildAppSpec, type AppSpec } from "../lib/fleet-spec";
 import { resolveProcess, type ResolvedProcess } from "../lib/processes";
+import type { ProcessFault, ProcessState } from "../lib/fleet";
 
 /**
  * The json tags of the agent's `App` struct, read from the agent itself.
@@ -119,6 +120,39 @@ test("a process that asked for its own memory gets it, in the unit the agent spe
   assert.equal(spec.processes?.[0].memoryBytes, 512 * 1024 * 1024);
 });
 
+test("a release command reaches the node as a release process", () => {
+  // The agent runs KindRelease to completion BEFORE web and worker start, and
+  // keys it by image so a slow start does not run a customer's migration twice
+  // concurrently. All of that is wasted if the command never arrives.
+  const spec = buildAppSpec({
+    ...base,
+    processes: [
+      resolveProcess("release", { command: "python manage.py migrate" }),
+      resolveProcess("web", { command: "gunicorn app:wsgi" }),
+    ] as ResolvedProcess[],
+  });
+
+  const release = spec.processes?.find((p) => p.name === "release");
+  assert.equal(release?.kind, "release");
+  assert.deepEqual(release?.command, ["/bin/sh", "-c", "python manage.py migrate"]);
+});
+
+test("a release declared in config, not a Procfile, still reaches the node", () => {
+  // deploy-pipeline.ts:483 treats a release PROCESS and a release COMMAND as
+  // separate things, because on Cloud Run they were: one is a Procfile line and
+  // the other is a job. On a node there is one primitive, so the command has to
+  // arrive as a process or the app's migrations simply never run.
+  const spec = buildAppSpec({
+    ...base,
+    processes: [resolveProcess("web", { command: "gunicorn app:wsgi" })] as ResolvedProcess[],
+    releaseCommand: "python manage.py migrate",
+  });
+
+  const release = spec.processes?.find((p) => p.name === "release");
+  assert.equal(release?.kind, "release");
+  assert.deepEqual(release?.command, ["/bin/sh", "-c", "python manage.py migrate"]);
+});
+
 test("declared processes cross over with the fields their kind uses", () => {
   const processes = [
     resolveProcess("web", { command: "npm start" }),
@@ -137,4 +171,213 @@ test("declared processes cross over with the fields their kind uses", () => {
   assert.equal(by("nightly")?.kind, "cron");
   assert.equal(by("nightly")?.schedule, "0 3 * * *");
   assert.equal(by("nightly")?.timezone, "Asia/Almaty");
+});
+
+/**
+ * The json tags of the agent's `ProcessFault` struct, read from the agent.
+ *
+ * The same check as above, for the pair phase 1C-1's self-review flagged and
+ * deferred: `ProcessFault` is declared in Go (services/fleet/agent/desired.go)
+ * and mirrored in TypeScript (lib/fleet.ts), the node writes one and the
+ * control plane reads it, and nothing held the two together.
+ *
+ * The failure it prevents is silent in the worst direction. A field renamed on
+ * one side does not throw — it arrives as undefined, `fault` reads as neither
+ * "node" nor "app", nodeFaultFor finds nothing, and a fault the node correctly
+ * blamed on itself goes back to being blamed on the app. Which is the one
+ * outcome that whole slice exists to prevent, restored by a typo.
+ */
+function agentProcessFaultFields(): string[] {
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type ProcessFault struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type ProcessFault struct` in the agent");
+  return [...block[1].matchAll(/json:"([^"]+)"/g)].map((m) => m[1].split(",")[0]);
+}
+
+test("what the node says about a process is what the control plane reads", () => {
+  // Every field present, so this is the whole shape and not whatever one
+  // instance happened to carry.
+  const full: Required<ProcessFault> = {
+    slug: "a8ebb",
+    process: "web",
+    fault: "node",
+    detail: "this node's database path (10.200.0.1:5432) is not answering",
+  };
+
+  assert.deepEqual(Object.keys(full).sort(), agentProcessFaultFields().sort());
+});
+
+test("the wire field the control plane keys absent-vs-empty on is still optional in Go", () => {
+  // `processes` is a POINTER to a slice with omitempty, and that is the whole
+  // absent/empty distinction: absent means "this agent does not report" and
+  // must leave the stored faults alone; `[]` means "I hold nothing failing" and
+  // must clear them. A plain slice with omitempty cannot express it — it drops
+  // nil and empty alike — and dropping the pointer would silently leave every
+  // repaired app marked as a node fault forever.
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type syncBody struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type syncBody struct` in the agent");
+  assert.match(
+    block[1],
+    /Processes\s+\*\[\]ProcessFault\s+`json:"processes,omitempty"`/,
+    "the sync body's processes field is no longer a pointer-to-slice with omitempty",
+  );
+});
+
+/** The json tags of `ProcessState`, read from the agent itself. */
+function agentProcessStateFields(): string[] {
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type ProcessState struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type ProcessState struct` in the agent");
+  return [...block[1].matchAll(/json:"([^"]+)"/g)].map((m) => m[1].split(",")[0]);
+}
+
+test("what the node says it is RUNNING is what the control plane reads", () => {
+  // The same drift risk as ProcessFault, failing in a sharper direction. A field
+  // renamed on one side does not throw — it arrives as undefined, `runVerdict`
+  // finds no matching row or no matching image, and every worker-only fleet
+  // deploy rolls back with a reason nobody can act on. And this pair carries the
+  // comparison itself: drop `command` from the Go struct and the verdict
+  // silently weakens to an image check, which passes a redeploy on the process
+  // still running the old argv.
+  const full: Required<ProcessState> = {
+    slug: "a8ebb",
+    process: "bot",
+    image: "us-central1-docker.pkg.dev/p/r/a8ebb@sha256:abc",
+    command: ["/bin/sh", "-c", "python bot.py"],
+  };
+
+  assert.deepEqual(Object.keys(full).sort(), agentProcessStateFields().sort());
+});
+
+test("the wire field the control plane keys absent-vs-empty on is a pointer for `running` too", () => {
+  // Absent means "this agent does not report" and must leave the stored rows
+  // alone, so a rolling agent upgrade does not read as the fleet having stopped
+  // running things; `[]` means "I am running nothing confirmed" and must clear
+  // them. `null` is neither — the reader tests for an array — and a plain slice
+  // with omitempty cannot express the distinction at all.
+  const src = readFileSync(resolve(process.cwd(), "../../services/fleet/agent/desired.go"), "utf8");
+  const block = src.match(/type syncBody struct \{([\s\S]*?)\n\}/);
+  assert.ok(block, "could not find `type syncBody struct` in the agent");
+  assert.match(
+    block[1],
+    /Running\s+\*\[\]ProcessState\s+`json:"running,omitempty"`/,
+    "the sync body's running field is no longer a pointer-to-slice with omitempty",
+  );
+});
+
+test("a release does not delete the web process it was appended next to", () => {
+  // The pipeline appends the release to the process list BEFORE calling this,
+  // so the realistic input is a list that already contains it — which is why
+  // the guard cannot be "was the list empty".
+  // Found on the fleet's first real placement with a release, p6mx8/goapi.
+  //
+  // An app whose web process comes from `start` rather than from a Procfile has
+  // an EMPTY process list, and an empty list is not "nothing" — `processesOf`
+  // reads it as one implicit web process. Appending the release makes the list
+  // non-empty, at which point the agent runs exactly what is in it: the
+  // release, and nothing else. The app migrates its database and serves no
+  // traffic.
+  //
+  // The spec that actually reached fleet_placements was [release] alone, and
+  // the placement was refused with "this placement declares no long-running
+  // process". This asserts the shape that refusal was pointing at.
+  const spec = buildAppSpec({
+    slug: "p6mx8",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [],
+    releaseCommand: "/app/migrate",
+    serviceless: false,
+  });
+
+  const kinds = (spec.processes ?? []).map((p) => p.kind);
+  assert.ok(kinds.includes("web"), `the web process was lost: ${JSON.stringify(spec.processes)}`);
+  assert.ok(kinds.includes("release"), "the release was not added");
+
+  // No command on the synthesised web: the image's own entrypoint is the app's
+  // `start`, and inventing a command here would override it with a guess.
+  const web = (spec.processes ?? []).find((p) => p.kind === "web");
+  assert.equal(web?.command, undefined);
+});
+
+test("an app that really declares no web keeps declaring none", () => {
+  // The other direction, and the one that must not regress: a bot declares its
+  // processes explicitly, so the list is already non-empty and nothing implicit
+  // is owed. Synthesising a web process here would put a Telegram bot back to
+  // pretending to be a web server, which is the defect the process model exists
+  // to remove.
+  const spec = buildAppSpec({
+    slug: "botapp",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("bot", { command: "python bot.py" }) as never],
+    releaseCommand: "python migrate.py",
+  });
+
+  const kinds = (spec.processes ?? []).map((p) => p.kind);
+  assert.ok(!kinds.includes("web"), `a web process was invented: ${JSON.stringify(spec.processes)}`);
+  assert.ok(kinds.includes("release"));
+});
+
+test("an app with a Procfile web and a config release gets exactly one web", () => {
+  const spec = buildAppSpec({
+    slug: "webapp",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("web", { command: "npm start" }) as never],
+    releaseCommand: "npm run migrate",
+  });
+  assert.equal((spec.processes ?? []).filter((p) => p.kind === "web").length, 1);
+});
+
+test("the release the PIPELINE already appended still does not delete the web process", () => {
+  // The shape that actually reached production. deploy-pipeline appends the
+  // release to `processes` itself, so buildAppSpec is handed `[release]` and
+  // its own releaseCommand branch never fires — which is why the first attempt
+  // at this fix, guarding on "was the list empty", did nothing at all.
+  const spec = buildAppSpec({
+    slug: "p6mx8",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("release", { command: "/app/migrate" }) as never],
+    releaseCommand: "/app/migrate",
+    serviceless: false,
+  });
+
+  const kinds = (spec.processes ?? []).map((p) => p.kind);
+  assert.ok(kinds.includes("web"), `the web process was lost: ${JSON.stringify(spec.processes)}`);
+  assert.equal(kinds.filter((k) => k === "release").length, 1, "the release was doubled");
+});
+
+test("a cron-only app is not given a web process it never asked for", () => {
+  // serviceless is true for this one, and that is the whole distinction: a list
+  // with no web and no worker is correct here, and inventing one would place an
+  // app that runs a web server nobody wrote.
+  const spec = buildAppSpec({
+    slug: "cronly",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("nightly", { command: "python digest.py", schedule: "0 3 * * *" }) as never],
+    serviceless: true,
+  });
+  assert.ok(!(spec.processes ?? []).some((p) => p.kind === "web"));
+});
+
+test("a caller that does not say makes this function decide nothing", () => {
+  // serviceless absent means "unknown". Guessing a web process into existence
+  // on a caller's silence is how a bot ends up pretending to be a web server.
+  const spec = buildAppSpec({
+    slug: "unknown",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("release", { command: "/app/migrate" }) as never],
+  });
+  assert.ok(!(spec.processes ?? []).some((p) => p.kind === "web"));
 });
