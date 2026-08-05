@@ -498,9 +498,38 @@ export async function placeOnFleet(
   //    deploy, and it takes the same restore.
   let verdict: Eligibility;
   try {
-    verdict = specHasWeb(spec)
-      ? fleetVerdict(await p.probe(slug))
-      : await p.runningOnNode(slug, node, spec);
+    if (!specHasWeb(spec)) {
+      verdict = await p.runningOnNode(slug, node, spec);
+    } else {
+      const probed = fleetVerdict(await p.probe(slug));
+      // A REDEPLOY's probe can be answered by the version it is replacing.
+      //
+      // fleetProbe returns on the first good answer, and for an app already on
+      // this fleet the outgoing process is still serving through the load
+      // balancer when the first request arrives — the node reconciles on its
+      // own ten-second clock and has not necessarily swapped yet. So a 200 says
+      // "something is serving this slug", which is exactly what it said before
+      // the deploy, and the flip goes through on the strength of the version
+      // being replaced.
+      //
+      // Watched happen on p6mx8, 5 Aug 05:51: the probe passed, run_url was
+      // flipped, the deploy was reported live — and the new version then failed
+      // its release and never started, so nothing served at all. The most
+      // expensive kind of false positive, because it is indistinguishable from
+      // a good deploy until a person opens the app.
+      //
+      // Only when a PREVIOUS placement exists, and that is the whole condition:
+      // on a first placement there is no other process that could have answered,
+      // so the probe alone is already evidence about the new version.
+      //
+      // The node's report is the right second question because it compares the
+      // IMAGE and the COMMAND against what was just placed — the agent's own
+      // predicate for "this is a different program". And it waits on the same
+      // budget the probe does (24 × 5s), so a slow start is not mistaken for a
+      // failure; without that this would trade a false pass for a false
+      // rollback, which is the worse of the two.
+      verdict = probed.ok && previous ? await p.runningOnNode(slug, node, spec) : probed;
+    }
   } catch {
     verdict = { ok: false, reason: "could not read what the node is running" };
   }

@@ -866,3 +866,71 @@ test("a probe that throws is a failed verdict too, not an escaped exception", as
   assert.equal(r.placed, false);
   assert.ok(calls.includes("unplace:myapp"), "a throwing probe skipped the rollback");
 });
+
+test("a redeploy is not passed by the version it is replacing", () => {
+  // Watched happen on p6mx8, 5 Aug 05:51. fleetProbe returns on the first good
+  // answer, and for an app already on this fleet the OUTGOING process is still
+  // serving through the load balancer when that request arrives — the node
+  // reconciles on its own ten-second clock. So the 200 said "something is
+  // serving this slug", which is what it said before the deploy too, run_url
+  // was flipped, the deploy was reported live, and the new version then failed
+  // its release and never started. Nothing served at all, and it looked exactly
+  // like a good deploy until a person opened the app.
+  //
+  // The node's report is the second question because it compares the IMAGE and
+  // the COMMAND against what was just placed.
+  return (async () => {
+    const { calls, p } = ports({
+      probe: async () => { calls.push("probe"); return { code: 200 }; },
+      readPlacement: async () => {
+        calls.push("read");
+        return { node: "fleet-lab-2", spec: { ...spec, image: "registry/myapp:good" } };
+      },
+      runningOnNode: async () => { calls.push("running"); return { ok: false, reason: "the node is still running the previous image" }; },
+    });
+    const r = await placeOnFleet("myapp", { ...spec, image: "registry/myapp:new" }, "8.232.255.172", p);
+
+    assert.equal(r.placed, false, "a 200 from the outgoing version must not flip the deploy");
+    assert.match(r.reason ?? "", /previous image|not reporting|running/i);
+    // …and the restore still lands on the node the app was already on.
+    assert.ok(calls.includes("place:myapp@fleet-lab-2:registry/myapp:good"), `restore missing: ${calls.join(", ")}`);
+  })();
+});
+
+test("a FIRST placement is not made to wait for a report it does not need", () => {
+  // The condition is `previous`, and this is why. With no previous placement
+  // there is no other process that could have answered the probe, so a 200 is
+  // already evidence about the new version. Asking the node as well would add a
+  // reconcile interval to every first placement for nothing — and would fail
+  // any app whose node has not yet reported, which is the false rollback this
+  // change must not introduce.
+  return (async () => {
+    const { calls, p } = ports({
+      probe: async () => { calls.push("probe"); return { code: 200 }; },
+      readPlacement: async () => { calls.push("read"); return null; },
+    });
+    const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
+
+    assert.equal(r.placed, true);
+    assert.ok(!calls.includes("running"), `a first placement asked the node anyway: ${calls.join(", ")}`);
+  })();
+});
+
+test("a redeploy the node confirms still passes", () => {
+  // The other direction: the ordinary redeploy, where the node has swapped and
+  // reports the new image. Nothing about this may become slower or stricter.
+  return (async () => {
+    const { calls, p } = ports({
+      probe: async () => { calls.push("probe"); return { code: 200 }; },
+      readPlacement: async () => {
+        calls.push("read");
+        return { node: "fleet-lab-1", spec: { ...spec, image: "registry/myapp:old" } };
+      },
+      runningOnNode: async () => { calls.push("running"); return { ok: true }; },
+    });
+    const r = await placeOnFleet("myapp", { ...spec, image: "registry/myapp:new" }, "8.232.255.172", p);
+
+    assert.equal(r.placed, true);
+    assert.equal(r.runUrl, "http://8.232.255.172");
+  })();
+});
