@@ -44,7 +44,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
-import { deployArgs, databaseEnv, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
+import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -2054,6 +2054,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     let databaseUrl = "";
     // Every database variable an app might read. Empty when it has no database.
     let dbEnv: string[] = [];
+    /** Enough of the provisioned role to name the same database at another address. */
+    let pgFacts: { user: string; password: string; dbName: string } | null = null;
     // The app's own Postgres role, when it got one.
     let dbIsolated = false;
     let dbPassword = "";
@@ -2236,6 +2238,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // Every spelling of the same endpoint. DATABASE_URL alone is not enough:
           // plenty of apps never read it and require POSTGRES_SERVER or PGHOST.
           dbEnv = databaseEnv(r.pg, dbAt);
+          // Kept whole, because a SIBLING needs the same database at a different
+          // address — see `siblingDbEnv` below. Only the four fields that name
+          // the connection; nothing here is the primary's placement.
+          pgFacts = { user: r.pg.user, password: r.pg.password, dbName: r.pg.dbName };
           dbIsolated = r.pg.isolated;
           dbPassword = r.pg.password;
           log("Provisioned the database — connecting through a Cloud SQL proxy");
@@ -2897,6 +2903,43 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           `SUPERSONIC_RUN=${startCmd}`,
         ]),
       ];
+      // A sibling deploys to CLOUD RUN even when the primary went to a node —
+      // `deploySibling` has no fleet branch — and the database env it inherits
+      // from the primary was computed at the PRIMARY's address. On the fleet
+      // that is 10.200.0.1, the host-side proxy on the node, which nothing in
+      // Cloud Run can route to. So a "frontend + API" repo placed on the fleet
+      // shipped its API a database address it could never open.
+      //
+      // This is the failure the runtime gate two hundred lines up exists to
+      // stop — "handing it FLEET_DB would give that Cloud Run revision an
+      // address it cannot reach" — arriving through the one door that gate does
+      // not cover. Same database, same role, stated at the address THIS service
+      // actually runs at.
+      let siblingDbRefs: SecretRef[] = [];
+      if (toFleet && pgFacts) {
+        const dbNames = new Set(databaseEnvNames());
+        for (let i = env.length - 1; i >= 0; i--) {
+          const eq = env[i].indexOf("=");
+          if (eq > 0 && dbNames.has(env[i].slice(0, eq))) env.splice(i, 1);
+        }
+        const hereEnv = databaseEnv(
+          { databaseUrl: databaseUrlFor(pgFacts, pgFacts.dbName, CLOUD_RUN_DB), ...pgFacts },
+          CLOUD_RUN_DB,
+        );
+        // Merged against nothing rather than against the app's secrets: this is
+        // replacing the platform's own values, and the app's copies of these
+        // names were already resolved once for the primary.
+        const merged = mergeDatabaseEnv({}, hereEnv);
+        env.push(...merged.plainEnv);
+        const stored = await putAppSecrets(name, merged.secretEnv, APP_RUNTIME_SA, log);
+        siblingDbRefs = stored.stored;
+        // Same fallback the primary takes: a value Secret Manager refused rides
+        // as a plain variable rather than not arriving at all.
+        for (const key of stored.skipped) {
+          if (merged.secretEnv[key] !== undefined) env.push(`${key}=${merged.secretEnv[key]}`);
+        }
+        log(`${servicePath(svc)} reaches the database on ${CLOUD_RUN_DB.host} — it runs on Cloud Run, not on the node`);
+      }
       // Service-level flags only; the argv builder scopes the rest to the app
       // container and appends the proxy. A sibling shares the app's database,
       // so it needs its own proxy beside it.
@@ -2917,7 +2960,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const siblingKeySecret = generatedBuild
         ? { stored: [] as SecretRef[], skipped: [] as string[] }
         : await putAppSecrets(name, { SUPERSONIC_CODE_KEY: key }, APP_RUNTIME_SA, log);
-      const siblingRefs = [...secretRefs.filter((r) => r.key !== "SUPERSONIC_CODE_KEY"), ...siblingKeySecret.stored];
+      // The primary's DATABASE_URL and password refs are dropped when this
+      // sibling minted its own above — they point at secrets holding the node's
+      // address, and two refs for one name is a revision gcloud refuses outright.
+      const rewritten = new Set(siblingDbRefs.map((r) => r.key));
+      const siblingRefs = [
+        ...secretRefs.filter((r) => r.key !== "SUPERSONIC_CODE_KEY" && !rewritten.has(r.key)),
+        ...siblingDbRefs,
+        ...siblingKeySecret.stored,
+      ];
       // Anything Secret Manager refused falls back to a literal, which is the
       // old behaviour and no worse — but it is said out loud rather than assumed.
       if (siblingKeySecret.skipped.length) env.push(`SUPERSONIC_CODE_KEY=${key}`);
