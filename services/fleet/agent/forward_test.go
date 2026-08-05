@@ -195,3 +195,59 @@ func TestAnAppWithOnePrefixlessRouteStillServesEverything(t *testing.T) {
 		}
 	}
 }
+
+func TestAForwardedHopIsSigned(t *testing.T) {
+	// The gate deletes the caller's signature before proxying — the tenant's app
+	// must never learn it — and the next node's gate demands one. So a forwarded
+	// request arrived unsigned and was refused: `x-supersonic-router: forwarded,
+	// unsigned`, a 403 for an app that was up, on the very path forwarding
+	// exists to serve.
+	var seen string
+	far := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("x-supersonic-edge")
+		w.WriteHeader(200)
+	}))
+	defer far.Close()
+
+	rt := NewRouter("supersonic.cv", "the-edge-secret")
+	rt.table.mu.Lock()
+	rt.table.byslug = map[string][]Route{"elsewhere": {{Slug: "elsewhere", Addr: far.Listener.Addr().String(), Healthy: true, Peer: true}}}
+	rt.table.mu.Unlock()
+
+	req := httptest.NewRequest("GET", "http://elsewhere.supersonic.cv/", nil)
+	req.Header.Set("x-supersonic-edge", "the-edge-secret")
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("got %d", rec.Code)
+	}
+	if seen != "the-edge-secret" {
+		t.Errorf("the hop reached the next node unsigned: %q", seen)
+	}
+}
+
+func TestALocalHopStillLosesTheSecret(t *testing.T) {
+	// The reason the delete exists: with the secret, a tenant's app could reach
+	// every other app on the node. Signing peer hops must not weaken that.
+	var seen string
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("x-supersonic-edge")
+		w.WriteHeader(200)
+	}))
+	defer app.Close()
+
+	rt := NewRouter("supersonic.cv", "the-edge-secret")
+	rt.table.mu.Lock()
+	rt.table.byslug = map[string][]Route{"mine": {{Slug: "mine", Addr: app.Listener.Addr().String(), Healthy: true}}}
+	rt.table.mu.Unlock()
+
+	req := httptest.NewRequest("GET", "http://mine.supersonic.cv/", nil)
+	req.Header.Set("x-supersonic-edge", "the-edge-secret")
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+
+	if seen != "" {
+		t.Errorf("the app was handed the platform's secret: %q", seen)
+	}
+}

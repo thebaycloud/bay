@@ -342,6 +342,18 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		r.Header.Set(forwardedHeader, "1")
+		// Sign the hop. The gate above deleted the caller's signature — the
+		// tenant's app must never learn it — and the next node's gate demands
+		// one, so a forwarded request arrived unsigned and was refused with 403.
+		// Measured: `x-supersonic-router: forwarded, unsigned`.
+		//
+		// The forwarding node signs as ITSELF rather than replaying what it was
+		// given, which is also the honest thing: this hop is the node's request,
+		// not the edge's, and a node with no secret configured forwards unsigned
+		// and is refused — which is correct, because it should not be serving.
+		if rt.edgeSecret != "" {
+			r.Header.Set("x-supersonic-edge", rt.edgeSecret)
+		}
 		w.Header().Set("X-Supersonic-Router", "forwarded")
 	}
 	if !route.Healthy {
