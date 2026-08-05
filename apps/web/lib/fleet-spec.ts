@@ -143,7 +143,12 @@ function agentProcess(p: ResolvedProcess): AgentProcess {
   if (p.command) out.command = shellArgv(p.command);
 
   if (p.kind === "web") {
-    out.port = DEFAULT_PORT;
+    // No per-process port. It used to be DEFAULT_PORT unconditionally, and the
+    // agent's `effectivePort` prefers the PROCESS value over the app's — so the
+    // app-level port, which is the one the deploy actually resolved, could never
+    // win. Leaving it unset makes `spec.port` authoritative, which is where a
+    // single answer for the app belongs; the agent falls back to 8080 itself if
+    // both are absent.
     out.healthPath = p.health.path;
     // Sent only when it is the answer the author gave. `public` is the agent's
     // default, and stating it changes nothing; `internal` means "do not publish

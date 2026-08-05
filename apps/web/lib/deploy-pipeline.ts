@@ -35,7 +35,7 @@ import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
 import { notifyDeployFinished } from "@/lib/deploy-notify";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
-import { listObjectNames, readObjectText, writeObject, describeServiceRest, resolveImageDigest } from "@/lib/gcp-rest";
+import { listObjectNames, readObjectText, writeObject, describeServiceRest, resolveImageDigest, imageExposedPort } from "@/lib/gcp-rest";
 import { take as takeClone } from "@/lib/clone-cache";
 import { staticBuildConfig } from "@/lib/static-build";
 import { verifyRelease } from "@/lib/verify-release";
@@ -44,7 +44,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
-import { deployArgs, databaseEnv, needsServiceRecreate, DB_HOST, DB_PORT, withScale, type Lane, type Scale } from "@/lib/lanes";
+import { deployArgs, databaseEnv, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -2935,7 +2935,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // Its OWN envelope, for the same reason it gets its own env and its own
           // facts: `scale` is per service in the schema, and a Django API beside
           // a Next frontend is not the same size as the frontend.
-          image, port: 8080, scale: withScale(svc.scale), cloudsql,
+          image, port: await servePortFor(image), scale: withScale(svc.scale), cloudsql,
           existingScoped: await liveContainerShape(name),
         });
         const out = await gcloudDeploy(args, log, (l) => builds.note(l));
@@ -3024,6 +3024,34 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * is the bug: falling back to it would place a reference that cannot express
      * "this is new code" and would hide that behind a deploy reporting success.
      */
+    /**
+     * The port this deploy serves on, decided once and reused.
+     *
+     * Memoised because both runtimes ask, and the answer costs a registry round
+     * trip: two manifest reads and a blob. Announced when it is NOT 8080, which
+     * is the only case where a person needs to know — and the case that used to
+     * present as an app that came up, answered fine, and was rolled back with
+     * "the fleet router answered, not the app".
+     */
+    // Keyed by image, not one value for the deploy: a multi-service app deploys
+    // a frontend and an API from DIFFERENT images, and one cached number would
+    // hand the second whatever the first happened to expose.
+    const servePortMemo = new Map<string, number>();
+    const servePortFor = async (builtImage: string): Promise<number> => {
+      const cached = servePortMemo.get(builtImage);
+      if (cached !== undefined) return cached;
+      const exposed = builtImage ? await imageExposedPort(builtImage) : null;
+      const port = choosePort(activePlan?.port, exposed);
+      if (port !== DEFAULT_PORT) {
+        const from = typeof activePlan?.port === "number" && activePlan.port === port
+          ? "your app declares it"
+          : "the image exposes it";
+        log(`Serving on port ${port} — ${from}. PORT is set to the same value, so an app that reads it lands there too.`);
+      }
+      servePortMemo.set(builtImage, port);
+      return port;
+    };
+
     const buildImage = async (): Promise<{ ok: true; image: string } | { ok: false; error: string }> => {
       if (!useDockerBuild && !serviceless) {
         // Only the buildpack lane reaches here: its image is produced as a side
@@ -3157,7 +3185,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         if (!relC.ok) return { ok: false, error: relC.error };
         return attempt(deployArgs({
           lane: "container", service: slug, serviceFlags: deployFlags, appFlags,
-          image: image.image, scale, cloudsql, existingScoped,
+          // Stated rather than left to `deployArgs`'s own default, which only
+          // fills one in for a scoped service — so an author's image serving
+          // anything but 8080 was deployed with no --port at all and Cloud Run
+          // probed its default. Same defect as the fleet's, one runtime over.
+          image: image.image, port: await servePortFor(image.image), scale, cloudsql, existingScoped,
         }));
       }
       if (serviceless) {
@@ -3284,6 +3316,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         serviceless,
         memoryBytes: memoryBytes(scale.memory),
         cpuShares: cpuShares(scale.cpu),
+        // What the node probes AND what it injects as PORT — one value, so an
+        // app that reads the variable and an app that hardcodes its port land in
+        // the same place. Without this every placement said 8080 and stock nginx,
+        // serving 80, was rolled back as unhealthy while answering 200.
+        port: await servePortFor(image.image),
       });
       placedSpec = placing;
 

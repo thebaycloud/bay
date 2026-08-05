@@ -45,6 +45,38 @@ export const ALL_LANES: Lane[] = ["static", ...SERVICE_LANES];
 export const DEFAULT_PORT = 8080;
 
 /**
+ * Which port this app is actually served on.
+ *
+ * 8080 was hardcoded at every site that needed it — both Cloud Run calls and the
+ * fleet spec — on the platform contract that an app reads `$PORT`. That contract
+ * holds for anything we generate a Dockerfile for, because we write `ENV
+ * PORT=8080` into it. It does not hold for an image the author brought: stock
+ * nginx serves 80 and never reads the variable, so excalidraw came up, answered
+ * 200 on 80, was probed on 8080, and was rolled back as unhealthy.
+ *
+ * Order, and each step is a different kind of evidence:
+ *
+ *  1. `plan.port` — the planner is asked for this exactly when an app hardcodes
+ *     a port instead of reading $PORT, which is the case at hand. The field has
+ *     existed and been populated since the planner was written; nothing ever
+ *     read it.
+ *  2. The port the BUILT IMAGE exposes, when it names exactly one. Ground truth
+ *     rather than a reading of the repository.
+ *  3. 8080.
+ *
+ * Choosing the image's port is safe for BOTH kinds of app, and that is the point
+ * that makes this shape work at all: whatever comes out of here is also what the
+ * agent injects as `PORT`, so an app that reads the variable follows us to it,
+ * and an app that hardcodes it is already there. There is no third behaviour.
+ */
+export function choosePort(planPort: unknown, exposed: number | null): number {
+  const stated = typeof planPort === "number" && Number.isInteger(planPort) && planPort >= 1 && planPort <= 65535
+    ? planPort
+    : null;
+  return stated ?? exposed ?? DEFAULT_PORT;
+}
+
+/**
  * Kept as names because dbContainerArgs and proxyWait are Cloud Run's sidecar
  * and mean loopback specifically. Anything that can run on either runtime takes
  * a DbAddress instead.

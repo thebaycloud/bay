@@ -164,9 +164,16 @@ test("declared processes cross over with the fields their kind uses", () => {
   const by = (n: string) => spec.processes?.find((p) => p.name === n);
 
   assert.equal(by("web")?.kind, "web");
-  assert.equal(by("web")?.port, 8080);
+  // A web process carries NO port of its own, and that is the fix rather than a
+  // regression: the agent's `effectivePort` prefers the process value over the
+  // app's, so a hardcoded 8080 here outranked whatever the deploy resolved and
+  // stock nginx — serving 80 — was probed on 8080 and rolled back as unhealthy.
+  // One answer for the app, on the app.
+  assert.equal(by("web")?.port, undefined);
+  assert.equal(spec.port, 8080);
   assert.equal(by("bot")?.kind, "worker");
-  // A worker has no port, and sending one would put it in the routing table.
+  // A worker has no port either, and for a different reason that still holds:
+  // sending one would put it in the routing table.
   assert.equal(by("bot")?.port, undefined);
   assert.equal(by("nightly")?.kind, "cron");
   assert.equal(by("nightly")?.schedule, "0 3 * * *");

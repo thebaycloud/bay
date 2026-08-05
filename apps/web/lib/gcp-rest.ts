@@ -602,3 +602,102 @@ export async function resolveImageDigest(ref: string): Promise<string | null> {
     return null;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* What port an image says it listens on.                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Pull one port out of an OCI `ExposedPorts` map.
+ *
+ * Exactly one, and that is the whole rule. Two exposed ports is an image that
+ * has not told us which one serves HTTP, and picking the lower of them would be
+ * a guess wearing a number — the platform's own 8080 is a better guess because
+ * it is also what `PORT` is set to, so an app that reads the variable follows us
+ * there. Anything unparseable is no answer rather than a bad one.
+ *
+ * Exported for the tests: this is the part with all the shapes in it, and it
+ * needs no registry, no token and no network to check.
+ */
+export function soleExposedPort(exposed: unknown): number | null {
+  if (!exposed || typeof exposed !== "object") return null;
+  const keys = Object.keys(exposed as Record<string, unknown>);
+  // UDP is not a web server. Filtering rather than refusing outright, because an
+  // image exposing 80/tcp beside a 514/udp log port has still told us plainly
+  // which one serves.
+  const tcp = keys.filter((k) => !/\/udp$/i.test(k));
+  if (tcp.length !== 1) return null;
+  const m = /^(\d{1,5})(?:\/tcp)?$/i.exec(tcp[0]);
+  if (!m) return null;
+  const port = Number(m[1]);
+  return port >= 1 && port <= 65535 ? port : null;
+}
+
+/**
+ * The port a BUILT image declares, read from the image itself.
+ *
+ * The reason this reads the image and not the Dockerfile: excalidraw's Dockerfile
+ * contains no `EXPOSE` line at all, and its image still exposes 80 — the value
+ * is inherited from `nginx:stable-alpine-slim`, which is where almost every
+ * static frontend gets it. A Dockerfile parser would have found nothing and
+ * concluded, wrongly, that the image had no opinion.
+ *
+ * Best-effort like everything else in this file: null means "no answer", and the
+ * caller keeps the platform default. It must never be a new way for a deploy to
+ * fail, because a deploy that cannot read a manifest is still a deploy whose
+ * image is fine.
+ */
+export async function imageExposedPort(ref: string): Promise<number | null> {
+  // Both spellings, because this runs after the build, on an image that is
+  // pinned by digest — and before it, on one still named by tag.
+  const m = ref.match(/^([^/]+)\/(.+?)(?:@(sha256:[0-9a-f]{64})|:([^:/]+))$/);
+  if (!m) return null;
+  const [, host, path, byDigest, byTag] = m;
+  if (!/\.pkg\.dev$/.test(host) && !/^gcr\.io$/.test(host)) return null;
+  const reference = byDigest || byTag;
+  if (!reference) return null;
+
+  const ACCEPT = [
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+  ].join(",");
+
+  try {
+    const token = await accessToken();
+    if (!token) return null;
+    const get = async (what: string) =>
+      fetch(`https://${host}/v2/${path}/${what}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: ACCEPT },
+        signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+      });
+
+    let res = await get(`manifests/${reference}`);
+    if (!res.ok) return null;
+    let manifest = await res.json();
+
+    // A multi-arch image answers with an index, whose entries are per-platform
+    // manifests. The node runs amd64; asking the index for anything else would
+    // read a config that never runs here.
+    if (Array.isArray(manifest?.manifests)) {
+      const child = manifest.manifests.find(
+        (x: { platform?: { architecture?: string; os?: string } }) =>
+          x?.platform?.architecture === "amd64" && (!x.platform.os || x.platform.os === "linux"),
+      ) ?? manifest.manifests[0];
+      if (!child?.digest) return null;
+      res = await get(`manifests/${child.digest}`);
+      if (!res.ok) return null;
+      manifest = await res.json();
+    }
+
+    const configDigest = manifest?.config?.digest;
+    if (typeof configDigest !== "string") return null;
+    const blob = await get(`blobs/${configDigest}`);
+    if (!blob.ok) return null;
+    const config = await blob.json();
+    return soleExposedPort(config?.config?.ExposedPorts);
+  } catch {
+    return null;
+  }
+}
