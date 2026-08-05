@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import {
-  heartbeatNode, desiredFor, recordNodeFaults, recordNodeRunning,
+  heartbeatNode, desiredFor, recordNodeFaults, recordNodeRunning, peersFor,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
 
@@ -109,7 +109,17 @@ export async function POST(req: Request) {
     }
 
     const apps = await desiredFor(name);
-    return Response.json({ apps });
+    // Where everything else lives. Without this a second node is not more
+    // capacity, it is an outage for half of every app's traffic: the load
+    // balancer fans across nodes without knowing where anything is, and the one
+    // that does not hold an app answers `Not on this node`.
+    const peers = await peersFor(name).catch((e) => {
+      // A peer map we could not read is a node that forwards nothing, which is
+      // exactly today's behaviour. It must never cost the node its own apps.
+      console.error("fleet sync: peers for", name, e instanceof Error ? e.message : String(e));
+      return [];
+    });
+    return Response.json({ apps, peers });
   } catch (e) {
     // A node that gets an error here keeps running what it already has, which is
     // the correct failure: the cached desired state is still the last thing the

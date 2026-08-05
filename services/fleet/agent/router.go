@@ -202,6 +202,11 @@ func withTarget(ctx context.Context, addr string) context.Context {
 // route.
 const fleetHealthPath = "/__fleet/healthz"
 
+// forwardedHeader marks a request that has already crossed one node. It is the
+// whole of the loop protection, so it is set on the way out and checked on the
+// way in, and never trusted for anything else.
+const forwardedHeader = "X-Supersonic-Forwarded"
+
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == fleetHealthPath {
 		// Healthy means "this node's router is serving", not "some app is up".
@@ -280,8 +285,23 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// generic 404 that looks like the app does not exist.
 		w.WriteHeader(http.StatusNotFound)
 		io.WriteString(w, page(404, "Not on this node.",
-			"This app is not placed here. Fleet-wide forwarding is not wired up yet."))
+			"This app is not placed on this machine, and no other machine claims it."))
 		return
+	}
+	// A route to another node's router. Forwarded once and only once: two nodes
+	// whose peer maps disagree — which is what one sync of skew looks like —
+	// would otherwise pass a request between them until it timed out, and a
+	// timeout is a much worse answer than a 404.
+	if route.Peer {
+		if r.Header.Get(forwardedHeader) != "" {
+			w.Header().Set("X-Supersonic-Router", "forward-loop")
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, page(404, "Not on this node.",
+				"Another machine forwarded this here and this one does not hold it either."))
+			return
+		}
+		r.Header.Set(forwardedHeader, "1")
+		w.Header().Set("X-Supersonic-Router", "forwarded")
 	}
 	if !route.Healthy {
 		w.Header().Set("X-Supersonic-Router", "unhealthy")

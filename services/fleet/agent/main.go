@@ -71,6 +71,18 @@ type App struct {
 
 type Desired struct {
 	Apps []App `json:"apps"`
+	// Peers is every app the FLEET holds that this node does not, and the router
+	// address that reaches it. Absent from an older control plane, in which case
+	// the node forwards nothing and behaves exactly as it did.
+	Peers []PeerRoute `json:"peers,omitempty"`
+}
+
+// PeerRoute is one app on another node.
+type PeerRoute struct {
+	Slug string `json:"slug"`
+	// The other node's ROUTER, not the app's sandbox: sandbox addresses are
+	// per-node private ranges and mean nothing off the machine that made them.
+	Addr string `json:"addr"`
 }
 
 // Route is what the router needs: a slug and where to send it.
@@ -79,6 +91,12 @@ type Route struct {
 	Addr    string `json:"addr"`
 	Healthy bool   `json:"healthy"`
 	Since   int64  `json:"since"`
+	// Peer marks a route to ANOTHER NODE's router rather than to a sandbox on
+	// this one. The router proxies to it the same way; the difference is that a
+	// peer hop must not be forwarded a second time, or two nodes that disagree
+	// about who holds an app would pass a request back and forth until it timed
+	// out.
+	Peer bool `json:"peer,omitempty"`
 }
 
 // work is one process of one app, queued to be started.
@@ -1247,6 +1265,27 @@ func (a *Agent) writeRoutes() error {
 			Addr:    fmt.Sprintf("%s:%d", l.net.IP, effectivePort(l.app, l.proc)),
 			Healthy: l.ok,
 			Since:   l.since.Unix(),
+		})
+	}
+	// Everything the fleet holds that this node does not. Local first: a slug
+	// this node runs is never routed off it, whatever the control plane said —
+	// the placement it is reading may be one sync older than the app it started.
+	local := make(map[string]bool, len(routes))
+	for _, r := range routes {
+		local[r.Slug] = true
+	}
+	for _, p := range a.desired.Peers {
+		if local[p.Slug] || p.Slug == "" || p.Addr == "" {
+			continue
+		}
+		routes = append(routes, Route{
+			Slug: p.Slug, Addr: p.Addr,
+			// Healthy because the node that holds it decides that, and this node
+			// has no way to ask. Forwarding and letting the far end answer 503 is
+			// the truthful failure; refusing here would report an app down on the
+			// word of a machine that is not running it.
+			Healthy: true,
+			Peer:    true,
 		})
 	}
 	a.mu.Unlock()

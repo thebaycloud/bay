@@ -462,3 +462,49 @@ export async function placementEnvKeys(slug: string): Promise<string[] | null> {
   const spec = row.spec as AppSpec;
   return [...Object.keys(spec.env ?? {}), ...Object.keys(spec.secrets ?? {})].sort();
 }
+
+/* -------------------------------------------------------------------------- */
+/* Where the apps this node does NOT hold actually live.                       */
+/* -------------------------------------------------------------------------- */
+
+/** One app that lives on some other node, and the router address that reaches it. */
+export interface PeerRoute {
+  slug: string;
+  /** `<internal-ip>:<router-port>` — the other node's router, not the app. */
+  addr: string;
+}
+
+/**
+ * The fleet-wide slug → node map, minus this node's own apps.
+ *
+ * The load balancer fans requests across nodes without knowing where anything
+ * is, which is exactly right with one node and breaks the moment there are two:
+ * roughly half of every app's traffic lands on a machine that does not hold it,
+ * and the router answers `Not on this node` — a 404 for an app that is up.
+ *
+ * So each node is told where the others' apps are and forwards on a miss. Told,
+ * rather than discovering: the control plane already knows, and a node querying
+ * its peers would be a second source of truth that can disagree with the first.
+ *
+ * Only nodes that have reported recently, for the same reason `chooseNode` only
+ * places on those — forwarding to a machine that stopped answering turns one
+ * app's outage into a timeout on every request for it.
+ */
+export async function peersFor(node: string, routerPort = 8080): Promise<PeerRoute[]> {
+  const r = await getPool(DB).query(
+    `SELECT p.slug, n.internal_ip
+       FROM fleet_placements p
+       JOIN apps a ON a.slug = p.slug
+       JOIN fleet_nodes n ON n.name = p.node
+      WHERE p.node <> $1
+        AND a.runtime = 'fleet'
+        AND n.drain = false
+        AND n.last_seen > now() - interval '90 seconds'
+        AND n.internal_ip IS NOT NULL
+      ORDER BY p.slug`,
+    [node],
+  );
+  return r.rows
+    .filter((row) => row.internal_ip)
+    .map((row) => ({ slug: row.slug as string, addr: `${row.internal_ip}:${routerPort}` }));
+}
