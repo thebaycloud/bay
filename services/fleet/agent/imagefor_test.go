@@ -54,3 +54,40 @@ func TestImageForEmptyStringIsNotAnImage(t *testing.T) {
 		t.Errorf("empty is absent: got %q", got)
 	}
 }
+
+// A changed environment is a reason to restart, and it was not one. `supersonic
+// env set` writes the placement spec; the node compared image and command,
+// found both unchanged, and left the process running with the value the user
+// had just replaced. The command reported success.
+
+func TestSameStringMapTreatsNilAndEmptyAsEqual(t *testing.T) {
+	// A spec that omits `env` and one that sends `{}` say the same thing, and
+	// reading them as different would restart every app on the first sync after
+	// a deploy that dropped its last variable.
+	if !sameStringMap(nil, map[string]string{}) {
+		t.Error("nil and empty are the same environment")
+	}
+}
+
+func TestSameStringMapNoticesEveryKindOfChange(t *testing.T) {
+	base := map[string]string{"LOG_LEVEL": "info", "REGION": "us"}
+	for name, other := range map[string]map[string]string{
+		"a changed value": {"LOG_LEVEL": "debug", "REGION": "us"},
+		"a removed key":   {"LOG_LEVEL": "info"},
+		"an added key":    {"LOG_LEVEL": "info", "REGION": "us", "NEW": "1"},
+		"a renamed key":   {"LOG_LEVEL": "info", "ZONE": "us"},
+		"nothing at all":  {},
+	} {
+		if sameStringMap(base, other) {
+			t.Errorf("%s should be a restart", name)
+		}
+	}
+}
+
+func TestSameStringMapIsNotOrderOrIdentity(t *testing.T) {
+	// Same content, different map. Restarting on identity rather than content
+	// would restart every process on every sync.
+	if !sameStringMap(map[string]string{"B": "2", "A": "1"}, map[string]string{"A": "1", "B": "2"}) {
+		t.Error("same content is the same environment")
+	}
+}

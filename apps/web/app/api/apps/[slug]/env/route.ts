@@ -1,9 +1,21 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * An app's environment, on whichever runtime it is actually on.
+ *
+ * This used to be `gcloud run services update` and nothing else, which for an
+ * app on a node is wrong in one of two ways. A fleet-native app has no Cloud Run
+ * service and the command fails. An app that MIGRATED to the fleet still has its
+ * old service, because nothing deletes it — so the command SUCCEEDS, writes a
+ * revision nothing routes to, reports success, and changes nothing about the
+ * running app. The second is much worse than the first, and with
+ * FLEET_PLACEMENT=1 every new app now lands where it applies.
+ */
 import { describeService, setEnv } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
+import { runtimeOf, setPlacementEnv, placementEnvKeys } from "@/lib/fleet";
 
 // GET  -> list env var KEYS (values are never exposed)
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
@@ -11,6 +23,13 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ keys: [], error: "forbidden" }, { status: 403 });
   try {
+    if ((await runtimeOf(slug)) === "fleet") {
+      const keys = await placementEnvKeys(slug);
+      // Not placed is not the same as having no variables, and answering `[]`
+      // to the first would read as an app that simply has none.
+      if (!keys) return Response.json({ keys: [], error: "this app is not placed on a node right now" });
+      return Response.json({ keys });
+    }
     const svc = await describeService(slug);
     return Response.json({ keys: svc.envKeys });
   } catch (e) {
@@ -25,6 +44,20 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
   const { set = {}, unset = [] } = await req.json().catch(() => ({}));
   try {
+    if ((await runtimeOf(slug)) === "fleet") {
+      const keys = await setPlacementEnv(slug, set as Record<string, string>, unset as string[]);
+      if (!keys) {
+        return Response.json(
+          { error: "this app is on a node but has no placement right now — redeploy it, then set the variable" },
+          { status: 409 },
+        );
+      }
+      // The node picks this up on its next pull and restarts the process, because
+      // a changed environment is now a reason to restart. It was not, and that is
+      // what would have made this a no-op on this runtime even once the spec was
+      // being written correctly.
+      return Response.json({ ok: true, keys, note: "the node applies this within about ten seconds" });
+    }
     await setEnv(slug, set as Record<string, string>, unset as string[]);
     const svc = await describeService(slug);
     return Response.json({ ok: true, keys: svc.envKeys });

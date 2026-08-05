@@ -874,10 +874,21 @@ func (a *Agent) reconcileOnce() error {
 		}
 
 		if running {
-			// Restart on a changed image or command. Comparing the whole spec
-			// would restart on every irrelevant field; these two are what
-			// actually mean "this is a different program".
-			if imageFor(l.app, l.proc) == imageFor(u.app, u.proc) && sameStrings(l.proc.Command, u.proc.Command) {
+			// Restart on a changed image, command OR environment. The first two
+			// are what mean "this is a different program"; the third is what
+			// means "the same program, told something different", and leaving it
+			// out made `supersonic env set` a no-op on this runtime — the spec
+			// changed, the node compared two fields that had not, and the process
+			// kept running with the value the user had just replaced.
+			//
+			// Secrets are compared as NAMES, which is all the spec carries. A
+			// rotated value behind an unchanged name does not restart anything,
+			// and should not: that is a Secret Manager version change, and an app
+			// that wants it takes it on its next start like every other one.
+			if imageFor(l.app, l.proc) == imageFor(u.app, u.proc) &&
+				sameStrings(l.proc.Command, u.proc.Command) &&
+				sameStringMap(l.app.Env, u.app.Env) &&
+				sameStringMap(l.app.Secrets, u.app.Secrets) {
 				if st, err := runscStatusFn(id); err == nil && st.Status == "running" {
 					// Forget every image this id ever failed on, not just the
 					// current one — otherwise a bad image's record (e.g.
@@ -1349,6 +1360,20 @@ const giveUpEvery = 10 * time.Minute
 // counter and the start counter — and they must agree or a process would carry
 // two independent counts.
 func startKey(id, image string) string { return id + "@" + image }
+
+// sameStringMap compares two env-shaped maps, nil and empty being the same
+// thing — a spec that omits `env` and one that sends `{}` say the same.
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
+}
 
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {

@@ -407,3 +407,58 @@ export async function listNodes(): Promise<FleetNodeRow[]> {
   );
   return r.rows as FleetNodeRow[];
 }
+
+/* -------------------------------------------------------------------------- */
+/* Changing an app's environment on a node.                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Set and unset environment variables on a PLACED app.
+ *
+ * `supersonic env set` has always been `gcloud run services update`, which for
+ * an app on a node is wrong in one of two ways. A fleet-native app has no Cloud
+ * Run service, so the command fails outright. An app that MIGRATED to the fleet
+ * still has its old service — nothing deletes it — so the command succeeds,
+ * writes a revision nothing routes to, reports success, and changes nothing
+ * about the running app. The second is much worse than the first.
+ *
+ * The spec is the app's environment on this runtime, so that is what is edited.
+ * `env` is merged rather than replaced, matching `--update-env-vars`: a redeploy
+ * must not drop a value somebody set by hand, which is the property the Cloud Run
+ * path documents as load-bearing.
+ *
+ * Returns the keys the app now has, or null when it is not placed anywhere —
+ * the caller has to be able to tell "no such placement" from "no variables".
+ */
+export async function setPlacementEnv(
+  slug: string,
+  set: Record<string, string>,
+  unset: string[] = [],
+): Promise<string[] | null> {
+  const pool = getPool(DB);
+  const r = await pool.query(`SELECT node, spec FROM fleet_placements WHERE slug = $1`, [slug]);
+  const row = r.rows[0];
+  if (!row) return null;
+
+  const spec = row.spec as AppSpec;
+  const env: Record<string, string> = { ...(spec.env ?? {}) };
+  for (const [k, v] of Object.entries(set)) if (k) env[k] = String(v);
+  for (const k of unset) delete env[k];
+
+  // Written back whole. The spec is one JSON document the agent reads verbatim,
+  // and a partial update of it is not a thing the agent can be handed.
+  await pool.query(
+    `UPDATE fleet_placements SET spec = $3::jsonb WHERE slug = $1 AND node = $2`,
+    [slug, row.node, JSON.stringify({ ...spec, env })],
+  );
+  return Object.keys(env).sort();
+}
+
+/** The variable NAMES a placed app has. Values are never returned. */
+export async function placementEnvKeys(slug: string): Promise<string[] | null> {
+  const r = await getPool(DB).query(`SELECT spec FROM fleet_placements WHERE slug = $1`, [slug]);
+  const row = r.rows[0];
+  if (!row) return null;
+  const spec = row.spec as AppSpec;
+  return [...Object.keys(spec.env ?? {}), ...Object.keys(spec.secrets ?? {})].sort();
+}
