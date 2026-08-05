@@ -944,7 +944,17 @@ func (a *Agent) reconcileOnce() error {
 				n := a.startFail.fail(key, time.Now())
 				log.Printf("%s: not running, restarting (%d/%d)", id, n, maxAttempts)
 			} else {
-				log.Printf("%s: image or command changed, restarting", id)
+				// Which of the three, because the answer changes what a person
+				// looks at next: a new image is a deploy, a new command is a
+				// deploy, and a new environment is somebody running `env set`.
+				what := "image"
+				if imageFor(l.app, l.proc) == imageFor(u.app, u.proc) {
+					what = "environment"
+					if !sameStrings(l.proc.Command, u.proc.Command) {
+						what = "command"
+					}
+				}
+				log.Printf("%s: %s changed, restarting", id, what)
 				// A changed image means the release process has to run again
 				// before anything serves the new one.
 				needRelease[u.app.Slug] = u.app
