@@ -376,7 +376,12 @@ export function runVerdict(spec: AppSpec, rows: ProcessState[]): Eligibility {
   for (const p of required) {
     const got = byName.get(p.name);
     if (!got) return { ok: false, reason: `the node is not reporting ${p.kind} "${p.name}" as running` };
-    if (got.image !== spec.image) {
+    // Against the PROCESS's image when it has one. A sibling placed beside its
+    // primary runs its own image, and comparing it to the app's would fail every
+    // multi-service deploy on this runtime — the node would be running exactly
+    // what was asked for and the verdict would call it a stale deploy.
+    const wantImage = p.image ?? spec.image;
+    if (got.image !== wantImage) {
       return { ok: false, reason: `the node is running a different image for "${p.name}" — this deploy has not reached it` };
     }
     if (!sameArgv(got.command, p.command)) {

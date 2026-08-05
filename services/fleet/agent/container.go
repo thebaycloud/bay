@@ -325,6 +325,13 @@ func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []s
 	for k, v := range app.Env {
 		env = append(env, k+"="+v)
 	}
+	// The process's own, after the app's so it wins. A sibling mounted at /api
+	// has to be told that and the app-wide value says otherwise — an app that
+	// trusts a stale SUPERSONIC_PATH_PREFIX builds every URL wrong, which is
+	// worse than having none.
+	for k, v := range proc.Env {
+		env = append(env, k+"="+v)
+	}
 	for k, v := range secrets {
 		env = append(env, k+"="+v)
 	}

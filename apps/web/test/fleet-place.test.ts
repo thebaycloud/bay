@@ -1045,3 +1045,46 @@ test("no health reported is not a failure", () => {
   const v = runVerdict(s, reportFor(s));
   assert.equal(v.ok, true, v.reason);
 });
+
+/* -------------------------------------------------------------------------- */
+/* A sibling placed beside its primary runs its own image.                     */
+/* -------------------------------------------------------------------------- */
+
+test("a sibling is verified against ITS image, not the app's", () => {
+  // A frontend and an API on one node are two programs behind one address, and
+  // they are built separately. Comparing the API's row to the app's image would
+  // fail every multi-service deploy on this runtime — the node running exactly
+  // what was asked for, and the verdict calling it a stale deploy.
+  const s: AppSpec = {
+    ...spec,
+    processes: [
+      { name: "web", kind: "web", command: ["/bin/sh", "-c", "node server.js"] },
+      { name: "api", kind: "web", command: ["/bin/sh", "-c", "node api.js"], image: "registry/api@sha256:bbb", prefix: "/api" },
+    ],
+  };
+  const rows: ProcessState[] = [
+    { slug: s.slug, process: "web", image: s.image, command: ["/bin/sh", "-c", "node server.js"], healthy: true },
+    { slug: s.slug, process: "api", image: "registry/api@sha256:bbb", command: ["/bin/sh", "-c", "node api.js"], healthy: true },
+  ];
+  const v = runVerdict(s, rows);
+  assert.equal(v.ok, true, v.reason);
+});
+
+test("a sibling running the wrong image still fails", () => {
+  // The check must stay a check. A sibling left on its previous build is exactly
+  // the redeploy this verdict exists to catch.
+  const s: AppSpec = {
+    ...spec,
+    processes: [
+      { name: "web", kind: "web", command: ["/bin/sh", "-c", "node server.js"] },
+      { name: "api", kind: "web", command: ["/bin/sh", "-c", "node api.js"], image: "registry/api@sha256:new", prefix: "/api" },
+    ],
+  };
+  const rows: ProcessState[] = [
+    { slug: s.slug, process: "web", image: s.image, command: ["/bin/sh", "-c", "node server.js"], healthy: true },
+    { slug: s.slug, process: "api", image: "registry/api@sha256:old", command: ["/bin/sh", "-c", "node api.js"], healthy: true },
+  ];
+  const v = runVerdict(s, rows);
+  assert.equal(v.ok, false);
+  assert.match(v.reason ?? "", /different image for "api"/);
+});

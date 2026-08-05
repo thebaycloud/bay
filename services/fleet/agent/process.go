@@ -56,6 +56,14 @@ type Process struct {
 	// exactly as it did.
 	Image string `json:"image,omitempty"`
 
+	// Env is what THIS process is told, over and above the app's.
+	//
+	// A sibling needs its own: it is mounted under a path prefix and the
+	// framework has to be told which one, and `env` is per service in the schema
+	// — the frontend's NODE_ENV has no business on the API. Merged over the
+	// app's rather than replacing it, so shared values still arrive once.
+	Env map[string]string `json:"env,omitempty"`
+
 	// web only
 	// Prefix is the path this process serves when an app has more than one
 	// program behind one address — a frontend at "/" beside an API at "/api".

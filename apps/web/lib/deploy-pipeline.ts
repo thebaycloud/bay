@@ -22,7 +22,7 @@ import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
 import { appLogFilter } from "@/lib/log-filter";
-import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
+import { buildAppSpec, memoryBytes, cpuShares, type AppSpec, type AgentProcess } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
 import { rollback, deleteRunService, getLogs } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
@@ -2784,7 +2784,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * built from the same source with its own install/build, and its own URL,
      * which the proxy then routes to by path prefix.
      */
-    const deploySibling = async (svc: ServiceConfig): Promise<{ ok: boolean; url?: string; error?: string; name: string }> => {
+    /**
+     * A sibling service: built always, then either deployed to Cloud Run or
+     * handed back as a PROCESS for the node.
+     *
+     * `placeOnNode` is the whole difference. On Cloud Run a sibling is a second
+     * service with its own URL, and the edge proxy splits traffic between them
+     * by path. On a node both programs live on the same machine behind one
+     * address, so the split happens in the node's router — and the sibling stops
+     * needing a second database address, a second set of secrets, and an IAM
+     * binding to let the platform probe it.
+     */
+    const deploySibling = async (
+      svc: ServiceConfig,
+      placeOnNode = false,
+    ): Promise<{ ok: boolean; url?: string; error?: string; name: string; process?: AgentProcess }> => {
       const label = (svc.name || servicePath(svc).replace(/[^a-z0-9]+/gi, "") || "svc").toLowerCase();
       const name = cloudRunName(`${slug}-${label}`);
       /**
@@ -2982,7 +2996,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // not cover. Same database, same role, stated at the address THIS service
       // actually runs at.
       let siblingDbRefs: SecretRef[] = [];
-      if (toFleet && pgFacts) {
+      // Only when this sibling is going to Cloud Run while its primary is on a
+      // node. Placed on the SAME node it reaches the database at the same
+      // address the primary does, and restating it would be the bug in reverse.
+      if (toFleet && pgFacts && !placeOnNode) {
         const merged = restateDatabaseAt(
           env,
           databaseEnv(
@@ -3038,6 +3055,33 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const siblingApp: string[] = [];
       if (siblingRefs.length) siblingApp.push(`--update-secrets=${setSecretsFlag(siblingRefs)}`);
       siblingApp.push(`--update-env-vars=^~~^${env.join("~~")}`);
+
+      // On a node, the sibling stops here and becomes a process in the app's
+      // placement. Everything above — its own image, its own directory, its own
+      // env with its own path prefix — is unchanged; what it no longer needs is
+      // a second Cloud Run service, an invoker binding so the platform can probe
+      // it, and a URL for the edge to route to.
+      //
+      // Its release is deliberately NOT run here. A release on this runtime is a
+      // process in the same spec, run by the node before anything else starts,
+      // and running it from the control plane would be a migration racing the
+      // one the node is about to run.
+      if (placeOnNode) {
+        const proc: AgentProcess = {
+          name: svc.name || label,
+          kind: "web",
+          command: ["/bin/sh", "-c", plan.run],
+          image,
+          prefix: servicePath(svc),
+          env: Object.fromEntries(
+            env
+              .map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)] as const)
+              .filter(([k]) => k),
+          ),
+        };
+        log(`${servicePath(svc)} → ${label} on the node, beside its primary`);
+        return { ok: true, name, process: proc };
+      }
 
       const relS = await runRelease({ lane: siblingLane, service: name, image, env, release: siblingRelease });
       if (!relS.ok) return { ok: false, name, error: relS.error };
@@ -3379,6 +3423,23 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // once, so a secret not passed is a secret the app loses.
       const secrets = await allAppSecrets(slug, secretRefs);
 
+      // Siblings, built and folded into THIS app's placement rather than
+      // deployed beside it. Before the spec, because the spec has to carry them.
+      //
+      // A sibling that cannot be built fails the whole deploy here, unlike on
+      // Cloud Run where it is reported and the primary still ships. The
+      // difference is real: there the frontend is already live on its own
+      // address and tearing it down would be worse; here nothing has been placed
+      // yet, so shipping half an app is a choice rather than a rescue.
+      const nodeSiblings: AgentProcess[] = [];
+      for (const svc of (appConfig ? extraServices(appConfig) : [])) {
+        const r = await deploySibling(svc, true);
+        if (!r.ok || !r.process) {
+          return { ok: false, error: r.error ?? `${servicePath(svc)} could not be prepared for the node` };
+        }
+        nodeSiblings.push(r.process);
+      }
+
       // No per-secret grant for the node here, deliberately. The node's service
       // account holds roles/secretmanager.secretAccessor on the WHOLE PROJECT —
       // see services/fleet/README.md, "What the node may read".
@@ -3440,6 +3501,9 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // serving 80, was rolled back as unhealthy while answering 200.
         port: await servePortFor(image.image),
       });
+      if (nodeSiblings.length) {
+        placing.processes = [...(placing.processes ?? []), ...nodeSiblings];
+      }
       placedSpec = placing;
 
       // The half of `scale` a node has no primitive for, said out loud.
@@ -3747,7 +3811,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // frontend is live and whose API did not come up is in a worse state if we
     // also tear the frontend down.
     let routes: { path: string; url: string }[] | null = null;
-    if (appConfig && result.ok) {
+    // Not when the app went to a node: its siblings are already in the
+    // placement, running beside it, and deploying them again to Cloud Run would
+    // be a second copy of each with a second database connection.
+    if (appConfig && result.ok && !toFleet) {
       const extras = extraServices(appConfig);
       if (extras.length) {
         const built: { path: string; url: string }[] = [

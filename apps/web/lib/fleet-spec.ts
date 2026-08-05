@@ -50,6 +50,12 @@ export interface AgentProcess {
    * somebody else's entirely.
    */
   image?: string;
+  /**
+   * What THIS process is told, over and above the app's env. A sibling is
+   * mounted under a path prefix and has to be told which one, and `env` is per
+   * service in the schema. Merged over the app's, not replacing it.
+   */
+  env?: Record<string, string>;
   port?: number;
   /**
    * The path this process serves, when an app has more than one program behind
