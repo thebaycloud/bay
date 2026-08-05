@@ -8,7 +8,7 @@ import { getPool } from "@/lib/db";
 import { resolveSlug } from "@/lib/gcloud";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
 import { runDeploy } from "@/lib/deploy-pipeline";
-import { createRun, startDeployJob, finishRun, pruneRuns } from "@/lib/deploy-runs";
+import { createRun, startDeployJob, finishRun, pruneRuns, isOwnSourceObject, readUploadedSource, type UploadedSource } from "@/lib/deploy-runs";
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
 import { getDeploy } from "@/lib/deploys";
 import { StageRecorder } from "@/lib/stages";
@@ -150,6 +150,9 @@ export async function POST(req: Request) {
   let friendlyName = "app";
   let secrets: Record<string, string> = {};
   let archive: Buffer | null = null;
+  // Set instead of `archive` when the client uploaded to the bucket itself. The
+  // two are exclusive and everything downstream sees only what createRun writes.
+  let uploaded: UploadedSource | null = null;
   let cloneToken: unknown = null;
   let reservedSlug = "";
   // The production run command the deploying agent worked out for this app (e.g.
@@ -158,7 +161,25 @@ export async function POST(req: Request) {
   // The runner uses it as SUPERSONIC_RUN; empty falls back to a Node-only default.
   let runCmd = "";
   if (isUpload) {
-    archive = Buffer.from(await req.arrayBuffer());
+    // Two shapes of upload. The bytes may be in the body — which works only up to
+    // Cloud Run's 32 MiB front-end cap, and fails invisibly above it — or already
+    // in the bucket under a name this service handed out, which is what
+    // /api/deploy/upload-url exists for and what the CLI now does.
+    //
+    // The object name is checked against the shape we mint rather than trusted:
+    // it is a caller-supplied path into a bucket the platform also keeps other
+    // things in, and "wherever you say" is not a thing an authenticated request
+    // gets to decide.
+    const srcObject = (req.headers.get("x-supersonic-source-object") ?? "").trim();
+    const srcKey = (req.headers.get("x-supersonic-source-key") ?? "").trim();
+    if (srcObject || srcKey) {
+      if (!isOwnSourceObject(srcObject) || !/^[0-9a-f]{64}$/.test(srcKey)) {
+        return Response.json({ error: "malformed source reference" }, { status: 400 });
+      }
+      uploaded = { object: srcObject, key: srcKey };
+    } else {
+      archive = Buffer.from(await req.arrayBuffer());
+    }
     friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
     reservedSlug = (req.headers.get("x-supersonic-slug") ?? "").trim();
     runCmd = decodeURIComponent(req.headers.get("x-supersonic-run") ?? "").trim();
@@ -231,7 +252,7 @@ export async function POST(req: Request) {
     const handoff = new StageRecorder(slug, "unknown");
     try {
       const recording = handoff.start("run-record");
-      runId = await createRun(input, archive);
+      runId = await createRun(input, archive, uploaded);
       await handoff.end(recording, "ok");
 
       const dispatch = handoff.start("job-dispatch");
@@ -265,7 +286,11 @@ export async function POST(req: Request) {
         catch { /* client gone — keep building, just stop narrating */ }
       };
       try {
-        await runDeploy({ ...input, archive }, send);
+        // The job path fetches its own source; this one has to, when the client
+        // uploaded rather than sent bytes. Without it an inline deploy would run
+        // with no source and fail somewhere much further down.
+        const source = uploaded ? await readUploadedSource(uploaded) : archive;
+        await runDeploy({ ...input, archive: source }, send);
       } finally {
         controller.close();
       }

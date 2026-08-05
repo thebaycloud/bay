@@ -71,6 +71,122 @@ function gcloud(args: string[]): Promise<void> {
   });
 }
 
+/** The same spawn, for the one call whose STDOUT is the answer. */
+function gcloudOut(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("gcloud", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    p.stdout.on("data", (d: Buffer) => (out += d));
+    p.stderr.on("data", (d: Buffer) => (err += d));
+    p.on("error", reject);
+    p.on("close", (c) => (c === 0 ? resolve(out) : reject(new Error(err.trim() || `gcloud exited ${c}`))));
+  });
+}
+
+/**
+ * Which identity this process is. Its own copy rather than an import: the only
+ * other one lives in lib/deploy-pipeline.ts, which pulls in the whole pipeline,
+ * and this module is imported BY the route that dispatches to it.
+ */
+async function controlPlaneSA(): Promise<string | null> {
+  try {
+    const r = await fetch("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email", {
+      headers: { "Metadata-Flavor": "Google" },
+    });
+    return r.ok ? (await r.text()).trim() : null;
+  } catch { return null; }
+}
+
+/**
+ * Where the assets bucket lives, stated rather than looked up.
+ *
+ * `gcloud storage sign-url` auto-detects the bucket's region with
+ * `storage.buckets.get`, and the control-plane SA does not hold it — the call
+ * fails with "Failed to auto-detect the region" before it ever signs anything.
+ * Passing the region explicitly skips that lookup, so signing needs no bucket
+ * permission at all, only Token Creator on itself.
+ */
+const SIGN_REGION = "us-central1";
+
+/** How long a source-upload URL is good for. One upload, on a home connection. */
+const UPLOAD_URL_TTL = "30m";
+
+/**
+ * Mint a one-object signed PUT URL for a deploy's source.
+ *
+ * This exists because the tarball cannot come through this service. Cloud Run
+ * caps a buffered request body at 32 MiB and the cap is enforced by the Google
+ * front end, so the request is rejected before any code here runs: nothing is
+ * logged, no handler sees it, and the only symptom is a deploy that stays
+ * `reserved` forever. Measured on excalidraw, whose bundle is 36.3 MB.
+ *
+ * The bytes were always going to this bucket — `createRun` uploaded them one hop
+ * later — so this moves the upload to the client rather than adding a store. The
+ * client encrypts before sending, under a key it generates and hands back with
+ * the deploy request, which keeps the property the bucket relies on: the shared
+ * app runtime identity can read this bucket, so plaintext source sitting in it
+ * would be readable by every other customer's container.
+ *
+ * Returns null if signing is unavailable, and the caller must then refuse rather
+ * than fall back to the body — the body is exactly what does not work.
+ */
+export async function signedSourceUpload(): Promise<{ object: string; uploadUrl: string } | null> {
+  const object = objectFor(randomUUID());
+  try {
+    const sa = await controlPlaneSA();
+    const args = [
+      "storage", "sign-url", `gs://${ASSETS_BUCKET}/${object}`,
+      "--http-verb=PUT", `--duration=${UPLOAD_URL_TTL}`, `--region=${SIGN_REGION}`,
+      "--project", PROJECT, "--format=json",
+    ];
+    if (sa) args.push(`--impersonate-service-account=${sa}`);
+    const out = await gcloudOut(args);
+    const start = out.indexOf("[");
+    const arr = start >= 0 ? JSON.parse(out.slice(start)) : null;
+    const o = Array.isArray(arr) ? arr[0] : arr;
+    const url = o?.signed_url || o?.signedUrl || o?.url;
+    return typeof url === "string" && url ? { object, uploadUrl: url } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Source that the client already put in the bucket, encrypted, itself.
+ *
+ * The key travels in the deploy request and lands in the same Postgres column a
+ * server-side upload would have written, so everything downstream — `claimRun`,
+ * the decrypt, the delete — cannot tell the two paths apart.
+ */
+export interface UploadedSource {
+  object: string;
+  key: string;
+}
+
+/** Does this object name look like one of ours, rather than a path chosen by the caller? */
+export function isOwnSourceObject(object: string): boolean {
+  return /^runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tgz\.enc$/.test(object);
+}
+
+/**
+ * Pull a client-uploaded source back down and decrypt it.
+ *
+ * Only the in-process deploy path needs this — with `DEPLOY_JOB=1` the job does
+ * its own fetch through `claimRun`. It exists so that running the pipeline
+ * inline, which is what a local control plane does, is not silently a deploy
+ * with no source at all.
+ */
+export async function readUploadedSource(uploaded: UploadedSource): Promise<Buffer> {
+  const dir = mkdtempSync(join(tmpdir(), "ss-run-"));
+  try {
+    const file = join(dir, "source.enc");
+    await gcloud(["storage", "cp", `gs://${ASSETS_BUCKET}/${uploaded.object}`, file, "--project", PROJECT]);
+    return decrypt(readFileSync(file), uploaded.key);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // A passphrase rather than a raw key, so the stored secret is a printable string
 // that survives JSON and a psql session unmangled. Fixed salt: the passphrase is
 // already 32 random bytes and used exactly once, so a salt adds nothing here
@@ -99,7 +215,11 @@ const objectFor = (runId: string) => `runs/${runId}.tgz.enc`;
  * recorded is a deploy that will start and then not find its own source, which
  * is a far worse failure than refusing the request outright.
  */
-export async function createRun(request: DeployRunRequest, archive: Buffer | null): Promise<string> {
+export async function createRun(
+  request: DeployRunRequest,
+  archive: Buffer | null,
+  uploaded: UploadedSource | null = null,
+): Promise<string> {
   await ensure();
   // Supersede whatever was already deploying this app.
   //
@@ -113,7 +233,13 @@ export async function createRun(request: DeployRunRequest, archive: Buffer | nul
   let sourceObject: string | null = null;
   let sourceKey: string | null = null;
 
-  if (archive) {
+  if (uploaded) {
+    // Already in the bucket, already encrypted, by the client. Recorded exactly
+    // as a server-side upload would have recorded it — `claimRun` reads these two
+    // columns and has no idea which path filled them.
+    sourceObject = uploaded.object;
+    sourceKey = uploaded.key;
+  } else if (archive) {
     sourceKey = randomBytes(32).toString("hex");
     sourceObject = objectFor(runId);
     const dir = mkdtempSync(join(tmpdir(), "ss-run-"));

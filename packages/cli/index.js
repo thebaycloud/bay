@@ -742,7 +742,25 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
     const envHeader = encodeEnvHeader(envVars);
     if (envHeader) headers["x-supersonic-env"] = envHeader;
     else if (envKeys.length) info(red("! ") + ".env is too large to send with the build — set them after it lands: " + bold(`supersonic env ${slug} set KEY=VALUE`));
-    res = await fetch(baseUrl() + "/api/deploy", { method: "POST", headers, body });
+
+    // The bytes go to the bucket, not through the API. Attempted for every size
+    // rather than only over the cap, so the path a large project depends on is
+    // the same one every deploy exercises — a fallback that only runs for the
+    // biggest uploads is a fallback nobody finds out is broken.
+    const placed = await uploadSourceToBucket(body);
+    if (placed) {
+      headers["x-supersonic-source-object"] = placed.object;
+      headers["x-supersonic-source-key"] = placed.key;
+      res = await fetch(baseUrl() + "/api/deploy", { method: "POST", headers });
+    } else if (body.length >= BODY_LIMIT) {
+      // Said here because nowhere else can. The 413 comes from Google's front
+      // end, so the server has no record to report and no log line to show.
+      cleanup();
+      die(`this project is ${(body.length / 1e6).toFixed(1)} MB packed, and the direct upload path caps at 32 MB — `
+        + `the bucket upload could not be prepared, so there is no way to send it right now. Nothing was deployed.`);
+    } else {
+      res = await fetch(baseUrl() + "/api/deploy", { method: "POST", headers, body });
+    }
     if (res.status === 401) { cleanup(); die("token invalid or expired — run: supersonic login"); }
   }
   await consumeDeploy(res, args, slug);   // when the build goes live the proxy serves it on `url`
@@ -897,6 +915,67 @@ function packageFolder() {
     else if (line.level === "detail") info(dim("  " + line.text));
     else info(dim("  " + line.text));
   });
+}
+
+/**
+ * What a request body may weigh before Google's front end throws it away.
+ *
+ * Cloud Run's cap, and it is enforced ABOVE the service: a larger POST is
+ * answered 413 by the front end, so the control plane never sees the request,
+ * logs nothing, and leaves the app sitting at "reserved" forever. Excalidraw
+ * bundles to 36.3 MB and hit exactly this — the deploy looked like it had simply
+ * stopped. Anything at or above this goes to the bucket instead.
+ */
+const BODY_LIMIT = 32 * 1024 * 1024;
+
+/**
+ * The tarball's encryption, mirroring lib/deploy-runs.ts on the server.
+ *
+ * The bucket is readable by the shared app-runtime identity, so source left
+ * there in the clear would be readable from inside every other customer's
+ * container. Encrypting here rather than server-side is what lets the bytes skip
+ * the control plane entirely; the key travels with the deploy request and is
+ * stored in the same Postgres column a server-side upload would have written.
+ *
+ * aes-256-cbc, key derived by scrypt from a 32-byte hex passphrase under a fixed
+ * salt, IV prefixed to the ciphertext. If either side changes, both must.
+ */
+function encryptSource(buf, pass) {
+  const { createCipheriv, scryptSync } = require("node:crypto");
+  const iv = require("node:crypto").randomBytes(16);
+  const cipher = createCipheriv("aes-256-cbc", scryptSync(pass, "supersonic-deploy-run", 32), iv);
+  return Buffer.concat([iv, cipher.update(buf), cipher.final()]);
+}
+
+/**
+ * Put the source in the bucket ourselves and hand back the reference.
+ *
+ * Returns null when the server cannot mint a URL, which the caller treats as
+ * "use the body" — correct for a small project and a refusal for a large one,
+ * because the body is precisely what does not work at size.
+ */
+async function uploadSourceToBucket(body) {
+  let spot;
+  try {
+    const r = await fetch(baseUrl() + "/api/deploy/upload-url", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token(), "Content-Type": "application/json" },
+    });
+    if (r.status === 401) die("token invalid or expired — run: supersonic login");
+    if (!r.ok) return null;
+    spot = await r.json();
+  } catch { return null; }
+  if (!spot || !spot.uploadUrl || !spot.object) return null;
+
+  const key = require("node:crypto").randomBytes(32).toString("hex");
+  const sealed = encryptSource(body, key);
+  const put = await fetch(spot.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: sealed,
+  });
+  if (!put.ok) die(`upload failed (${put.status}) — the code never left your machine, so nothing was deployed`);
+  return { object: spot.object, key };
 }
 
 /**
