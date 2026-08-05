@@ -407,8 +407,9 @@ func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []s
 		// clock, so the first app on a node ever to declare a release mounted a
 		// directory nothing had made. Found on 2026-08-05 on gzz9j, after the
 		// snapshot lease (a558e17) uncovered it; the same start also failed for
-		// p6mx8 at 06:25. It is equally the cold-boot case, because local SSD
-		// does not survive a stop and /srv comes back empty.
+		// p6mx8 at 06:25. It is equally the cold-boot case: /srv/apps comes back
+		// empty on any node that has not been given a data disk, and on one that
+		// has, the directory still has to exist before anything mounts into it.
 		if err := os.MkdirAll(app.DataDir, 0o755); err != nil {
 			return fmt.Errorf("data dir: %w", err)
 		}

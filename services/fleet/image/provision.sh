@@ -178,25 +178,70 @@ systemctl enable containerd
 # and it is explicitly not the durable copy — see docs/VM-FLEET.md section D.
 # ---------------------------------------------------------------------------
 
-SSD_LINK=/dev/disk/by-id/google-local-nvme-ssd-0
-if [ -e "$SSD_LINK" ]; then
-  SSD_DEV="$(readlink -f "$SSD_LINK")"
+# Two kinds of state, and they do not belong on the same disk.
+#
+# /srv/state is bundles and rootfs overlays. Every byte of it can be rebuilt by
+# pulling the image again, so it wants speed and does not want durability —
+# local SSD exactly.
+#
+# /srv/apps is the app's own data directory and its logs. Nothing can rebuild
+# that. It was sharing whatever /srv happened to be, which on this node was the
+# BOOT disk, because the by-id name below did not match and the else branch ran
+# silently. So app data survived a reboot by accident and would have started
+# dying the moment the SSD mounted — a durability model that changes under you
+# with no deploy and no message is worse than either of the two it switches
+# between.
+#
+# The boot disk is not the answer either: it carries autoDelete=true, so
+# replacing the instance takes every app's data with it. A separate persistent
+# disk survives stop, reboot AND node replacement, and can be reattached to the
+# machine that takes over.
+
+mkdir -p /srv /srv/apps /srv/state
+
+# Rebuildable state on the fast disk. Both spellings of the device, because the
+# by-id name differs between images and the earlier one silently found nothing.
+SSD_DEV=""
+for cand in /dev/disk/by-id/google-local-nvme-ssd-0 /dev/nvme0n1; do
+  if [ -e "$cand" ]; then SSD_DEV="$(readlink -f "$cand")"; break; fi
+done
+if [ -n "$SSD_DEV" ]; then
   if ! blkid "$SSD_DEV" >/dev/null 2>&1; then
     log "formatting local SSD $SSD_DEV"
     mkfs.ext4 -F -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard "$SSD_DEV"
   fi
-  mkdir -p /srv
-  if ! mountpoint -q /srv; then
-    log "mounting local SSD at /srv"
-    mount -o discard,defaults,nobarrier "$SSD_DEV" /srv
+  if ! mountpoint -q /srv/state; then
+    log "mounting local SSD at /srv/state"
+    mount -o discard,defaults,nobarrier "$SSD_DEV" /srv/state
   fi
   # No fstab entry on purpose: a node whose local SSD is gone (post-stop) must
-  # still boot. The agent's job is to notice /srv is empty and re-place, not to
-  # sit in emergency mode because a mount that cannot exist did not happen.
-  mkdir -p /srv/apps /srv/state
+  # still boot. Losing /srv/state costs an image pull, not an app's data.
 else
-  log "WARNING: no local SSD attached; /srv will live on the boot disk"
-  mkdir -p /srv/apps /srv/state
+  log "no local SSD; /srv/state will live on the boot disk (slower, still correct)"
+fi
+
+# App data on a disk that outlives the node. Named by device rather than found
+# by guessing, so a wrong disk cannot be adopted as this one.
+APPDATA_LINK=/dev/disk/by-id/google-appdata
+if [ -e "$APPDATA_LINK" ]; then
+  APPDATA_DEV="$(readlink -f "$APPDATA_LINK")"
+  if ! blkid "$APPDATA_DEV" >/dev/null 2>&1; then
+    log "formatting app-data disk $APPDATA_DEV"
+    mkfs.ext4 -F -m 0 "$APPDATA_DEV"
+  fi
+  if ! mountpoint -q /srv/apps; then
+    log "mounting app-data disk at /srv/apps"
+    mount -o discard,defaults "$APPDATA_DEV" /srv/apps
+  fi
+  # fstab HERE, unlike the SSD: this mount can always exist, and a node that
+  # boots without it would hand every app an empty data directory and call it
+  # normal. `nofail` so a missing disk is a degraded boot rather than no boot.
+  if ! grep -q " /srv/apps " /etc/fstab; then
+    echo "$(blkid -o export "$APPDATA_DEV" | grep ^UUID=) /srv/apps ext4 discard,defaults,nofail 0 2" >> /etc/fstab
+  fi
+else
+  log "WARNING: no app-data disk attached; /srv/apps is on the boot disk and dies with the instance"
+  log "WARNING: attach one with device-name=appdata — see docs/VM-FLEET.md"
 fi
 
 # ---------------------------------------------------------------------------

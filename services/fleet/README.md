@@ -206,3 +206,50 @@ is why it wants someone watching rather than a quiet commit.
 - **Volumes and Litestream.** `/data` is bind-mounted from local SSD and nothing
   replicates it.
 - **Static apps** still go through the shared Cloud Run static server.
+
+## The app-data disk
+
+`/srv/apps` holds every app's `/data` and its logs. Nothing can rebuild it, so it
+does not belong on either of the disks a node has by default:
+
+- **Local SSD** is attach-at-creation and does not survive a stop. `provision.sh`
+  now puts `/srv/state` there instead — bundles and rootfs overlays, every byte
+  of which comes back with an image pull.
+- **The boot disk** survives a reboot but carries `autoDelete=true`, so replacing
+  the instance takes every app's data with it.
+
+A separate persistent disk survives stop, reboot and node replacement, and can be
+reattached to whatever machine takes over. `provision.sh` formats and mounts it,
+and writes the fstab entry, when it finds it at device name `appdata`. Without
+it the node still boots and says so, loudly, on every provision.
+
+Creating and attaching one, per node:
+
+```bash
+gcloud compute disks create <node>-appdata \
+  --size=200GB --type=pd-balanced --zone=<zone> --project=supersonic-deploy-prod
+gcloud compute instances attach-disk <node> \
+  --disk=<node>-appdata --device-name=appdata --zone=<zone> --project=supersonic-deploy-prod
+gcloud compute instances set-disk-auto-delete <node> \
+  --no-auto-delete --device-name=appdata --zone=<zone> --project=supersonic-deploy-prod
+```
+
+`--device-name=appdata` is load-bearing: it is what `/dev/disk/by-id/google-appdata`
+is named after, and `provision.sh` looks the disk up by that name rather than by
+guessing at an unmounted block device.
+
+On a node that already has apps, migrate before switching — `/srv/apps` is small
+(tens of MB; it is data and logs, not images):
+
+```bash
+sudo mkdir -p /mnt/appdata && sudo mount /dev/disk/by-id/google-appdata /mnt/appdata
+sudo rsync -a /srv/apps/ /mnt/appdata/
+sudo systemctl stop supersonicd          # sandboxes keep running: KillMode=process
+sudo mv /srv/apps /srv/apps.preexisting  # kept, not deleted
+sudo mkdir /srv/apps && sudo umount /mnt/appdata && sudo mount /dev/disk/by-id/google-appdata /srv/apps
+sudo systemctl start supersonicd         # adopts the running sandboxes, does not bounce them
+```
+
+Already-running sandboxes keep the bind mount they started with, so they are
+unaffected until their next restart, at which point they get the copied data on
+the new disk. `/srv/apps.preexisting` stays until somebody is sure.
