@@ -207,7 +207,7 @@ substitutions:
   # comma and `p6mx8` becomes a malformed variable name — the second canary
   # would silently not exist, and every flag after it would shift. The same
   # escape is already used by gcloud.ts:368 and :696 for exactly this reason.
-  _LANE_ENV: ^~~^FLEET_APPS=i6xce~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
+  _LANE_ENV: ^~~^FLEET_APPS=i6xce,gzz9j~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
   # passes whatever it likes. The default keeps a hand-run build from failing on an

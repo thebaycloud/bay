@@ -134,19 +134,46 @@ export function setSecretsFlag(refs: SecretRef[]): string {
   return refs.map((r) => `${r.key}=${r.name}:latest`).join(",");
 }
 
-/** Grant the Cloud Build service account read access, so the prepare step can use them. */
-export async function grantBuildAccess(refs: SecretRef[], buildServiceAccount: string, log: (l: string) => void): Promise<void> {
-  if (!buildServiceAccount) return;
+/**
+ * Grant one identity read access to a set of secrets, one binding per secret.
+ *
+ * Per-secret rather than a project-wide role: Cloud Build runs customer install
+ * steps, so what it may read is exactly the app it is building and nothing else.
+ *
+ * The fleet NODES are deliberately NOT granted this way — their service account
+ * holds the role project-wide. See the note at the `allAppSecrets` call in
+ * `runFleetDeploy` for why that was widened, and what it costs.
+ *
+ * Best-effort per secret. `add-iam-policy-binding` is a read-modify-write against
+ * an etag, so two deploys of the same app can collide on one binding while every
+ * other binding lands — failing the deploy for that would be worse than the thing
+ * it prevents, and the consumer's own error names the secret it could not read.
+ * Silent, though, it must never be: an unheard grant failure is exactly how a
+ * 403 arrives later with nothing in the log pointing at its cause.
+ */
+async function grantSecretAccess(
+  refs: SecretRef[],
+  serviceAccount: string,
+  who: string,
+  log: (l: string) => void,
+): Promise<void> {
+  if (!serviceAccount) return;
   for (const r of refs) {
     try {
       await gcloud(["secrets", "add-iam-policy-binding", r.name,
-        "--member", `serviceAccount:${buildServiceAccount}`,
+        "--member", `serviceAccount:${serviceAccount}`,
         "--role", "roles/secretmanager.secretAccessor", "--project", PROJECT]);
     } catch (e) {
-      log(`build cannot read ${r.key} (${e instanceof Error ? e.message.split("\n")[0] : String(e)})`);
+      log(`${who} cannot read ${r.key} (${e instanceof Error ? e.message.split("\n")[0] : String(e)})`);
     }
   }
 }
+
+/** Grant the Cloud Build service account read access, so the prepare step can use them. */
+export async function grantBuildAccess(refs: SecretRef[], buildServiceAccount: string, log: (l: string) => void): Promise<void> {
+  return grantSecretAccess(refs, buildServiceAccount, "build", log);
+}
+
 
 /** Forget every secret belonging to an app. Called from the delete path. */
 export async function deleteAppSecrets(slug: string): Promise<void> {

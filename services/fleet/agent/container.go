@@ -22,6 +22,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,6 +33,7 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/leases"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/remotes"
 	"github.com/containerd/containerd/v2/core/remotes/docker"
@@ -121,8 +124,71 @@ func (r *Runtime) EnsureImage(ref string) (client.Image, error) {
 	return img, nil
 }
 
+// leaseID turns a sandbox id into something containerd will accept as a lease id.
+//
+// Sandbox ids are `<slug>--<process>.` (process.go), and containerd validates
+// lease ids against `^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$` — which `gzz9j--release.`
+// fails twice over, on the doubled separator and on the trailing dot. Snapshot
+// KEYS have no such rule, which is why the id has always been fine there and is
+// not fine here.
+//
+// Sanitising alone would collide: `subio-2--web.` and a hypothetical `subio` with
+// a `2-web` process both flatten to `subio-2-web`. The short digest of the
+// ORIGINAL id makes it unique, and keeps the function pure — `Stop` has to derive
+// the same lease id from the same sandbox id with no stored state, because it is
+// also called on a cold boot to clear wreckage left by a process that is gone.
+func leaseID(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	var b strings.Builder
+	prevSep := true // leading separators are not allowed either
+	for _, c := range id {
+		switch {
+		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'):
+			b.WriteRune(c)
+			prevSep = false
+		case !prevSep:
+			b.WriteByte('-')
+			prevSep = true
+		}
+	}
+	base := strings.Trim(b.String(), "-")
+	if base == "" {
+		base = "sandbox"
+	}
+	// 76 is containerd's cap; the digest and its separator take 9.
+	if len(base) > 60 {
+		base = strings.Trim(base[:60], "-")
+	}
+	return base + "-" + hex.EncodeToString(sum[:4])
+}
+
 // prepareRootfs takes a writable snapshot of the image and mounts it at
 // <bundle>/rootfs.
+//
+// The snapshot is held by a LEASE, and that is not a refinement — without it the
+// sandbox cannot be started at all on a node that is pulling images.
+//
+// An active snapshot with nothing referencing it is garbage to containerd, and
+// its collector deletes it. That deletes the overlay's UPPERDIR while the mount
+// itself stays in place, and a mounted overlay whose upper layer is gone answers
+// every write with ENOENT — which runsc reports as "creating gofer filestore
+// files: failed to create filestore file inside <rootfs>: no such file or
+// directory". The message names the rootfs, the rootfs exists, and the thing that
+// is missing is one directory below it in another tree entirely.
+//
+// Found on 2026-08-05 by the first app the pipeline ever placed that declared a
+// release process. The node held 246 snapshots, 0 of them active, and 0 leases —
+// including for the twenty-one sandboxes that were running at the time. Those
+// survive because their files are already open; only a NEW start needs the upper
+// layer to still be there, which is why a node can look perfectly healthy and be
+// unable to start anything. The apps that did work were pulled long ago; a fresh
+// image pull is itself what makes the collector run, so a deploy of new code is
+// the case most likely to lose the race.
+//
+// The lease has no expiration on purpose: it must outlive an arbitrarily
+// long-running app, and an expiry short enough to bound a leak would be short
+// enough to reintroduce the bug. `Stop` deletes it, and `ctr -n supersonic leases
+// ls` is where a leak from an agent killed mid-start would show.
 func (r *Runtime) prepareRootfs(id string, img client.Image, bundle string) error {
 	ctx := r.ctx()
 	diffIDs, err := img.RootFS(ctx)
@@ -132,10 +198,8 @@ func (r *Runtime) prepareRootfs(id string, img client.Image, bundle string) erro
 	parent := identityChainID(diffIDs)
 
 	rootfs := filepath.Join(bundle, "rootfs")
-	// A previous sandbox's mount can survive an ungraceful stop. Mounting the new
-	// snapshot on top of it stacks mounts, and runsc then fails with "failed to
-	// create filestore file inside <rootfs>: no such file or directory" — which
-	// reads like a missing directory rather than like one directory too many.
+	// A previous sandbox's mount can survive an ungraceful stop, and mounting the
+	// new snapshot on top of it stacks mounts.
 	runOK("umount", "-l", rootfs)
 	if err := os.MkdirAll(rootfs, 0o755); err != nil {
 		return err
@@ -147,7 +211,19 @@ func (r *Runtime) prepareRootfs(id string, img client.Image, bundle string) erro
 	// subsequent start — an app that can never come back without manual cleanup.
 	_ = sn.Remove(ctx, id)
 
-	mounts, err := sn.Prepare(ctx, id, parent)
+	// Same reasoning for the lease: a leftover one makes Create fail with
+	// "already exists", and then every start of this sandbox fails forever.
+	lm := r.cd.LeasesService()
+	lid := leaseID(id)
+	_ = lm.Delete(ctx, leases.Lease{ID: lid})
+	if _, err := lm.Create(ctx, leases.WithID(lid)); err != nil {
+		return fmt.Errorf("snapshot lease: %w", err)
+	}
+
+	// Prepare UNDER the lease. `leases.WithLease` is what puts the new snapshot
+	// out of the collector's reach; calling Prepare on the plain context is the
+	// defect this whole comment is about.
+	mounts, err := sn.Prepare(leases.WithLease(ctx, lid), id, parent)
 	if err != nil {
 		return fmt.Errorf("snapshot prepare: %w", err)
 	}
@@ -544,6 +620,10 @@ func (r *Runtime) Stop(slug string) {
 
 	ctx := r.ctx()
 	_ = r.cd.SnapshotService("").Remove(ctx, slug)
+	// After the snapshot, not before: the lease exists to keep the collector off
+	// that snapshot, and dropping it first would hand the collector a window in
+	// which it, rather than this function, decides when the layer goes.
+	_ = r.cd.LeasesService().Delete(ctx, leases.Lease{ID: leaseID(slug)}, leases.SynchronousDelete)
 }
 
 // List returns the sandbox ids runsc currently knows about.

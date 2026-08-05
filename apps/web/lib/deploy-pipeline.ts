@@ -126,6 +126,7 @@ const buildIdentityArgs = (): string[] =>
   (BUILD_RUN_AS ? [`--service-account=projects/${PROJECT}/serviceAccounts/${BUILD_RUN_AS}`] : []);
 /** Runtime identity for the apps we host. Empty = inherit the project default. */
 const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
+
 /** The one Cloud Run service that fronts every static app. */
 const STATIC_SERVICE = process.env.STATIC_SERVICE ?? "supersonic-static";
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
@@ -3227,6 +3228,24 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // just the ones this deploy stored: a node is handed the whole set at
       // once, so a secret not passed is a secret the app loses.
       const secrets = await allAppSecrets(slug, secretRefs);
+
+      // No per-secret grant for the node here, deliberately. The node's service
+      // account holds roles/secretmanager.secretAccessor on the WHOLE PROJECT —
+      // see services/fleet/README.md, "What the node may read".
+      //
+      // This code used to add one binding per secret on this branch, so that only
+      // an app actually going to a node let a node read its database password.
+      // That was replaced on 5 Aug 2026 by an explicit decision to widen it, for a
+      // reason the narrow version could not meet: a per-deploy binding only exists
+      // for apps that have been deployed SINCE the binding was introduced, so
+      // moving the fleet wholesale — FLEET_PLACEMENT=1, which places every app
+      // without redeploying any of them — would have started every app that has a
+      // database against a 403.
+      //
+      // What it costs is stated rather than left to be discovered: one escape from
+      // one sandbox now reads every tenant's database password, not one tenant's.
+      // The nftables rule in provision.sh keeping the metadata credentials API
+      // away from tenant uids is what that now rests on.
 
       // The `fleet` stage — placing the app on a node and checking it answers
       // from there — written from inside the branch that does the work.

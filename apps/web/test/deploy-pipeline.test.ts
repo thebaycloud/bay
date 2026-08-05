@@ -125,6 +125,14 @@ let digestReply: string | null = A_DIGEST;
 /** What the fleet load balancer answers, so a failed verification is reachable. */
 let probeCode = 200;
 
+/**
+ * What Secret Manager holds for the app, switchable per test.
+ *
+ * Empty by default, so every test written before this one keeps exercising the
+ * app it always did: an app with no secrets.
+ */
+let storedSecrets: { key: string; name: string }[] = [];
+
 /** Which build implementation this process is exercising. See `generatedBuild`. */
 const COLLAPSED = process.env.RUNNER === "0";
 
@@ -218,7 +226,17 @@ async function install() {
   });
 
   // Secret Manager, object storage, the model, and the side effects.
-  mock.module("@/lib/app-secrets", { namedExports: { putAppSecrets: async () => ({ stored: [], skipped: [] }), setSecretsFlag: () => "", grantBuildAccess: asyncNoop, readAppSecret: async () => null, allAppSecrets: async () => [] } });
+  mock.module("@/lib/app-secrets", { namedExports: {
+    putAppSecrets: async () => ({ stored: [], skipped: [] }),
+    setSecretsFlag: () => "",
+    grantBuildAccess: asyncNoop,
+    readAppSecret: async () => null,
+    // What Secret Manager says the app HAS, which is not what this deploy
+    // stored. Switchable per test because the distinction is the whole point of
+    // the grant: an app on its second deploy stores nothing and still has to be
+    // readable by the node.
+    allAppSecrets: async () => storedSecrets,
+  } });
   // Spread the real module, then override the parts that reach the network.
   //
   // Replacing it wholesale is how this file failed the moment `resolveImageDigest`
