@@ -519,4 +519,25 @@ if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
 fi
 log "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.controllers)"
 
+# The SQL proxy needs /etc/supersonic/fleet.env, which is written per node and
+# may not exist the first time this runs. Enabling it here means a node that
+# gains the file later starts serving databases on the next boot without anyone
+# remembering to — and a node provisioned before the file existed said so, at
+# the only moment it mattered:
+#
+#   FLEET_NODE_FAULT: fleet-lab-2 reports this app cannot start on it —
+#   this node's database path (10.200.0.1:5432) is not answering
+#
+# which is the right answer and still a node nobody could deploy a database app
+# to. Enabled, then started only if its config is present.
+if systemctl list-unit-files 2>/dev/null | grep -q '^cloud-sql-proxy'; then
+  systemctl enable cloud-sql-proxy >/dev/null 2>&1 || true
+  if [ -s /etc/supersonic/fleet.env ] && grep -q '^PG_INSTANCE=..*' /etc/supersonic/fleet.env; then
+    log "starting cloud-sql-proxy"
+    systemctl restart cloud-sql-proxy || log "WARNING: cloud-sql-proxy would not start"
+  else
+    log "WARNING: no PG_INSTANCE in /etc/supersonic/fleet.env — this node cannot serve a database app"
+  fi
+fi
+
 log "provision complete"
