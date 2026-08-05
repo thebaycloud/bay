@@ -934,3 +934,75 @@ test("a redeploy the node confirms still passes", () => {
     assert.equal(r.runUrl, "http://8.232.255.172");
   })();
 });
+
+/* -------------------------------------------------------------------------- */
+/* What the app itself said, on a placement that did not answer.               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The evidence half of a failed placement.
+ *
+ * On 5 Aug 2026 a container whose first log line was `nginx: [emerg] chown(...)
+ * failed (1: Operation not permitted)` was reported as "the fleet router
+ * answered, not the app (unhealthy)" and nothing else. The line was already in
+ * Cloud Logging — the node ships it and `appLogFilter` reads it — and the repair
+ * agent then spent 2.2M tokens and 16 steps guessing at image metadata. So these
+ * pin both that the lines are printed AND that they can never change what the
+ * failure path does.
+ */
+
+test("a failed placement prints what the app said", async () => {
+  const said = [
+    "nginx: [emerg] chown(\"/var/cache/nginx/client_temp\", 101) failed (1: Operation not permitted)",
+    "/docker-entrypoint.sh: Configuration complete; ready for start up",
+  ];
+  const lines: string[] = [];
+  const { p } = ports({
+    probe: async () => ({ code: 503 }),
+    recentAppLogs: async () => said,
+    log: (l) => lines.push(l),
+  });
+  const r = await placeOnFleet("gzz9j", spec, "lb", p);
+
+  assert.equal(r.placed, false);
+  const printed = lines.join("\n");
+  for (const s of said) assert.ok(printed.includes(s), `missing from the deploy log: ${s}`);
+});
+
+test("a successful placement says nothing about logs", async () => {
+  // Evidence is for a failure. Printing a healthy app's log lines on every
+  // deploy would bury the one line that matters on the day it appears.
+  let asked = false;
+  const { p } = ports({ recentAppLogs: async () => { asked = true; return ["noise"]; } });
+  const r = await placeOnFleet("gzz9j", spec, "lb", p);
+
+  assert.equal(r.placed, true);
+  assert.equal(asked, false);
+});
+
+test("a log read that throws does not skip the rollback", async () => {
+  // The one property that matters more than the evidence itself. This port is a
+  // network call in production; an exception escaping it would leave the app
+  // placed and `apps.runtime` flipped to 'fleet' with nothing serving.
+  const { calls, p } = ports({
+    probe: async () => ({ code: 503 }),
+    recentAppLogs: async () => { throw new Error("logging API unreachable"); },
+  });
+  const r = await placeOnFleet("gzz9j", spec, "lb", p);
+
+  assert.equal(r.placed, false);
+  assert.ok(calls.includes("unplace:gzz9j"), "the placement was not rolled back");
+  assert.ok(calls.includes("runtime:gzz9j=fleet"), "the runtime flag was not restored");
+});
+
+test("an unwired log port is not a crash", async () => {
+  // `recentAppLogs` is optional, and a caller that predates it must keep working
+  // — the same lesson `nodeFaultFor` learned when a test fixture without the new
+  // port took the restore down with it.
+  const { calls, p } = ports({ probe: async () => ({ code: 503 }) });
+  delete (p as { recentAppLogs?: unknown }).recentAppLogs;
+  const r = await placeOnFleet("gzz9j", spec, "lb", p);
+
+  assert.equal(r.placed, false);
+  assert.ok(calls.includes("unplace:gzz9j"));
+});

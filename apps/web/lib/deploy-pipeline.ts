@@ -24,7 +24,7 @@ import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtim
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
-import { rollback, deleteRunService } from "@/lib/gcloud";
+import { rollback, deleteRunService, getLogs } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv } from "@/lib/env-merge";
@@ -3405,6 +3405,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
           runningOnNode: (s, n, sp) => awaitRunning(s, n, sp, runningOnNode),
           nodeFaultFor,
+          // Short and recent on purpose. This runs while a person is watching a
+          // deploy fail, and the useful part of a crash loop is the first thing
+          // it said, repeated — not the hundred lines of it.
+          recentAppLogs: async (s) =>
+            (await getLogs(s, { limit: 20, freshness: "10m" })).map((l) => l.message),
           log,
         },
       ));

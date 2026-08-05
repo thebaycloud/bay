@@ -62,6 +62,15 @@ export interface PlacementPorts {
    * touches, so the order below stays checkable without a database.
    */
   nodeFaultFor: (slug: string) => Promise<{ node: string; detail: string } | null>;
+  /**
+   * The app's OWN last words, from the node, when a placement did not answer.
+   *
+   * A port because this is the only thing in the failure path that is neither
+   * a verdict nor a rollback: it is evidence, and it must not be able to change
+   * what happens — a log read that throws or hangs cannot be allowed to skip the
+   * restore below.
+   */
+  recentAppLogs?: (slug: string) => Promise<string[]>;
   log: (line: string) => void;
 }
 
@@ -566,6 +575,29 @@ export async function placeOnFleet(
     const reason = nf
       ? `FLEET_NODE_FAULT: ${nf.node} reports this app cannot start on it${nf.detail ? ` — ${nf.detail}` : ""}`
       : verdict.reason;
+
+    // What the app itself said before it stopped answering.
+    //
+    // Every line of this was already in Cloud Logging while the deploy failed —
+    // the node's ops agent ships /srv/apps/<slug>/*.log and `appLogFilter`
+    // already reads it — and nothing asked. Measured on 5 Aug 2026: a container
+    // whose FIRST log line was `nginx: [emerg] chown(...) failed (1: Operation
+    // not permitted)` was reported to the user as "the fleet router answered,
+    // not the app (unhealthy)", and the repair agent then spent 2.2M tokens and
+    // 16 steps guessing at EXPOSE and image metadata. The answer was sitting in
+    // a log the platform can read.
+    //
+    // Printed BEFORE the restore, so the order a person reads is: what the app
+    // said, then what we did about it. Errors are swallowed whole and the port
+    // is optional: this is evidence, and evidence that cannot be gathered must
+    // never stop the rollback that follows it.
+    try {
+      const lines = p.recentAppLogs ? await p.recentAppLogs(slug) : [];
+      if (lines.length) {
+        p.log(`· what ${slug} said on the node before it stopped answering:`);
+        for (const line of lines) p.log(`    ${line}`);
+      }
+    } catch { /* no evidence is not a verdict */ }
 
     // There is no Cloud Run to fall back to any more, so the fallback is the
     // last version that answered, on the node it was already running on — not
