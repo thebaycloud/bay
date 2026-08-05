@@ -196,6 +196,29 @@ export function buildAppSpec(i: SpecInput): AppSpec {
   // precedence the pipeline gives a Procfile-declared process over the inferred
   // one.
   if (i.releaseCommand && !declared.some((p) => p.name === "release")) {
+    // The implicit web process has to be made EXPLICIT first, or adding the
+    // release destroys it.
+    //
+    // An empty list means "one implicit web process" — the comment below says so
+    // and `processesOf` implements it. Appending anything makes the list
+    // non-empty, and the agent then runs exactly what is in it: for an app whose
+    // web process came from `start` rather than from a Procfile, that is the
+    // release and nothing else. The app migrates its database and serves
+    // nothing.
+    //
+    // Measured on 5 Aug, on p6mx8/goapi, the first app ever placed on the fleet
+    // with a release: the spec arrived as `[release]`, and the placement was
+    // refused with "this placement declares no long-running process". Before
+    // that check existed the same spec would have been placed and then rolled
+    // back for not answering, which is the same outcome with a worse reason.
+    //
+    // No command on the synthesised entry, deliberately: that is exactly what
+    // `processesOf` builds for the implicit case, and it means the image's own
+    // entrypoint runs — the app's `start`, already baked into the image by the
+    // Dockerfile. Naming a command here would be this function inventing one.
+    if (!declared.length) {
+      declared.push({ name: "web", kind: "web" });
+    }
     declared.push({ name: "release", kind: "release", command: shellArgv(i.releaseCommand) });
   }
   // Absent rather than empty, and the difference is load-bearing: `processesOf`

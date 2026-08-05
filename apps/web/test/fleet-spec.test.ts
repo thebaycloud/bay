@@ -265,3 +265,67 @@ test("the wire field the control plane keys absent-vs-empty on is a pointer for 
     "the sync body's running field is no longer a pointer-to-slice with omitempty",
   );
 });
+
+test("a release does not delete the web process it was appended next to", () => {
+  // Found on the fleet's first real placement with a release, p6mx8/goapi.
+  //
+  // An app whose web process comes from `start` rather than from a Procfile has
+  // an EMPTY process list, and an empty list is not "nothing" — `processesOf`
+  // reads it as one implicit web process. Appending the release makes the list
+  // non-empty, at which point the agent runs exactly what is in it: the
+  // release, and nothing else. The app migrates its database and serves no
+  // traffic.
+  //
+  // The spec that actually reached fleet_placements was [release] alone, and
+  // the placement was refused with "this placement declares no long-running
+  // process". This asserts the shape that refusal was pointing at.
+  const spec = buildAppSpec({
+    slug: "p6mx8",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [],
+    releaseCommand: "/app/migrate",
+  });
+
+  const kinds = (spec.processes ?? []).map((p) => p.kind);
+  assert.ok(kinds.includes("web"), `the web process was lost: ${JSON.stringify(spec.processes)}`);
+  assert.ok(kinds.includes("release"), "the release was not added");
+
+  // No command on the synthesised web: the image's own entrypoint is the app's
+  // `start`, and inventing a command here would override it with a guess.
+  const web = (spec.processes ?? []).find((p) => p.kind === "web");
+  assert.equal(web?.command, undefined);
+});
+
+test("an app that really declares no web keeps declaring none", () => {
+  // The other direction, and the one that must not regress: a bot declares its
+  // processes explicitly, so the list is already non-empty and nothing implicit
+  // is owed. Synthesising a web process here would put a Telegram bot back to
+  // pretending to be a web server, which is the defect the process model exists
+  // to remove.
+  const spec = buildAppSpec({
+    slug: "botapp",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("bot", { command: "python bot.py" }) as never],
+    releaseCommand: "python migrate.py",
+  });
+
+  const kinds = (spec.processes ?? []).map((p) => p.kind);
+  assert.ok(!kinds.includes("web"), `a web process was invented: ${JSON.stringify(spec.processes)}`);
+  assert.ok(kinds.includes("release"));
+});
+
+test("an app with a Procfile web and a config release gets exactly one web", () => {
+  const spec = buildAppSpec({
+    slug: "webapp",
+    image: "img@sha256:abc",
+    env: [],
+    secrets: [],
+    processes: [resolveProcess("web", { command: "npm start" }) as never],
+    releaseCommand: "npm run migrate",
+  });
+  assert.equal((spec.processes ?? []).filter((p) => p.kind === "web").length, 1);
+});
