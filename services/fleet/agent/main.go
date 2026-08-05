@@ -371,6 +371,14 @@ func (a *Agent) reportRunning() []ProcessState {
 		s := ProcessState{
 			Slug: l.app.Slug, Process: l.proc.Name, Image: l.app.Image,
 		}
+		// Health, and only for a kind that has any. `probeAll` skips anything
+		// that is not `web` — a worker has no port to ask — so reporting `false`
+		// for one would say "broken" about a process nobody ever checked, and
+		// the deploy that reads this would refuse every worker-only app.
+		if l.proc.Kind == KindWeb {
+			ok := l.ok
+			s.Healthy = &ok
+		}
 		if len(l.proc.Command) > 0 {
 			s.Command = append([]string(nil), l.proc.Command...)
 		}

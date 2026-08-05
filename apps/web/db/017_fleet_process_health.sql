@@ -1,0 +1,21 @@
+-- Whether a reported process is ANSWERING, not merely present.
+--
+-- 016 stored "the node is running this image and this command", and a deploy
+-- verified against it. That turned out not to mean the app works. A container
+-- that starts and exits sits in the agent's live set for the whole time it is
+-- being restarted — reconcile puts it back five times before giving up — so it
+-- reports its new image on every sync while serving nothing.
+--
+-- Measured on 5 Aug 2026. i341m v3 was a one-line server that exited before
+-- binding. The node logged `not running, restarting (1/5)`, `(2/5)`, `(3/5)`;
+-- /status showed `healthy: false, status: stopped`; the app's own log said
+-- `v3 boot: cannot reach the thing I need, giving up` four times. The deploy
+-- reported `✓ live` and flipped run_url onto it. The rollback that exists for
+-- exactly this case did not run, because nothing it checks was false.
+--
+-- NULL is not false. An agent that does not report health, and a worker — which
+-- has no port and is never probed — must both be distinguishable from a web
+-- process that was asked and did not answer. `runVerdict` refuses only on an
+-- explicit false, so an older agent keeps deploying rather than failing every
+-- app the moment this column appears.
+ALTER TABLE fleet_process_running ADD COLUMN IF NOT EXISTS healthy boolean;

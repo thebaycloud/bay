@@ -78,6 +78,22 @@ type ProcessState struct {
 	Process string   `json:"process"`
 	Image   string   `json:"image"`
 	Command []string `json:"command,omitempty"`
+	// Whether this process is ANSWERING, not merely present.
+	//
+	// Added because "the node is running your image" turned out not to mean the
+	// app works, and the deploy was believing it. A container that starts and
+	// exits is in `a.live` the whole time it is being restarted — reconcile puts
+	// it back five times — so it reported its new image on every sync while
+	// serving nothing, and a redeploy verified against that row and was
+	// announced live. Measured on 5 Aug 2026: i341m v3 exited before binding,
+	// the node logged `not running, restarting (3/5)`, and the deploy said
+	// `✓ live`.
+	//
+	// A pointer so the field can be ABSENT. The control plane must be able to
+	// tell "this agent does not report health" from "reported, and it is false"
+	// — the same distinction Processes itself makes above, and for the same
+	// reason: an older agent must not have its silence read as a failure.
+	Healthy *bool `json:"healthy,omitempty"`
 }
 
 // syncBody is what the node POSTs: its identity, plus what it has to say about

@@ -1006,3 +1006,42 @@ test("an unwired log port is not a crash", async () => {
   assert.equal(r.placed, false);
   assert.ok(calls.includes("unplace:gzz9j"));
 });
+
+/* -------------------------------------------------------------------------- */
+/* Running is not working.                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The false positive that shipped a broken deploy as live.
+ *
+ * i341m v3, 5 Aug 2026: a one-line server that exited before binding. The node
+ * restarted it five times, /status said `healthy: false, status: stopped`, and
+ * the app's own log said `v3 boot: cannot reach the thing I need, giving up`
+ * four times. `runVerdict` compared image and command, found both matching —
+ * because a crash-looping process IS in the live set with the new image — and
+ * the deploy reported `✓ live` and flipped run_url onto it.
+ */
+
+test("a process the node reports as not answering fails the verdict", () => {
+  const s = spec;
+  const rows = reportFor(s).map((r) => ({ ...r, healthy: false }));
+  const v = runVerdict(s, rows);
+
+  assert.equal(v.ok, false);
+  assert.match(v.reason ?? "", /not answering/);
+});
+
+test("a process the node reports as answering passes", () => {
+  const s = spec;
+  const v = runVerdict(s, reportFor(s).map((r) => ({ ...r, healthy: true })));
+  assert.equal(v.ok, true);
+});
+
+test("no health reported is not a failure", () => {
+  // Three states, not two. A worker has no port and is never probed, and an
+  // agent older than the field says nothing at all — refusing on absence would
+  // fail every worker-only app and every deploy against a node not yet rebuilt.
+  const s = spec;
+  const v = runVerdict(s, reportFor(s));
+  assert.equal(v.ok, true, v.reason);
+});

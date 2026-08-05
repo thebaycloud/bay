@@ -266,6 +266,16 @@ export interface ProcessState {
   process: string;
   image: string;
   command?: string[];
+  /**
+   * Whether the node's own probe is getting an answer.
+   *
+   * Optional, and the three states are all different. `true` is answering;
+   * `false` is asked and silent; ABSENT is nobody asked — a worker has no port,
+   * and an agent older than this field says nothing at all. Only the explicit
+   * `false` is a failure, because refusing on absence would refuse every
+   * worker-only app and every deploy made before the node was rebuilt.
+   */
+  healthy?: boolean;
 }
 
 /**
@@ -283,12 +293,34 @@ export interface ProcessState {
  * every row an older agent binary knows nothing about — and unlike a cleared
  * fault, a cleared running-row fails the next deploy of that app.
  */
+/**
+ * The `healthy` column, guaranteed before the first write that needs it.
+ *
+ * db/017 is the canonical schema, but migrations are a separate command — they
+ * do not run as part of a deploy. So shipping code that writes a column nobody
+ * has added yet would not degrade: `recordNodeRunning` would throw on every
+ * sync, the node's running reports would stop arriving, and every fleet deploy
+ * would then fail its verify for want of a row. Same shape as `ensure()` in
+ * lib/deploy-runs.ts, and idempotent for the same reason.
+ */
+let healthColumn: Promise<void> | null = null;
+function ensureHealthColumn(): Promise<void> {
+  if (!healthColumn) {
+    healthColumn = getPool(DB)
+      .query(`ALTER TABLE fleet_process_running ADD COLUMN IF NOT EXISTS healthy boolean`)
+      .then(() => undefined)
+      .catch((e) => { healthColumn = null; throw e; });
+  }
+  return healthColumn;
+}
+
 export async function recordNodeRunning(node: string, running: ProcessState[]): Promise<void> {
+  await ensureHealthColumn();
   await getPool(DB).query(
     `WITH incoming AS (
-       SELECT DISTINCT ON (slug, process) slug, process, image, command
+       SELECT DISTINCT ON (slug, process) slug, process, image, command, healthy
          FROM jsonb_to_recordset($2::jsonb)
-              AS t(slug text, process text, image text, command jsonb)
+              AS t(slug text, process text, image text, command jsonb, healthy boolean)
         WHERE slug IS NOT NULL AND process IS NOT NULL AND image IS NOT NULL
         ORDER BY slug, process
      ),
@@ -304,11 +336,12 @@ export async function recordNodeRunning(node: string, running: ProcessState[]): 
             SELECT 1 FROM accepted a WHERE a.slug = f.slug AND a.process = f.process
           )
      )
-     INSERT INTO fleet_process_running(slug, node, process, image, command, reported_at)
-     SELECT a.slug, $1, a.process, a.image, a.command, now() FROM accepted a
+     INSERT INTO fleet_process_running(slug, node, process, image, command, healthy, reported_at)
+     SELECT a.slug, $1, a.process, a.image, a.command, a.healthy, now() FROM accepted a
      ON CONFLICT (slug, node, process) DO UPDATE
         SET image = EXCLUDED.image,
             command = EXCLUDED.command,
+            healthy = EXCLUDED.healthy,
             reported_at = now()`,
     [node, JSON.stringify(running)]
   );
@@ -332,7 +365,7 @@ export async function recordNodeRunning(node: string, running: ProcessState[]): 
  */
 export async function runningOnNode(slug: string, node: string): Promise<ProcessState[]> {
   const r = await getPool(DB).query(
-    `SELECT f.process, f.image, f.command
+    `SELECT f.process, f.image, f.command, f.healthy
        FROM fleet_process_running f
        JOIN fleet_nodes n ON n.name = f.node
       WHERE f.slug = $1
@@ -347,6 +380,9 @@ export async function runningOnNode(slug: string, node: string): Promise<Process
     process: row.process as string,
     image: row.image as string,
     command: (row.command as string[] | null) ?? undefined,
+    // null stays undefined rather than becoming false: an unprobed worker and an
+    // agent that does not report health must not read as a failing app.
+    healthy: row.healthy === null || row.healthy === undefined ? undefined : Boolean(row.healthy),
   }));
 }
 

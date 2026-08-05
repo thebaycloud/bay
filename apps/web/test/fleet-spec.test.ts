@@ -252,6 +252,10 @@ test("what the node says it is RUNNING is what the control plane reads", () => {
     process: "bot",
     image: "us-central1-docker.pkg.dev/p/r/a8ebb@sha256:abc",
     command: ["/bin/sh", "-c", "python bot.py"],
+    // Added when "the node is running your image" turned out not to mean the app
+    // works. Drop it from either side and a redeploy verifies against a process
+    // that is crash looping, which is how a broken deploy was announced live.
+    healthy: true,
   };
 
   assert.deepEqual(Object.keys(full).sort(), agentProcessStateFields().sort());

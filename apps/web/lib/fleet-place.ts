@@ -382,6 +382,21 @@ export function runVerdict(spec: AppSpec, rows: ProcessState[]): Eligibility {
     if (!sameArgv(got.command, p.command)) {
       return { ok: false, reason: `the node is running a different command for "${p.name}" — this deploy has not reached it` };
     }
+    // Present is not working, and believing it was is how a broken deploy went
+    // out as live. A container that starts and exits is in the agent's live set
+    // for the whole time reconcile is restarting it, so it reports the NEW image
+    // on every sync while serving nothing — image and command both matched, and
+    // this function said yes. Measured on 5 Aug 2026: i341m v3 exited before
+    // binding, the node logged `not running, restarting (3/5)`, and the deploy
+    // announced `✓ live`.
+    //
+    // Only an explicit `false`. Absent means nobody asked — a worker has no port
+    // to probe, and an agent older than this field says nothing — and refusing
+    // on absence would fail every worker-only app and every deploy made against
+    // a node that has not been rebuilt yet.
+    if (got.healthy === false) {
+      return { ok: false, reason: `the node started "${p.name}" and it is not answering — the app came up and then stopped` };
+    }
   }
   return { ok: true };
 }
