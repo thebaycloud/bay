@@ -137,3 +137,27 @@ func TestAProcessWithNoEnvNeverWaits(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// The address variables a dependency publishes are the APP's, not one
+// process's — every process of the app may read them. The first version of this
+// checked only the per-process half, so nothing ever waited and an unresolved
+// `${process:redis}` reached a live app's environment.
+
+func TestWaitsOnAnAddressInTheAppsEnv(t *testing.T) {
+	app := appWithCache()
+	app.Env = map[string]string{"REDIS_URL": "redis://${process:redis}:6379"}
+	a := agentWith(map[string]*live{})
+
+	if got := a.waitingOn(app, Process{Name: "api", Kind: KindWeb}); got != "redis" {
+		t.Errorf("should wait for redis, got %q", got)
+	}
+}
+
+func TestResolvesAnAddressInTheAppsEnv(t *testing.T) {
+	app := appWithCache()
+	app.Env = map[string]string{"REDIS_URL": "redis://${process:redis}:6379"}
+	got := resolveProcessAddrs(app.Env["REDIS_URL"], app, Process{Name: "api", Kind: KindWeb})
+	if got != "redis://10.200.1.9:6379" {
+		t.Errorf("got %q", got)
+	}
+}

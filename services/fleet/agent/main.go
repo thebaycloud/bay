@@ -1466,12 +1466,23 @@ func startKey(id, image string) string { return id + "@" + image }
 // can express, and treating an unknown name as something to wait for would hang
 // a process forever on a typo.
 func (a *Agent) waitingOn(app App, proc Process) string {
-	if len(proc.Env) == 0 {
+	// The app's env as well as the process's. A dependency's address variables
+	// are the APP's — every process may read them — and checking only the
+	// per-process half meant nothing ever waited, which is exactly how the first
+	// version of this shipped an unresolved placeholder into a live app.
+	values := make([]string, 0, len(proc.Env)+len(app.Env))
+	for _, v := range proc.Env {
+		values = append(values, v)
+	}
+	for _, v := range app.Env {
+		values = append(values, v)
+	}
+	if len(values) == 0 {
 		return ""
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for _, v := range proc.Env {
+	for _, v := range values {
 		for _, m := range procAddrRef.FindAllStringSubmatch(v, -1) {
 			name := m[1]
 			if name == proc.Name {

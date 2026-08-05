@@ -323,7 +323,12 @@ func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []s
 	// before knowing whether it will serve — does not crash on a missing value.
 	env = append(env, fmt.Sprintf("PORT=%d", effectivePort(app, proc)))
 	for k, v := range app.Env {
-		env = append(env, k+"="+v)
+		// Resolved here too, not only for the process's own env. A dependency's
+		// address variables are the APP's — every process of the app may read
+		// them — and substituting only the per-process half left
+		// `REDIS_URL=redis://${process:redis}:6379` in the environment of the one
+		// service that actually needed it.
+		env = append(env, k+"="+resolveProcessAddrs(v, app, proc))
 	}
 	// The process's own, after the app's so it wins. A sibling mounted at /api
 	// has to be told that and the app-wide value says otherwise — an app that
