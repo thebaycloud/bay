@@ -3067,11 +3067,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // and running it from the control plane would be a migration racing the
       // one the node is about to run.
       if (placeOnNode) {
+        // A REFERENCE the node can resolve, and pinned if we can pin it.
+        //
+        // `image` here is a bare repository path — Cloud Run fills in `:latest`
+        // and the node does not: containerd answered `failed to resolve
+        // reference … : object required` and the sibling never started. Digest
+        // first for the reason the primary is deployed by digest at all: a tag
+        // is a name, and "the new version" should be a fact.
+        const pushed = `${image}:latest`;
+        const digest = await resolveImageDigest(pushed);
+        const ref = digest ? `${image}@${digest}` : pushed;
         const proc: AgentProcess = {
           name: svc.name || label,
           kind: "web",
           command: ["/bin/sh", "-c", plan.run],
-          image,
+          image: ref,
           prefix: servicePath(svc),
           env: Object.fromEntries(
             env
