@@ -259,6 +259,52 @@ func (r *Runtime) imageConfig(img client.Image) (entrypoint, cmd, env []string, 
 	return ic.Config.Entrypoint, ic.Config.Cmd, ic.Config.Env, ic.Config.WorkingDir, nil
 }
 
+// sandboxCaps is what root inside a sandbox is allowed to do.
+//
+// This used to be CAP_NET_BIND_SERVICE alone, on the reasoning that "Cloud Run
+// gave these apps none either, so this is not a new constraint on anything that
+// runs today". The premise was wrong, and it cost a deploy to find out: the
+// first app ever placed here whose image was not written for this platform —
+// excalidraw, whose final stage is stock `nginx:stable-alpine-slim` — crash
+// looped five times with
+//
+//	nginx: [emerg] chown("/var/cache/nginx/client_temp", 101) failed
+//	       (1: Operation not permitted)
+//
+// The official nginx entrypoint chowns its cache directories and then drops to
+// an unprivileged worker. Without CAP_CHOWN it dies before binding anything, so
+// the port never even came into it. That is not one image being unusual: it is
+// what postgres, redis and most official images do on startup, and all of them
+// run on an ordinary container runtime because root there holds the standard
+// set. A fleet that refuses them is a fleet that only runs apps built for it.
+//
+// So: the capabilities a startup script legitimately needs, and nothing that
+// widens the sandbox's reach.
+//
+//   - CHOWN, FOWNER, FSETID, DAC_OVERRIDE — own the files you shipped in your
+//     own image, which is what every one of these entrypoints is doing.
+//   - SETUID, SETGID, SETPCAP — drop to a non-root worker. Refusing these
+//     PUNISHES the images that are trying to be careful, which is backwards.
+//   - KILL — signal your own children; supervisors and entrypoint wrappers do.
+//   - NET_BIND_SERVICE — unchanged, and the reason a port below 1024 works.
+//
+// Deliberately still absent: NET_RAW (raw sockets), MKNOD (device nodes),
+// SYS_ADMIN and everything like it, SYS_CHROOT, AUDIT_WRITE, SETFCAP. None is
+// needed to start a server, and each is reach rather than housekeeping.
+// `NoNewPrivileges` stays on below, so none of this survives an execve into a
+// setuid binary — it only lets the process do these things as itself.
+var sandboxCaps = []string{
+	"CAP_CHOWN",
+	"CAP_DAC_OVERRIDE",
+	"CAP_FOWNER",
+	"CAP_FSETID",
+	"CAP_KILL",
+	"CAP_NET_BIND_SERVICE",
+	"CAP_SETGID",
+	"CAP_SETPCAP",
+	"CAP_SETUID",
+}
+
 // writeSpec generates the OCI runtime spec for one app.
 //
 // Precedence, lowest first: the image's own ENV, then PORT, then the app's
@@ -291,12 +337,10 @@ func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []s
 			Args:     argv,
 			Env:      env,
 			Cwd:      cwd,
-			// No added capabilities. Cloud Run gave these apps none either, so
-			// this is not a new constraint on anything that runs today.
 			Capabilities: &specs.LinuxCapabilities{
-				Bounding:  []string{"CAP_NET_BIND_SERVICE"},
-				Effective: []string{"CAP_NET_BIND_SERVICE"},
-				Permitted: []string{"CAP_NET_BIND_SERVICE"},
+				Bounding:  sandboxCaps,
+				Effective: sandboxCaps,
+				Permitted: sandboxCaps,
 			},
 			NoNewPrivileges: true,
 		},
