@@ -95,3 +95,41 @@ export function configEnv(
   }
   return { env, shadowed };
 }
+
+/**
+ * Restate a service's database connection at the address IT runs at.
+ *
+ * A sibling inherits the primary's environment, and that environment names the
+ * database at the primary's address. When the two run in different places the
+ * inherited value is not merely stale, it is unroutable: on the fleet the
+ * primary gets 10.200.0.1, the host-side proxy on the node, and a sibling on
+ * Cloud Run has no path to it at all. The app comes up looking healthy and
+ * every request that touches the database fails.
+ *
+ * Pure, and separate from `deploySibling`, because that function is four
+ * hundred lines with a build and two gcloud calls in it — the address decision
+ * is the part worth pinning and the only part that can be checked without a
+ * cloud. Returns the same shape `mergeDatabaseEnv` does, plus the surviving
+ * inherited variables, so the caller has one thing to hand to the deploy.
+ *
+ * Every name `databaseEnv` writes is dropped before the new values are added,
+ * rather than the new ones being appended and left to win by ordering: `PGHOST`
+ * appearing twice in one `--update-env-vars` is a coin toss, and the losing side
+ * of that coin is an app that cannot reach its database.
+ */
+export function restateDatabaseAt(
+  inherited: string[],
+  freshDatabaseEnv: string[],
+  databaseNames: string[],
+): MergedEnv & { inherited: string[] } {
+  const owned = new Set(databaseNames);
+  const kept = inherited.filter((entry) => {
+    const eq = entry.indexOf("=");
+    return eq <= 0 || !owned.has(entry.slice(0, eq));
+  });
+  // Merged against nothing: these are the platform's own values for a database
+  // it provisioned, and the app's copies of these names were already resolved
+  // once, for the primary.
+  const { secretEnv, plainEnv } = mergeDatabaseEnv({}, freshDatabaseEnv);
+  return { inherited: kept, secretEnv, plainEnv };
+}

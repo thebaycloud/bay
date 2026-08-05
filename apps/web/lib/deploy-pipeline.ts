@@ -27,7 +27,7 @@ import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnF
 import { rollback, deleteRunService, getLogs } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
-import { mergeDatabaseEnv, configEnv } from "@/lib/env-merge";
+import { mergeDatabaseEnv, configEnv, restateDatabaseAt } from "@/lib/env-merge";
 import { pgConfig } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed } from "@/lib/apps";
@@ -2917,20 +2917,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // actually runs at.
       let siblingDbRefs: SecretRef[] = [];
       if (toFleet && pgFacts) {
-        const dbNames = new Set(databaseEnvNames());
-        for (let i = env.length - 1; i >= 0; i--) {
-          const eq = env[i].indexOf("=");
-          if (eq > 0 && dbNames.has(env[i].slice(0, eq))) env.splice(i, 1);
-        }
-        const hereEnv = databaseEnv(
-          { databaseUrl: databaseUrlFor(pgFacts, pgFacts.dbName, CLOUD_RUN_DB), ...pgFacts },
-          CLOUD_RUN_DB,
+        const merged = restateDatabaseAt(
+          env,
+          databaseEnv(
+            { databaseUrl: databaseUrlFor(pgFacts, pgFacts.dbName, CLOUD_RUN_DB), ...pgFacts },
+            CLOUD_RUN_DB,
+          ),
+          databaseEnvNames(),
         );
-        // Merged against nothing rather than against the app's secrets: this is
-        // replacing the platform's own values, and the app's copies of these
-        // names were already resolved once for the primary.
-        const merged = mergeDatabaseEnv({}, hereEnv);
-        env.push(...merged.plainEnv);
+        env.length = 0;
+        env.push(...merged.inherited, ...merged.plainEnv);
         const stored = await putAppSecrets(name, merged.secretEnv, APP_RUNTIME_SA, log);
         siblingDbRefs = stored.stored;
         // Same fallback the primary takes: a value Secret Manager refused rides
