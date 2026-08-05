@@ -8,16 +8,30 @@ import { filterCommands, type CommandItem } from "@/lib/command-search";
 import type { App } from "./AppsGrid";
 
 /**
- * ⌘K.
+ * Search, on `/`.
  *
- * The topbar has advertised this shortcut since the design system landed, but
- * the control was a bare <button> with no handler and nothing listened for the
- * key — the affordance was drawn, never wired. Pressing ⌘K did nothing, and so
- * did clicking the bar.
+ * It was ⌘K, which is a chord you have to know; `/` is one key and the
+ * convention every reader has already met on GitHub, Slack and Gmail. It also
+ * costs nothing to claim — ⌘K is Chrome's own address-bar shortcut and had to be
+ * fought for with preventDefault.
  *
  * The trigger and the overlay are one component so they cannot disagree about
  * whether the palette is open.
  */
+/**
+ * Where a bare `/` is a character rather than a command.
+ *
+ * Any field the reader might be typing in, including the palette's own input.
+ * Without this, searching for a path — or writing anything at all in a form —
+ * opens the palette instead of typing a slash, which is the failure mode every
+ * site that ships this shortcut has had to fix.
+ */
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+}
 export function CommandPalette({ apps }: { apps: App[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -25,17 +39,17 @@ export function CommandPalette({ apps }: { apps: App[] }) {
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Apps, and only apps. Both commands that used to sit at the top — New app and
+  // Settings — are permanent rows in the rail two hundred pixels away; a search
+  // box earns its keep on the things too numerous to pin, which here is the app
+  // list and nothing else.
   const items: CommandItem[] = useMemo(
-    () => [
-      { id: "cmd:new", label: "New app", hint: "Deploy something", href: "/new" },
-      { id: "cmd:settings", label: "Settings", hint: "Account and plan", href: "/settings" },
-      ...apps.map((a) => ({
-        id: `app:${a.slug}`,
-        label: a.name || a.slug,
-        hint: `${a.slug}.supersonic.cv`,
-        href: `/apps/${a.slug}`,
-      })),
-    ],
+    () => apps.map((a) => ({
+      id: `app:${a.slug}`,
+      label: a.name || a.slug,
+      hint: `${a.slug}.supersonic.cv`,
+      href: `/apps/${a.slug}`,
+    })),
     [apps],
   );
 
@@ -46,10 +60,11 @@ export function CommandPalette({ apps }: { apps: App[] }) {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        // Chrome's own ⌘K focuses the address bar, so this has to be claimed.
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping(e.target)) {
+        // Otherwise the slash lands in whatever the browser focuses next — and
+        // in Firefox it opens quick-find.
         e.preventDefault();
-        setOpen((was) => !was);
+        setOpen(true);
       } else if (e.key === "Escape") {
         setOpen(false);
       }
@@ -89,7 +104,7 @@ export function CommandPalette({ apps }: { apps: App[] }) {
   return (
     <>
       <button className="kbar" onClick={() => setOpen(true)}>
-        <Search size={13} />Search<span className="kbd">⌘K</span>
+        <Search size={13} />Search<span className="kbd">/</span>
       </button>
 
       {open ? (

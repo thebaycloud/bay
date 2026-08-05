@@ -64,7 +64,7 @@ export interface ServiceInfo {
    * while the worker was running perfectly, and offered it "Handles anything from
    * 1 to millions of visitors" as a feature.
    */
-  workers: { name: string; ready: boolean }[];
+  workers?: { name: string; ready: boolean }[];
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -142,7 +142,38 @@ export async function listWorkers(slug: string): Promise<{ name: string; ready: 
   }
 }
 
-export async function describeService(slug: string): Promise<ServiceInfo> {
+/**
+ * Cloud Run's answer, remembered for a moment.
+ *
+ * The cockpit re-asks on every navigation, and clicking into an app and back
+ * paid the full round trip each time. Short on purpose: a deploy changes the
+ * revision, and this must never be the reason someone watches a stale one.
+ * Writers bypass it — see `describeService(slug, { fresh: true })`.
+ */
+const described = new Map<string, { at: number; info: ServiceInfo }>();
+const DESCRIBE_TTL_MS = 20_000;
+
+/**
+ * One Cloud Run service, as this product understands it.
+ *
+ * `workers` is NOT fetched here any more. It used to be, and it cost every
+ * caller 1.5–1.7s: `listWorkers` shells out to `gcloud beta run worker-pools
+ * list`, a subprocess that on nearly every app returns nothing. The app page
+ * awaited it before it could render a single pixel. It is now asked for
+ * explicitly, by the one screen that shows it, after that screen exists.
+ */
+export async function describeService(
+  slug: string,
+  opts: { withWorkers?: boolean; fresh?: boolean } = {},
+): Promise<ServiceInfo> {
+  const hit = described.get(slug);
+  if (!opts.fresh && !opts.withWorkers && hit && Date.now() - hit.at < DESCRIBE_TTL_MS) return hit.info;
+  const info = await describeServiceUncached(slug, opts.withWorkers === true);
+  described.set(slug, { at: Date.now(), info });
+  return info;
+}
+
+async function describeServiceUncached(slug: string, withWorkers: boolean): Promise<ServiceInfo> {
   const s = await serviceResource(slug);
   const c = s.spec?.template?.spec?.containers?.[0] ?? {};
   const ann = s.spec?.template?.metadata?.annotations ?? {};
@@ -164,7 +195,7 @@ export async function describeService(slug: string): Promise<ServiceInfo> {
     repo: (c.env ?? []).find((e: any) => e.name === "SUPERSONIC_REPO")?.value ?? "",
     storageBucket: (c.env ?? []).find((e: any) => e.name === "STORAGE_BUCKET")?.value ?? "",
     owner: s.metadata?.labels?.[OWNER_LABEL] ?? "",
-    workers: await listWorkers(slug),
+    workers: withWorkers ? await listWorkers(slug) : undefined,
   };
 }
 

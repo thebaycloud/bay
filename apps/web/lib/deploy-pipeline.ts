@@ -5,7 +5,10 @@ import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync, unli
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
-import { opencodeRepair, planDeploy, PartialPlan, type DeployPlan } from "@/lib/opencode-deploy";
+// The agent backend is chosen by DEPLOY_AGENT (codex by default, opencode one
+// variable away). The pipeline imports the switch, never a backend, so it does
+// not learn which CLI ran — see lib/agents/types.ts.
+import { agentRepair, agentName, planDeploy, PartialPlan, type DeployPlan } from "@/lib/agents";
 import { checkPlanDeps, RUNTIME_UNSUPPORTED, RUNTIME_VERSIONS } from "@/lib/plan-deps";
 import { repoRuntime, runnerServes, runtimeRouting } from "@/lib/repo-runtime";
 import { generateDockerfile, baseImage, dockerignore, manifestPaths, DockerfileError, type DockerfileInput } from "@/lib/dockerfile";
@@ -3486,16 +3489,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // Timed separately: a deploy the agent rescues is a very different
       // experience from one that worked first time, and a median that mixes
       // the two hides how often we are paying for it.
-      const useOpencode = process.env.DEPLOY_ENGINE === "opencode";
-      if (useOpencode) log("Repair engine: opencode");
+      // Whether to run a repair agent AT ALL. The value is the string
+      // "opencode" for historical reasons — it predates there being a choice of
+      // backend — and it no longer names which one runs. DEPLOY_AGENT does that.
+      const useAgent = process.env.DEPLOY_ENGINE === "opencode";
+      if (useAgent) log(`Repair engine: ${agentName()}`);
       // Snapshot first, so whatever the agent changes can be handed back. Its
       // edits live in a scratch copy that is deleted when the deploy ends, so
       // until now a rescued app left the user's own folder still broken — and
       // their next deploy shipped the same code again.
       const snapshotted = await snapshotSources(dir);
       const repair = stages.start("repair-agent");
-      const fixed = useOpencode
-        ? await opencodeRepair({
+      const fixed = useAgent
+        ? await agentRepair({
             dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy, log,
             // Named, not inferred: the agent is told which runtime its
             // `redeploy` reaches, so its prompt cannot describe one while the
