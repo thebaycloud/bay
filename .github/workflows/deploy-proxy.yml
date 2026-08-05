@@ -1,0 +1,115 @@
+# Push to main → the proxy deploys itself, from GitHub.
+#
+# The control plane has deployed itself on every push since the OIDC cutover.
+# The proxy never had anything: no workflow, no Cloud Build trigger, no script.
+# It was deployed by remembering one long gcloud command, which means it was
+# deployed when somebody remembered — and this is the process that fronts every
+# tenant app, so "merged but dark" here is a fix that protects nobody while
+# everybody believes it is out.
+#
+# Phase 0 is the example. The edge secret, the signed forward and the unsigned
+# refusal all had to move together, and the side that moves by hand is the one
+# that decides whether the other two mean anything.
+#
+# NOT YET VERIFIED. This file has never run: the deploy it performs can only be
+# exercised by pushing to main, and it is being written by someone who cannot.
+# The command below is the one the handoff documents as working by hand; what is
+# untested is whether supersonic-deployer@ can run it, in particular whether it
+# may drive a `--source` build. If the first run fails it fails before any new
+# revision exists, so the running proxy is not at risk — but treat the first run
+# as something to watch rather than something that worked.
+name: Deploy proxy
+
+on:
+  push:
+    branches: [main]
+    # Only when the proxy actually changed. Every push to main already rebuilds
+    # and redeploys the control plane; making each of those also redeploy the
+    # proxy would put a second tenant-facing rollout behind every unrelated
+    # commit.
+    paths:
+      - "services/proxy/**"
+      - ".github/workflows/deploy-proxy.yml"
+  # Deploying the current main by hand, from the Actions tab — for a run that
+  # needs redoing, or a change outside those paths that has to reach it.
+  workflow_dispatch:
+
+# One at a time, and never cancel one already running: a half-applied rollout of
+# the service that fronts every app is worse than a queued one.
+concurrency:
+  group: deploy-proxy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required to mint the OIDC token; without it auth fails
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/540236122367/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # NEVER --set-env-vars, in any form.
+      #
+      # The live service carries NODE_ENV, ROOT_DOMAIN, LOGIN_URL, AUTH_SECRET,
+      # PG_PASSWORD and FLEET_EDGE_SECRET. Six — read off the running service on
+      # 5 Aug 2026; the handoff that documented this command said four, which is
+      # exactly how this goes wrong. `--set-env-vars` REPLACES the whole set, so
+      # one such flag here takes AUTH_SECRET and FLEET_EDGE_SECRET with it:
+      # every session invalidated, and every fleet app 502 because the node's
+      # router refuses an unsigned request. Nothing worth adding here is worth
+      # that. Anything that ever does belong must arrive as --update-env-vars,
+      # which merges.
+      #
+      # And no resource flags, which is a deliberate departure from what
+      # cloudbuild.yaml does for the control plane. Those settings really do
+      # belong in the repo — the running values today are cpu=1, memory=512Mi,
+      # concurrency=80, min-instances=1, max-instances=100, startup-cpu-boost,
+      # the supersonic-proxy@ service account and the shared-pg Cloud SQL
+      # attachment, recorded here so a reader has them — but `gcloud run deploy`
+      # preserves what it is not told to change, and every flag added to a
+      # workflow that has never executed is one more way for its first run to
+      # fail. Move them in when someone can watch a run do it.
+      - name: Deploy
+        run: |
+          gcloud run deploy supersonic-proxy \
+            --source services/proxy \
+            --project supersonic-deploy-prod \
+            --region us-central1 \
+            --quiet
+
+      # Two checks, and the second is the one that matters.
+      #
+      # /_healthz proves the process is up and nothing else: index.ts answers it
+      # before any routing, session lookup or upstream call. That is the point of
+      # a liveness path and also its whole limitation. It is NOT reachable at
+      # app.supersonic.cv — that name is the control plane, and asking it there
+      # returns a 307 from a completely different service, which is the kind of
+      # green light that is worse than no light at all.
+      #
+      # So a real tenant app is fetched through the proxy too. anatf is on the
+      # fleet, so a 200 there also proves the signed forward still works end to
+      # end: the proxy holding a good FLEET_EDGE_SECRET and the node accepting
+      # it. That is exactly what a deploy carrying --set-env-vars would break,
+      # and it would break it silently.
+      - name: Check the proxy answers
+        run: |
+          url=$(gcloud run services describe supersonic-proxy \
+            --region us-central1 --project supersonic-deploy-prod \
+            --format='value(status.url)')
+          echo "proxy url: $url"
+          live=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url/_healthz" || true)
+          echo "proxy /_healthz → $live"
+          app=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://anatf.supersonic.cv/ || true)
+          echo "anatf through the proxy → $app"
+          [ "$live" = "200" ] || { echo "the proxy process is not answering"; exit 1; }
+          [ "$app" = "200" ] || { echo "the proxy is up but is not serving an app"; exit 1; }
