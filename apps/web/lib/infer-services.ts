@@ -6,6 +6,7 @@ import {
   serviceLanguage, type BuildSpec,
 } from "./detect";
 import type { AppConfig, ServiceConfig } from "./app-config";
+import { buildOwner } from "./dockerfile-context";
 
 /**
  * Re-exported, not re-implemented.
@@ -368,6 +369,33 @@ export async function inferAppConfig(repoDir: string, detect: Detect): Promise<A
     }
   }
   if (parts.length < 2) return null;
+
+  // A repository that already assembles itself is ONE deployment, whatever the
+  // directory listing looks like.
+  //
+  // The full-stack FastAPI template has `frontend/` and `backend/`, and reading
+  // those two directories gives two confident answers. But `backend/Dockerfile`
+  // copies `./frontend`, builds it, and puts the result inside the API image —
+  // its own compose file says `context: .` with `dockerfile: backend/Dockerfile`.
+  // Split anyway, the backend was built from `backend/` alone, the frontend it
+  // mounts did not exist, and the app died on import after a build that passed.
+  //
+  // The rule is the one three lines up, applied where it was missing: a
+  // Dockerfile that reaches into ANOTHER candidate's directory is the author
+  // saying these are not two deployments, and an inference must not overrule it.
+  const owner = buildOwner(parts.map((rel) => {
+    const at = rel === "." ? repoDir : join(repoDir, rel);
+    const file = join(at, "Dockerfile");
+    return { dir: rel, dockerfile: existsSync(file) ? readFileSync(file, "utf8") : undefined };
+  }));
+  if (owner) {
+    try {
+      const abs = owner === "." ? repoDir : join(repoDir, owner);
+      return { version: 1, services: [{ ...serviceFor(owner, await detect(abs), abs), path: "/" }] };
+    } catch {
+      return null;
+    }
+  }
 
   // A part we could not read is a part we cannot deploy, so the whole split is
   // off — but the DEPLOY is not. Inference is an upgrade, never a prerequisite:

@@ -53,6 +53,7 @@ import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, p
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
 import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
+import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
 import { readProcfile } from "@/lib/procfile";
 import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
 import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
@@ -2811,7 +2812,42 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       try {
         await stages.around(generatedBuild ? "build" : "prepare", async () => {
           const mountable = builder === "buildkit" ? buildSecrets(secretRefs) : [];
-          if (generatedBuild) {
+          // Where the build runs from, and what it reads as its Dockerfile. Both
+          // are the service's own directory unless the author's file says
+          // otherwise, and the config is named per service so two of them cannot
+          // land on one path when the context is shared.
+          let buildContext = contextDir;
+          let dockerfileIn: string | undefined;
+          const configName = `cloudbuild-${name}.yaml`;
+          if (generatedBuild && existsSync(join(contextDir, "Dockerfile"))) {
+            // The author's own build definition, which used to be OVERWRITTEN
+            // here — the primary asked whether a Dockerfile existed before
+            // generating one and this path never did, so a sibling's Dockerfile
+            // was silently replaced on every deploy.
+            //
+            // And it is built where it expects. `backend/Dockerfile` in the
+            // full-stack FastAPI template copies `./frontend`, builds it, and
+            // puts the result inside the API image; its own compose file says
+            // `context: .` with `dockerfile: backend/Dockerfile`. Built from
+            // `backend/`, that copy finds nothing, the build still passes, and
+            // the app dies on import with `Frontend directory ... does not
+            // exist` — which the deploy then reported as a $PORT problem.
+            const own = readFileSync(join(contextDir, "Dockerfile"), "utf8");
+            const rel = svc.dir && svc.dir !== "." ? svc.dir.replace(/^\.\//, "").replace(/\/+$/, "") : ".";
+            if (rel !== "." && wantsRepoRootContext(own, readdirSync(contextDir), readdirSync(dir))) {
+              buildContext = dir;
+              dockerfileIn = `${rel}/Dockerfile`;
+              log(`Building ${label} with its own Dockerfile, from the repository root — it reads paths outside ${rel}/`);
+            } else {
+              log(`Building ${label} with its own Dockerfile`);
+            }
+            // No .dockerignore written: theirs, or its absence, is theirs too.
+            writeFileSync(join(buildContext, configName), cachedBuildConfig(image, builder, name, {
+              secretEnv: mountable,
+              buildArgs: Object.entries(svc.buildEnv ?? {}).map(([key, value]) => ({ key, value })),
+              dockerfile: dockerfileIn,
+            }));
+          } else if (generatedBuild) {
             log(`Building ${label} from ${svc.dir ?? "."}…`);
             // Its own detection, rooted at its own directory — which is the
             // difference `inferAppConfig` was written for: the same detector
@@ -2844,13 +2880,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
               waitFor: (s.database?.engine || appConfig?.resources?.database) ? proxyWait() : undefined,
             }));
             writeFileSync(join(contextDir, ".dockerignore"), dockerignore());
-            writeFileSync(join(contextDir, "cloudbuild.yaml"), cachedBuildConfig(image, builder, name, {
+            writeFileSync(join(buildContext, configName), cachedBuildConfig(image, builder, name, {
               secretEnv: mountable,
               buildArgs: Object.entries(svc.buildEnv ?? {}).map(([key, value]) => ({ key, value })),
             }));
           } else {
             log(`Preparing ${label} on the ${lang} runner…`);
-            writeFileSync(join(contextDir, "cloudbuild.yaml"), runnerPrepareConfig({
+            writeFileSync(join(buildContext, configName), runnerPrepareConfig({
               image, bucket: ASSETS_BUCKET, slug, release, codeKey: key,
               build: plan.build, install: plan.install, language: lang!, secretEnv: buildSecrets(secretRefs),
             }));
@@ -2861,7 +2897,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           const hb = setInterval(() => log(`${generatedBuild ? "building" : "preparing"} ${label}…`), 8000);
           builds.reset();
           try {
-            await run("gcloud", ["builds", "submit", contextDir, "--region", REGION, "--project", PROJECT, "--config", join(contextDir, "cloudbuild.yaml"), ...buildIdentityArgs()], buildLine);
+            await run("gcloud", ["builds", "submit", buildContext, "--region", REGION, "--project", PROJECT, "--config", join(buildContext, configName), ...buildIdentityArgs()], buildLine);
           } finally { clearInterval(hb); }
         });
       } catch (e) {

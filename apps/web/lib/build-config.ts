@@ -123,6 +123,18 @@ export interface BuildInputs {
   secretEnv?: { key: string; name: string }[];
   /** Public build-time values. `--build-arg`, and visible in image history forever. */
   buildArgs?: { key: string; value: string }[];
+  /**
+   * Where the Dockerfile is, relative to the build context. Defaults to
+   * `Dockerfile` at the root of it.
+   *
+   * Present because an author's Dockerfile does not always sit at the top of
+   * what it builds. `backend/Dockerfile` in the full-stack FastAPI template
+   * copies `./frontend`, builds it, and puts the result in the API image — its
+   * own compose file says `context: .` with `dockerfile: backend/Dockerfile`.
+   * Built from `backend/` instead, the copy finds nothing and the app dies on
+   * import with the build reported green.
+   */
+  dockerfile?: string;
 }
 
 /** An env var name. Anything else would be injected into a shell line. */
@@ -183,7 +195,7 @@ export function kanikoBuildConfig(image: string, slug?: string, inputs: BuildInp
     "  - name: gcr.io/kaniko-project/executor:latest",
     "    args:",
     `      - --destination=${image}:latest`,
-    "      - --dockerfile=Dockerfile",
+    `      - --dockerfile=${inputs.dockerfile ?? "Dockerfile"}`,
     "      - --cache=true",
     "      - --cache-ttl=168h",
     `      - --cache-repo=${image}-cache`,
@@ -293,7 +305,7 @@ export function buildkitBuildConfig(
     ...stage,
     [
       "docker buildx build",
-      "-f Dockerfile",
+      `-f ${inputs.dockerfile ?? "Dockerfile"}`,
       `--cache-from type=registry,ref=${cache}`,
       `--cache-to type=registry,ref=${cache},mode=max,ignore-error=true`,
       ...secrets.map((s) => `--secret id=${s.key},src=/tmp/ss-secret-${s.key}`),
