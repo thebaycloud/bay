@@ -53,6 +53,7 @@ import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, p
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
 import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
+import { sidecarFor, sidecarEnv, dependencyRefusal } from "@/lib/dependencies";
 import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
 import { readProcfile } from "@/lib/procfile";
 import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
@@ -2150,6 +2151,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // whose only declared process is scheduled has nothing a node could report
     // and every deploy of it would roll back.
     const workerCount = processes.filter((pr) => pr.kind === "worker").length;
+    // A dependency we will not run, refused before anything is built.
+    //
+    // Stated with the reason rather than ignored: an app that declares
+    // elasticsearch and gets a deploy with no elasticsearch in it fails later,
+    // somewhere inside a client library, and looks like the app's bug.
+    for (const declared of (appConfig ? [...new Set(appConfig.services.flatMap((v) => v.uses ?? []))] : [])) {
+      const refusal = dependencyRefusal(declared);
+      if (refusal) throw new Error(`${CONFIG_FILENAME} asks for ${declared}, and ${refusal}.`);
+    }
+
     const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless, hasDockerfile: hasDockerfileNow, workers: workerCount });
     const toFleet = target.runtime === "fleet" && fleetPlacementWanted(process.env, slug);
     // The address the database is provisioned at follows `toFleet`, never
@@ -3441,6 +3452,29 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // difference is real: there the frontend is already live on its own
       // address and tearing it down would be worse; here nothing has been placed
       // yet, so shipping half an app is a choice rather than a rescue.
+      // Dependencies that run BESIDE the app, on the same machine.
+      //
+      // `database` and `bucket` are not here: they are provisioned before this
+      // and are managed, because they are the app's data and it has to survive
+      // the node. A cache is the opposite — losing it is a slow request, not a
+      // lost customer — so it is a process with its own image, which is a thing
+      // a placement can now express.
+      const sidecarEnvs: string[] = [];
+      const sidecars: AgentProcess[] = [];
+      for (const declared of [...new Set((appConfig?.services ?? []).flatMap((v) => v.uses ?? []))]) {
+        const spec = sidecarFor(declared);
+        if (!spec) continue;
+        sidecars.push({
+          name: spec.name,
+          kind: "worker",
+          image: spec.image,
+          command: spec.command,
+          memoryBytes: spec.memoryBytes,
+        });
+        sidecarEnvs.push(...sidecarEnv(spec));
+        log(`Running ${spec.name} beside your app — reachable only by it, and not persisted`);
+      }
+
       const nodeSiblings: AgentProcess[] = [];
       for (const svc of (appConfig ? extraServices(appConfig) : [])) {
         const r = await deploySibling(svc, true);
@@ -3491,7 +3525,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // the 2 GiB floor — DEFAULT_SCALE is. That floor exists because Cloud
       // Run's 512Mi OOM-killed a real Node app at 564Mi before it bound $PORT.
       const placing = buildAppSpec({
-        slug, image: image.image, env: extraEnv, secrets,
+        slug, image: image.image, env: [...extraEnv, ...sidecarEnvs], secrets,
         processes, healthPath: primaryHealth.health.path,
         // Belt and suspenders with the append above: `processes` already
         // carries a synthesised release entry when `releaseCmd` was set, but
@@ -3528,6 +3562,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
               ...(placing.healthPath ? { healthPath: placing.healthPath } : {}),
             }];
         placing.processes = [...own, ...nodeSiblings];
+      }
+      if (sidecars.length) {
+        // Appended after the same materialisation rule: a sidecar is a process
+        // too, and adding one to an app that declared none would delete the
+        // app's own program exactly as a sibling would.
+        const own: AgentProcess[] = placing.processes?.length
+          ? placing.processes
+          : [{
+              name: "web",
+              kind: "web",
+              ...(placing.command ? { command: placing.command } : {}),
+              ...(placing.healthPath ? { healthPath: placing.healthPath } : {}),
+            }];
+        placing.processes = [...own, ...sidecars];
       }
       placedSpec = placing;
 

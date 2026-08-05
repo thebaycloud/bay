@@ -330,7 +330,7 @@ func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []s
 	// trusts a stale SUPERSONIC_PATH_PREFIX builds every URL wrong, which is
 	// worse than having none.
 	for k, v := range proc.Env {
-		env = append(env, k+"="+v)
+		env = append(env, k+"="+resolveProcessAddrs(v, app, proc))
 	}
 	for k, v := range secrets {
 		env = append(env, k+"="+v)

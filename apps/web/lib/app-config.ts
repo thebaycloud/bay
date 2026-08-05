@@ -167,7 +167,7 @@ export interface ServiceConfig {
    * Which shared resources this service receives credentials for. The unit that
    * per-app database isolation is scoped to.
    */
-  uses?: ("database" | "bucket")[];
+  uses?: ("database" | "bucket" | "redis" | "elasticsearch")[];
   /**
    * Non-secret literals, committed, deploy-shaping. NODE_ENV, LOG_LEVEL.
    *

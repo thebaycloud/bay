@@ -54,7 +54,7 @@ export interface ResolvedService {
   dockerfile?: string;
   context?: string;
 
-  uses: ("database" | "bucket")[];
+  uses: ("database" | "bucket" | "redis" | "elasticsearch")[];
 
   /**
    * The names of the processes this service declares, if any.

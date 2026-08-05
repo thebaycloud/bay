@@ -50,7 +50,7 @@ export interface ServiceEnvelope {
   buildEnv: Record<string, string>;
   /** NAMES only. */
   secrets: string[];
-  uses: ("database" | "bucket")[];
+  uses: ("database" | "bucket" | "redis" | "elasticsearch")[];
 
   health: HealthConfig;
   scale: Scale;

@@ -25,6 +25,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -170,6 +171,36 @@ func processesOf(app App) []Process {
 // only starts: adoption, the restart-on-change comparison, the release key and
 // the failure counters all key on an image, and any of them reading a different
 // answer would mean a process that is restarted forever or never.
+// procAddrRef matches `${process:name}` — how one process refers to another's
+// address before either of them has one.
+var procAddrRef = regexp.MustCompile(`\$\{process:([a-zA-Z0-9_-]+)\}`)
+
+// resolveProcessAddrs fills in a sibling process's address.
+//
+// A placement is written before anything is placed, so no IP exists when the
+// spec is made — the node assigns one per process at start. Carrying a NAME and
+// substituting here also means a process that restarts into another slot does
+// not leave a stale address behind in someone else's environment.
+//
+// An unknown name is left as it was written. Substituting an empty string would
+// hand the app `redis://:6379`, which fails somewhere deep in a client library;
+// leaving the placeholder makes the value obviously unresolved in the app's own
+// error message.
+func resolveProcessAddrs(v string, app App, self Process) string {
+	return procAddrRef.ReplaceAllStringFunc(v, func(m string) string {
+		name := procAddrRef.FindStringSubmatch(m)[1]
+		for _, p := range processesOf(app) {
+			if p.Name != name || p.Name == self.Name {
+				continue
+			}
+			if ip := app.ProcessIPs[name]; ip != "" {
+				return ip
+			}
+		}
+		return m
+	})
+}
+
 func imageFor(app App, p Process) string {
 	if p.Image != "" {
 		return p.Image

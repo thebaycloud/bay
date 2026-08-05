@@ -67,6 +67,12 @@ type App struct {
 	DataDir string `json:"-"`
 	// LogPath is where the sandbox's stdout and stderr land.
 	LogPath string `json:"-"`
+	// ProcessIPs is where each of this app's OTHER processes is reachable, filled
+	// in by the agent at start time — never by the control plane, which cannot
+	// know it. A placement is written before anything is placed, so a sidecar's
+	// address does not exist yet; the spec carries `${process:name}` and this is
+	// what resolves it.
+	ProcessIPs map[string]string `json:"-"`
 }
 
 type Desired struct {
@@ -1158,6 +1164,25 @@ func (a *Agent) startMany(items []work) {
 
 			a.mu.Lock()
 			idx := a.slotFor(id)
+			// Where this app's OTHER processes are, so a `${process:name}` in the
+			// environment can be resolved to an address. Read under the same lock
+			// as the slot and copied, because `a.live` is written by every other
+			// start running concurrently with this one.
+			//
+			// A sidecar that has not started yet is simply absent, and the
+			// placeholder survives into the app's environment unresolved — which
+			// is what an app's own error message should say, rather than a
+			// half-formed URL failing inside a client library. The next reconcile
+			// pass restarts nothing on its own; a client that retries connects
+			// when the sidecar arrives, and one that does not is restarted by its
+			// own exit.
+			peers := map[string]string{}
+			for _, l := range a.live {
+				if l.app.Slug == app.Slug && l.net != nil && l.proc.Name != proc.Name {
+					peers[l.proc.Name] = l.net.IP.String()
+				}
+			}
+			app.ProcessIPs = peers
 			a.mu.Unlock()
 
 			started := time.Now()
