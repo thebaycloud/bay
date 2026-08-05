@@ -21,7 +21,7 @@ import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtim
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
-import { rollback } from "@/lib/gcloud";
+import { rollback, deleteRunService } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv } from "@/lib/env-merge";
@@ -41,7 +41,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
-import { deployArgs, databaseEnv, DB_HOST, DB_PORT, withScale, type Lane, type Scale } from "@/lib/lanes";
+import { deployArgs, databaseEnv, needsServiceRecreate, DB_HOST, DB_PORT, withScale, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -3060,6 +3060,23 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // Read once, before any lane runs: the container shape belongs to the
       // service that already exists, and every lane below has to agree with it.
       const existingScoped = await liveContainerShape(slug);
+      // Cloud Run cannot rename the container of a live service, and a Cloud SQL
+      // sidecar requires named ones — so an app that already exists and then
+      // gains a database is undeployable until its service is recreated. The
+      // measurements are in `needsServiceRecreate`'s own comment; the short
+      // version is that every other transition was tried against the real API
+      // and rejected, including naming the container with no sidecar at all.
+      if (needsServiceRecreate({ cloudsql, existingScoped })) {
+        log("This app gained a database, and Cloud Run cannot add one to a service that was built without it — recreating the service. Its url and revision history are replaced; the database, the secrets and the images are not touched.");
+        try {
+          await deleteRunService(slug);
+        } catch (e) {
+          // Not fatal, and not silent. The deploy below fails on its own with
+          // the container error, which is the same outcome; saying why here is
+          // what stops the next reader chasing an imaginary port problem.
+          log(`! could not recreate the service — the deploy below will fail on the container shape: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`);
+        }
+      }
       if (runnerLang && runnerObject) {
         // No image is built. A one-time prepare step installs deps + builds on
         // the runner image (warm cache) and uploads a ready-to-run bundle; the

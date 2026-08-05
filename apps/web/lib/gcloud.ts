@@ -482,6 +482,19 @@ async function otherAppSlugs(slug: string): Promise<Set<string>> {
   }
 }
 
+/**
+ * Delete ONLY the Cloud Run service, leaving everything else the app owns.
+ *
+ * Not `deleteApp`: the database, the secrets, the images, the buckets and the
+ * fleet placement all stay. This exists for one transition Cloud Run does not
+ * otherwise offer — a live service whose container is unnamed cannot be
+ * redeployed with named containers, which a Cloud SQL sidecar requires — so the
+ * service is recreated by the very next command. See `needsServiceRecreate`.
+ */
+export async function deleteRunService(slug: string): Promise<void> {
+  await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]);
+}
+
 export async function deleteApp(slug: string): Promise<void> {
   // Two serving lanes, either of which may be absent:
   //  - container: its own Cloud Run service + optional per-app bucket
