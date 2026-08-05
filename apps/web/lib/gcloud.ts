@@ -5,6 +5,7 @@ import { accessToken as restAccessToken, describeServiceRest, listServicesRest, 
 import { ASSETS_BUCKET } from "./static-release";
 import { dbNameForSlug, getPool } from "./db";
 import { deleteAppSecrets } from "./app-secrets";
+import { dropAppDatabase } from "./pg-role";
 import { runIdsForSlug } from "./deploy-runs";
 import { appPingScheduleArgs } from "./process-deploy";
 import { SCHEDULER_SA } from "./identities";
@@ -622,24 +623,27 @@ export async function deleteApp(slug: string): Promise<void> {
   // delete since databases existed has left the customer's data on the
   // instance. Five such databases were on it when this was written.
   //
-  // Doing it properly means taking ownership over SQL first (GRANT the app's
-  // role to the connecting user, ALTER DATABASE ... OWNER TO, then DROP) and is
-  // deliberately NOT added here by the same change that discovered it: it is a
-  // destructive path against shared production and it must be written by
-  // someone who can watch it run once. What changes now is that the failure
-  // stops being invisible.
+  // Done over SQL rather than through the API, which is the only way it can be
+  // done at all: taking membership of the app's role, then ownership of the
+  // database, then dropping it. `dropStatements` documents why each step is
+  // required by the one after it. The gcloud call is gone rather than kept as a
+  // first attempt — it cannot succeed for any database this platform
+  // provisioned, and a failing call ahead of a working one is just a confusing
+  // line in the log.
+  //
+  // Watched running once, on 5 Aug, against `icflz` — the oldest of the five
+  // orphans, and ours.
+  const dbName = dbNameForSlug(slug);
   try {
-    await capture(["sql", "databases", "delete", dbNameForSlug(slug), "--instance", PG_INSTANCE, "--project", PROJECT, "--quiet"]);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    // An app that never had a database is the ordinary case and says so; a
-    // failure for any other reason is a customer's data staying on a shared
-    // instance after they asked for it to be gone, and that gets said out loud.
-    if (/not found|does not exist/i.test(msg)) {
-      // nothing to delete
-    } else {
-      console.error(`deleteApp ${slug}: database ${dbNameForSlug(slug)} NOT deleted — ${msg.slice(0, 300)}`);
+    const { dropped, reason } = await dropAppDatabase(slug, dbName, (l) => console.error(`deleteApp ${slug}: ${l}`));
+    if (!dropped) {
+      // A customer's data staying on a shared instance after they asked for it
+      // to be gone. The old code's silent catch is exactly how that went
+      // unnoticed for as long as databases have existed.
+      console.error(`deleteApp ${slug}: database ${dbName} NOT deleted — ${reason ?? "unknown"}`);
     }
+  } catch (e) {
+    console.error(`deleteApp ${slug}: database ${dbName} NOT deleted — ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`);
   }
 
   // The app's secrets. Left behind they are live credentials belonging to an app

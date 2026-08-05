@@ -34,6 +34,16 @@ import { readAppSecret } from "./app-secrets";
 /** The env var the role's password is stored and mounted under. */
 export const DB_PASSWORD_SECRET = "SUPERSONIC_DB_PASSWORD";
 
+/**
+ * Where `dropAppDatabase` connects FROM.
+ *
+ * Postgres refuses to drop a database the current session is using, and
+ * `getPool` is keyed by database name — so asking it for the target would open
+ * precisely the connection that blocks the drop. The platform's own database is
+ * on the same instance and is never an app's.
+ */
+const PLATFORM_DB_FOR_DROP = "supersonic_platform";
+
 export interface AppRole {
   user: string;
   password: string;
@@ -195,6 +205,97 @@ export async function ensureAppRole(
   } catch (e) {
     log(`! could not isolate this app's database (${e instanceof Error ? e.message.split("\n")[0] : String(e)}) — using the shared credential`);
     return { ...fallback, isolated: false };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * The statements that drop an app's database, in order, so the sequence can be
+ * read and tested without a Postgres.
+ *
+ * `gcloud sql databases delete` cannot do this and never could. Provisioning
+ * makes the app's own role the OWNER of its database — that is the isolation
+ * `ensureAppRole` exists to provide — and gcloud connects as cloudsqlsuperuser,
+ * which is not the owner:
+ *
+ *   ERROR: (gcloud.sql.databases.delete) HTTPError 400: Invalid request:
+ *   failed to delete database "icflz". Detail: pq: must be owner of database
+ *   icflz.
+ *
+ * So every delete since databases existed left the customer's data on a shared
+ * instance. The fix has to take ownership back before dropping, and each step
+ * here is one the server will refuse without the step before it:
+ *
+ *  1. Membership. Cloud SQL's `postgres` is not a real superuser, so it cannot
+ *     take an object from a role it is not a member of — the same rule
+ *     `ensureAppRole` hit with `must be able to SET ROLE`.
+ *  2. Ownership, which is what gcloud lacked.
+ *  3. Disconnect everything else. DROP DATABASE fails outright while any other
+ *     session is connected, and a deleted app's containers can still be draining.
+ *  4. The drop itself.
+ *  5. The role. Left behind it is a live login for an app that no longer exists,
+ *     and the slug space is five characters — the name WILL be reissued, and the
+ *     new tenant would inherit a stranger's credential. It drops last because a
+ *     role cannot be dropped while it owns anything.
+ *
+ * IF EXISTS throughout: this runs on apps that never had a database at all.
+ */
+export function dropStatements(role: string, dbName: string): string[] {
+  return [
+    `GRANT ${role} TO CURRENT_USER`,
+    `ALTER DATABASE ${dbName} OWNER TO CURRENT_USER`,
+    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`,
+    `DROP DATABASE IF EXISTS ${dbName}`,
+    `DROP ROLE IF EXISTS ${role}`,
+  ];
+}
+
+/**
+ * Drop the app's database and its role.
+ *
+ * Connected to the PLATFORM database, never to the one being dropped: Postgres
+ * refuses to drop a database that the connection itself is using, and `getPool`
+ * is keyed by database name, so asking it for the target would open exactly the
+ * session that blocks the drop.
+ *
+ * Every statement is allowed to fail on its own. An app that never had a
+ * database, one whose role was never created, one already half-removed by a
+ * previous attempt — all of these are ordinary, and none of them should stop the
+ * steps that follow. What is NOT tolerated silently is the database still being
+ * there afterwards: that is a customer's data left on a shared instance after
+ * they asked for it to be gone, and it is reported to the caller.
+ */
+export async function dropAppDatabase(
+  slug: string,
+  dbName: string,
+  log: (l: string) => void,
+): Promise<{ dropped: boolean; reason?: string }> {
+  const role = roleNameForSlug(slug);
+  if (!SAFE_IDENT.test(role) || !SAFE_IDENT.test(dbName)) {
+    return { dropped: false, reason: `"${role}"/"${dbName}" is not a usable identifier` };
+  }
+
+  const pool = getPool(PLATFORM_DB_FOR_DROP);
+  const client = await pool.connect().catch(() => null);
+  if (!client) return { dropped: false, reason: "could not reach Postgres" };
+
+  try {
+    for (const sql of dropStatements(role, dbName)) {
+      try {
+        await client.query(sql);
+      } catch (e) {
+        // Said, not swallowed. The old code's catch is the reason nobody knew
+        // this path had never worked.
+        log(`drop ${dbName}: ${sql.split(" ").slice(0, 3).join(" ")} — ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+      }
+    }
+
+    // Verified, not assumed. Every statement above tolerates failure, so the
+    // only honest answer comes from asking the catalogue.
+    const { rows } = await client.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName]);
+    if (rows.length > 0) return { dropped: false, reason: "still present after the drop" };
+    return { dropped: true };
   } finally {
     client.release();
   }
