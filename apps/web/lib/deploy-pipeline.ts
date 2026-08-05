@@ -796,23 +796,55 @@ async function idTokenFor(audience: string): Promise<string> {
 //
 // The judgement about what counts as working lives in lib/verify-app.ts; this
 // is only the part that needs the deployer's credentials.
-async function probeApp(
+export async function probeApp(
   url: string,
   log: (l: string) => void,
   sealed: boolean,
   health?: { health: HealthConfig; strict: boolean; spaFallback?: boolean },
+  // Seams, for the test below. Nothing in production passes either.
+  opts: { mint?: (audience: string) => Promise<string>; sleepImpl?: (ms: number) => Promise<void> } = {},
 ): Promise<{ ok: boolean; reason?: string }> {
   // A sealed app cannot be reached without a token, so mint it outside the check
   // below: a token failure means the check did not happen, and saying so beats
   // returning a pass we never verified. A public app needs no token at all.
+  //
+  // It said that and then returned `{ ok: true }` — a pass it had never
+  // verified. So a deploy whose app never came up shipped, was marked live, and
+  // reported "verified" to everything downstream, on the strength of a check
+  // that did not run. The comment was right and the code did the opposite.
+  //
+  // Retried first, because most of what breaks here is transient. A single
+  // metadata hiccup is not evidence about the app, and turning one into a
+  // failed deploy would trade a silent false pass for a noisy false failure.
+  //
+  // Then FAILED, not skipped — and marked IAM_FAILURE, which is already in
+  // PLATFORM_MARKERS. That routing is what makes failing closed safe here:
+  // `classify` reads the marker, blames the platform, rolls back and tells the
+  // user, and never hands the repair agent a customer's repository over a
+  // credential of ours. Without the marker this same change would send an LLM
+  // to "fix" a repo that has nothing wrong with it.
   let auth: Record<string, string> = {};
   if (sealed) {
-    try {
-      auth = { Authorization: `Bearer ${await idTokenFor(url)}` };
-    } catch (e) {
-      log(`! response check skipped — no ID token (${e instanceof Error ? e.message : String(e)})`);
-      return { ok: true };
+    const mint = opts.mint ?? idTokenFor;
+    const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    let lastErr = "";
+    let token = "";
+    for (let i = 0; i < 3 && !token; i++) {
+      if (i) await sleep(1000 * i);
+      try {
+        token = await mint(url);
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : String(e);
+      }
     }
+    if (!token) {
+      log(`! could not mint an ID token to check ${url} after 3 attempts — ${lastErr}`);
+      return {
+        ok: false,
+        reason: `IAM_FAILURE: could not mint an ID token to check this app, so the deploy was never verified — ${lastErr}`,
+      };
+    }
+    auth = { Authorization: `Bearer ${token}` };
   }
   return verifyApp({
     url,
