@@ -593,18 +593,41 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 		id, st.Status, lastErr)
 }
 
+// startFn and stopFn are how RunToCompletion reaches the sandbox lifecycle,
+// behind package variables so a test can assert its CLEANUP ORDERING without
+// containerd, a node, or an image. The same seam shape runscStatusFn and
+// secretManagerBase use.
+//
+// Only RunToCompletion goes through them. reconcileOnce's own start path calls
+// the methods directly: what is being pinned here is which cleanup runs on
+// which outcome, not whether a sandbox came up.
+var (
+	startFn = (*Runtime).Start
+	stopFn  = (*Runtime).Stop
+)
+
 // RunToCompletion starts a process and waits for it to exit. `release` and
 // `cron` are both this.
 //
 // A non-zero exit is an error, and for `release` that has to stop the deploy:
 // a migration that failed followed by a web process that starts anyway is how
 // an app comes up against a half-migrated database.
+//
+// The cleanup is deferred BEFORE the start, not after it. A start can fail
+// having already created the bundle, mounted the rootfs and taken the snapshot
+// lease — `Start` tears down only the network namespace on its way out — so
+// deferring after the error check leaks all three on every failed attempt. A
+// release retried five times leaves five mounts and five leases behind, and the
+// lease is exactly what keeps the collector off a snapshot nothing will ever
+// use again. Observed on 2026-08-05: `p6mx8--release.` from 06:25 and
+// `gzz9j--release.` from 10:06 were both still mounted, with a live lease, long
+// after the agent had given up on them.
 func (r *Runtime) RunToCompletion(app App, proc Process, index int, timeout time.Duration) error {
 	id := sandboxID(app.Slug, proc)
-	if _, err := r.Start(app, proc, index); err != nil {
+	defer stopFn(r, id)
+	if _, err := startFn(r, app, proc, index); err != nil {
 		return err
 	}
-	defer r.Stop(id)
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
