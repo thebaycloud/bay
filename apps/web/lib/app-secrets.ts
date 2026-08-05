@@ -87,7 +87,7 @@ export async function putAppSecrets(
     const name = secretName(slug, key);
     try {
       // Create-or-add-version. `describe` first so an existing secret gets a new
-      // version rather than an error, and so the IAM grant is only applied once.
+      // version rather than an error.
       let existed = true;
       try {
         await gcloud(["secrets", "describe", name, "--project", PROJECT]);
@@ -97,10 +97,6 @@ export async function putAppSecrets(
       }
       if (existed) {
         await gcloudIn(["secrets", "versions", "add", name, "--data-file=-", "--project", PROJECT], value);
-      } else if (runtimeServiceAccount) {
-        await gcloud(["secrets", "add-iam-policy-binding", name,
-          "--member", `serviceAccount:${runtimeServiceAccount}`,
-          "--role", "roles/secretmanager.secretAccessor", "--project", PROJECT]);
       }
       stored.push({ key, name });
     } catch (e) {
@@ -108,6 +104,36 @@ export async function putAppSecrets(
       // about to be set as a plain env var instead, and that is worth saying.
       log(`could not store ${key} in Secret Manager (${e instanceof Error ? e.message.split("\n")[0] : String(e)}) — setting it directly`);
       skipped.push(key);
+      continue;
+    }
+
+    // The grant is unconditional, and it is OUTSIDE the store's try.
+    //
+    // It used to hang off the branch that CREATED the secret, which made who
+    // may read a secret a side effect of when it first appeared. Change
+    // APP_RUNTIME_SERVICE_ACCOUNT and no existing secret ever gains a binding
+    // for the new account: every app deployed before the change keeps a binding
+    // for an identity that no longer runs it, and says nothing until it starts
+    // and 403s on a value it has always had. The same defect shape the fleet
+    // node had — a per-deploy binding only covers apps deployed since it
+    // existed. `add-iam-policy-binding` is idempotent, so re-granting an
+    // unchanged account costs one call and changes nothing.
+    //
+    // Separate from the store because the two failures mean opposite things. A
+    // value that could not be STORED must fall back to a plain env var. A value
+    // that was stored and could not be GRANTED must not: demoting it would
+    // write the secret into the revision in the clear to fix a permission — and
+    // this call is a read-modify-write against an etag, so two deploys of one
+    // app collide on it routinely. Loud, though, always: an unheard grant
+    // failure is exactly how a 403 arrives later with nothing pointing at it.
+    if (runtimeServiceAccount) {
+      try {
+        await gcloud(["secrets", "add-iam-policy-binding", secretName(slug, key),
+          "--member", `serviceAccount:${runtimeServiceAccount}`,
+          "--role", "roles/secretmanager.secretAccessor", "--project", PROJECT]);
+      } catch (e) {
+        log(`stored ${key}, but the runtime account may not be able to read it (${e instanceof Error ? e.message.split("\n")[0] : String(e)})`);
+      }
     }
   }
   return { stored, skipped };
