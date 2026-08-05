@@ -11,13 +11,17 @@
 # refusal all had to move together, and the side that moves by hand is the one
 # that decides whether the other two mean anything.
 #
-# NOT YET VERIFIED. This file has never run: the deploy it performs can only be
-# exercised by pushing to main, and it is being written by someone who cannot.
-# The command below is the one the handoff documents as working by hand; what is
-# untested is whether supersonic-deployer@ can run it, in particular whether it
-# may drive a `--source` build. If the first run fails it fails before any new
-# revision exists, so the running proxy is not at risk — but treat the first run
-# as something to watch rather than something that worked.
+# VERIFIED on 5 Aug 2026, first run, watched. The open question was whether
+# supersonic-deployer@ may drive a `--source` build; it may. Deploy succeeded,
+# revision supersonic-proxy-00021-8jm took 100% of traffic, and the checks below
+# answered `/_healthz → 200` and `anatf through the proxy → 200` — the second
+# being the one that would have caught a wiped edge secret. All six env vars
+# survived, which is the whole reason this file passes no --set-env-vars.
+#
+# It also nearly never ran at all: the commit adding it was written and left on
+# its branch for a day while main went on having no automatic deploy for the
+# service that fronts every tenant app. "Committed" and "on main" are different
+# questions, and only the second one deploys anything.
 name: Deploy proxy
 
 on:
