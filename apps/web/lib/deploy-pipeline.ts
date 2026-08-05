@@ -1758,12 +1758,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // over the top. That is how the full-stack FastAPI template deployed with no
     // frontend in its API image: `backend/Dockerfile` builds `./frontend` and
     // copies the result in, and nothing ever ran it.
-    const primaryDirRel = (() => {
+    const primaryDirForBuild = (() => {
       const cfg = appConfig ? primaryService(appConfig) : undefined;
       return cfg?.dir && cfg.dir !== "." ? cfg.dir.replace(/^\.\//, "").replace(/\/+$/, "") : "";
     })();
-    const primaryOwnDockerfile = primaryDirRel && existsSync(join(dir, primaryDirRel, "Dockerfile"))
-      ? `${primaryDirRel}/Dockerfile`
+    const primaryOwnDockerfile = primaryDirForBuild && existsSync(join(dir, primaryDirForBuild, "Dockerfile"))
+      ? `${primaryDirForBuild}/Dockerfile`
       : "";
     if (primaryOwnDockerfile) {
       log(`Building with ${primaryOwnDockerfile} — the repository's own, from the repository root`);
@@ -1907,7 +1907,18 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // so "did it throw" is not the question — "did an image get described" is.
       await stages.end(renderStage, renderInput ? "ok" : "failed");
     }
-    const hasDockerfile = existsSync(join(dir, "Dockerfile"));
+    // The repository's own build definition, wherever the author put it. A
+    // service that is not the repo root keeps its Dockerfile beside itself, and
+    // reading only the root sent such an app down the buildpack lane — which has
+    // no image name at decision time, so `fleetEligibility` refused it with
+    // "this deploy produced no image to place" and it went to Cloud Run. The
+    // author was explicit; that is what the lane is supposed to honour.
+    const primaryCfgDir = (() => {
+      const cfg = appConfig ? primaryService(appConfig) : undefined;
+      return cfg?.dir && cfg.dir !== "." ? cfg.dir.replace(/^\.\//, "").replace(/\/+$/, "") : "";
+    })();
+    const hasDockerfile = existsSync(join(dir, "Dockerfile"))
+      || Boolean(primaryCfgDir && existsSync(join(dir, primaryCfgDir, "Dockerfile")));
 
     // When the planner gave up, the fallback is the detector — which is the
     // opinion the planner was called in to improve on. That is fine when there is
