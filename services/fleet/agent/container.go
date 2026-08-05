@@ -348,6 +348,26 @@ func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []s
 	}
 
 	if app.DataDir != "" {
+		// The DIRECTORY, and here rather than at the call sites — the same
+		// reasoning, and the same defect, as the app log dir in runscDetached.
+		//
+		// A bind mount whose SOURCE does not exist does not degrade: the gofer
+		// dies with `error setting up FS: opening <src>: no such file or
+		// directory` and the sandbox never signals ready, so runsc reports
+		// `cannot create sandbox: cannot read client sync file: waiting for
+		// sandbox to start: EOF` — which names neither the mount nor the path,
+		// and reads like a sandbox that cannot boot at all.
+		//
+		// startBatch created it, and startBatch is the path LONG-RUNNING
+		// processes take. `release` runs before any of them and `cron` off a
+		// clock, so the first app on a node ever to declare a release mounted a
+		// directory nothing had made. Found on 2026-08-05 on gzz9j, after the
+		// snapshot lease (a558e17) uncovered it; the same start also failed for
+		// p6mx8 at 06:25. It is equally the cold-boot case, because local SSD
+		// does not survive a stop and /srv comes back empty.
+		if err := os.MkdirAll(app.DataDir, 0o755); err != nil {
+			return fmt.Errorf("data dir: %w", err)
+		}
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Destination: "/data", Type: "bind", Source: app.DataDir,
 			Options: []string{"rbind", "rw"},
