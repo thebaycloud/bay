@@ -197,6 +197,24 @@ substitutions:
   # NODE's fault, which is what keeps a repair agent away from a repository that
   # has nothing wrong with it.
   #
+  # `gzz9j` — `ss-canary-db`, ours, built from examples/pgapp — is armed as of
+  # 5 Aug, and it takes p6mx8's place as the app that carries a database and a
+  # release. Both blockers above it are now fixed and proven on the node: the
+  # node can read app secrets (0d0072c, project-wide — see services/fleet/README
+  # for what that costs), and a release sandbox can actually start. The latter
+  # was two bugs stacked. The snapshot had no lease, so containerd's collector
+  # deleted the overlay's upperdir out from under a live mount (a558e17); behind
+  # that, the spec bind-mounted /srv/apps/<slug>/data and only the LONG-RUNNING
+  # start path had ever created it, so the first app on a node to declare a
+  # release mounted a directory nothing had made and the gofer died before the
+  # sandbox could signal ready.
+  #
+  # What this proves that i6xce cannot: a spec carrying env, secrets and a
+  # release reaching a node by the path a deploy actually takes. Success is one
+  # line in the app's log — `release ok — visits table present` — because
+  # migrate.js can only print it from inside the sandbox, with a resolved
+  # DATABASE_URL.
+  #
   # Reverting is the same one word. Remove the entry and redeploy the app: the
   # deploy takes the Cloud Run branch again and `setRuntime` puts apps.runtime
   # back. Nothing here moves an app by itself — this only decides where the NEXT
@@ -207,7 +225,7 @@ substitutions:
   # comma and `p6mx8` becomes a malformed variable name — the second canary
   # would silently not exist, and every flag after it would shift. The same
   # escape is already used by gcloud.ts:368 and :696 for exactly this reason.
-  _LANE_ENV: ^~~^FLEET_APPS=i6xce~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
+  _LANE_ENV: ^~~^FLEET_APPS=i6xce,gzz9j~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
   # passes whatever it likes. The default keeps a hand-run build from failing on an
