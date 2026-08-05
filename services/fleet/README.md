@@ -133,6 +133,33 @@ were going to write — and it was the only part of the stack that did not work.
   refuses to work when it is unset. It should become a GCE instance identity
   token before the fleet leaves one project.
 
+## What the node may read
+
+The node's service account —
+`540236122367-compute@developer.gserviceaccount.com`, the project default —
+holds **`roles/secretmanager.secretAccessor` on the whole project**. It reads
+every app's secrets, not only the apps placed on it.
+
+Recorded here because it is not in any file the deploy runs: it was applied with
+`gcloud projects add-iam-policy-binding` on 5 Aug 2026, and IAM in this project
+has no other home in the repository.
+
+It was per-secret first, granted by the deploy on the fleet branch, and widening
+it was a decision rather than a shortcut. A per-deploy binding only exists for
+apps deployed since the binding was introduced, so `FLEET_PLACEMENT=1` — which
+places every app without redeploying any of them — would have started every app
+that has a database against a 403.
+
+What it costs, stated so nobody has to rediscover it: one escape from one sandbox
+reads every tenant's database password rather than one tenant's. What stands
+between those is the nftables rule in `image/provision.sh`, which admits only
+uid 0 and uid 987 (`supersonic`, the agent) to `169.254.169.254` and drops every
+other uid — tenant code included. That rule is now load-bearing for the whole
+fleet's secrets, not just for one app's.
+
+Narrowing it again means a dedicated per-node service account and a binding
+written at placement time rather than at deploy time.
+
 ## Not done
 
 - **HTTPS.** The wildcard certificate needs a DNS authorization TXT record, and

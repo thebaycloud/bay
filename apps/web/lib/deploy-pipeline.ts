@@ -14,7 +14,7 @@ import { readBuildHints, rememberBuildHints, aptPackagesIn } from "@/lib/build-h
 import { detect } from "@/lib/detect";
 import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
-import { putAppSecrets, setSecretsFlag, grantBuildAccess, grantNodeAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
+import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
@@ -124,26 +124,6 @@ const buildIdentityArgs = (): string[] =>
 /** Runtime identity for the apps we host. Empty = inherit the project default. */
 const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
 
-/**
- * The identities the fleet's NODES run as, comma-separated.
- *
- * A LIST, because the node that will hold this app is chosen inside
- * `placeOnFleet` — after the grant below has to have happened — so there is no
- * single identity to name at grant time. Every node the fleet has is the correct
- * answer; a binding for a machine the app never lands on costs nothing.
- *
- * Not read from `fleet_nodes`, which has no column for it: a node registers its
- * zone, ip and capacity and has never told the control plane who it is. Adding
- * that column is the right end state and a bigger change than this one; until
- * then the list is configuration, and a node whose identity is missing from it
- * fails its start with a 403 that `nodeFaultFor` correctly blames on the
- * platform rather than on the app.
- *
- * Empty means "grant nothing", which is exactly the behaviour before this
- * existed — so this is additive, and revertible by unsetting one variable.
- */
-const FLEET_NODE_SAS = (process.env.FLEET_NODE_SA ?? "")
-  .split(",").map((s) => s.trim()).filter(Boolean);
 /** The one Cloud Run service that fronts every static app. */
 const STATIC_SERVICE = process.env.STATIC_SERVICE ?? "supersonic-static";
 const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
@@ -3246,27 +3226,23 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // once, so a secret not passed is a secret the app loses.
       const secrets = await allAppSecrets(slug, secretRefs);
 
-      // The node has to be able to READ what it is about to be handed.
+      // No per-secret grant for the node here, deliberately. The node's service
+      // account holds roles/secretmanager.secretAccessor on the WHOLE PROJECT —
+      // see services/fleet/README.md, "What the node may read".
       //
-      // Here rather than in `putAppSecrets`, and that placement is the decision:
-      // this is the fleet branch, so only an app actually going to a node grants
-      // a node access to its database password. Granting at creation time would
-      // hand the machine that runs tenant code a binding on every tenant's
-      // secrets, which is the project-wide grant this whole file avoids, spelled
-      // differently.
+      // This code used to add one binding per secret on this branch, so that only
+      // an app actually going to a node let a node read its database password.
+      // That was replaced on 5 Aug 2026 by an explicit decision to widen it, for a
+      // reason the narrow version could not meet: a per-deploy binding only exists
+      // for apps that have been deployed SINCE the binding was introduced, so
+      // moving the fleet wholesale — FLEET_PLACEMENT=1, which places every app
+      // without redeploying any of them — would have started every app that has a
+      // database against a 403.
       //
-      // `secrets`, not `secretRefs`: the same distinction `allAppSecrets` exists
-      // for. `putAppSecrets` only grants on the pass that CREATES a secret, so an
-      // app whose secrets already existed — which is every app after its first
-      // deploy — would otherwise never gain the binding, and the canary would
-      // work for new apps only.
-      //
-      // Before `placeOnFleet` because the node resolves at start and the release
-      // is the first thing it runs. Secret Manager IAM is not instantaneous, so
-      // this is ordering rather than a guarantee; a binding that has not
-      // propagated fails the release, `nodeFaultFor` blames the platform, and
-      // `placeOnFleet` restores the previous placement — the safe direction.
-      await grantNodeAccess(secrets, FLEET_NODE_SAS, log);
+      // What it costs is stated rather than left to be discovered: one escape from
+      // one sandbox now reads every tenant's database password, not one tenant's.
+      // The nftables rule in provision.sh keeping the metadata credentials API
+      // away from tenant uids is what that now rests on.
 
       // The `fleet` stage — placing the app on a node and checking it answers
       // from there — written from inside the branch that does the work.

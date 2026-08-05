@@ -207,19 +207,7 @@ substitutions:
   # comma and `p6mx8` becomes a malformed variable name — the second canary
   # would silently not exist, and every flag after it would shift. The same
   # escape is already used by gcloud.ts:368 and :696 for exactly this reason.
-  #
-  # FLEET_NODE_SA is who the NODES are, and it is what lets a canary with a
-  # database start at all. The agent resolves an app's secrets itself, as the
-  # node's own service account, and until 5 Aug 2026 no secret had ever been
-  # granted to that identity — the first app that declared a database placed and
-  # then died on `secret app-p6mx8-DATABASE_URL: 403`. The deploy now adds a
-  # per-secret binding for every name here before it places an app, so this list
-  # must carry EVERY node the fleet has: `chooseNode` runs after the grant, and a
-  # node missing from this list fails the start of anything placed on it.
-  #
-  # Comma-separated, which is safe only because of the `^~~^` above. Unset means
-  # no binding is added, which is exactly the behaviour before this existed.
-  _LANE_ENV: ^~~^FLEET_APPS=i6xce~~FLEET_NODE_SA=540236122367-compute@developer.gserviceaccount.com~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
+  _LANE_ENV: ^~~^FLEET_APPS=i6xce~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
   # passes whatever it likes. The default keeps a hand-run build from failing on an

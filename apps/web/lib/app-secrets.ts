@@ -137,10 +137,12 @@ export function setSecretsFlag(refs: SecretRef[]): string {
 /**
  * Grant one identity read access to a set of secrets, one binding per secret.
  *
- * Per-secret rather than a project-wide role, and that is the whole point of the
- * function existing: every consumer here is a machine that runs code we did not
- * write, so the grant has to name the secrets that machine is about to be given
- * and no others.
+ * Per-secret rather than a project-wide role: Cloud Build runs customer install
+ * steps, so what it may read is exactly the app it is building and nothing else.
+ *
+ * The fleet NODES are deliberately NOT granted this way — their service account
+ * holds the role project-wide. See the note at the `allAppSecrets` call in
+ * `runFleetDeploy` for why that was widened, and what it costs.
  *
  * Best-effort per secret. `add-iam-policy-binding` is a read-modify-write against
  * an etag, so two deploys of the same app can collide on one binding while every
@@ -172,44 +174,6 @@ export async function grantBuildAccess(refs: SecretRef[], buildServiceAccount: s
   return grantSecretAccess(refs, buildServiceAccount, "build", log);
 }
 
-/**
- * Grant the fleet's NODES read access, so a placed app can start.
- *
- * The third consumer of an app's secrets, and the one that was missing. On Cloud
- * Run the runtime never resolves anything — `--set-secrets` hands the platform a
- * reference and the platform mounts the value — so `putAppSecrets` granting the
- * runtime account and `grantBuildAccess` granting the build account covered every
- * identity that existed. A node is different in kind: the agent is the thing that
- * starts the process, so the agent is the thing that reads the secret
- * (`services/fleet/agent/secrets.go`), and it reads as the node's own service
- * account.
- *
- * It stayed invisible until 5 Aug 2026 because the twenty apps migrated onto the
- * node by hand carried a spec with no secrets in it, so the node had never once
- * been asked to resolve one. The first app that declared a database — `p6mx8` —
- * placed, then failed its release on
- * `secret app-p6mx8-DATABASE_URL: 403 Permission 'secretmanager.versions.access'
- * denied`, with the binding list on that secret naming the runtime and build
- * accounts and nobody else.
- *
- * **Every node identity, not the one this app is about to land on.** The node is
- * chosen inside `placeOnFleet`, after this runs, so there is no single answer to
- * grant to — and a binding for a machine the app never reaches costs nothing,
- * while a missing one costs the start.
- *
- * Empty list means no node identity is configured, and then this does nothing at
- * all: the same "say nothing and inherit" shape the build identity uses, and the
- * reason this change cannot break the Cloud Run path even if it is wrong.
- */
-export async function grantNodeAccess(
-  refs: SecretRef[],
-  nodeServiceAccounts: string[],
-  log: (l: string) => void,
-): Promise<void> {
-  for (const sa of nodeServiceAccounts) {
-    await grantSecretAccess(refs, sa, `the node (${sa})`, log);
-  }
-}
 
 /** Forget every secret belonging to an app. Called from the delete path. */
 export async function deleteAppSecrets(slug: string): Promise<void> {
