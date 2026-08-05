@@ -36,6 +36,15 @@ import { dirname, join } from "node:path";
 /* -------------------------------------------------------------------------- */
 
 interface Recorded {
+  /**
+   * Every apps.runtime write, in order.
+   *
+   * The one fact that decides whether a node is still handed this app:
+   * desiredFor only yields placements whose app reads 'fleet'. A deploy that
+   * goes to Cloud Run without writing 'cloudrun' here leaves the node running a
+   * second copy of an app Cloud Run is already serving.
+   */
+  runtimeWrites: { slug: string; runtime: string }[];
   /** Every argv the pipeline sent to a real command, in order. */
   argv: string[][];
   /** Everything `emit` received. */
@@ -119,7 +128,7 @@ let probeCode = 200;
 /** Which build implementation this process is exercising. See `generatedBuild`. */
 const COLLAPSED = process.env.RUNNER === "0";
 
-let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [] };
+let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [] };
 let activeReplies: Replies = () => ({});
 
 function fakeSpawn() {
@@ -246,7 +255,9 @@ async function install() {
       unplaceApp: asyncNoop,
       placementFor: async () => null,
       runtimeOf: async () => "cloudrun",
-      setRuntime: asyncNoop,
+      setRuntime: async (slug: string, runtime: string) => {
+        active.runtimeWrites.push({ slug, runtime });
+      },
       // No node blames itself here, which is what keeps these deploys' failures
       // the app's — the repair-agent tests below depend on that being the
       // default, and a fleet failure the node DOES claim is tested where it
@@ -332,7 +343,7 @@ function input(over: Record<string, unknown> = {}) {
 
 async function run(files: Record<string, string>, over: Record<string, unknown> = {}, replies: Replies = () => ({})) {
   const runDeploy = await loadPipeline();
-  const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [] };
+  const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [] };
   active = rec;
   activeReplies = replies;
   // The pipeline swallows nothing at the top level, so a throw here is a real
@@ -916,4 +927,28 @@ test("a worker-only app deploys to the fleet, verified by the node rather than b
   assert.equal(errors.length, 0, `a worker-only fleet deploy failed: ${JSON.stringify(errors).slice(0, 400)}`);
   // And it is not double-run, which is the whole reason it is safe to ship.
   assert.ok(!madeAWorkerPool(rec), "the bot runs on the node AND on Cloud Run");
+});
+
+test("a deploy that goes to Cloud Run says so, so the node stops being handed the app", async () => {
+  // The door nobody had closed. setRuntime was only ever called by placeOnFleet
+  // and by its rollback, so an app that had been placed on the fleet and then
+  // deployed to Cloud Run kept runtime='fleet' AND kept its placement row.
+  // desiredFor yields every placement whose app reads 'fleet', so the node went
+  // on running a second copy of an app Cloud Run was already serving.
+  //
+  // Seen on p6mx8 the moment it was withdrawn from the canary: Cloud Run served
+  // it while fleet-lab-1 kept failing its release every few minutes.
+  //
+  // Asserted as a VALUE, not as "setRuntime was called": a stub that wrote
+  // 'fleet' here would satisfy a membership check and reintroduce the bug.
+  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
+
+  assert.ok(
+    rec.runtimeWrites.some((w) => w.runtime === "cloudrun"),
+    `a Cloud Run deploy never wrote runtime=cloudrun: ${JSON.stringify(rec.runtimeWrites)}`,
+  );
+  assert.ok(
+    !rec.runtimeWrites.some((w) => w.runtime === "fleet"),
+    `a Cloud Run deploy claimed the fleet: ${JSON.stringify(rec.runtimeWrites)}`,
+  );
 });

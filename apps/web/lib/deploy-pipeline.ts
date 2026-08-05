@@ -3644,6 +3644,33 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       await createDomainMapping(slug, log);
     }
     setDeploy(slug, { status: "live", url: result.url });
+
+    // A deploy that went to Cloud Run says so, and that had no writer.
+    //
+    // `setRuntime` was only ever called by placeOnFleet and by its rollback, so
+    // an app that had been placed on the fleet and then deployed to Cloud Run
+    // kept `runtime = 'fleet'` AND kept its placement row. `desiredFor` hands a
+    // node every placement whose app reads 'fleet', so the node went on running
+    // a second copy of an app Cloud Run was already serving — two live runtimes
+    // for one app, which is the defect class this whole move exists to end,
+    // arriving through the one door nobody had closed.
+    //
+    // Seen on p6mx8 the moment it was withdrawn from the canary: Cloud Run
+    // served it while fleet-lab-1 kept failing its release every few minutes
+    // against secrets it cannot read.
+    //
+    // OUTSIDE the owner/workspace guard below, deliberately. That guard is
+    // there because run_url and the app row are owner-scoped; WHERE AN APP RUNS
+    // is not. An app whose workspace is unknown must still stop being handed to
+    // a node.
+    //
+    // Unconditional on this branch rather than guarded by a read: for an app
+    // that was always on Cloud Run both statements are no-ops, and a guard
+    // would cost the same query it saves. setRuntime('cloudrun') drops the
+    // placement itself, so the node stops on its next reconcile without being
+    // told anything.
+    if (!toFleet) await setRuntime(slug, "cloudrun");
+
     if (ownerId && ownerWorkspace) {
       // The flip, and the only write of run_url. `result.url` is the fleet's
       // load-balancer address on the fleet branch and the Cloud Run url on the
@@ -3652,6 +3679,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // top of this file and that declaredNeeds.web is already computed from —
       // this is where it finally gets persisted, so the edge can stop calling a
       // working bot a failed deploy.
+      // A deploy that went to Cloud Run says so, and that had no writer.
+      //
+      // `setRuntime` was only ever called by placeOnFleet and by its rollback,
+      // so an app that had been placed on the fleet and then deployed to Cloud
+      // Run kept `runtime = 'fleet'` and kept its placement row. `desiredFor`
+      // hands a node every placement whose app reads 'fleet', so the node went
+      // on trying to run a copy of an app Cloud Run was already serving — two
+      // live runtimes for one app, which is the defect class this whole move
+      // exists to end, arriving through the one door nobody had closed.
+      //
+      // Seen on p6mx8 the moment it was withdrawn from the canary: Cloud Run
+      // served it, and fleet-lab-1 kept failing its release every few minutes
+      // against secrets it cannot read.
+      //
       await markAppLive(slug, result.url ?? "", null, routes, !serviceless);
       // Not awaited: the deploy is finished, and a thumbnail must never hold it.
       // Skipped entirely for a worker-only app: there is no page to photograph,
