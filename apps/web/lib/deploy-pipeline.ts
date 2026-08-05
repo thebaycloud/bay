@@ -2537,6 +2537,31 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // by an earlier deploy is still live and still correct.
     let revisionEnv: { name: string; fromSecret: boolean }[] = [];
     let hasRevision = false;
+    /**
+     * The app's own last words, attached to whatever the tooling concluded.
+     *
+     * `diagnose()` reads gcloud's output and guesses. On the FastAPI template it
+     * guessed "didn't start on $PORT — most likely needs environment/secrets
+     * that aren't set yet (e.g. DATABASE_URL)", and the truth was
+     * `RuntimeError: Frontend directory '/app/app/frontend' does not exist`,
+     * sitting in the revision's own log the whole time.
+     *
+     * The same fix `placeOnFleet` already carries, on the other runtime: ask the
+     * app rather than the platform. Swallowed whole on failure — a log we cannot
+     * read is not a reason to lose the error we already have.
+     */
+    const withAppLog = async (service: string, error: string): Promise<string> => {
+      try {
+        const lines = (await getLogs(service, { limit: 20, freshness: "10m" })).map((l) => l.message);
+        if (!lines.length) return error;
+        log(`· what ${service} said before it stopped:`);
+        for (const l of lines) log(`    ${l}`);
+        return `${error}\n\nWhat ${service} said before it stopped:\n${lines.map((l) => `  ${l}`).join("\n")}`;
+      } catch {
+        return error;
+      }
+    };
+
     const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
       // A worker-only app builds exactly as any other app and then deploys no
       // service. Skipping HERE rather than branching per lane is deliberate: every
@@ -2572,7 +2597,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           if (SEAL_APPS && wants("invoker")) await grantInvokers(slug, log);
           log("verifying the app responds…");
           const probe = await probeApp(liveUrl, log, SEAL_APPS, primaryHealth);
-          if (!probe.ok) return { ok: false, error: probe.reason };
+          if (!probe.ok) return { ok: false, error: await withAppLog(slug, probe.reason ?? "the app did not answer") };
         }
         return { ok: true, url: liveUrl };
       } catch (e) {
@@ -2582,6 +2607,11 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           log("fetching the real build log for the agent…");
           const buildLog = await builds.error();
           if (buildLog) err = `Cloud Build failed. Actual build output:\n${buildLog}`;
+        } else {
+          // Only when the BUILD was not the problem. A build that never produced
+          // an image left no container to have said anything, and asking would
+          // attach the previous revision's log to a failure it had no part in.
+          err = await withAppLog(slug, err);
         }
         return { ok: false, error: err };
       }
@@ -3052,7 +3082,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         }
         return { ok: true, name, url };
       } catch (e) {
-        return { ok: false, name, error: `Deploying ${label} failed: ${e instanceof Error ? e.message : String(e)}` };
+        // A sibling that will not start is the case this was written for: the
+        // FastAPI template's API died on import and the deploy blamed $PORT.
+        return {
+          ok: false, name,
+          error: await withAppLog(name, `Deploying ${label} failed: ${e instanceof Error ? e.message : String(e)}`),
+        };
       }
     };
 
