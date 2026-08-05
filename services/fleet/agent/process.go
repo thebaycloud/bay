@@ -57,6 +57,10 @@ type Process struct {
 	Image string `json:"image,omitempty"`
 
 	// web only
+	// Prefix is the path this process serves when an app has more than one
+	// program behind one address — a frontend at "/" beside an API at "/api".
+	// Empty serves everything, which is every app with a single program.
+	Prefix     string `json:"prefix,omitempty"`
 	Port       int    `json:"port,omitempty"`
 	HealthPath string `json:"healthPath,omitempty"`
 	Visibility string `json:"visibility,omitempty"` // "public" (default) | "internal"

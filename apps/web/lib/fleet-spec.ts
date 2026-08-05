@@ -51,6 +51,11 @@ export interface AgentProcess {
    */
   image?: string;
   port?: number;
+  /**
+   * The path this process serves, when an app has more than one program behind
+   * one address. Absent serves everything.
+   */
+  prefix?: string;
   healthPath?: string;
   visibility?: "public" | "internal";
   schedule?: string;

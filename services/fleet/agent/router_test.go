@@ -12,7 +12,7 @@ const testSecret = "edge-secret-for-tests"
 // withRoute puts one healthy route in the table without going through a file.
 func withRoute(rt *Router, slug, addr string) {
 	rt.table.mu.Lock()
-	rt.table.byslug = map[string]Route{slug: {Slug: slug, Addr: addr, Healthy: true}}
+	rt.table.byslug = map[string][]Route{slug: {{Slug: slug, Addr: addr, Healthy: true}}}
 	rt.table.mu.Unlock()
 }
 

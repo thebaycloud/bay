@@ -121,3 +121,77 @@ func TestAnUnknownSlugIsStillAMiss(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// One address, two programs. A repository that is a frontend beside an API used
+// to be split across runtimes — the frontend on a node, the API on Cloud Run —
+// because the node could route by slug and nothing else. Splitting by path is
+// what lets both live on the machine that holds the app.
+
+func TestLongestPrefixWins(t *testing.T) {
+	// `/` must not answer `/api/things`. It would answer with an SPA's
+	// index.html, which reads to the caller as the API returning HTML for no
+	// reason — a failure that looks like the API's bug and is the router's.
+	var hit string
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hit = "web"; w.WriteHeader(200) }))
+	defer web.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hit = "api"; w.WriteHeader(200) }))
+	defer api.Close()
+
+	rt, _ := routerOver(t, []Route{
+		{Slug: "two", Addr: web.Listener.Addr().String(), Healthy: true, Prefix: "/"},
+		{Slug: "two", Addr: api.Listener.Addr().String(), Healthy: true, Prefix: "/api"},
+	})
+
+	for path, want := range map[string]string{
+		"/":           "web",
+		"/about":      "web",
+		"/api":        "api",
+		"/api/things": "api",
+	} {
+		hit = ""
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, httptest.NewRequest("GET", "http://two.supersonic.cv"+path, nil))
+		if hit != want {
+			t.Errorf("%s went to %q, wanted %q", path, hit, want)
+		}
+	}
+}
+
+func TestPrefixMatchesAtABoundary(t *testing.T) {
+	// `/apiary` is not under `/api`, and a string-prefix match would send it
+	// there. The edge proxy already keeps this rule; this is now a second place
+	// that decides it, so it is pinned in both.
+	for _, c := range []struct {
+		prefix, path string
+		want         bool
+	}{
+		{"/api", "/api", true},
+		{"/api", "/api/", true},
+		{"/api", "/api/things", true},
+		{"/api", "/apiary", false},
+		{"/api", "/api-docs", false},
+		{"/api/", "/api/things", true},
+		{"/", "/anything", true},
+		{"", "/anything", true},
+	} {
+		if got := prefixMatches(c.prefix, c.path); got != c.want {
+			t.Errorf("prefixMatches(%q, %q) = %v, wanted %v", c.prefix, c.path, got, c.want)
+		}
+	}
+}
+
+func TestAnAppWithOnePrefixlessRouteStillServesEverything(t *testing.T) {
+	// The shape every single-program app has, and the shape this had before
+	// prefixes existed. It must not need one.
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+	defer app.Close()
+	rt, _ := routerOver(t, []Route{{Slug: "one", Addr: app.Listener.Addr().String(), Healthy: true}})
+
+	for _, path := range []string{"/", "/deep/path", "/api"} {
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, httptest.NewRequest("GET", "http://one.supersonic.cv"+path, nil))
+		if rec.Code != 200 {
+			t.Errorf("%s got %d", path, rec.Code)
+		}
+	}
+}

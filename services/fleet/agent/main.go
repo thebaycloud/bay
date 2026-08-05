@@ -91,6 +91,10 @@ type Route struct {
 	Addr    string `json:"addr"`
 	Healthy bool   `json:"healthy"`
 	Since   int64  `json:"since"`
+	// Prefix is the path this route serves, when an app has more than one
+	// program behind one address. Empty serves everything, which is every app
+	// with a single program.
+	Prefix string `json:"prefix,omitempty"`
 	// Peer marks a route to ANOTHER NODE's router rather than to a sandbox on
 	// this one. The router proxies to it the same way; the difference is that a
 	// peer hop must not be forwarded a second time, or two nodes that disagree
@@ -1265,6 +1269,7 @@ func (a *Agent) writeRoutes() error {
 			Addr:    fmt.Sprintf("%s:%d", l.net.IP, effectivePort(l.app, l.proc)),
 			Healthy: l.ok,
 			Since:   l.since.Unix(),
+			Prefix:  l.proc.Prefix,
 		})
 	}
 	// Everything the fleet holds that this node does not. Local first: a slug

@@ -36,14 +36,21 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 type routerTable struct {
-	mu     sync.RWMutex
-	byslug map[string]Route
+	mu sync.RWMutex
+	// One slug can now have SEVERAL routes, split by path prefix: a repository
+	// that is a frontend beside an API is two programs behind one address, and
+	// once both run on this node the split has to happen here rather than at the
+	// edge, which only knows the slug.
+	//
+	// Ordered longest-prefix-first at load, so lookup is the first match.
+	byslug map[string][]Route
 	loaded time.Time
 }
 
@@ -56,9 +63,15 @@ func (t *routerTable) load(path string) error {
 	if err := json.Unmarshal(b, &routes); err != nil {
 		return err
 	}
-	m := make(map[string]Route, len(routes))
+	m := make(map[string][]Route, len(routes))
 	for _, r := range routes {
-		m[r.Slug] = r
+		m[r.Slug] = append(m[r.Slug], r)
+	}
+	// Longest prefix first. `/api` must be tried before `/`, or the frontend
+	// mounted at the root would answer every API call — with an SPA's index.html,
+	// which looks to the caller like the API returning HTML for no reason.
+	for _, rs := range m {
+		sort.SliceStable(rs, func(i, j int) bool { return len(rs[i].Prefix) > len(rs[j].Prefix) })
 	}
 	t.mu.Lock()
 	t.byslug = m
@@ -67,11 +80,37 @@ func (t *routerTable) load(path string) error {
 	return nil
 }
 
-func (t *routerTable) get(slug string) (Route, bool) {
+// get returns the route for a slug and a request path.
+//
+// A route with no prefix serves everything, which is every app that has one
+// program — the overwhelming majority, and the shape this had before prefixes
+// existed.
+func (t *routerTable) get(slug, path string) (Route, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	r, ok := t.byslug[slug]
-	return r, ok
+	for _, r := range t.byslug[slug] {
+		if prefixMatches(r.Prefix, path) {
+			return r, true
+		}
+	}
+	return Route{}, false
+}
+
+// prefixMatches is a match at a PATH BOUNDARY, never a string prefix.
+//
+// `/api` must match `/api` and `/api/things` and must not match `/apiary` —
+// the same rule the edge proxy's routing table already keeps, restated here
+// because this is now a second place that decides it.
+func prefixMatches(prefix, path string) bool {
+	if prefix == "" || prefix == "/" {
+		return true
+	}
+	p := strings.TrimSuffix(prefix, "/")
+	if !strings.HasPrefix(path, p) {
+		return false
+	}
+	rest := path[len(p):]
+	return rest == "" || strings.HasPrefix(rest, "/") || strings.HasPrefix(rest, "?")
 }
 
 func (t *routerTable) size() int {
@@ -86,9 +125,11 @@ func (t *routerTable) summary() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	healthy := 0
-	for _, r := range t.byslug {
-		if r.Healthy {
-			healthy++
+	for _, rs := range t.byslug {
+		for _, r := range rs {
+			if r.Healthy {
+				healthy++
+			}
 		}
 	}
 	return fmt.Sprintf("%d healthy", healthy)
@@ -145,7 +186,7 @@ func edgeSecretFromEnv() string {
 
 func NewRouter(rootDomain, edgeSecret string) *Router {
 	rt := &Router{
-		table:      &routerTable{byslug: map[string]Route{}},
+		table:      &routerTable{byslug: map[string][]Route{}},
 		rootDomain: rootDomain,
 		edgeSecret: edgeSecret,
 	}
@@ -273,7 +314,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	route, ok := rt.table.get(slug)
+	route, ok := rt.table.get(slug, r.URL.Path)
 	if !ok {
 		// Mark every response the ROUTER generates, so a caller can tell one from
 		// a response the app generated. Without this a routing miss and an app's
