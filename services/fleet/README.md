@@ -160,6 +160,37 @@ fleet's secrets, not just for one app's.
 Narrowing it again means a dedicated per-node service account and a binding
 written at placement time rather than at deploy time.
 
+## Who may reach the node
+
+`default-allow-ssh` admitted `0.0.0.0/0` on tcp:22 — the GCP default, never
+narrowed, on a box that holds every tenant's running code and, since the
+paragraph above, can read every tenant's secrets. It is now
+**`35.235.240.0/20`**, IAP's forwarding range, so ssh arrives only through
+Identity-Aware Proxy and is subject to IAM rather than to whoever has a key.
+
+Changed on 5 Aug 2026, and in that order deliberately: IAP access was proven
+working FIRST — `gcloud compute ssh … --tunnel-through-iap` — because narrowing
+the rule before knowing the replacement path works is how a node becomes
+unreachable. Verified both ways afterwards: IAP connects, and a direct TCP probe
+to the node's external address on 22 times out.
+
+**Use `--tunnel-through-iap` from now on.** Plain `gcloud compute ssh` still
+works only because it falls back to IAP itself; if it ever stops, this rule is
+why.
+
+`default-allow-rdp` (0.0.0.0/0 on tcp:3389) was deleted the same day. There has
+never been a Windows instance in this project — it was an open port to nothing.
+
+**Still open: the node has a public IP** (`35.255.177.212`). What it now exposes
+is ICMP and nothing else, so the urgency went with the ssh rule — but removing
+it is not a one-liner. The subnet has `privateIpGoogleAccess: False` and the
+project has no Cloud Router and no Cloud NAT, so an instance with no external
+address cannot reach Artifact Registry or Secret Manager at all: every app on
+the node would fail its next image pull and the agent could not resolve a single
+secret. The order is Private Google Access, then a Cloud Router and NAT, then
+drop the address — and the last step cannot be verified until it is taken, which
+is why it wants someone watching rather than a quiet commit.
+
 ## Not done
 
 - **HTTPS.** The wildcard certificate needs a DNS authorization TXT record, and
