@@ -108,15 +108,26 @@ type SandboxNet struct {
 	IP   net.IP
 }
 
+// ipForIndex maps a slot to an address.
+//
+// 10.200.<index/254+1>.<index%254+1> — skips .0 and .255 in each octet so no app
+// can be handed a network or broadcast address.
+//
+// A pure function of the slot, and that is what makes a running sandbox
+// adoptable across an agent restart: the new agent reads the slot back from the
+// sandbox's manifest and derives the same address, instead of having to ask the
+// kernel what the namespace was given.
+func ipForIndex(index int) net.IP {
+	return net.IPv4(10, 200, byte(index/254+1), byte(index%254+1))
+}
+
 // SetupSandboxNet builds the namespace, the veth pair, and the addressing for
 // one app. `index` is the app's slot on this node and decides its address.
 func SetupSandboxNet(slug string, index int) (*SandboxNet, error) {
 	ns := netnsName(slug)
 	host, peer := vethNames(slug)
 
-	// 10.200.<index/254+1>.<index%254+1> — skips .0 and .255 in each octet so no
-	// app can be handed a network or broadcast address.
-	ip := net.IPv4(10, 200, byte(index/254+1), byte(index%254+1))
+	ip := ipForIndex(index)
 
 	// Tear down any remnant first. A half-built namespace from a killed agent is
 	// the normal case after a crash, and "already exists" would otherwise make

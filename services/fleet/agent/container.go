@@ -381,6 +381,110 @@ func writeSpec(bundle string, app App, proc Process, net *SandboxNet, imgEnv []s
 	return os.WriteFile(filepath.Join(bundle, "config.json"), b, 0o644)
 }
 
+// --- adoption --------------------------------------------------------------
+
+// manifestName is what a sandbox records about itself, beside its OCI spec.
+//
+// The OCI spec is not enough to adopt from. It carries the argv and the mounts,
+// but nothing that says WHICH IMAGE produced them and nothing that says which
+// slot the agent handed out — and both are needed to decide whether a sandbox
+// that survived an agent restart is still the thing desired state asks for.
+const manifestName = "supersonic.json"
+
+// sandboxManifest is the agent's own record of a running sandbox, written into
+// the bundle at start and read back after a restart.
+type sandboxManifest struct {
+	Slug    string   `json:"slug"`
+	Process string   `json:"process"`
+	Kind    string   `json:"kind"`
+	Image   string   `json:"image"`
+	Command []string `json:"command,omitempty"`
+	Index   int      `json:"index"`
+}
+
+func writeManifest(bundle string, app App, proc Process, index int) error {
+	b, err := json.Marshal(sandboxManifest{
+		Slug: app.Slug, Process: proc.Name, Kind: string(proc.Kind),
+		Image: app.Image, Command: proc.Command, Index: index,
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(bundle, manifestName), b, 0o644)
+}
+
+func readManifest(bundle string) (sandboxManifest, error) {
+	var m sandboxManifest
+	b, err := os.ReadFile(filepath.Join(bundle, manifestName))
+	if err != nil {
+		return m, err
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+// Adopted is a sandbox that outlived the agent and can be taken back over.
+type Adopted struct {
+	ID       string
+	Manifest sandboxManifest
+	Net      *SandboxNet
+}
+
+// Adoptable returns the sandboxes a restarting agent can take back rather than
+// kill and recreate.
+//
+// Why this exists: the agent holds its live set in memory, so on restart it knew
+// about nothing, and `ReapAll` killed every sandbox on the node and started them
+// again from desired state. That is a full outage of every app on the box for
+// every agent restart — 21 of them bounced at 09:51 on 5 Aug for a change to one
+// line of Go. The systemd unit already uses `KillMode=process` so that a restart
+// does NOT take the sandboxes down; ReapAll then took them down anyway.
+//
+// A sandbox is adoptable only when everything the agent would otherwise have
+// forgotten can be recovered exactly:
+//
+//   - it is genuinely running, per runsc rather than per the bundle existing
+//   - it wrote a manifest, so its image, its declared command and its SLOT are
+//     known — the slot is what makes the address derivable and what stops the
+//     next start being handed an address already in use
+//   - its network namespace is still there
+//
+// Anything else is reaped, which is the old behaviour and the safe direction:
+// the cost of failing to adopt is one restart, and the cost of adopting wrongly
+// is a sandbox the agent believes it understands and does not.
+func (r *Runtime) Adoptable() map[string]Adopted {
+	out := map[string]Adopted{}
+	for _, id := range r.List() {
+		st, err := runscStatus(id)
+		if err != nil || st.Status != "running" {
+			continue
+		}
+		bundle := filepath.Join(bundleRoot, id)
+		m, err := readManifest(bundle)
+		if err != nil || m.Slug == "" || m.Image == "" {
+			// Written by an agent from before manifests, or unreadable. Not
+			// adoptable, and deliberately not guessed at.
+			continue
+		}
+		if sandboxID(m.Slug, Process{Name: m.Process}) != id {
+			// The manifest does not describe the bundle it sits in.
+			continue
+		}
+		nsPath := NetnsPath(id)
+		if _, err := os.Stat(nsPath); err != nil {
+			continue
+		}
+		out[id] = Adopted{
+			ID:       id,
+			Manifest: m,
+			Net:      &SandboxNet{Name: netnsName(id), Path: nsPath, IP: ipForIndex(m.Index)},
+		}
+	}
+	return out
+}
+
 // --- runsc lifecycle -------------------------------------------------------
 
 // runsc runs a runsc subcommand and returns its STDOUT only.
@@ -548,6 +652,14 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	if err := writeSpec(bundle, app, proc, net, imgEnv, argv, cwd, resolved); err != nil {
 		TeardownSandboxNet(id)
 		return nil, err
+	}
+
+	// Written BEFORE the sandbox starts, so a sandbox that exists always has a
+	// manifest beside it. Written after it would leave a window in which a
+	// running sandbox is unadoptable, and that window is exactly a crash.
+	if err := writeManifest(bundle, app, proc, index); err != nil {
+		TeardownSandboxNet(id)
+		return nil, fmt.Errorf("manifest: %w", err)
 	}
 
 	// `run --detach` rather than create-then-start: one call, and the failure

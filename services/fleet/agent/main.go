@@ -122,8 +122,17 @@ type Agent struct {
 	// and each publishes on completion, so without this two goroutines share one
 	// temp path and the rename can land a half-written file — a node briefly
 	// serving 502s for every app it holds.
-	writeMu  sync.Mutex
-	slots    map[int]string
+	writeMu sync.Mutex
+	slots   map[int]string
+	// adopt holds sandboxes that outlived the previous agent and have not yet
+	// been matched against desired state. reconcileOnce claims what it wants on
+	// its first pass and stops the rest, so this is empty from then on — an entry
+	// left here after that pass is a sandbox nothing desires.
+	//
+	// Their SLOTS are reserved in `slots` from the moment they are read, before
+	// any of this is matched: an adopted sandbox already holds an address, and a
+	// new start handed the same index would build a veth with a duplicate IP.
+	adopt    map[string]Adopted
 	desired  Desired
 	cron     *cronRunner
 	cronJobs []cronJob
@@ -553,15 +562,37 @@ func main() {
 		log.Printf("no FLEET_ENDPOINT set; reading desired state from %s", statePath)
 	}
 
-	// Clear anything a previous agent left behind, before the first reconcile.
-	// The live set lives in memory, so on restart the agent knows about nothing
-	// and a survivor is not adoptable — it just collides with every start
-	// attempt from here on.
-	if n := rt.ReapAll(); n > 0 {
-		log.Printf("reaped %d sandbox(es) from a previous run", n)
+	// Take back what the previous agent left running, and reap only the rest.
+	//
+	// This used to be an unconditional ReapAll, and the comment on it said a
+	// survivor "is not adoptable". It is now: `Start` records the image, the
+	// declared command and the SLOT in the bundle, so everything the in-memory
+	// live set held can be recovered exactly. What is left is the reason the
+	// systemd unit has always carried KillMode=process — a routine agent restart
+	// is not supposed to be an outage — and ReapAll was undoing that on purpose.
+	// All 21 apps on this node bounced at 09:51 on 5 Aug for a one-line change.
+	//
+	// Nothing is adopted blind. reconcileOnce still has to match each candidate
+	// against desired state, and anything it does not claim is stopped on the
+	// first pass, so a stale image or a deleted app is no more durable than
+	// before.
+	adoptable := rt.Adoptable()
+	reaped := 0
+	for _, id := range rt.List() {
+		if _, ok := adoptable[id]; !ok {
+			rt.Stop(id)
+			reaped++
+		}
+	}
+	if reaped > 0 {
+		log.Printf("reaped %d sandbox(es) from a previous run", reaped)
+	}
+	if len(adoptable) > 0 {
+		log.Printf("found %d running sandbox(es) to adopt", len(adoptable))
 	}
 
 	a := &Agent{rt: rt, src: src, live: map[string]*live{}, slots: map[int]string{},
+		adopt:      adoptable,
 		released:   map[string]string{},
 		relFail:    newFailTracker(),
 		relRunning: map[string]bool{},
@@ -570,6 +601,11 @@ func main() {
 		quiet:      newLogThrottle(),
 		blocked:    map[string]bool{},
 		faults:     map[string]ProcessFault{}}
+
+	// Reserve every adopted sandbox's slot before anything can ask for one.
+	for id, ad := range adoptable {
+		a.slots[ad.Manifest.Index] = id
+	}
 
 	// Wired only when there is a control plane to report to. Leaving it nil on
 	// the lab path is deliberate: nil means "this node does not report", which
@@ -763,6 +799,28 @@ func (a *Agent) reconcileOnce() error {
 		}
 	}
 
+	// Anything still unclaimed after this pass has considered every desired unit
+	// is a sandbox nothing wants: an app removed while the agent was down, or a
+	// process whose image changed under it. Stopped here rather than left, and
+	// its slot released — holding one would leak an address per restart.
+	//
+	// Deferred so it runs after the claiming loop below, and only once: `adopt`
+	// is empty from the second pass on, so this costs nothing thereafter.
+	defer func() {
+		a.mu.Lock()
+		leftovers := make([]Adopted, 0, len(a.adopt))
+		for id, ad := range a.adopt {
+			leftovers = append(leftovers, ad)
+			delete(a.adopt, id)
+			delete(a.slots, ad.Manifest.Index)
+		}
+		a.mu.Unlock()
+		for _, ad := range leftovers {
+			log.Printf("%s: not desired after the restart — stopping", ad.ID)
+			a.rt.Stop(ad.ID)
+		}
+	}()
+
 	// Work out what needs starting, then start it CONCURRENTLY.
 	//
 	// Serially was the first version and it does not survive contact with a real
@@ -778,6 +836,34 @@ func (a *Agent) reconcileOnce() error {
 		a.mu.Lock()
 		l, running := a.live[id]
 		a.mu.Unlock()
+
+		// A sandbox that outlived the previous agent, claimed here rather than
+		// killed and rebuilt. Only on an exact match of the two fields that mean
+		// "this is a different program" — the same test a live process gets just
+		// below, against the same manifest fields Start recorded. A changed image
+		// falls through and is started normally, so a deploy that happened while
+		// the agent was down still takes effect.
+		if !running {
+			a.mu.Lock()
+			ad, canAdopt := a.adopt[id]
+			if canAdopt && ad.Manifest.Image == u.app.Image && sameStrings(ad.Manifest.Command, u.proc.Command) {
+				delete(a.adopt, id)
+				now := time.Now()
+				a.live[id] = &live{
+					app: u.app, proc: u.proc, net: ad.Net, index: ad.Manifest.Index,
+					// `ok` stays false: this agent has not health-checked it yet,
+					// and inheriting a verdict it never reached would report a
+					// process as healthy on the word of a process that is gone.
+					// The liveness pass sets it within one interval.
+					since: now, confirmed: now,
+				}
+				l, running = a.live[id], true
+				a.mu.Unlock()
+				log.Printf("%s: adopted at %s (survived the agent restart)", id, ad.Net.IP)
+			} else {
+				a.mu.Unlock()
+			}
+		}
 
 		if running {
 			// Restart on a changed image or command. Comparing the whole spec
