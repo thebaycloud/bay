@@ -542,9 +542,15 @@ export function parseAppConfig(text: string): AppConfig {
     // would break working apps on a rename.
     const envIsNameList = Array.isArray(svc.env);
     const uses = svc.uses === undefined ? undefined : names(svc.uses, `${where}.uses`, database);
+    // `redis` and `elasticsearch` are accepted HERE and answered later, and the
+    // two answers are different: redis becomes a process beside the app on a
+    // node, elasticsearch is refused by name with the reason. Rejecting either
+    // at parse time would make "we do not run that" indistinguishable from "you
+    // spelled it wrong", and the first deserves an explanation.
+    const known = ["database", "bucket", "redis", "elasticsearch"];
     for (const u of uses ?? []) {
-      if (u !== "database" && u !== "bucket") {
-        throw new ConfigError(`${where}.uses: "${u}" is not a resource — expected "database" or "bucket"`);
+      if (!known.includes(u)) {
+        throw new ConfigError(`${where}.uses: "${u}" is not a resource — expected one of ${known.join(", ")}`);
       }
     }
     return {

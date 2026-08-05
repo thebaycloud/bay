@@ -424,9 +424,20 @@ test("a memory value Cloud Run would reject is caught here instead", () => {
 
 test("an unknown resource in uses is named", () => {
   assert.throws(
-    () => parseAppConfig(config({ version: 1, services: [{ uses: ["redis"] }] })),
-    /"redis" is not a resource/,
+    () => parseAppConfig(config({ version: 1, services: [{ uses: ["kafka"] }] })),
+    /"kafka" is not a resource/,
   );
+});
+
+test("a resource we run, and one we refuse, both parse", () => {
+  // Accepted here and answered later, and the two answers differ: redis becomes
+  // a process beside the app on a node, elasticsearch is refused by name with
+  // the reason. Rejecting either at parse time would make "we do not run that"
+  // indistinguishable from "you spelled it wrong", and the first deserves an
+  // explanation the second does not.
+  for (const kind of ["redis", "elasticsearch"]) {
+    assert.doesNotThrow(() => parseAppConfig(config({ version: 1, services: [{ uses: [kind] }] })));
+  }
 });
 
 /* ── secrets are enforced ────────────────────────────────────────────────── */
