@@ -282,7 +282,7 @@ func (a *Agent) mayStart(id, image string, now time.Time) bool {
 // the first would destroy the bound on a process that starts fine and then
 // exits immediately.
 func (a *Agent) recordStartFailure(id string, app App, proc Process, err error, now time.Time) {
-	n := a.startFail.failWith(startKey(id, app.Image), now, err.Error())
+	n := a.startFail.failWith(startKey(id, imageFor(app, proc)), now, err.Error())
 	log.Printf("%s: start failed (%d/%d): %v", id, n, maxAttempts, err)
 
 	fault := classifyStartError(err)
@@ -369,7 +369,7 @@ func (a *Agent) reportRunning() []ProcessState {
 			continue
 		}
 		s := ProcessState{
-			Slug: l.app.Slug, Process: l.proc.Name, Image: l.app.Image,
+			Slug: l.app.Slug, Process: l.proc.Name, Image: imageFor(l.app, l.proc),
 		}
 		// Health, and only for a kind that has any. `probeAll` skips anything
 		// that is not `web` — a worker has no port to ask — so reporting `false`
@@ -854,7 +854,7 @@ func (a *Agent) reconcileOnce() error {
 		if !running {
 			a.mu.Lock()
 			ad, canAdopt := a.adopt[id]
-			if canAdopt && ad.Manifest.Image == u.app.Image && sameStrings(ad.Manifest.Command, u.proc.Command) {
+			if canAdopt && ad.Manifest.Image == imageFor(u.app, u.proc) && sameStrings(ad.Manifest.Command, u.proc.Command) {
 				delete(a.adopt, id)
 				now := time.Now()
 				a.live[id] = &live{
@@ -877,7 +877,7 @@ func (a *Agent) reconcileOnce() error {
 			// Restart on a changed image or command. Comparing the whole spec
 			// would restart on every irrelevant field; these two are what
 			// actually mean "this is a different program".
-			if l.app.Image == u.app.Image && sameStrings(l.proc.Command, u.proc.Command) {
+			if imageFor(l.app, l.proc) == imageFor(u.app, u.proc) && sameStrings(l.proc.Command, u.proc.Command) {
 				if st, err := runscStatusFn(id); err == nil && st.Status == "running" {
 					// Forget every image this id ever failed on, not just the
 					// current one — otherwise a bad image's record (e.g.
@@ -897,7 +897,7 @@ func (a *Agent) reconcileOnce() error {
 				// forever is not — that is a broken image turning into a
 				// permanent cycle of sandbox creation on a node holding
 				// nineteen working apps.
-				key := startKey(id, u.app.Image)
+				key := startKey(id, imageFor(u.app, u.proc))
 				switch a.startFail.decide(key, time.Now()) {
 				case actWait:
 					continue
@@ -939,7 +939,7 @@ func (a *Agent) reconcileOnce() error {
 			// would not restart is counted by both paths in the same pass and so
 			// reaches the cap sooner; that is the safe direction to be wrong in,
 			// and it is more broken, not less.
-			if !a.mayStart(id, u.app.Image, time.Now()) {
+			if !a.mayStart(id, imageFor(u.app, u.proc), time.Now()) {
 				continue
 			}
 			needRelease[u.app.Slug] = u.app
@@ -1256,21 +1256,34 @@ func (a *Agent) serve(addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
+		// Healthy is a POINTER so it can be null, and that is the whole change.
+		//
+		// `probeAll` only checks `web` — a worker has no port to ask — so `l.ok`
+		// stays false for one forever, and this reported `"healthy": false` for a
+		// process nobody had ever probed. Every worker on the node read as broken
+		// for life. It cost two sessions a detour each, one of them mine, and the
+		// node was right every time: nothing was wrong, the report could not say
+		// "not applicable" and said "no" instead.
 		type item struct {
 			Slug    string `json:"slug"`
 			Kind    string `json:"kind"`
 			Image   string `json:"image"`
 			Addr    string `json:"addr"`
-			Healthy bool   `json:"healthy"`
+			Healthy *bool  `json:"healthy"`
 			Status  string `json:"status"`
 		}
 		out := []item{}
 		for id, l := range a.live {
 			st, _ := runscStatus(id)
+			var healthy *bool
+			if l.proc.Kind == KindWeb {
+				ok := l.ok
+				healthy = &ok
+			}
 			out = append(out, item{
-				Slug: id, Image: l.app.Image, Kind: string(l.proc.Kind),
+				Slug: id, Image: imageFor(l.app, l.proc), Kind: string(l.proc.Kind),
 				Addr:    fmt.Sprintf("%s:%d", l.net.IP, effectivePort(l.app, l.proc)),
-				Healthy: l.ok, Status: st.Status,
+				Healthy: healthy, Status: st.Status,
 			})
 		}
 		a.mu.Unlock()

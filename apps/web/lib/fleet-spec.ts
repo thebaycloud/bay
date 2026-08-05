@@ -41,6 +41,15 @@ export interface AgentProcess {
   name: string;
   kind: "web" | "worker" | "cron" | "release";
   command?: string[];
+  /**
+   * The image THIS process runs, when it is not the app's own program.
+   *
+   * Absent means the app's image, which is right for web, worker and release —
+   * the same code entered differently. It is wrong for anything an app needs
+   * beside itself: a sibling service builds its own image, and a dependency is
+   * somebody else's entirely.
+   */
+  image?: string;
   port?: number;
   healthPath?: string;
   visibility?: "public" | "internal";

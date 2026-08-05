@@ -44,6 +44,18 @@ type Process struct {
 	Kind    ProcessKind `json:"kind"`
 	Command []string    `json:"command,omitempty"`
 
+	// Image, when this process is not the app's own program.
+	//
+	// Every process of an app shared one image, which is right for `web` and
+	// `worker` and `release` — they are the same code entered differently — and
+	// wrong for everything an app needs BESIDE itself. A sibling service builds
+	// its own image, and so does a dependency: "give it a Redis" is one more
+	// process with `redis:7` on it, not a new subsystem.
+	//
+	// Empty means the app's image, so a spec written before this field behaves
+	// exactly as it did.
+	Image string `json:"image,omitempty"`
+
 	// web only
 	Port       int    `json:"port,omitempty"`
 	HealthPath string `json:"healthPath,omitempty"`
@@ -140,6 +152,19 @@ func processesOf(app App) []Process {
 }
 
 // effectivePort is the port a process is told to listen on.
+// imageFor is what this process actually runs.
+//
+// One function rather than `p.Image` at each site, because the sites are not
+// only starts: adoption, the restart-on-change comparison, the release key and
+// the failure counters all key on an image, and any of them reading a different
+// answer would mean a process that is restarted forever or never.
+func imageFor(app App, p Process) string {
+	if p.Image != "" {
+		return p.Image
+	}
+	return app.Image
+}
+
 func effectivePort(app App, p Process) int {
 	if p.Port > 0 {
 		return p.Port

@@ -450,7 +450,7 @@ type sandboxManifest struct {
 func writeManifest(bundle string, app App, proc Process, index int) error {
 	b, err := json.Marshal(sandboxManifest{
 		Slug: app.Slug, Process: proc.Name, Kind: string(proc.Kind),
-		Image: app.Image, Command: proc.Command, Index: index,
+		Image: imageFor(app, proc), Command: proc.Command, Index: index,
 	})
 	if err != nil {
 		return err
@@ -636,7 +636,7 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	id := sandboxID(app.Slug, proc)
 	bundle := filepath.Join(bundleRoot, id)
 
-	img, err := r.EnsureImage(app.Image)
+	img, err := r.EnsureImage(imageFor(app, proc))
 	if err != nil {
 		return nil, err
 	}
