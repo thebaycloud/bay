@@ -1750,7 +1750,26 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     //
     // Nothing else here changes: no rendering decision moves, and the file is
     // still written where every later existence check expects it.
-    if ((runtimePinned || generatedBuild) && !servesStatic && !existsSync(join(dir, "Dockerfile"))) {
+    // The primary service's OWN Dockerfile, when the service is not the
+    // repository root.
+    //
+    // The check below asked only about the root, so a repo whose author put the
+    // build definition in `backend/` had it ignored and a generated one written
+    // over the top. That is how the full-stack FastAPI template deployed with no
+    // frontend in its API image: `backend/Dockerfile` builds `./frontend` and
+    // copies the result in, and nothing ever ran it.
+    const primaryDirRel = (() => {
+      const cfg = appConfig ? primaryService(appConfig) : undefined;
+      return cfg?.dir && cfg.dir !== "." ? cfg.dir.replace(/^\.\//, "").replace(/\/+$/, "") : "";
+    })();
+    const primaryOwnDockerfile = primaryDirRel && existsSync(join(dir, primaryDirRel, "Dockerfile"))
+      ? `${primaryDirRel}/Dockerfile`
+      : "";
+    if (primaryOwnDockerfile) {
+      log(`Building with ${primaryOwnDockerfile} — the repository's own, from the repository root`);
+    }
+
+    if (!primaryOwnDockerfile && (runtimePinned || generatedBuild) && !servesStatic && !existsSync(join(dir, "Dockerfile"))) {
       const renderStage = stages.start("render");
       const runCommand = runCmd || s.startCommand || "";
       // What the REPOSITORY says, read by code rather than by a model. `pinned`
@@ -2144,7 +2163,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // were written, so an app can have gained one since. The lane label was
     // fixed even earlier and does not update either way — this is the checkout
     // telling the truth about how the app will actually be built.
-    const hasDockerfileNow = existsSync(join(dir, "Dockerfile"));
+    const hasDockerfileNow = existsSync(join(dir, "Dockerfile")) || Boolean(primaryOwnDockerfile);
     // `workers` is what makes "worker-only" placeable and "cron-only" not. The
     // node confirms a process it is RUNNING, and a cron is never running — the
     // agent's reconcile excludes it, because the scheduler owns it — so an app
@@ -2531,7 +2550,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // is for and is why anything sensitive belongs in `secrets`.
       const buildArgs = Object.entries(primaryConfigService?.buildEnv ?? {}).map(([key, value]) => ({ key, value }));
       if (buildArgs.length) log(`Build args: ${buildArgs.map((a) => a.key).join(", ")}`);
-      writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder, slug, { secretEnv: mountable, buildArgs }));
+      // Context stays the repository root — which is what an author who put the
+      // Dockerfile one level down and wrote `COPY ./frontend` is expecting.
+      writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder, slug, {
+        secretEnv: mountable, buildArgs,
+        ...(primaryOwnDockerfile ? { dockerfile: primaryOwnDockerfile } : {}),
+      }));
     }
     // Which Cloud Build is ours. Every command below that can start one feeds
     // its raw output through builds.note(), so a failure is read back from the
