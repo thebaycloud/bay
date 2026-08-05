@@ -3512,7 +3512,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         port: await servePortFor(image.image),
       });
       if (nodeSiblings.length) {
-        placing.processes = [...(placing.processes ?? []), ...nodeSiblings];
+        // The primary's own process, made EXPLICIT before anything is appended.
+        //
+        // An app that declares no processes is one implicit web process, and the
+        // agent synthesises it from an EMPTY list. Appending a sibling makes the
+        // list non-empty, so that synthesis stops happening and the app's own
+        // program silently disappears — measured: the sibling started, the
+        // primary never did, and the probe reported a routing miss.
+        const own: AgentProcess[] = placing.processes?.length
+          ? placing.processes
+          : [{
+              name: "web",
+              kind: "web",
+              ...(placing.command ? { command: placing.command } : {}),
+              ...(placing.healthPath ? { healthPath: placing.healthPath } : {}),
+            }];
+        placing.processes = [...own, ...nodeSiblings];
       }
       placedSpec = placing;
 

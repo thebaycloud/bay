@@ -1088,3 +1088,24 @@ test("a sibling running the wrong image still fails", () => {
   assert.equal(v.ok, false);
   assert.match(v.reason ?? "", /different image for "api"/);
 });
+
+test("adding a sibling does not delete the app's own program", () => {
+  // An app that declares no processes IS one implicit web process, and the
+  // agent synthesises it from an EMPTY list. Appending a sibling makes the list
+  // non-empty, and that synthesis stops — measured on a live deploy: the
+  // sibling started, the primary never did, and the probe reported a routing
+  // miss three layers away from the cause.
+  //
+  // `requiredProcesses` is the same reading the verdict does, so it is the right
+  // place to pin it: a spec whose only process is the sibling is a spec that has
+  // lost the app.
+  const withSibling: AppSpec = {
+    ...spec,
+    processes: [
+      { name: "web", kind: "web", command: ["/bin/sh", "-c", "node server.js"] },
+      { name: "api", kind: "web", command: ["/bin/sh", "-c", "node api.js"], image: "registry/api@sha256:bbb", prefix: "/api" },
+    ],
+  };
+  const names = requiredProcesses(withSibling).map((p) => p.name).sort();
+  assert.deepEqual(names, ["api", "web"]);
+});
