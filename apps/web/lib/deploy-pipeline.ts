@@ -3696,6 +3696,54 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         }
       }
 
+      // The `release` stage — folded into the node's own startup ordering
+      // instead of run as a Cloud Run Job, per the comment above this
+      // function's own `toFleet` fork. `release` already lives in
+      // LANE_KNOWN_STAGES; nothing on this branch had ever written it, so
+      // `deploy_stages` held a Cloud-Run-only view of release reliability
+      // without anybody having decided that on purpose (docs/research/
+      // cloud-run-shape.md, "release is a full architectural fork, not a
+      // branch").
+      //
+      // What CAN honestly be said from here, and what cannot:
+      //
+      // An app with no release process gets no row. Not "skipped" — skipped is
+      // for a stage a lane legitimately never reaches, and this app was never
+      // going to have one; a row of any outcome would be exactly the fake
+      // success the ticket names ("a lie a reliability query cannot tell from
+      // the truth").
+      //
+      // An app WITH one gets an outcome inferred from `placement.placed`, not
+      // measured directly, because there is no direct measurement to take.
+      // `main.go` blocks an app's own processes from starting at all until its
+      // release succeeds (`blocked`/`cronBlocked`), so a placement that came up
+      // is proof its release came up first — recording "ok" there is reading a
+      // real invariant the agent enforces, not hardcoding a success. The
+      // reverse is weaker: a placement that never answered may be a release
+      // that failed, or a web process that crashed AFTER a release that
+      // succeeded (`fleet-place.ts`'s own `runVerdict` cannot tell those apart
+      // either, and neither can a human reading the log), and this stage
+      // inherits that same fused verdict rather than resolving it. Written
+      // anyway, because a wrong-but-labelled "failed" is still closer to the
+      // truth than a table with no row — the same call already made for the
+      // `fleet` stage and the outer activation stage this sits beside.
+      //
+      // The DURATION this writes is not the release's own, and cannot be made
+      // to be from here. `placeOnFleet` is timed as one place→verify span; the
+      // node never reports when ITS release finished — `desired.go`'s sync
+      // payload carries only `ProcessFault` (written by `recordStartFailure`,
+      // a process-START error, never a release one) and `ProcessState`
+      // (`fleet-place.ts`'s `requiredProcesses` excludes "release" by name,
+      // because a release runs once and is gone before any sync could report
+      // it running). `main.go`'s own release timing (`RunToCompletion`,
+      // `relFail`) lives entirely on the node and never reaches the wire. So
+      // this stage's `startedAt`/`endedAt` are the same instants the `fleet`
+      // stage records, release and everything it gates fused into one number —
+      // an honest fact about what is measurable today, not a proxy for how
+      // long the release itself took. Separating them needs the node to say
+      // so, which is a change to services/fleet/agent this task does not make.
+      const hasRelease = placing.processes?.some((p) => p.kind === "release") ?? false;
+      const releaseHandle = hasRelease ? stages.start("release") : null;
       const placement = await stages.around("fleet", () => placeOnFleet(
         slug,
         placing,
@@ -3713,6 +3761,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           log,
         },
       ));
+      if (releaseHandle) await stages.end(releaseHandle, placement.placed ? "ok" : "failed");
       return placement.placed
         ? { ok: true, url: placement.runUrl }
         : { ok: false, error: placement.reason ?? "the app did not answer from the fleet" };

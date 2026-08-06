@@ -951,6 +951,75 @@ test("an app that declares no scale is placed at the platform's floor", NEEDS_MO
   assert.equal(rec.placements[0].spec.cpuShares, 1024);
 });
 
+test("a fleet deploy of an app with a release records a release stage with a real outcome", NEEDS_MOCKS, async () => {
+  // docs/research/cloud-run-shape.md: "release is a full architectural fork, not
+  // a branch. On Cloud Run it's a named stage wrapping a Cloud Run Job... On the
+  // fleet... it never runs as a separate stage at all... Consequence: fleet
+  // deploys produce no release row in deploy_stages at all." `release` already
+  // exists in LANE_KNOWN_STAGES — nothing writes it from this branch.
+  //
+  // A Procfile `release:` line is enough to prove it: readProcesses resolves it
+  // to kind "release" with no `releaseCmd` involved at all, which is the same
+  // channel buildAppSpec folds into the node's AppSpec at line ~3630.
+  const rec = await onFleet({
+    "Dockerfile": "FROM alpine\n",
+    "Procfile": "web: node index.js\nrelease: node migrate.js\n",
+    "index.js": "",
+  });
+
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.equal(errors.length, 0, `a successful fleet deploy was reported as failed: ${JSON.stringify(errors).slice(0, 500)}`);
+
+  const release = rec.stages.filter((s) => s.stage === "release");
+  assert.equal(release.length, 1, `expected exactly one release stage, got ${JSON.stringify(rec.stages)}`);
+  // Not a fake "ok" written regardless of what happened — the placement actually
+  // came up, and coming up is proof the release the node ran before starting the
+  // app's own processes did not fail (a failed release blocks the app forever).
+  assert.equal(release[0].outcome, "ok", `a release that gated a successful placement must read ok, got ${JSON.stringify(release)}`);
+});
+
+test("a fleet deploy of an app with no release writes no release row", NEEDS_MOCKS, async () => {
+  // The other half of the acceptance criteria, and the one silence would pass by
+  // default: a fake "ok" for an app that declared no release is indistinguishable,
+  // in deploy_stages, from a real one that happened to succeed — and a reliability
+  // query over that table cannot tell them apart, which is exactly the lie this
+  // ticket exists to refuse.
+  const rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+
+  assert.ok(rec.placements.length > 0, "sanity: the deploy must actually place, or the absence of a release row proves nothing");
+  assert.ok(
+    !rec.stages.some((s) => s.stage === "release"),
+    `an app with no release must write no release stage, got ${JSON.stringify(rec.stages)}`,
+  );
+});
+
+test("a fleet placement that never comes up records its release as failed too", NEEDS_MOCKS, async () => {
+  // The node blocks an app's own processes from starting at all until its
+  // release succeeds (main.go's `blocked` map), so a placement that never
+  // answers can never be evidence of a release that DID succeed — "ok" here
+  // would be the fake success the acceptance criteria rules out. It is still
+  // an approximation in the other direction (a release can succeed and the web
+  // process can crash afterward, and this reads as a release failure too) — see
+  // the comment beside where this is recorded for why that is the best available
+  // signal without a node-side change, and why it is still better than the
+  // silence this ticket closes.
+  probeCode = 503;
+  let rec: Recorded;
+  try {
+    rec = await onFleet({
+      "Dockerfile": "FROM alpine\n",
+      "Procfile": "web: node index.js\nrelease: node migrate.js\n",
+      "index.js": "",
+    });
+  } finally {
+    probeCode = 200;
+  }
+
+  const release = rec.stages.filter((s) => s.stage === "release");
+  assert.equal(release.length, 1, `expected exactly one release stage, got ${JSON.stringify(rec.stages)}`);
+  assert.equal(release[0].outcome, "failed", `a placement that never verified must not report its release as ok, got ${JSON.stringify(release)}`);
+});
+
 test("a sibling's Dockerfile is written for the context it is built in", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
   // The bug that broke EVERY sibling, and it is invisible from argv alone: the
   // context was right and the file inside it was written for a different one.
