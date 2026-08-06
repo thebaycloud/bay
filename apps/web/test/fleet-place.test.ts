@@ -1109,3 +1109,27 @@ test("adding a sibling does not delete the app's own program", () => {
   const names = requiredProcesses(withSibling).map((p) => p.name).sort();
   assert.deepEqual(names, ["api", "web"]);
 });
+
+test("a forwarded hop is not the router answering", () => {
+  // `forwarded` means the node that received the request does not hold the app
+  // and passed it to the node that does. Whatever came back is the app's.
+  //
+  // Reading it as a router answer failed a placement that had worked: the app
+  // was live on the second node, the probe went load balancer → node one →
+  // forwarded → node two → app, and the verdict rejected it on the mark left by
+  // the hop.
+  assert.equal(fleetVerdict({ code: 200, router: "forwarded" }).ok, true);
+  assert.equal(fleetVerdict({ code: 401, router: "forwarded" }).ok, true);
+});
+
+test("every other marker is still the router speaking for an app that did not", () => {
+  for (const m of ["miss", "unhealthy", "unsigned", "forward-loop"]) {
+    const v = fleetVerdict({ code: 404, router: m });
+    assert.equal(v.ok, false, `${m} should fail`);
+    assert.match(v.reason ?? "", new RegExp(m));
+  }
+  // And a forward that ended in one of them is still that one.
+  const v = fleetVerdict({ code: 403, router: "forwarded, unsigned" });
+  assert.equal(v.ok, false);
+  assert.match(v.reason ?? "", /unsigned/);
+});

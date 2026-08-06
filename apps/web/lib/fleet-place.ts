@@ -231,7 +231,17 @@ export function chooseRuntime(a: {
  * fleet that serves nothing, which is an outage rather than a failed migration.
  */
 export function fleetVerdict(r: { code: number; router?: string }): Eligibility {
-  if (r.router) return { ok: false, reason: `the fleet router answered, not the app (${r.router})` };
+  // `forwarded` is not the router answering. It means the node this request
+  // reached does not hold the app and passed it to the node that does, and
+  // whatever came back is the APP's — which is the whole point of forwarding.
+  //
+  // Treating it as a router answer failed a placement that had worked: the app
+  // was live on the second node, the probe went load balancer → node one →
+  // forwarded → node two → app, and the verdict read the mark left by the hop
+  // as evidence that no app had answered. Every other marker — miss, unhealthy,
+  // unsigned, forward-loop — IS the router speaking for an app that did not.
+  const marker = (r.router ?? "").split(",").map((m) => m.trim()).filter((m) => m && m !== "forwarded");
+  if (marker.length) return { ok: false, reason: `the fleet router answered, not the app (${marker.join(", ")})` };
   if (!r.code) return { ok: false, reason: "no answer from the fleet" };
   if (r.code >= 500) return { ok: false, reason: `the app answered ${r.code} from the fleet` };
   // A 404 at the root or a redirect to /login is a working app. Only the router
