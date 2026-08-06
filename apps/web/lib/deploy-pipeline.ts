@@ -55,6 +55,7 @@ import { deploymentEnv } from "@/lib/framework-env";
 import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
 import { sidecarFor, sidecarEnv, dependencyRefusal } from "@/lib/dependencies";
 import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
+import { publicUrlBuildArgs } from "@/lib/public-url-args";
 import { readProcfile } from "@/lib/procfile";
 import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
 import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
@@ -2560,6 +2561,26 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // history forever, which is correct for the public build-time constants it
       // is for and is why anything sensitive belongs in `secrets`.
       const buildArgs = Object.entries(primaryConfigService?.buildEnv ?? {}).map(([key, value]) => ({ key, value }));
+      // Where this app will live, told to the build — the only moment a browser
+      // bundle can still hear it. Vite, Next and CRA write their env into the
+      // JavaScript they ship, so the API URL at BUILD time is what the user's
+      // browser calls forever.
+      //
+      // Only names the Dockerfile itself declares, and only ones that mean an
+      // address. The FastAPI template declares `ARG VITE_API_URL=` for exactly
+      // this and nobody passed it: its backend answered 200 on the node while
+      // the signup form posted to http://localhost:8000 and showed "Something
+      // went wrong".
+      const ownDockerfilePath = primaryOwnDockerfile
+        ? join(dir, primaryOwnDockerfile)
+        : join(dir, "Dockerfile");
+      if (existsSync(ownDockerfilePath)) {
+        const told = publicUrlBuildArgs(readFileSync(ownDockerfilePath, "utf8"), `https://${slug}.supersonic.cv`, buildArgs);
+        if (told.length) {
+          log(`Telling the build where this app will live: ${told.map((a) => a.key).join(", ")}`);
+          buildArgs.push(...told);
+        }
+      }
       if (buildArgs.length) log(`Build args: ${buildArgs.map((a) => a.key).join(", ")}`);
       // Context stays the repository root — which is what an author who put the
       // Dockerfile one level down and wrote `COPY ./frontend` is expecting.
@@ -2932,9 +2953,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
               log(`Building ${label} with its own Dockerfile`);
             }
             // No .dockerignore written: theirs, or its absence, is theirs too.
+            const siblingArgs = Object.entries(svc.buildEnv ?? {}).map(([key, value]) => ({ key, value }));
+            // Same for a sibling, at the address the app is served on — a
+            // sibling is mounted under a path on the SAME origin, so the app's
+            // own URL is what its frontend should call.
+            siblingArgs.push(...publicUrlBuildArgs(own, `https://${slug}.supersonic.cv`, siblingArgs));
             writeFileSync(join(buildContext, configName), cachedBuildConfig(image, builder, name, {
               secretEnv: mountable,
-              buildArgs: Object.entries(svc.buildEnv ?? {}).map(([key, value]) => ({ key, value })),
+              buildArgs: siblingArgs,
               dockerfile: dockerfileIn,
             }));
           } else if (generatedBuild) {
