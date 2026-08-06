@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.10.1
+
+**`env set` and `env unset` stop announcing a rollout that is not happening.**
+
+Both printed "— new revision rolling out", unconditionally and on both runtimes.
+An app on a node has no revisions, and the line went out even for a write that
+changed nothing — which is how the command read as a success while `env` went on
+listing the key you had just removed. The server now says what it actually did:
+"the node applies this within about ten seconds", or the new revision on Cloud
+Run. The CLI repeats that instead of guessing.
+
+What was genuinely broken is on the server, and is already fixed for 0.10.0 as
+well: anything that came from your `.env` is stored as a secret, and these two
+commands only ever edited the plain variables sitting beside it. Upgrading does
+not fix that and staying does not break it — this release only stops the CLI
+describing it wrongly.
+
+## 0.10.0
 
 **`supersonic init` and `supersonic check` — the deploy loop, on your machine, in
 two seconds.**
@@ -69,8 +86,6 @@ responsible, and the `.env` files held back to be sent as env vars instead.
 - git-lfs pointers are fetched, or the deploy stops and names the files. They are
   130-byte text stubs with `.mp4` names, and every stage after this one reports
   success over them.
-
-## 0.10.0
 
 **`status` can say an app is still coming.**
 
