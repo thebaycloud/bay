@@ -1,5 +1,6 @@
 import { getPool } from "./db";
 import { postgresSink } from "./stages";
+import { putAppSecrets } from "./app-secrets";
 
 const DB = "supersonic_platform";
 
@@ -607,6 +608,9 @@ export async function setPlacementEnv(
   slug: string,
   set: Record<string, string>,
   unset: string[] = [],
+  /** How a value is written to Secret Manager. A port, so this is testable. */
+  storeSecrets: (slug: string, vars: Record<string, string>) => Promise<{ key: string; name: string }[]>
+    = async (s, vars) => (await putAppSecrets(s, vars, process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "", () => {})).stored,
 ): Promise<string[] | null> {
   const pool = getPool(DB);
   const r = await pool.query(`SELECT node, spec FROM fleet_placements WHERE slug = $1`, [slug]);
@@ -615,16 +619,52 @@ export async function setPlacementEnv(
 
   const spec = row.spec as AppSpec;
   const env: Record<string, string> = { ...(spec.env ?? {}) };
-  for (const [k, v] of Object.entries(set)) if (k) env[k] = String(v);
-  for (const k of unset) delete env[k];
+  const secrets: Record<string, string> = { ...(spec.secrets ?? {}) };
+
+  // A key that ARRIVED as a secret is written back as one.
+  //
+  // Everything from the project's `.env` lands in Secret Manager, so for most
+  // apps every name worth changing lives in `secrets` and not in `env`. Editing
+  // only `env` — which is what this did — wrote a plain variable beside a secret
+  // of the same name and left the old value in place: the node appends secrets
+  // after env, so the stale one won, and `env unset` removed a key that was
+  // never there while the listing kept showing it from `secrets`. That is what
+  // "✓ set … — new revision rolling out" was saying about nothing.
+  const asSecret: Record<string, string> = {};
+  for (const [k, v] of Object.entries(set)) {
+    if (!k) continue;
+    if (k in secrets) asSecret[k] = String(v);
+    else env[k] = String(v);
+  }
+  let wroteSecrets = false;
+  if (Object.keys(asSecret).length) {
+    for (const ref of await storeSecrets(slug, asSecret)) {
+      secrets[ref.key] = ref.name;
+      wroteSecrets = true;
+    }
+  }
+  // Unset removes the NAME from both maps. The secret itself is left in Secret
+  // Manager: unlinking is reversible and deleting is not, and nothing else the
+  // platform does destroys a customer's value on a one-word command.
+  for (const k of unset) {
+    delete env[k];
+    if (k in secrets) {
+      delete secrets[k];
+      wroteSecrets = true;
+    }
+  }
 
   // Written back whole. The spec is one JSON document the agent reads verbatim,
   // and a partial update of it is not a thing the agent can be handed.
+  const next: AppSpec = { ...spec, env, secrets };
+  // The node resolves a secret to its latest version, so a changed VALUE leaves
+  // the spec identical and nothing restarts. This is the field that moves.
+  if (wroteSecrets) next.secretsVersion = new Date().toISOString();
   await pool.query(
     `UPDATE fleet_placements SET spec = $3::jsonb WHERE slug = $1 AND node = $2`,
-    [slug, row.node, JSON.stringify({ ...spec, env })],
+    [slug, row.node, JSON.stringify(next)],
   );
-  return Object.keys(env).sort();
+  return [...Object.keys(env), ...Object.keys(secrets)].sort();
 }
 
 /** The variable NAMES a placed app has. Values are never returned. */

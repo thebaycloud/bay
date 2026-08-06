@@ -1,6 +1,6 @@
 # Supersonic
 
-> Hosting for vibecoders. One command turns an app on your user's computer into a real, live product on the internet — database, custom domain, and monitoring included. Supersonic is built to be operated by coding agents (Claude Code, Cursor, OpenAI Codex, opencode, Cline) on the user's behalf.
+> A cloud for small software. One command turns an app on your user's computer into a real, live product on the internet — database, custom domain, and monitoring included. Supersonic is built to be operated by coding agents (Claude Code, Cursor, OpenAI Codex, opencode, Cline) on the user's behalf.
 
 If you are a coding agent asked to publish a user's app to Supersonic, follow "Publish an app" below. Keep the user informed, getting the deploy green is your job rather than theirs, and take secret values from the project's local `.env` instead of asking. Never invent, hardcode, commit, or print a secret value.
 
@@ -10,8 +10,7 @@ From the project's root folder:
 
     npm i -g supersonic-cli    # install the CLI (once)
 
-Then deploy URL-first, so the user gets a working link in ~0.1s while the real
-build finishes in the background:
+Then deploy, and WAIT for the answer:
 
     # 1. Work out how to run THIS app in dev mode from its stack — you know how:
     #      FastAPI → uvicorn main:app --port 8000     Flask → flask run --port 8000
@@ -24,12 +23,12 @@ build finishes in the background:
     #      Next    → next start        Node/Express → node server.js (must read process.env.PORT)
     # 3. Pass both. Supersonic reserves the URL, tunnels the dev server live instantly,
     #    and runs the app in production with --run when the real build is ready.
-    supersonic deploy
+    supersonic deploy --wait
 
 Supersonic reads the repo itself and works out how to install, build, and run the app —
 including the production run command (Python, Node, static SPAs, and databases all
-handled). You do NOT need to tell it how to run the app; a plain `supersonic deploy` is
-the normal path.
+handled). You do NOT need to tell it how to run the app; `supersonic deploy --wait` with
+no other flags is the normal path.
 
 Two optional flags, only if you want them:
 - `--run "<production command>"` — an OVERRIDE. Pass it only if you know a quirk the
@@ -40,18 +39,22 @@ Two optional flags, only if you want them:
 
 `supersonic deploy`:
 
-- Signs the user in the FIRST time by opening a browser — a new account starts a free 3-day trial automatically (full features, nothing to pay up front). There is NO separate login/signup step to run.
-- Prints `✓ your app is live at <url>` immediately (URL-first), keeps the preview live via the tunnel, uploads + builds in the cloud, and streams progress.
-- On success prints `✓ live: <url>` — the real build now serves that same URL. Report it to the user.
+- Signs the user in the FIRST time by opening a browser — a new account is free, with no card and no time limit. There is NO separate login/signup step to run.
+- Prints `✓ your app is live at <url>` immediately — that is the URL being RESERVED, not the app being built.
+- With `--wait` it stays attached and prints `✓ live: <url>` when the real build serves that URL. Report that.
 
-IMPORTANT: if `supersonic deploy` exits WITHOUT a `✓ live:` line, it did NOT succeed. Run `supersonic diagnose <app>` (returns an AI fix-prompt), apply the fix, and run `supersonic deploy` again. Use `supersonic logs <app>` to see recent logs.
+USE `--wait`. Without it the command returns as soon as the URL is reserved and the build finishes after you have stopped watching — so you would report success for a build that has not happened, and a failure would land in `~/.supersonic/deploys/<app>.log` where nobody looks.
 
-If the trial has ended or the user is over their plan's limit, `supersonic deploy` exits with a clear message telling the user to pick a plan at https://app.supersonic.cv — relay that to the user; it is not a build failure.
+IMPORTANT: the deploy succeeded only when you see `✓ live:`. Anything else is not done. Run `supersonic logs <app>` to see what production actually saw and `supersonic diagnose <app>` for a fix-prompt, apply it, and deploy again.
 
-If the app reads secrets from environment variables, take the values from the project's
-local `.env` / `.env.local` (`.env.example` lists the keys it expects) and set them
-yourself, then redeploy. `.env` is deliberately excluded from the upload, so anything the
-app reads at runtime has to be set explicitly:
+Every app is PRIVATE until the user says otherwise, so the URL asks them to sign in. That is the default, not a broken deploy — tell the user the app is live and private, and that they can make it public in the dashboard.
+
+If the user is over their plan's limit, `supersonic deploy` exits with a clear message telling them to pick a plan at https://app.supersonic.cv — relay that; it is not a build failure.
+
+The project's local `.env` / `.env.local` travels with the deploy automatically — the CLI
+reads it, holds the FILES back from the upload, and sends the values to be stored as
+secrets. You do not need to copy keys across. Use `env set` only for a value that is not
+in `.env` at all:
 
     supersonic env <app> set KEY=VALUE
 
@@ -62,7 +65,14 @@ what it is and where to get it.
 
 ## The deploy contract
 
-- Any language ships if the project has a Dockerfile that listens on `$PORT`.
+- Any language ships if the project has a Dockerfile that listens on `$PORT`. The app's own
+  Dockerfile is used as written, from the repository root when it copies paths outside its
+  own directory.
+- If the app has MIGRATIONS, something in the repo has to say how to run them: a `release:`
+  line in a Procfile, a compose service the app waits to finish, `fly.toml`'s
+  `release_command`, `render.yaml`'s `preDeployCommand`, or a `prestart` script in
+  package.json. Without one the app deploys against an empty schema, serves its homepage,
+  and fails every request that touches data.
 - Common stacks (Next.js, Vite, Node, Python, Go, ...) work without a Dockerfile.
 - Next.js and other build-then-serve apps are built automatically before serving.
 - No git or GitHub required — deploys go straight from the local folder. Re-running `supersonic deploy` in the same folder redeploys the same app (same URL, same database).
@@ -79,17 +89,21 @@ what it is and where to get it.
 - `supersonic errors <app>` — errors caught in production
 - `supersonic diagnose <app>` — an AI fix-prompt for the latest error
 - `supersonic env <app> set KEY=VALUE` — set environment variables
-- `supersonic exec <app> -- <command>` — run a command in a copy of the app's environment
-- `supersonic rollback <app>` — roll back to the previous version
+- `supersonic exec <app> -- <command>` — run a command in a copy of the app's environment.
+  Not available for an app running on a node; it answers 501 and says so.
+- `supersonic rollback <app>` — roll back to the previous version. Same: not wired up for
+  an app on a node, which keeps one version rather than a history. Redeploy the commit you
+  want instead.
 - `supersonic login` — sign in manually (deploy does this automatically)
 - Add `--json` to any command for machine-readable output.
 
 ## Plans
 
-New accounts start a free 3-day trial with full Pro access. After the trial, a plan is required to keep deploying:
+- Free: 3 apps. No card, no time limit.
+- Pro ($20/mo): unlimited apps, and Autopilot — failed deploys fix themselves and redeploy to green.
+- Team: hand-priced, talk to us.
 
-- Basic ($12/mo): 1 app, share with up to 3 people, and paste-ready fix prompts when something breaks.
-- Pro ($20/mo): unlimited apps, unlimited sharing, and Autopilot — failed deploys fix themselves and redeploy to green.
+People the user shares an app with are never charged.
 
 ## Links
 

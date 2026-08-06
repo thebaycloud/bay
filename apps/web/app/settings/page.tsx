@@ -4,11 +4,17 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
-  User, CreditCard, Terminal, AlertTriangle, Trash2, Loader2, Check, Sparkles, ExternalLink,
+  User, Terminal, AlertTriangle, Trash2, Loader2, Check,
 } from "lucide-react";
 import { Sidebar } from "@/components/Sidebar";
+import { Billing, type BillingAccount } from "@/components/Billing";
 
-interface Account { email: string; name: string | null; provider: string; hasPassword: boolean; plan: "basic" | "pro"; }
+interface Account extends BillingAccount {
+  email: string;
+  name: string | null;
+  provider: string;
+  hasPassword: boolean;
+}
 interface Tok { id: string; name: string | null; created_at: string; last_used_at: string | null; }
 
 const providerLabel: Record<string, string> = { google: "Google", github: "GitHub", credentials: "Email & password" };
@@ -27,8 +33,6 @@ export default function Settings() {
 
   const [tokens, setTokens] = useState<Tok[] | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [billingBusy, setBillingBusy] = useState(false);
-  const [billingNote, setBillingNote] = useState("");
 
   const [confirm, setConfirm] = useState("");
   const [delBusy, setDelBusy] = useState(false);
@@ -50,17 +54,6 @@ export default function Settings() {
     const r = await fetch("/api/account/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revoke: id }) });
     setConfirmingId(null);
     if (r.ok) setTokens((t) => (t ?? []).filter((x) => x.id !== id));
-  }
-
-  async function billing(path: string, body?: unknown) {
-    setBillingBusy(true); setBillingNote("");
-    try {
-      const r = await fetch(path, { method: "POST", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
-      const d = await r.json().catch(() => ({}));
-      if (d.url) { window.location.href = d.url; return; }
-      setBillingNote(d.error || "Billing isn't available yet.");
-    } catch { setBillingNote("Something went wrong."); }
-    setBillingBusy(false);
   }
 
   async function del() {
@@ -95,21 +88,10 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Plan & billing */}
-          <div className="set-card">
-            <div className="set-head"><CreditCard size={15} /><div><div className="st">Plan &amp; billing</div><div className="ss">You&apos;re on the {acct?.plan === "pro" ? "Pro" : "Basic"} plan.</div></div></div>
-            <div className="set-body">
-              <div className="plan-line">
-                <span className={"plan-tag" + (acct?.plan === "pro" ? " pro" : "")}><Sparkles size={12} />{acct?.plan === "pro" ? "Pro" : "Basic"}</span>
-                {acct?.plan === "pro" ? (
-                  <button className="btn" disabled={billingBusy} onClick={() => billing("/api/billing/portal")}>Manage billing <ExternalLink size={13} /></button>
-                ) : (
-                  <button className="btn primary" disabled={billingBusy} onClick={() => billing("/api/billing/checkout", { plan: "pro" })}>Upgrade to Pro</button>
-                )}
-              </div>
-              {billingNote && <div className="set-err">⚠ {billingNote}</div>}
-            </div>
-          </div>
+          {/* Plan, usage and billing — its own component because it grew from a
+              plan badge and one button into four meters, a reset date and two
+              different ways to change plan. */}
+          <Billing acct={acct} />
 
           {/* CLI tokens */}
           <div className="set-card">

@@ -42,6 +42,11 @@ test("the placement spec is the agent's App, and this is what keeps it so", () =
     command: ["node", "server.js"],
     env: { LOG_LEVEL: "info" },
     secrets: { DATABASE_URL: "app-myapp-DATABASE_URL" },
+    // Moves when a secret VALUE moves. Without it the spec is byte-identical
+    // after `env set`, the node has no reason to restart, and the app keeps
+    // serving the value it started with — which is how that command reported
+    // success and changed nothing.
+    secretsVersion: "2026-08-06T21:00:00.000Z",
     port: 8080,
     memoryBytes: 2147483648,
     cpuShares: 1024,

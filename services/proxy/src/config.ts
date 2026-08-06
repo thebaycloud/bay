@@ -16,6 +16,15 @@ export const config = {
   /** Inject the "Runs on Supersonic" badge + owner toolbar into HTML pages. */
   injectOverlay: process.env.INJECT_OVERLAY !== "0",
   /**
+   * Whether plan limits are enforced — must match GATING_ENABLED in apps/web.
+   *
+   * The edge only reads it for one decision (may this app hide the badge), but
+   * it has to be the same flag: a proxy that enforced plans while the control
+   * plane did not would take the badge off apps whose owners the dashboard is
+   * still treating as unlimited.
+   */
+  gatingEnabled: process.env.GATING_ENABLED === "1",
+  /**
    * What the fleet's node router checks. Empty means fleet requests go unsigned,
    * which the node only accepts while its own gate is off.
    *

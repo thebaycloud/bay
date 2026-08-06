@@ -7,7 +7,7 @@ import { Bracket } from "@/components/Bracket";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sidebar } from "@/components/Sidebar";
-import { TrialBanner } from "@/components/TrialBanner";
+import { AccountBanner } from "@/components/AccountBanner";
 import { AppsGrid, type App } from "@/components/AppsGrid";
 import { CardsSkeleton, RailSkeleton } from "@/components/Skeleton";
 import { currentUserId } from "@/lib/session";
@@ -77,7 +77,7 @@ async function AppsAndRail() {
     <>
       <Sidebar active="apps" apps={apps} />
       <div className="main">
-        <TrialBanner />
+        <AccountBanner />
         <header className="topbar topbar-flush">
           <div className="topbar-wrap">
             <div className="topbar-row">

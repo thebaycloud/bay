@@ -9,9 +9,9 @@ const APP = "https://app.supersonic.cv";
 const SITE = "https://supersonic.cv";
 
 /** A self-contained script that builds the overlay in a shadow root. */
-function overlayScript(slug: string, owner: boolean): string {
+function overlayScript(slug: string, owner: boolean, badge: boolean): string {
   // slug is validated [a-z0-9-] upstream; JSON.stringify guards the rest.
-  const cfg = JSON.stringify({ slug, owner, app: APP, site: SITE });
+  const cfg = JSON.stringify({ slug, owner, badge, app: APP, site: SITE });
   return `<script>(function(){
 var C=${cfg};
 if(window.__ssOverlay)return; window.__ssOverlay=1;
@@ -54,10 +54,12 @@ var vis='private',grants=[],reqs=[];
 function h(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;}
 var style=document.createElement('style');style.textContent=css;root.appendChild(style);
 
-// badge (everyone)
+// badge (everyone on free; removable on paid plans)
+if(C.badge){
 var badge=document.createElement('a');badge.className='badge';badge.href=C.site;badge.target='_blank';
 badge.innerHTML=MARK(12,'#fff')+'Runs on Supersonic';
 root.appendChild(badge);
+}
 
 if(!C.owner)return;
 
@@ -112,11 +114,24 @@ share.onclick=function(){
 }
 
 /** Inject the overlay script just before </body> (or append if there's no body). */
-export function injectOverlay(htmlBody: string, slug: string, owner: boolean): string {
-  const snippet = overlayScript(slug, owner);
+export function injectOverlay(htmlBody: string, slug: string, owner: boolean, badge: boolean): string {
+  const snippet = overlayScript(slug, owner, badge);
   const idx = htmlBody.toLowerCase().lastIndexOf("</body>");
   if (idx === -1) return htmlBody + snippet;
   return htmlBody.slice(0, idx) + snippet + htmlBody.slice(idx);
+}
+
+/**
+ * Whether there is anything to inject at all.
+ *
+ * A paid app being viewed by a stranger has no badge and no toolbar, so the
+ * overlay would be an empty shadow root — and buffering the entire HTML
+ * response to add nothing is a real cost on the one path where it is charged to
+ * every page view. This is what lets `forward` stream those responses through
+ * untouched, exactly like a Pro customer's app should behave.
+ */
+export function hasOverlay(owner: boolean, badge: boolean): boolean {
+  return owner || badge;
 }
 
 /** True only for a top-level HTML document we should decorate. */

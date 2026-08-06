@@ -6,6 +6,7 @@ import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
 import { pickRoute, pickPrefix } from "./routes";
+import { badgeRequired } from "./plan";
 import { forward } from "./forward";
 import { attachTunnel, hasTunnel, forwardToTunnel } from "./tunnel";
 
@@ -76,10 +77,13 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // the sibling at /api has to build its links under /api and cannot know that
   // from the request alone.
   const prefix = pickPrefix(app.routes, req.url ?? "/");
+  // Resolved once per request rather than per response: the plan travels on the
+  // app row that has already been fetched and cached, so this costs nothing.
+  const badge = badgeRequired(app.owner_plan, app.owner_status);
   const serve = (visitorCtx: { userId: string; email: string; name: string }, wd: string, owner: boolean) =>
     action.serve === "tunnel"
       ? Promise.resolve(forwardToTunnel(req, res, slug))
-      : forward(req, res, target as string, visitorCtx, wd, { slug, owner }, prefix);
+      : forward(req, res, target as string, visitorCtx, wd, { slug, owner, badge }, prefix);
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
   if (app.visibility === "public") {

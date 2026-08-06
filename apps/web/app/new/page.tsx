@@ -8,19 +8,31 @@ import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 
-const AGENT_PROMPT = `You are publishing my app to Supersonic — one-command hosting for vibecoders (agent manual: https://supersonic.cv/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
+// The 402 bodies carry a `reason`; anything unrecognised (an older server, a
+// proxy that ate the body) falls back to the generic plan comparison rather
+// than to a specific limit the user may not have hit.
+const REASONS: PaywallReason[] = ["app_limit", "public_limit", "build_limit", "fix_used", "no_account"];
+function asReason(v: unknown): PaywallReason {
+  return REASONS.includes(v as PaywallReason) ? (v as PaywallReason) : "choose_plan";
+}
+
+const AGENT_PROMPT = `You are publishing my app to Supersonic — a cloud for small software (agent manual: https://supersonic.cv/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
 
 1. Install the CLI if it isn't already:  npm i -g supersonic-cli
 
-2. Work out how this app runs in dev mode (npm run dev, uvicorn main:app --port 8000, bin/rails s — you know the stack), then publish it with that command:
-   supersonic deploy --dev-cmd "<how to run it>"
-   The first run opens a browser for me to sign in — a new account starts a free trial automatically, nothing to pay. It prints a live URL within seconds and finishes the real build in the background. Send me that URL.
+2. Publish it, and WAIT for the answer:
+   supersonic deploy --wait
+   The first run opens a browser for me to sign in. Without --wait the command returns the moment the URL is reserved and finishes building after you have stopped watching, so you would report success for a build that has not happened yet.
 
-3. Getting it green is your job, not mine. If the deploy exits without a "✓ live:" line, or the live URL is broken, work it out yourself:  supersonic diagnose <app>  hands you a paste-ready fix, and  supersonic logs <app>  and  supersonic errors <app>  show what production actually saw. Fix the code, redeploy, repeat until it works. Don't paste me an error and ask what to do.
+3. The deploy succeeded only when you see a line starting "✓ live:". Anything else is not done. Getting it green is your job, not mine:  supersonic logs <app>  shows what production actually saw and  supersonic diagnose <app>  hands you a fix. Fix the code, redeploy, repeat. Don't paste me an error and ask what to do.
 
-Don't ask me for anything you can find yourself. The keys my app uses — OPENAI_API_KEY, STRIPE_SECRET_KEY and the like — are already in my local .env / .env.local, and .env.example lists which ones it expects. Read them from there and set them yourself with  supersonic env <app> set KEY=VALUE, then redeploy — .env is never uploaded with my code, so anything the app reads has to be set this way.
+4. The URL will ask me to sign in — every app is private until I say otherwise. That is not a bug; tell me the app is live and private, and that I can make it public in the dashboard.
 
-Two exceptions: skip DATABASE_URL and anything pointing at localhost, because Supersonic provisions the database and injects that itself; and if a key is missing or is obviously a placeholder or test value (sk_test_…, "changeme"), ask me for the real one in one sentence — what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
+My .env travels with the deploy automatically — you do not need to copy keys across. Use  supersonic env <app> set KEY=VALUE  only for a value that is NOT in my .env. Skip DATABASE_URL and anything pointing at localhost: Supersonic provisions the database and injects that itself.
+
+If my app has migrations and nothing in the repo says how to run them — no Procfile release line, nothing in compose.yml, fly.toml or package.json — say so and add one. An app deployed against an empty schema serves its homepage and fails everything else.
+
+If a key is missing or is obviously a placeholder (sk_test_…, "changeme"), ask me for the real one in one sentence: what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
 
 type Door = "url" | "github" | "local";
 type Phase = "idle" | "detecting" | "secrets" | "deploying" | "done" | "error";
@@ -106,7 +118,10 @@ export default function NewApp() {
       // paywall / upgrade modal instead of trying to parse it as events.
       if (res.status === 402) {
         const d = await res.json().catch(() => ({}));
-        setPaywall(d.paywall ? "trial_ended" : "app_limit");
+        // The server names the limit it enforced. Guessing here — the old code
+        // read `paywall` as "trial ended" and everything else as "too many
+        // apps" — meant a build-quota refusal was explained as an app cap.
+        setPaywall(asReason(d.reason));
         setError(d.error || ""); setPhase("error");
         return;
       }
@@ -327,7 +342,10 @@ export default function NewApp() {
         </div>
       </div>
 
-      {paywall && <Paywall reason={paywall} onClose={paywall === "trial_ended" ? undefined : () => setPaywall(null)} />}
+      {/* Always dismissable: there is no state a person can be in where the
+          only thing behind this modal is a locked account. Free is always
+          behind it, with their apps still running. */}
+      {paywall && <Paywall reason={paywall} onClose={() => setPaywall(null)} />}
       <ThemeToggle />
     </div>
   );

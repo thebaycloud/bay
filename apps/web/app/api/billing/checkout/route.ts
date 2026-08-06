@@ -18,7 +18,18 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const plan: Plan = body.plan === "pro" ? "pro" : "basic";
+  // Only paid plans reach checkout. "free" is not a thing you buy — it is where
+  // you already are — so an unrecognised plan means Pro rather than an error.
+  const plan: Plan = body.plan === "team" ? "team" : "pro";
+  const price = priceForPlan(plan);
+  if (!price) {
+    // Team with no configured price: hand-priced, on purpose, while we learn
+    // what it should cost. Answered as an invitation rather than a failure.
+    return Response.json(
+      { error: "Team plans are set up with us directly — email founders@supersonic.cv and we'll get you started.", contact: true },
+      { status: 503 }
+    );
+  }
 
   const pool = getPool("supersonic_platform");
   const r = await pool.query("SELECT email, stripe_customer_id FROM users WHERE id = $1", [uid]);
@@ -35,7 +46,7 @@ export async function POST(req: Request) {
   const session = await s.checkout.sessions.create({
     mode: "subscription",
     customer: customerId,
-    line_items: [{ price: priceForPlan(plan), quantity: 1 }],
+    line_items: [{ price, quantity: 1 }],
     success_url: `${APP_URL}/?billing=success`,
     cancel_url: `${APP_URL}/?billing=cancel`,
     client_reference_id: uid,

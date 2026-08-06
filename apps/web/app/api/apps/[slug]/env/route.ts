@@ -63,7 +63,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     }
     await setEnv(slug, set as Record<string, string>, unset as string[]);
     const svc = await describeService(slug);
-    return Response.json({ ok: true, keys: svc.envKeys });
+    return Response.json({ ok: true, keys: svc.envKeys, note: "a new revision is rolling out" });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

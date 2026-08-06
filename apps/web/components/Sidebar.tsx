@@ -11,11 +11,17 @@ import type { App } from "./AppsGrid";
 interface Acct {
   email: string;
   name: string | null;
-  plan: "basic" | "pro";
-  access?: "trial" | "active" | "locked";
-  trialEndsAt?: string | null;
-  usage?: { apps: number; maxApps: number | null; maxGrants: number | null };
+  plan: "free" | "pro" | "team";
+  access?: "active" | "locked";
+  usage?: {
+    apps: number;
+    maxApps: number | null;
+    builds: number;
+    monthlyBuilds: number | null;
+  };
 }
+
+const PLAN_LABEL: Record<string, string> = { free: "Free", pro: "Pro", team: "Team" };
 
 /**
  * What the fleet is doing, for the rail.
@@ -128,10 +134,13 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
   }, [menuOpen, closing, closeMenu]);
 
   const initial = (acct?.name || acct?.email || "?").trim().charAt(0).toUpperCase();
-  const onTrial = acct?.access === "trial";
-  const canUpgrade = onTrial || acct?.plan === "basic";
+  const paid = acct?.plan === "pro" || acct?.plan === "team";
+  const canUpgrade = !!acct && !paid;
+  // A meter only where there is a ceiling to measure against. `maxApps` is null
+  // on the wire for unlimited (Infinity does not survive JSON), and a bar with
+  // no end renders as "3/null" and a full-width fill.
   const meter = acct?.usage && acct.usage.maxApps != null ? acct.usage : null;
-  const left = onTrial ? trialLeft(acct?.trialEndsAt) : "";
+  const buildMeter = acct?.usage && acct.usage.monthlyBuilds != null ? acct.usage : null;
 
   return (
     <aside className="sidebar">
@@ -240,8 +249,8 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
                     the line that names them. */}
                 <div className="acct-nameline">
                   {acct.name && <span className="acct-name">{acct.name}</span>}
-                  <span className={"plan-tag sm" + (onTrial || acct.plan === "pro" ? " pro" : "")}>
-                    {onTrial ? "Trial" : acct.plan === "pro" ? "Pro" : "Basic"}
+                  <span className={"plan-tag sm" + (paid ? " pro" : "")}>
+                    {PLAN_LABEL[acct.plan] ?? "Free"}
                   </span>
                 </div>
                 <div className="acct-email">{acct.email}</div>
@@ -279,14 +288,21 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
               <button className="btn sm primary" onClick={() => setShowPlans(true)}><Sparkles size={13} />Upgrade</button>
             </div>
           )}
-          {/* The clock the tag never showed. `trialEndsAt` has been in the
-              account payload since trials shipped and nothing read it, so the
-              rail said "Trial" on day one and on the last day alike. */}
-          {left && <div className="trial-left">{left}</div>}
+          {/* Two meters, and only the ones with a ceiling. Builds is here
+              because it is the limit a person can hit without doing anything
+              they would describe as "adding" something — redeploying the same
+              app twenty times in an afternoon is an ordinary Tuesday, and
+              running out with no warning would read as the platform breaking. */}
           {meter && (
             <div className="usage">
               <div className="usage-row"><span>Apps</span><span>{meter.apps}/{meter.maxApps}</span></div>
               <div className="usage-bar"><span style={{ width: `${Math.min(100, (meter.apps / (meter.maxApps || 1)) * 100)}%` }} /></div>
+            </div>
+          )}
+          {buildMeter && (
+            <div className="usage">
+              <div className="usage-row"><span>Builds</span><span>{buildMeter.builds}/{buildMeter.monthlyBuilds}</span></div>
+              <div className="usage-bar"><span style={{ width: `${Math.min(100, (buildMeter.builds / (buildMeter.monthlyBuilds || 1)) * 100)}%` }} /></div>
             </div>
           )}
         </div>

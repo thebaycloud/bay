@@ -43,6 +43,8 @@ import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
+import { countIfUnder, claimFreeFix } from "@/lib/usage";
+import { agentLimitMessage } from "@/lib/plan-copy";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
@@ -3645,6 +3647,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         serviceless,
         memoryBytes: memoryBytes(scale.memory),
         cpuShares: cpuShares(scale.cpu),
+        // Stamped whenever this app HAS secrets, because this deploy just wrote
+        // a version of every one of them. Secrets travel as names resolved to
+        // `versions/latest`, so an edited .env leaves the spec byte-identical and
+        // nothing restarts — the app keeps the value it booted with. Measured on
+        // a worker whose token was changed in .env and redeployed onto the same
+        // cached digest: the container never saw the new one.
+        ...(secretRefs.length ? { secretsVersion: new Date().toISOString() } : {}),
         // What the node probes AND what it injects as PORT — one value, so an
         // app that reads the variable and an app that hardcodes its port land in
         // the same place. Without this every placement said 8080 and stock nginx,
@@ -4016,14 +4025,47 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         await failure.repaired("skipped", null);
         return;
       }
-      // The auto-fix agent is a Pro feature. Basic gets a paste-ready prompt
-      // for its own coding agent instead of us fixing the code in the cloud.
-      if (!limits.autoFix) {
+      // Whether the repair agent runs at all — three questions now, not one.
+      //
+      // This is the single most expensive thing the platform can do on a user's
+      // behalf: an LLM session that reads a repo, edits it, and redeploys, up to
+      // MAX_REDEPLOYS times. Per-RUN cost was already bounded (MAX_STEPS,
+      // MAX_REDEPLOYS, REPAIR_MAX_CALLS in lib/agent.ts and lib/agents/index.ts).
+      // What was never bounded is how many runs a month can hold, and that is
+      // the hole a free tier would have opened.
+      let runRepair = false;
+      let declined = "";
+      if (limits.autoFix) {
+        runRepair = await countIfUnder(ownerId, "agentRuns", limits.monthlyAgentRuns);
+        if (!runRepair) declined = agentLimitMessage();
+      } else if (limits.lifetimeFreeFixes > 0) {
+        // The one free repair, spent here: on a deploy that has ACTUALLY FAILED,
+        // rather than on the first deploy an account makes. Spent on the first
+        // deploy it would usually be spent on one that was going to succeed —
+        // costing us a session and showing the user nothing. Spent on the first
+        // failure it is the one moment the product does something no other
+        // deploy tool does.
+        //
+        // Claimed before the agent starts rather than after it succeeds: a crash
+        // mid-run must not hand out a second session. `claimFreeFix` is a
+        // conditional UPDATE, so two deploys failing in the same instant cannot
+        // both take it, and it fails CLOSED — unlike every other limit here —
+        // because the fallback costs a paste-ready prompt and the alternative
+        // costs an unbounded LLM session.
+        runRepair = await claimFreeFix(ownerId);
+        if (runRepair) log("Using your one free auto-fix — the repair agent is taking this one.");
+      }
+      if (!runRepair) {
+        // The rollback's own outcome, appended rather than dropped: on the fleet
+        // there is no previous version to restore, and saying so is the whole
+        // point of the change that taught this function to return a note. The
+        // three sibling call sites already do this; this one arrived from the
+        // repair-gating work and had no reason to know.
         const rollbackNote = await rollBackToLastGood();
         if (rollbackNote) result = { ...result, error: `${result.error ?? "deploy failed"}\n\n${rollbackNote}` };
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
-        log("Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
+        log(declined || "Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
         send({
           type: "error",
           message: result.error,

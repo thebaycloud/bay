@@ -5,7 +5,8 @@ import { getAppBySlug, setVisibility, listGrants, addGrant, removeGrant, type Vi
 import { listPending, resolveRequest } from "@/lib/requests";
 import { sendAccessGranted } from "@/lib/email";
 import { currentUserId } from "@/lib/session";
-import { entitlement } from "@/lib/entitlements";
+import { entitlement, countPublicApps } from "@/lib/entitlements";
+import { publicLimitMessage, noAccountMessage } from "@/lib/plan-copy";
 
 const VISIBILITIES: Visibility[] = ["private", "shared", "public"];
 
@@ -62,6 +63,28 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     if (!VISIBILITIES.includes(body.visibility)) {
       return Response.json({ error: "invalid visibility" }, { status: 400, headers: cors });
     }
+    // The public cap, and the only limit on this route that still bites —
+    // sharing by email is unlimited on every plan.
+    //
+    // Only 'public' is counted. Private and email-shared apps are unbounded
+    // because they are the product working; public is bounded because it is the
+    // one visibility a stranger can reach, which makes it both the acquisition
+    // surface and the abuse surface (free CDN, phishing host, raw egress).
+    //
+    // `countPublicApps` excludes this slug, so re-saving an app that is already
+    // public is idempotent rather than a refusal against the cap it occupies.
+    if (body.visibility === "public") {
+      const ent = await entitlement(app.owner_id);
+      if (Number.isFinite(ent.limits.maxPublicApps)) {
+        const others = await countPublicApps(app.owner_id, slug);
+        if (others >= ent.limits.maxPublicApps) {
+          return Response.json(
+            { error: publicLimitMessage(ent.limits), upgrade: true, reason: "public_limit" },
+            { status: 402, headers: cors }
+          );
+        }
+      }
+    }
     await setVisibility(slug, body.visibility);
   }
   if (body.addEmail) {
@@ -71,15 +94,14 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return Response.json({ error: "invalid email" }, { status: 400, headers: cors });
     }
-    // Sharing cap (inert until GATING_ENABLED=1). Re-adding someone already on the
-    // list is idempotent and always allowed; only a genuinely new invitee counts
-    // against the cap.
+    // Sharing by email is unlimited on every plan — `maxGrants` is Infinity
+    // everywhere, so the cap below never fires. It is kept rather than deleted
+    // because the mechanism is worth having if a spam vector ever appears here;
+    // what is NOT worth having is a number in it, because recipients are how
+    // small software spreads and charging for them taxes our own growth.
     const ent = await entitlement(app.owner_id);
     if (ent.locked) {
-      return Response.json(
-        { error: "Your free trial has ended. Pick a plan to keep sharing.", paywall: true },
-        { status: 402, headers: cors }
-      );
+      return Response.json({ error: noAccountMessage(), paywall: true, reason: "no_account" }, { status: 402, headers: cors });
     }
     if (Number.isFinite(ent.limits.maxGrants)) {
       const current = await listGrants(slug);

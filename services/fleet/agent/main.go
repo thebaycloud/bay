@@ -59,6 +59,17 @@ type App struct {
 	MemoryBytes int64             `json:"memoryBytes"`
 	CPUShares   uint64            `json:"cpuShares"`
 	HealthPath  string            `json:"healthPath,omitempty"`
+	// SecretsVersion moves when the platform WRITES this app's secret values.
+	//
+	// Secrets travel as names and are resolved to `versions/latest`, so a changed
+	// value leaves the spec byte-identical and nothing below has any reason to
+	// restart — the app keeps serving what it started with. `env set` reported
+	// success and changed nothing for exactly this reason.
+	//
+	// So it is compared like image and command are. An older control plane sends
+	// nothing and both sides are empty, which compares equal and changes no
+	// behaviour.
+	SecretsVersion string `json:"secretsVersion,omitempty"`
 	// Processes is what the app declares it runs. Empty means one implicit web
 	// process — see processesOf, where that distinction is load-bearing.
 	Processes []Process `json:"processes,omitempty"`
@@ -980,7 +991,8 @@ func (a *Agent) reconcileOnce() error {
 			if imageFor(l.app, l.proc) == imageFor(u.app, u.proc) &&
 				sameStrings(l.proc.Command, u.proc.Command) &&
 				sameStringMap(l.app.Env, u.app.Env) &&
-				sameStringMap(l.app.Secrets, u.app.Secrets) {
+				sameStringMap(l.app.Secrets, u.app.Secrets) &&
+				l.app.SecretsVersion == u.app.SecretsVersion {
 				if st, err := runscStatusFn(id); err == nil && st.Status == "running" {
 					// Forget every image this id ever failed on, not just the
 					// current one — otherwise a bad image's record (e.g.
@@ -1022,6 +1034,8 @@ func (a *Agent) reconcileOnce() error {
 					what = "environment"
 					if !sameStrings(l.proc.Command, u.proc.Command) {
 						what = "command"
+					} else if l.app.SecretsVersion != u.app.SecretsVersion {
+						what = "a secret value"
 					}
 				}
 				log.Printf("%s: %s changed, restarting", id, what)

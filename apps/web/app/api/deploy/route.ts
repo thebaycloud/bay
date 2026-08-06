@@ -7,6 +7,8 @@ import { currentUserId } from "@/lib/session";
 import { getPool } from "@/lib/db";
 import { resolveSlug } from "@/lib/gcloud";
 import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
+import { countIfUnder } from "@/lib/usage";
+import { appLimitMessage, buildLimitMessage, noAccountMessage } from "@/lib/plan-copy";
 import { runDeploy } from "@/lib/deploy-pipeline";
 import { createRun, startDeployJob, finishRun, pruneRuns, isOwnSourceObject, readUploadedSource, type UploadedSource } from "@/lib/deploy-runs";
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
@@ -207,27 +209,34 @@ export async function POST(req: Request) {
   // Plan enforcement (inert until GATING_ENABLED=1 — see lib/entitlements).
   // Checked up front so a blocked deploy fails cleanly with a 402 instead of
   // erroring mid-stream. `limits` also decides, further down, whether a failed
-  // deploy gets the auto-fix agent (pro/trial) or a paste prompt (basic).
+  // deploy gets the auto-fix agent or a paste prompt.
   const ent = await entitlement(ownerId);
   const limits: Limits = ent.limits;
   if (ent.locked) {
-    // Trial ended (or subscription canceled) — hard paywall.
-    return Response.json(
-      { error: "Your free trial has ended. Pick a plan at app.supersonic.cv to keep deploying.", paywall: true },
-      { status: 402 }
-    );
+    // Reachable only when there is no user row at all — a lapsed subscription
+    // downgrades to free rather than locking. See `entitlement`.
+    return Response.json({ error: noAccountMessage(), paywall: true, reason: "no_account" }, { status: 402 });
   }
   if (Number.isFinite(limits.maxApps)) {
     const existing = await countOwnerApps(ownerId, slug);
     if (existing >= limits.maxApps) {
-      return Response.json(
-        {
-          error: `Your plan includes ${limits.maxApps} app. Upgrade to Pro for unlimited apps at app.supersonic.cv.`,
-          upgrade: true,
-        },
-        { status: 402 }
-      );
+      return Response.json({ error: appLimitMessage(limits), upgrade: true, reason: "app_limit" }, { status: 402 });
     }
+  }
+
+  // The build meter, and the only place it is authoritative.
+  //
+  // /api/deploy/reserve checks it too, but that check is advisory — it exists so
+  // the CLI refuses before printing a URL, and it reads a counter it does not
+  // increment. This is where a build actually gets dispatched, so this is where
+  // the count has to be taken, atomically, against concurrent deploys of
+  // different apps by the same owner.
+  //
+  // Counted BEFORE the job is dispatched rather than after it succeeds: we pay
+  // for a build that fails exactly as much as for one that works, and a meter
+  // that only counted successes would be a meter a broken repo could evade.
+  if (!(await countIfUnder(ownerId, "builds", limits.monthlyBuilds))) {
+    return Response.json({ error: buildLimitMessage(limits), upgrade: true, reason: "build_limit" }, { status: 402 });
   }
 
 

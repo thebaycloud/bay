@@ -33,6 +33,18 @@ export interface AppSpec {
   memoryBytes: number;
   cpuShares: number;
   healthPath?: string;
+  /**
+   * When the platform last WROTE this app's secret values.
+   *
+   * The spec names secrets, and the node resolves each to its latest version —
+   * so a changed value leaves the spec byte-identical and the node has no reason
+   * to restart anything. The app then keeps serving the value it started with,
+   * which is how `env set BOT_TOKEN=…` reported success and changed nothing.
+   *
+   * This is the one field that moves when a value does. Compared like any other,
+   * so a write here is a restart there.
+   */
+  secretsVersion?: string;
   processes?: AgentProcess[];
 }
 
@@ -103,6 +115,8 @@ export interface SpecInput {
   memoryBytes?: number;
   cpuShares?: number;
   healthPath?: string;
+  /** See `AppSpec.secretsVersion`. Absent leaves the field off the spec. */
+  secretsVersion?: string;
 }
 
 /** What migrate.sh hardcoded, now named. */
@@ -223,6 +237,7 @@ export function buildAppSpec(i: SpecInput): AppSpec {
     memoryBytes: i.memoryBytes ?? DEFAULT_MEMORY,
     cpuShares: i.cpuShares ?? DEFAULT_CPU_SHARES,
     healthPath: i.healthPath ?? "/",
+    ...(i.secretsVersion ? { secretsVersion: i.secretsVersion } : {}),
   };
   if (Object.keys(env).length) spec.env = env;
   if (Object.keys(secrets).length) spec.secrets = secrets;

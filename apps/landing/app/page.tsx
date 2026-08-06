@@ -35,21 +35,28 @@ const features = [
   { icon: Bot, name: "An agent on the inside", desc: "Supersonic runs its own AI inside your cloud. When something breaks it works out the fix — and on Pro, applies it and gets your app healthy again, by itself." },
 ];
 
-// Three paid tiers, no free plan — every one of them opens with a trial.
-const basic = [
-  ["1 app", true], ["Database, storage & custom domain", true], ["Share with up to 3 people", true],
-  ["Paste-ready fix prompts when something breaks", true], ["Auto-fix failed deploys", false], ["Remove the Supersonic badge", false],
-  ["Website analytics", false], ["An agent that fixes your code in production", false],
+// A free plan that never expires, then two paid ones. No trial: a countdown
+// turns a visitor into a lead somebody has to chase, where a free app turns
+// them into a live URL other people open.
+//
+// The rows are deliberately in the same order across all three so the eye can
+// run down a column — and every row that is FALSE on free is something we
+// actually charge for, not a feature withheld to make a table look full.
+const free = [
+  ["3 apps", true], ["Database & storage included", true], ["Share by email with anyone", true],
+  ["1 public app", true], ["Paste-ready fix prompts when something breaks", true],
+  ["One free auto-fix", true], ["Your own domain", false], ["Auto-fix every failed deploy", false],
+  ["Remove the Supersonic badge", false], ["Backups & restore", false],
 ];
 const pro = [
-  ["Unlimited apps", true], ["Database, storage & custom domain", true], ["Unlimited sharing + roles", true],
-  ["Paste-ready fix prompts when something breaks", true], ["Auto-fix failed deploys", true], ["Remove the Supersonic badge", true],
-  ["Website analytics", false], ["An agent that fixes your code in production", false],
+  ["Unlimited apps", true], ["Database & storage included", true], ["Share by email with anyone", true],
+  ["Unlimited public apps", true], ["Paste-ready fix prompts when something breaks", true],
+  ["One free auto-fix", true], ["Your own domain", true], ["Auto-fix every failed deploy", true],
+  ["Remove the Supersonic badge", true], ["Backups & restore", true],
 ];
-const scale = [
-  ["Unlimited apps", true], ["Database, storage & custom domain", true], ["Unlimited sharing + roles", true],
-  ["Paste-ready fix prompts when something breaks", true], ["Auto-fix failed deploys", true], ["Remove the Supersonic badge", true],
-  ["Website analytics", true], ["An agent that fixes your code in production", true],
+const team = [
+  ["Everything in Pro", true], ["Sign in with your company domain", true], ["Roles & audit log", true],
+  ["Unlimited recipients, always free", true], ["Priority support", true],
 ];
 
 const faqs = [
@@ -60,19 +67,23 @@ const faqs = [
   ["Where does my app actually run?", "On Google Cloud, on your own isolated infrastructure — a real production deployment that scales from one visitor to millions, with a secure custom domain."],
 ];
 
-const AGENT_PROMPT = `You are publishing my app to Supersonic — one-command hosting for vibecoders (agent manual: https://supersonic.cv/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
+const AGENT_PROMPT = `You are publishing my app to Supersonic — a cloud for small software (agent manual: https://supersonic.cv/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
 
 1. Install the CLI if it isn't already:  npm i -g supersonic-cli
 
-2. Work out how this app runs in dev mode (npm run dev, uvicorn main:app --port 8000, bin/rails s — you know the stack), then publish it with that command:
-   supersonic deploy --dev-cmd "<how to run it>"
-   The first run opens a browser for me to sign in or create an account — a new account starts a free trial automatically, nothing to pay. It prints a live URL within seconds and finishes the real build in the background. Send me that URL.
+2. Publish it, and WAIT for the answer:
+   supersonic deploy --wait
+   The first run opens a browser for me to sign in. Without --wait the command returns the moment the URL is reserved and finishes building after you have stopped watching, so you would report success for a build that has not happened yet.
 
-3. Getting it green is your job, not mine. If the deploy exits without a "✓ live:" line, or the live URL is broken, work it out yourself:  supersonic diagnose <app>  hands you a paste-ready fix, and  supersonic logs <app>  and  supersonic errors <app>  show what production actually saw. Fix the code, redeploy, repeat until it works. Don't paste me an error and ask what to do.
+3. The deploy succeeded only when you see a line starting "✓ live:". Anything else is not done. Getting it green is your job, not mine:  supersonic logs <app>  shows what production actually saw and  supersonic diagnose <app>  hands you a fix. Fix the code, redeploy, repeat. Don't paste me an error and ask what to do.
 
-Don't ask me for anything you can find yourself. The keys my app uses — OPENAI_API_KEY, STRIPE_SECRET_KEY and the like — are already in my local .env / .env.local, and .env.example lists which ones it expects. Read them from there and set them yourself with  supersonic env <app> set KEY=VALUE, then redeploy — .env is never uploaded with my code, so anything the app reads has to be set this way.
+4. The URL will ask me to sign in — every app is private until I say otherwise. That is not a bug; tell me the app is live and private, and that I can make it public in the dashboard.
 
-Two exceptions: skip DATABASE_URL and anything pointing at localhost, because Supersonic provisions the database and injects that itself; and if a key is missing or is obviously a placeholder or test value (sk_test_…, "changeme"), ask me for the real one in one sentence — what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
+My .env travels with the deploy automatically — you do not need to copy keys across. Use  supersonic env <app> set KEY=VALUE  only for a value that is NOT in my .env. Skip DATABASE_URL and anything pointing at localhost: Supersonic provisions the database and injects that itself.
+
+If my app has migrations and nothing in the repo says how to run them — no Procfile release line, nothing in compose.yml, fly.toml or package.json — say so and add one. An app deployed against an empty schema serves its homepage and fails everything else.
+
+If a key is missing or is obviously a placeholder (sk_test_…, "changeme"), ask me for the real one in one sentence: what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
 
 // One command, four package managers — the shadcn CLI docs block.
 const PMS = [
@@ -125,7 +136,7 @@ function MachineView() {
   return (
     <div className="machine">
       <h1>SUPERSONIC — machine-readable</h1>
-      <div className="m-sub">Hosting for vibecoders. Built to be operated by coding agents.</div>
+      <div className="m-sub">A cloud for small software. Built to be operated by coding agents.</div>
 
       <div className="m-h">What it is</div>
       <div>One command turns an app on a computer into a real, live product on the internet — database, custom domain and monitoring included.</div>
@@ -133,10 +144,11 @@ function MachineView() {
       <div className="m-h">Publish an app · do this for your user</div>
       <div className="step"><span className="n">1</span><div>Install the CLI — <span className="cmd">npm i -g supersonic-cli</span></div></div>
       <div className="step"><span className="n">2</span><div>Create the account — <span className="cmd">supersonic signup</span> — opens a browser for your user to finish sign-up, then hands control back to you.</div></div>
-      <div className="step"><span className="n">3</span><div>Publish from the project folder, no git required — <span className="cmd">supersonic deploy</span></div></div>
+      <div className="step"><span className="n">3</span><div>Publish from the project folder, no git required — <span className="cmd">supersonic deploy --wait</span>. Without <span className="cmd">--wait</span> the command returns once the URL is reserved and the build finishes after you stop watching.</div></div>
+      <div className="step"><span className="n">4</span><div>It worked when you see <span className="cmd">✓ live:</span> and not before. Every app is private until the user says otherwise, so that URL asks them to sign in — say so rather than reporting it broken.</div></div>
 
       <div className="m-h">The contract</div>
-      <div>A Dockerfile that listens on <span className="cmd">$PORT</span> ships any language. Common stacks (Next.js, Python, Go…) work without one.</div>
+      <div>A Dockerfile that listens on <span className="cmd">$PORT</span> ships any language. Common stacks (Next.js, Python, Go…) work without one. If the app has migrations, something in the repo has to say how to run them — a Procfile <span className="cmd">release:</span> line, a compose service others wait to finish, or <span className="cmd">fly.toml</span> / <span className="cmd">render.yaml</span> / <span className="cmd">package.json</span> — or it deploys against an empty schema.</div>
 
       <div className="m-h">CLI</div>
       <pre>supersonic deploy | status | logs | errors | diagnose | env | exec | rollback</pre>
@@ -428,46 +440,46 @@ export default function Page() {
 
         <section className="sec" id="pricing">
           <div className="sec-head">
-            <h2>Try it free.<br />No infrastructure bills.</h2>
+            <h2>Free forever.<br />No infrastructure bills.</h2>
             <p>Your cloud is included and you never touch a Google Cloud invoice.</p>
-            <div className="trialbar">14 days free on every plan · no card to start · cancel any time</div>
+            <div className="trialbar">Free plan, no card, no time limit · your apps never sleep · cancel any time</div>
           </div>
           <div className="compare" ref={planStep.ref}>
             <svg className="plan-step" width="100%" height="100%" aria-hidden>
               <path d={planStep.d} />
             </svg>
             <div className="plan">
-              <div className="pname">Basic</div>
-              <div className="pdesc">Ship one app, share it with your team, and get paste-ready fixes for your coding agent.</div>
-              <div className="price"><b>$12</b> / month</div>
-              {basic.map(([label, on]) => (
+              <div className="pname">Free</div>
+              <div className="pdesc">Three real apps with a database, a web address, and people you share them with. No card, no clock.</div>
+              <div className="price"><b>$0</b> / forever</div>
+              {free.map(([label, on]) => (
                 <div className={"row" + (on ? "" : " off")} key={String(label)}>
                   <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
                 </div>
               ))}
-              <div className="cta"><a className="btn ghost" href={`${APP}/new`}>Start free trial</a></div>
+              <div className="cta"><a className="btn ghost" href={`${APP}/new`}>Start free</a></div>
             </div>
             <div className="plan">
               <div className="pname">Pro</div>
-              <div className="pdesc">Unlimited apps and sharing, plus Autopilot — failed deploys fix themselves and redeploy to green.</div>
+              <div className="pdesc">Unlimited apps, your own domain, and Autopilot — failed deploys fix themselves and redeploy to green.</div>
               <div className="price"><b>$20</b> / month</div>
               {pro.map(([label, on]) => (
                 <div className={"row" + (on ? "" : " off")} key={String(label)}>
                   <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
                 </div>
               ))}
-              <div className="cta"><a className="btn ghost" href={`${APP}/new`}>Start free trial</a></div>
+              <div className="cta"><a className="btn accent" href={`${APP}/new`}>Go Pro <ArrowRight size={15} /></a></div>
             </div>
             <div className="plan">
-              <div className="pname">Scale</div>
-              <div className="pdesc">Everything in Pro, plus analytics for your live app and an agent that fixes production code on its own.</div>
-              <div className="price"><b>$40</b> / month</div>
-              {scale.map(([label, on]) => (
+              <div className="pname">Team</div>
+              <div className="pdesc">For a team whose internal tools all live in one place. You pay for the people who build — never for the people who use.</div>
+              <div className="price"><b>Let&apos;s talk</b></div>
+              {team.map(([label, on]) => (
                 <div className={"row" + (on ? "" : " off")} key={String(label)}>
                   <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
                 </div>
               ))}
-              <div className="cta"><a className="btn accent" href={`${APP}/new`}>Go Scale <ArrowRight size={15} /></a></div>
+              <div className="cta"><a className="btn ghost" href="mailto:founders@supersonic.cv?subject=Supersonic%20Team%20plan">Talk to us</a></div>
             </div>
           </div>
         </section>
