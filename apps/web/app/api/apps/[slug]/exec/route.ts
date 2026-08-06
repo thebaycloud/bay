@@ -5,7 +5,7 @@ export const maxDuration = 300;
 import { execCommand } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
-import { runtimeOf } from "@/lib/fleet";
+import { deployTargetForApp } from "@/lib/deploy-target";
 
 // Run a command in a one-off container built from the app's image (isolated
 // from the serving instances, but with the app's env + Cloud SQL attached).
@@ -21,7 +21,8 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   // in a container that shares the image and NOT the machine, the data directory
   // or the network the app actually lives on. An exec that lies about where it
   // ran is worse than no exec.
-  if ((await runtimeOf(slug)) === "fleet") {
+  const target = await deployTargetForApp(slug);
+  if (!target.supports("exec")) {
     return Response.json(
       { error: "this app runs on a node, where exec is not wired up yet — it needs to enter the running sandbox, not a copy of its image." },
       { status: 501 },

@@ -15,7 +15,8 @@ export const dynamic = "force-dynamic";
 import { describeService, setEnv } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
-import { runtimeOf, setPlacementEnv, placementEnvKeys } from "@/lib/fleet";
+import { setPlacementEnv, placementEnvKeys } from "@/lib/fleet";
+import { deployTargetForApp } from "@/lib/deploy-target";
 
 // GET  -> list env var KEYS (values are never exposed)
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
@@ -23,7 +24,8 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ keys: [], error: "forbidden" }, { status: 403 });
   try {
-    if ((await runtimeOf(slug)) === "fleet") {
+    const target = await deployTargetForApp(slug);
+    if (target.kind === "fleet") {
       const keys = await placementEnvKeys(slug);
       // Not placed is not the same as having no variables, and answering `[]`
       // to the first would read as an app that simply has none.
@@ -44,7 +46,8 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
   const { set = {}, unset = [] } = await req.json().catch(() => ({}));
   try {
-    if ((await runtimeOf(slug)) === "fleet") {
+    const target = await deployTargetForApp(slug);
+    if (target.kind === "fleet") {
       const keys = await setPlacementEnv(slug, set as Record<string, string>, unset as string[]);
       if (!keys) {
         return Response.json(

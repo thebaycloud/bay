@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import { rollback } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
-import { runtimeOf } from "@/lib/fleet";
+import { deployTargetForApp } from "@/lib/deploy-target";
 
 export async function POST(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -18,7 +18,8 @@ export async function POST(_req: Request, { params }: { params: { slug: string }
   // There is nothing to fall back to yet either: a placement holds one spec, not
   // a history, so the previous version is not written down anywhere. Saying so is
   // the honest answer until it is.
-  if ((await runtimeOf(slug)) === "fleet") {
+  const target = await deployTargetForApp(slug);
+  if (!target.supports("rollback")) {
     return Response.json(
       { error: "this app runs on a node, where rollback is not wired up yet — a placement keeps only the current version. Redeploy the commit you want." },
       { status: 501 },

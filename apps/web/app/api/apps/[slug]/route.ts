@@ -6,8 +6,9 @@ import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { getAppBySlug } from "@/lib/apps";
 import { getDeploy } from "@/lib/deploys";
-import { runtimeOf, placementFor, runningOnNode } from "@/lib/fleet";
+import { placementFor, runningOnNode } from "@/lib/fleet";
 import { statusFromFleet } from "@/lib/app-status";
+import { deployTargetForApp } from "@/lib/deploy-target";
 
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -34,7 +35,8 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   // Best-effort: any failure here falls through to exactly the old path, so a
   // fleet table that cannot be read costs the extra detail and nothing else.
   try {
-    if ((await runtimeOf(slug)) === "fleet") {
+    const target = await deployTargetForApp(slug);
+    if (target.kind === "fleet") {
       const placed = await placementFor(slug);
       if (placed) {
         const running = await runningOnNode(slug, placed.node);
