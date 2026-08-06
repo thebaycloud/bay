@@ -152,6 +152,23 @@ what a new user waits. What can be relied on:
   drops with no dependency install and no compile. That is our static lane, and it is
   already 26 s.
 
+Two further findings change what "fastest on the market" can mean.
+
+**The sub-second numbers in circulation are about the wrong thing.** Fly.io is candid
+about it in its own materials: machine *start* is 10-150 ms, but machine *creation* —
+which is what a first deploy actually is — runs to roughly 92 steps and can take
+minutes. The fast number survives being quoted secondhand; the distinction does not.
+Cloudflare Workers is genuinely fast for the no-build case, but by skipping
+containers entirely for V8 isolates, which is a different product rather than a
+faster version of ours.
+
+**Nobody measures the part a new user actually waits through.** Database and resource
+provisioning, account setup, OAuth, installing a Git app — no vendor in the survey
+publishes a number for any of it. That is an industry-wide blind spot rather than one
+platform's omission, and it is exactly the span this design targets. It means the bar
+is lower than the folklore suggests, and that an honest, published, end-to-end
+first-deploy number would itself be a thing none of them has.
+
 Netlify's 2.5 s is the number that matters, because it is the same layer this design
 moves to the CLI. **They got there by persisting the build cache on long-lived
 microVM cells rather than by moving the work off the platform.** That is a genuine
