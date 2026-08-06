@@ -259,12 +259,25 @@ async function status(args) {
   const dot = d.ready ? green("● live") : d.deploying ? yellow("◐ deploying") : red("○ down");
   print(`${bold(app)}  ${dot}${d.deploying && d.stage ? dim(` · ${d.stage}`) : ""}`);
   print(dim("  url      ") + `${app}.supersonic.cv`);
-  print(dim("  revision ") + (d.revision || "—"));
+  // Where it runs, when that is not Cloud Run. An app on the fleet has no
+  // revision — it has a node and an image — and printing `revision —` was the
+  // whole of what `status` said about a third of all apps.
+  if (d.served === "fleet") print(dim("  running  ") + `on the fleet · ${d.node || "—"}`);
+  else print(dim("  revision ") + (d.revision || "—"));
   print(dim("  image    ") + (d.image ? d.image.split("/").pop() : "—"));
   print(dim("  region   ") + (d.region || "—"));
   print(dim("  database ") + (d.cloudsql ? d.cloudsql.split(":").pop() : "none"));
   print(dim("  env      ") + (d.envKeys && d.envKeys.length ? d.envKeys.join(", ") : "none"));
   print(dim("  repo     ") + (d.repo || "—"));
+  // An app is not always one program. A worker, a cron and a release are
+  // invisible everywhere else in this command, and "is my worker running" is
+  // the question people actually ask.
+  if (d.processes && d.processes.length) {
+    const line = d.processes
+      .map((p) => `${p.name}(${p.kind})${p.kind === "web" || p.kind === "worker" ? (p.running ? " ✓" : " ✗") : ""}`)
+      .join("  ");
+    print(dim("  runs     ") + line);
+  }
 }
 
 async function logs(args) {

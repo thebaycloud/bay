@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp ca86467ef565d8cb
+// supersonic-vendor-stamp 9777fd89a339e59c
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -325,9 +325,10 @@ function parseAppConfig(text) {
     }
     const envIsNameList = Array.isArray(svc.env);
     const uses = svc.uses === void 0 ? void 0 : names(svc.uses, `${where}.uses`, database);
+    const known = ["database", "bucket", "redis", "elasticsearch"];
     for (const u of uses ?? []) {
-      if (u !== "database" && u !== "bucket") {
-        throw new ConfigError(`${where}.uses: "${u}" is not a resource \u2014 expected "database" or "bucket"`);
+      if (!known.includes(u)) {
+        throw new ConfigError(`${where}.uses: "${u}" is not a resource \u2014 expected one of ${known.join(", ")}`);
       }
     }
     return {
@@ -1565,6 +1566,62 @@ function orderToolchains(toolchains, framework, command) {
   return toolchains;
 }
 
+// lib/dockerfile-context.ts
+function copySources(dockerfile) {
+  const out = [];
+  const lines = dockerfile.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    let raw = lines[i];
+    let last = i;
+    while (/\\\s*$/.test(raw) && last + 1 < lines.length) {
+      last++;
+      raw = raw.replace(/\\\s*$/, " ") + lines[last];
+    }
+    const started = i;
+    i = last;
+    const m = /^\s*(COPY|ADD)\s+(.*)$/i.exec(raw);
+    if (!m) continue;
+    let rest = m[2].trim();
+    if (rest.startsWith("#")) continue;
+    let fromStage = false;
+    while (rest.startsWith("--")) {
+      const flag = rest.slice(0, rest.search(/\s/) < 0 ? rest.length : rest.search(/\s/));
+      if (/^--from=/i.test(flag)) fromStage = true;
+      rest = rest.slice(flag.length).trim();
+    }
+    if (fromStage || !rest) continue;
+    let args;
+    if (rest.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(rest);
+        args = Array.isArray(parsed) ? parsed.map(String) : [];
+      } catch {
+        continue;
+      }
+    } else {
+      args = rest.split(/\s+/).filter(Boolean).map((a) => a.replace(/^["']|["']$/g, ""));
+    }
+    if (args.length < 2) continue;
+    for (const src of args.slice(0, -1)) {
+      if (src.includes("$")) continue;
+      out.push({ path: src, line: started + 1 });
+    }
+  }
+  return out;
+}
+function buildOwner(candidates) {
+  const dirs = candidates.map((c) => c.dir.replace(/^\.\//, "").replace(/\/+$/, "")).filter((d) => d && d !== ".");
+  for (const c of candidates) {
+    if (!c.dockerfile) continue;
+    const mine = c.dir.replace(/^\.\//, "").replace(/\/+$/, "");
+    for (const { path } of copySources(c.dockerfile)) {
+      const head = path.replace(/^\.\//, "").split("/")[0];
+      if (head && head !== mine && dirs.includes(head)) return c.dir;
+    }
+  }
+  return null;
+}
+
 // lib/infer-services.ts
 var BROWSER_FACING = /next|nuxt|remix|svelte|astro|vite|create react app|static/i;
 var NOT_AN_APP = /* @__PURE__ */ new Set([
@@ -1672,6 +1729,19 @@ async function inferAppConfig(repoDir, detect2) {
     }
   }
   if (parts2.length < 2) return null;
+  const owner = buildOwner(parts2.map((rel) => {
+    const at = rel === "." ? repoDir : (0, import_node_path6.join)(repoDir, rel);
+    const file = (0, import_node_path6.join)(at, "Dockerfile");
+    return { dir: rel, dockerfile: (0, import_node_fs6.existsSync)(file) ? (0, import_node_fs6.readFileSync)(file, "utf8") : void 0 };
+  }));
+  if (owner) {
+    try {
+      const abs = owner === "." ? repoDir : (0, import_node_path6.join)(repoDir, owner);
+      return { version: 1, services: [{ ...serviceFor(owner, await detect2(abs), abs), path: "/" }] };
+    } catch {
+      return null;
+    }
+  }
   let detected;
   try {
     detected = await Promise.all(parts2.map(async (rel) => {

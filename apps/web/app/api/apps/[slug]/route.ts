@@ -6,6 +6,8 @@ import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { getAppBySlug } from "@/lib/apps";
 import { getDeploy } from "@/lib/deploys";
+import { runtimeOf, placementFor, runningOnNode } from "@/lib/fleet";
+import { statusFromFleet } from "@/lib/app-status";
 
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -17,6 +19,35 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   // was a confident answer to a question the platform could not yet answer.
   const deploy = await getDeploy(slug).catch(() => null);
   const deploying = deploy?.status === "building";
+
+  // WHERE the app runs, before anything else is asked.
+  //
+  // This route used to go straight to Cloud Run, and for a fleet app that is
+  // wrong in two different ways. With no Cloud Run service it fell through to
+  // the static branch below and reported empty revision, empty image and no env
+  // for an app that was serving — the shape of every app deployed since the
+  // fleet became the default target. With a STALE service left behind by the
+  // move it answered FROM that service, and reported `ready: false` for an app
+  // that is up, because an abandoned revision cannot start. Blank reads as "not
+  // known yet"; wrong-but-plausible sends someone to debug an app that is fine.
+  //
+  // Best-effort: any failure here falls through to exactly the old path, so a
+  // fleet table that cannot be read costs the extra detail and nothing else.
+  try {
+    if ((await runtimeOf(slug)) === "fleet") {
+      const placed = await placementFor(slug);
+      if (placed) {
+        const running = await runningOnNode(slug, placed.node);
+        return Response.json({
+          ...statusFromFleet(slug, placed.node, placed.spec, running),
+          deploying,
+          stage: deploy?.stage ?? "",
+        });
+      }
+    }
+  } catch {
+    // fall through to Cloud Run
+  }
 
   try {
     return Response.json({ ...(await describeService(slug)), deploying, stage: deploy?.stage ?? "" });
