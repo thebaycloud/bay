@@ -348,14 +348,18 @@ async function env(args) {
     for (const kv of rest) { const i = kv.indexOf("="); if (i > 0) set[kv.slice(0, i)] = kv.slice(i + 1); }
     if (!Object.keys(set).length) die("usage: supersonic env <app> set KEY=VALUE [KEY2=VALUE2]");
     const d = await api(`/api/apps/${app}/env`, { method: "POST", body: { set } });
-    print(green("✓ ") + `set ${Object.keys(set).join(", ")} — new revision rolling out`);
+    // "new revision" is Cloud Run's word, and an app on a node has none — its
+    // process is restarted in place. Worse, it was printed unconditionally, so
+    // it announced a rollout for a write that had changed nothing. The server
+    // says what actually happened; this repeats it rather than guessing.
+    print(green("✓ ") + `set ${Object.keys(set).join(", ")}${d?.note ? ` — ${d.note}` : ""}`);
     if (args.json) json(d);
     return;
   }
   if (sub === "unset") {
     if (!rest.length) die("usage: supersonic env <app> unset KEY [KEY2]");
     const d = await api(`/api/apps/${app}/env`, { method: "POST", body: { unset: rest } });
-    print(green("✓ ") + `unset ${rest.join(", ")} — new revision rolling out`);
+    print(green("✓ ") + `unset ${rest.join(", ")}${d?.note ? ` — ${d.note}` : ""}`);
     if (args.json) json(d);
     return;
   }

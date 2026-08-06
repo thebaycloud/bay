@@ -3637,6 +3637,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         serviceless,
         memoryBytes: memoryBytes(scale.memory),
         cpuShares: cpuShares(scale.cpu),
+        // Stamped whenever this app HAS secrets, because this deploy just wrote
+        // a version of every one of them. Secrets travel as names resolved to
+        // `versions/latest`, so an edited .env leaves the spec byte-identical and
+        // nothing restarts — the app keeps the value it booted with. Measured on
+        // a worker whose token was changed in .env and redeployed onto the same
+        // cached digest: the container never saw the new one.
+        ...(secretRefs.length ? { secretsVersion: new Date().toISOString() } : {}),
         // What the node probes AND what it injects as PORT — one value, so an
         // app that reads the variable and an app that hardcodes its port land in
         // the same place. Without this every placement said 8080 and stock nginx,
