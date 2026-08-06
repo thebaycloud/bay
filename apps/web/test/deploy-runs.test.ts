@@ -80,6 +80,35 @@ test("a probe that resolves to a body with no image does not block the deploy", 
   await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job"));
 });
 
+test("a probe that resolves to a body whose image field is not a string does not block the deploy", async () => {
+  // Same failure class as the no-image case above, one field shape further:
+  // `pick` returning an object or a number instead of undefined still reads as
+  // truthy, so `!image` alone would let it through fetchImage. Both job and
+  // service have to return a non-string image here — if either threw instead
+  // (missing field, the case above), Promise.all would reject and the outer
+  // catch would fail this open for an unrelated reason. The bug lives past
+  // that: `imageTag(jobRef)` runs OUTSIDE assertJobImageMatches's try, so a
+  // non-string that survives fetchImage throws a TypeError nothing catches,
+  // turning a schema change into a refused deploy instead of a fail-open. Runs
+  // the real `liveProbe`/`fetchImage` path, not an injected `ImageProbe`,
+  // because that is where this bug lives.
+  globalThis.fetch = (async (input: unknown) => {
+    const url = String(input);
+    if (isMetadata(url)) {
+      return { ok: true, status: 200, json: async () => ({ access_token: "test-token", expires_in: 3600 }) };
+    }
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        template: { template: { containers: [{ image: { digest: "sha256:abc" } }] } },
+        spec: { template: { spec: { containers: [{ image: { digest: "sha256:abc" } }] } } },
+      }),
+    };
+  }) as unknown as typeof fetch;
+
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job"));
+});
+
 test("SKIP_JOB_IMAGE_CHECK=1 turns the refusal off without a deploy", async () => {
   // A guard that can refuse every deploy needs a way to be switched off that is
   // faster than shipping a revert — the same shape BUILDER already uses, and the

@@ -416,7 +416,14 @@ async function fetchImage(url: string, pick: (body: any) => string | undefined):
   // assertJobImageMatches's catch, which fails the check open instead of
   // refusing the deploy on a comparison neither side actually made.
   const image = pick(await res.json());
-  if (!image) throw new Error(`${url} answered 200 with no container image`);
+  // Not just `!image`: `pick` reads a deeply-nested field out of JSON this code
+  // does not control, and a schema change can make that field an object or a
+  // number rather than absent. `!image` is false for either, and the caller
+  // hands the result straight to `imageTag`, which assumes a string and throws
+  // — outside this function's try, so it would escape assertJobImageMatches's
+  // catch and turn a schema change into a 503 on every deploy instead of a
+  // fail-open.
+  if (typeof image !== "string" || !image) throw new Error(`${url} answered 200 with no container image`);
   return image;
 }
 
