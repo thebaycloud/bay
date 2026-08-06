@@ -27,8 +27,13 @@ const ENV = {
   CLOUDSDK_CORE_DISABLE_PROMPTS: "1",
 } as NodeJS.ProcessEnv;
 
-/** How long a single REST call may take before we give up and let gcloud try. */
-const HTTP_TIMEOUT_MS = 20_000;
+/**
+ * How long a single REST call may take before we give up and let gcloud try.
+ *
+ * Exported so deploy-runs.ts's job/service image probes use the same number
+ * instead of a second literal — see the note there for why they need it too.
+ */
+export const HTTP_TIMEOUT_MS = 20_000;
 /** The metadata server is on-host; if it does not answer instantly it is absent. */
 const METADATA_TIMEOUT_MS = 1_000;
 /**

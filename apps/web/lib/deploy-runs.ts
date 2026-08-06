@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPool } from "./db";
-import { accessToken, imageTag, runJobUrl, runServiceUrl } from "./gcp-rest";
+import { HTTP_TIMEOUT_MS, accessToken, imageTag, runJobUrl, runServiceUrl } from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
 
 const DB = "supersonic_platform";
@@ -408,7 +408,16 @@ export interface ImageProbe {
 async function fetchImage(url: string, pick: (body: any) => string | undefined): Promise<string> {
   const token = await accessToken();
   if (!token) throw new Error("no access token");
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  // gcp-rest.ts's own calls go through its `authed()`, which sets this same
+  // timeout — but `authed` collapses every failure, including a timeout, to
+  // `null` rather than throwing, and is not exported. This function's contract
+  // is the opposite: throw, so assertJobImageMatches's catch fails the check
+  // open. Reusing `authed` would mean turning its `null` back into a throw
+  // anyway while losing the underlying error's message, so this keeps its own
+  // fetch and takes only the constant. Without a timeout, this runs on the
+  // deploy dispatch path ahead of undici's 300s default — the guard fails open
+  // on an ERROR, but a HANG would stall a customer's deploy for minutes first.
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`${url} answered ${res.status}`);
   // A 200 whose body does not have the shape expected — a Cloud Run API
   // change, say — is a probe that cannot answer, not evidence of an untagged
