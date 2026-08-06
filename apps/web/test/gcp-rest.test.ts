@@ -8,7 +8,9 @@ import {
   objectMediaUrl,
   objectInsertUrl,
   runServiceUrl,
+  runJobUrl,
   runServicesListUrl,
+  imageTag,
   relativeObjectNames,
   serviceListItems,
   serviceListContinue,
@@ -163,6 +165,26 @@ test("Cloud Run is addressed on the regional v1 Knative surface", () => {
   assert.equal(runServicesListUrl(),
     "https://us-central1-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/supersonic-deploy-prod/services");
   assert.ok(!runServiceUrl("x").includes("/v2/"));
+});
+
+test("runJobUrl targets the Cloud Run Admin v2 jobs resource", () => {
+  const url = runJobUrl("supersonic-deploy-job", "proj", "us-central1");
+  assert.equal(url, "https://us-central1-run.googleapis.com/v2/projects/proj/locations/us-central1/jobs/supersonic-deploy-job");
+});
+
+test("imageTag takes the tag after the last colon, not one inside the host", () => {
+  // The registry host may carry a port, and the repository path may not. Splitting
+  // on the first colon would read "5000/supersonic/control-plane" as a tag.
+  assert.equal(imageTag("us-central1-docker.pkg.dev/p/supersonic/control-plane:abc123"), "abc123");
+  assert.equal(imageTag("localhost:5000/supersonic/control-plane:abc123"), "abc123");
+});
+
+test("imageTag returns empty for an untagged reference rather than guessing", () => {
+  // A digest-pinned or bare reference has no tag. Returning "" makes the caller's
+  // comparison fail loudly; inventing "latest" would make two different images
+  // compare equal.
+  assert.equal(imageTag("us-central1-docker.pkg.dev/p/supersonic/control-plane"), "");
+  assert.equal(imageTag("us-central1-docker.pkg.dev/p/supersonic/control-plane@sha256:dead"), "");
 });
 
 /* ---------------------------- response shaping --------------------------- */

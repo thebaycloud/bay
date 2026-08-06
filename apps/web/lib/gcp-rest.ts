@@ -143,6 +143,39 @@ export function runServiceUrl(service: string, project: string = PROJECT, region
 }
 
 /**
+ * A Cloud Run **job**, on the v2 Admin API.
+ *
+ * Not the Knative v1 path `runServiceUrl` uses: jobs were never part of the
+ * Knative surface, and v1 answers 404 for them — which reads as "no such job"
+ * rather than "wrong API", and is exactly the kind of wrong answer that gets
+ * believed.
+ */
+export function runJobUrl(job: string, project: string = PROJECT, region: string = REGION): string {
+  return `https://${region}-run.googleapis.com/v2/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(region)}/jobs/${encodeURIComponent(job)}`;
+}
+
+/**
+ * The tag of an image reference, or "" when it carries none.
+ *
+ * Split at the LAST colon, and only when it comes after the last slash: a
+ * registry host may carry a port, so the first colon can belong to
+ * `localhost:5000/…`. A digest-pinned reference (`@sha256:…`) is checked
+ * first and separately, because its "@" also sits after the last slash and
+ * the digest itself contains a colon — `control-plane@sha256:dead` would
+ * otherwise read "dead" off the end as if it were a tag. An untagged or
+ * digest-pinned reference returns "" rather than the conventional "latest" —
+ * the caller compares two of these for equality, and a guess that makes two
+ * different images compare equal defeats the comparison.
+ */
+export function imageTag(image: string): string {
+  const slash = image.lastIndexOf("/");
+  const at = image.lastIndexOf("@");
+  if (at > slash) return "";
+  const colon = image.lastIndexOf(":");
+  return colon > slash ? image.slice(colon + 1) : "";
+}
+
+/**
  * A page of the service list. `continueToken` resumes where the last page
  * stopped.
  *
