@@ -56,6 +56,7 @@ import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
 import { sidecarFor, sidecarEnv, dependencyRefusal } from "@/lib/dependencies";
 import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
 import { publicUrlBuildArgs } from "@/lib/public-url-args";
+import { detectRelease, RELEASE_FILES } from "@/lib/release-detect";
 import { readProcfile } from "@/lib/procfile";
 import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
 import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
@@ -2052,6 +2053,29 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // every inferred migration command"). Re-deriving it here from config alone
     // would silently drop both of those and let the two runtimes disagree about
     // which command a release even is — the exact bug this task exists to close.
+    // A release the REPOSITORY declares somewhere the pipeline did not read.
+    //
+    // Config, Procfile and the planner's `preRun` were the three places asked,
+    // and a repository has more. The full-stack FastAPI template declares its
+    // migrations in compose — a service the app waits to FINISH — and deployed
+    // here with an empty schema: every form answered `relation "user" does not
+    // exist` while the deploy was reported live.
+    //
+    // Last, so anything already resolved wins: this is for the case where
+    // nothing else spoke, which is also the case where `inferAppConfig` produced
+    // the plan and therefore the planner never ran at all.
+    if (!releaseCmd.trim()) {
+      const declared = detectRelease(Object.fromEntries(
+        RELEASE_FILES.map((f) => [f, existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : undefined]),
+      ));
+      if (declared) {
+        releaseCmd = declared.command;
+        // Said out loud BEFORE it runs. A failed release stops the app coming up
+        // at all, so a person has to be able to see what we decided on their
+        // behalf without reading a dead deploy to find out.
+        log(`Running migrations first: ${declared.command} — declared in ${declared.from}`);
+      }
+    }
     if (releaseCmd.trim() && !processes.some((p) => p.name === "release")) {
       processes.push(resolveProcess("release", { command: releaseCmd }));
     }
