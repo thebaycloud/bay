@@ -410,17 +410,34 @@ async function fetchImage(url: string, pick: (body: any) => string | undefined):
   if (!token) throw new Error("no access token");
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`${url} answered ${res.status}`);
-  return pick(await res.json()) ?? "";
+  // A 200 whose body does not have the shape expected — a Cloud Run API
+  // change, say — is a probe that cannot answer, not evidence of an untagged
+  // image. Throwing here, rather than coercing to "", sends it into
+  // assertJobImageMatches's catch, which fails the check open instead of
+  // refusing the deploy on a comparison neither side actually made.
+  const image = pick(await res.json());
+  if (!image) throw new Error(`${url} answered 200 with no container image`);
+  return image;
 }
 
-const liveProbe: ImageProbe = {
-  jobImage: () => fetchImage(
-    runJobUrl(process.env.DEPLOY_JOB_NAME || "supersonic-deploy-job"),
-    (b) => b?.template?.template?.containers?.[0]?.image),
-  serviceImage: () => fetchImage(
-    runServiceUrl(process.env.K_SERVICE || "supersonic-control-plane"),
-    (b) => b?.spec?.template?.spec?.containers?.[0]?.image),
-};
+/**
+ * A function of `job` rather than a constant: `jobImage` has to ask about the
+ * same job `assertJobImageMatches` was asked about, not re-derive one from the
+ * environment. The single call site passes the same name either way, so this
+ * is silent today — but a second caller checking a different job would
+ * otherwise be told about `DEPLOY_JOB_NAME`'s job while believing it had
+ * checked its own.
+ */
+function liveProbe(job: string): ImageProbe {
+  return {
+    jobImage: () => fetchImage(
+      runJobUrl(job),
+      (b) => b?.template?.template?.containers?.[0]?.image),
+    serviceImage: () => fetchImage(
+      runServiceUrl(process.env.K_SERVICE || "supersonic-control-plane"),
+      (b) => b?.spec?.template?.spec?.containers?.[0]?.image),
+  };
+}
 
 /**
  * Refuse to hand a deploy to a job running different code from this service.
@@ -437,7 +454,7 @@ const liveProbe: ImageProbe = {
  * catch a stale image, not to become a fresh way for every deploy to fail when
  * an API is having a bad minute.
  */
-export async function assertJobImageMatches(job: string, deps: ImageProbe = liveProbe): Promise<void> {
+export async function assertJobImageMatches(job: string, deps: ImageProbe = liveProbe(job)): Promise<void> {
   // The switch-off, in the shape BUILDER and the other lane flags already use. A
   // guard that can refuse every deploy has to be removable in one variable
   // rather than in a revert and a build.

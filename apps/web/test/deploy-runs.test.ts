@@ -1,6 +1,25 @@
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { assertJobImageMatches } from "../lib/deploy-runs";
+import { resetTokenCache } from "../lib/gcp-rest";
+
+/* --------------------------------------------------------------------------
+ * A fake fetch, exactly the shape test/gcp-rest.test.ts uses, for the one
+ * test below that has to exercise the real `liveProbe`/`fetchImage` path
+ * rather than an injected `ImageProbe` — the bug it guards against lives
+ * inside `fetchImage` itself, so a fake `ImageProbe` cannot see it recur.
+ * -------------------------------------------------------------------------- */
+
+const realFetch = globalThis.fetch;
+
+function isMetadata(url: string) {
+  return url.startsWith("http://metadata.google.internal/");
+}
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  resetTokenCache();
+});
 
 test("dispatch is allowed when the job and the service run the same tag", async () => {
   await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", {
@@ -41,6 +60,24 @@ test("a probe that cannot answer does not block the deploy", async () => {
     jobImage: async () => { throw new Error("500 from Cloud Run"); },
     serviceImage: async () => "reg/supersonic/control-plane:abc123",
   }));
+});
+
+test("a probe that resolves to a body with no image does not block the deploy", async () => {
+  // A 200 whose shape this code does not recognise — a Cloud Run API schema
+  // change, say — is a probe that cannot answer, same as a 500. It must cost
+  // the check, not the deploy. This runs the real `liveProbe`/`fetchImage`,
+  // not an injected stand-in, because that is where the bug lived: coercing
+  // a body it could not read into "" made it look exactly like a genuinely
+  // untagged image, which the next test proves is refused on purpose.
+  globalThis.fetch = (async (input: unknown) => {
+    const url = String(input);
+    if (isMetadata(url)) {
+      return { ok: true, status: 200, json: async () => ({ access_token: "test-token", expires_in: 3600 }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ unexpected: "shape" }) };
+  }) as unknown as typeof fetch;
+
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job"));
 });
 
 test("SKIP_JOB_IMAGE_CHECK=1 turns the refusal off without a deploy", async () => {
