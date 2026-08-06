@@ -96,6 +96,25 @@ export const LANE_KNOWN_STAGES = [
 /** Every stage name this system may write. */
 export const ALL_STAGES: readonly string[] = [...HANDOFF_STAGES, ...PRE_LANE_STAGES, ...LANE_KNOWN_STAGES];
 
+/**
+ * `fleet-pull` and `fleet-boot` again, named here for what a reader of
+ * deploy_stages must NOT do with them rather than for what wrote them.
+ *
+ * Both are written off the node's own async sync (`recordStartTiming`,
+ * lib/fleet.ts) every time it successfully starts a process — a genuine
+ * deploy, a crash-loop restart, and a node reboot all look identical from
+ * there, and none of the three carries a `run_id`, because the node has no
+ * notion of a deploy attempt. A query that reconstructs ONE DEPLOY's span by
+ * grouping deploy_stages on `run_id` (or, for rows older than that column, a
+ * time window) must exclude these two before doing that grouping: a restart's
+ * row, landing in the same null-run_id bucket as the deploy it has nothing to
+ * do with, drags that deploy's reconstructed end forward to whenever the
+ * restart happened. This is deploy IDENTITY they must stay out of — a
+ * per-stage query that just wants "how long did fleet-pull take, across every
+ * row" still wants them, unfiltered.
+ */
+export const NODE_RESTART_STAGES = ["fleet-pull", "fleet-boot"] as const;
+
 /** The stage whose presence means a new deploy began. */
 export const ATTEMPT_START_STAGE = "run-record";
 

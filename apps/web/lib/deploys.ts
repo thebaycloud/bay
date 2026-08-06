@@ -1,4 +1,5 @@
 import { getPool } from "./db";
+import { NODE_RESTART_STAGES } from "./stage-names";
 
 const DB = "supersonic_platform";
 
@@ -143,11 +144,22 @@ export async function lastDeploySummaries(ownerId: string): Promise<Record<strin
            -- because four attempts and a repair-agent run preceded it. The error
            -- is always upward and grows with how often somebody redeploys, so the
            -- number lied hardest while a person was debugging and reading it most.
+           --
+           -- ${NODE_RESTART_STAGES.join(" and ")} are excluded from "latest": both
+           -- are written with run_id always null, off the node's own sync, on
+           -- every successful process start rather than only on a deploy — see
+           -- lib/stage-names.ts. Left in, one could BE the newest row for a slug
+           -- (a crash-loop restart or a node reboot after the real deploy
+           -- finished), which would force latest.run_id to null and drop this
+           -- lookup into the legacy window branch below for an app that has a
+           -- perfectly good run id — the exact mistake this run-id scoping exists
+           -- to end, arriving through a stage nothing here knew to distrust.
            WITH latest AS (
              SELECT s.run_id
                FROM deploy_stages s
               WHERE s.slug = d.slug
                 AND s.started_at <= COALESCE(d.finished_at, d.updated_at)
+                AND s.stage NOT IN (${NODE_RESTART_STAGES.map((s) => `'${s}'`).join(", ")})
               ORDER BY s.started_at DESC
               LIMIT 1
            )

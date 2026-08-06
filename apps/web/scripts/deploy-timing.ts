@@ -9,7 +9,7 @@
  * Run: npm run timing [days]   (defaults to 14)
  */
 import { getPool } from "@/lib/db";
-import { ATTEMPT_START_STAGE, ACTIVATION_STAGE } from "@/lib/stage-names";
+import { ATTEMPT_START_STAGE, ACTIVATION_STAGE, NODE_RESTART_STAGES } from "@/lib/stage-names";
 
 const DB = "supersonic_platform";
 const days = Number(process.argv[2] || 14);
@@ -27,13 +27,23 @@ const days = Number(process.argv[2] || 14);
  * job handoff — merges into the attempt before it rather than splitting off.
  * That is why the spec treats this reconstructed per-deploy total as good to
  * about ±15%, while the single-stage numbers above are exact.
+ *
+ * NODE_RESTART_STAGES are excluded before any of this runs. Both are written
+ * with no run_id, off the node's own sync, on every successful process start
+ * — a crash-loop restart or a node reboot as much as a deploy — so leaving
+ * them in would fold a restart's row into whichever attempt bucket the
+ * running window-count last landed on, dragging that deploy's `t1` forward
+ * to whenever the restart happened. See lib/stage-names.ts for the fuller
+ * account.
  */
 const ATTEMPTS = `
   WITH marked AS (
     SELECT *,
       COALESCE(run_id, 'w:' || slug || ':' || sum(CASE WHEN stage = '${ATTEMPT_START_STAGE}' THEN 1 ELSE 0 END)
         OVER (PARTITION BY slug ORDER BY started_at ROWS UNBOUNDED PRECEDING)) AS deploy_key
-    FROM deploy_stages WHERE started_at > now() - ($1 || ' days')::interval),
+    FROM deploy_stages
+    WHERE started_at > now() - ($1 || ' days')::interval
+      AND stage NOT IN (${NODE_RESTART_STAGES.map((s) => `'${s}'`).join(", ")})),
   att AS (
     SELECT deploy_key, min(started_at) AS t0, max(COALESCE(ended_at, started_at)) AS t1,
       bool_or(stage = 'repair-agent') AS had_repair,
