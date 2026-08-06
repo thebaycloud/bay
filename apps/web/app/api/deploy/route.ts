@@ -12,6 +12,7 @@ import { createRun, startDeployJob, finishRun, pruneRuns, isOwnSourceObject, rea
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
 import { getDeploy } from "@/lib/deploys";
 import { StageRecorder } from "@/lib/stages";
+import { randomUUID } from "node:crypto";
 
 const REGION = "us-central1";
 // Dark until set, and the in-request path below stays exactly as it was. This
@@ -239,7 +240,7 @@ export async function POST(req: Request) {
   // being the worker: it records the work, starts it, and narrates. Whether this
   // connection survives no longer decides whether the app gets deployed.
   if (DEPLOY_JOB) {
-    let runId: string | null = null;
+    let runId = "";
     // The largest single item in the deploy budget, and the only one nothing
     // measures. On 1 Aug, 79 seconds passed between the CLI finishing its upload
     // and the pipeline logging its first line; on the same fixture on 1 Aug it
@@ -249,10 +250,15 @@ export async function POST(req: Request) {
     //
     // Split at the two boundaries this process can actually see. The third,
     // "job accepted → job running", belongs to the job and is recorded there.
-    const handoff = new StageRecorder(slug, "unknown");
+    // The id is minted HERE, before the first stage, so the handoff and
+    // everything the job records afterwards share one. Generated rather than
+    // taken from createRun's return, because the first stage starts before that
+    // call returns and a stage with no id is a stage the reader cannot group.
+    runId = randomUUID();
+    const handoff = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId });
     try {
       const recording = handoff.start("run-record");
-      runId = await createRun(input, archive, uploaded);
+      await createRun(input, archive, uploaded, runId);
       await handoff.end(recording, "ok");
 
       const dispatch = handoff.start("job-dispatch");

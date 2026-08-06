@@ -134,12 +134,33 @@ export async function lastDeploySummaries(ownerId: string): Promise<Record<strin
               EXTRACT(EPOCH FROM (st.ended - st.started)) * 1000 AS ms
          FROM deploys d
          LEFT JOIN LATERAL (
+           -- Scoped to ONE deploy by its run id, and only falling back to the
+           -- time window for rows written before that column existed.
+           --
+           -- The window alone folded every attempt in half an hour into a single
+           -- duration. Measured on the dashboard's own cards: an app whose deploy
+           -- took 1m 34s from build start to publish was shown as 23m 57s,
+           -- because four attempts and a repair-agent run preceded it. The error
+           -- is always upward and grows with how often somebody redeploys, so the
+           -- number lied hardest while a person was debugging and reading it most.
+           WITH latest AS (
+             SELECT s.run_id
+               FROM deploy_stages s
+              WHERE s.slug = d.slug
+                AND s.started_at <= COALESCE(d.finished_at, d.updated_at)
+              ORDER BY s.started_at DESC
+              LIMIT 1
+           )
            SELECT min(s.started_at) AS started,
                   max(COALESCE(s.ended_at, s.started_at)) AS ended
-             FROM deploy_stages s
+             FROM deploy_stages s, latest
             WHERE s.slug = d.slug
-              AND s.started_at > COALESCE(d.finished_at, d.updated_at) - interval '30 minutes'
               AND s.started_at <= COALESCE(d.finished_at, d.updated_at)
+              AND (
+                (latest.run_id IS NOT NULL AND s.run_id = latest.run_id)
+                OR (latest.run_id IS NULL AND s.run_id IS NULL
+                    AND s.started_at > COALESCE(d.finished_at, d.updated_at) - interval '30 minutes')
+              )
          ) st ON TRUE
         WHERE d.owner_id = $1 AND d.status <> 'building'`,
       [ownerId],

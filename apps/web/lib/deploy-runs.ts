@@ -219,6 +219,10 @@ export async function createRun(
   request: DeployRunRequest,
   archive: Buffer | null,
   uploaded: UploadedSource | null = null,
+  // Minted by the caller when it needs the id BEFORE this returns — the route
+  // stamps its first stage with it, and that stage starts before the run row
+  // exists. Absent, one is generated here exactly as it always was.
+  withId?: string,
 ): Promise<string> {
   await ensure();
   // Supersede whatever was already deploying this app.
@@ -229,7 +233,7 @@ export async function createRun(
   // exactly that during testing and ended up with three. The newest request is
   // the one the user means; the older ones are abandoned work.
   await supersedeRunsFor(request.slug).catch(() => { /* never block a deploy on cleanup */ });
-  const runId = randomUUID();
+  const runId = withId || randomUUID();
   let sourceObject: string | null = null;
   let sourceKey: string | null = null;
 

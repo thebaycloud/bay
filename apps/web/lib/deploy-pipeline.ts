@@ -1309,6 +1309,15 @@ async function createDomainMapping(slug: string, log: (l: string) => void, servi
  * a client that hung up is not a reason to stop building.
  */
 export interface DeployInput {
+  /**
+   * Which deploy this is, so every stage it records can be grouped by it.
+   *
+   * The same id the route used for its handoff stages, so the wait a person
+   * experienced is one span rather than two. Optional: a caller that does not
+   * supply one still records stages, and the reader falls back to the time
+   * window it used before the column existed.
+   */
+  runId?: string;
   ownerId: string;
   ownerWorkspace: string | null;
   slug: string;
@@ -1341,7 +1350,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
   // "unknown", not "generic": no lane has been chosen yet, and `generic` used to
   // mean both that and the Dockerfile lane — one string for two facts, which is
   // what LANE_BLIND_STAGES in lib/analytics/attempts.ts exists to work around.
-  let stages = new StageRecorder(slug, "unknown");
+  let stages = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId: input.runId });
   let lastStage = 0;
   const log = (line: string) => {
     send({ type: "log", line });
@@ -1363,7 +1372,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const dir = reused ?? mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
     if (isPrebuilt && archive) {
-      stages = new StageRecorder(slug, "static");
+      stages = new StageRecorder(slug, "static", undefined, undefined, undefined, { runId: input.runId });
       // Wrapped in the ACTIVATION stage, which this path has never emitted.
       //
       // `publishPrebuilt` writes `unpack`, `upload` and `verify` and then this
@@ -1979,6 +1988,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // 2-4 minute cold build is affordable.
     const laneNow = lane;
     stages = new StageRecorder(slug, laneNow, undefined, undefined, undefined, {
+      runId: input.runId,
       runtime: String(s.runtime || "") || null,
       // Null for the static lane on purpose: it publishes to GCS and has no
       // Cloud Run service of its own, so "no service exists" is not evidence of a

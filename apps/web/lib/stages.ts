@@ -61,6 +61,8 @@ export interface StageRow {
   runtime?: string | null;
   /** Whether this was the app's first successful deploy. Null when not yet known. */
   cold?: boolean | null;
+  /** Which deploy this stage belongs to. Null on rows written before the column. */
+  runId?: string | null;
 }
 
 /** Where a stage's timings are written. Swapped out in tests. */
@@ -68,12 +70,32 @@ export interface StageSink {
   write(row: StageRow): Promise<void>;
 }
 
+/**
+ * The `run_id` column, guaranteed before the first write that needs it.
+ *
+ * db/018 is the canonical schema, but migrations are their own command and no
+ * deploy runs them. Writing a column nobody has added would make every stage
+ * write throw — and telemetry is wrapped, so it would fail SILENTLY and the
+ * dashboard would keep showing the old wrong number with no sign why.
+ */
+let runIdColumn: Promise<void> | null = null;
+function ensureRunIdColumn(): Promise<void> {
+  if (!runIdColumn) {
+    runIdColumn = getPool(DB)
+      .query(`ALTER TABLE deploy_stages ADD COLUMN IF NOT EXISTS run_id text`)
+      .then(() => undefined)
+      .catch((e) => { runIdColumn = null; throw e; });
+  }
+  return runIdColumn;
+}
+
 export const postgresSink: StageSink = {
   async write(row) {
+    await ensureRunIdColumn();
     await getPool(DB).query(
-      `INSERT INTO deploy_stages (slug, lane, stage, started_at, ended_at, outcome, runtime, cold)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [row.slug, row.lane, row.stage, row.startedAt, row.endedAt, row.outcome, row.runtime ?? null, row.cold ?? null],
+      `INSERT INTO deploy_stages (slug, lane, stage, started_at, ended_at, outcome, runtime, cold, run_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [row.slug, row.lane, row.stage, row.startedAt, row.endedAt, row.outcome, row.runtime ?? null, row.cold ?? null, row.runId ?? null],
     );
   },
 };
@@ -114,7 +136,23 @@ export class StageRecorder {
      * all. A first deploy is a guaranteed miss and is also the moment the product
      * is judged.
      */
-    private readonly facts: { runtime?: string | null; cold?: boolean | null } = {},
+    private readonly facts: {
+      runtime?: string | null;
+      cold?: boolean | null;
+      /**
+       * Which DEPLOY these stages belong to.
+       *
+       * Without it a duration can only be bounded by a time window, and every
+       * attempt inside that window becomes one deploy: a 1m 34s deploy was
+       * reported as 23m 57s because four attempts preceded it within the half
+       * hour the reader looks back over.
+       *
+       * The SAME id has to reach the handoff recorder in the route and the
+       * pipeline recorder in the job, or the wait a person actually experienced
+       * is split in two and only half of it is reported.
+       */
+      runId?: string | null;
+    } = {},
   ) {}
 
   start(stage: string): StageHandle {
@@ -152,6 +190,7 @@ export class StageRecorder {
         outcome,
         runtime: this.facts.runtime ?? null,
         cold: this.facts.cold ?? null,
+        runId: this.facts.runId ?? null,
       });
     } catch (e) {
       this.onError(e);
