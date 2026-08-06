@@ -28,6 +28,37 @@ steps:
           --push \
           -f Dockerfile .
 
+  # The deploy job runs the SAME image with a different command, so it has to move
+  # with the service or a deploy from main would leave every actual deploy running
+  # the previous commit's pipeline — the worst kind of drift, because the thing
+  # that looks deployed is not the thing doing the work.
+  #
+  # Only --image, and never fails the build: the job may not exist yet in a fresh
+  # environment, and the service being live is what matters. Create or reconfigure
+  # it with scripts/setup-deploy-job.sh.
+  #
+  # This runs BEFORE `deploy` below, and that order is load-bearing, not
+  # cosmetic. Cloud Build runs steps in file order with no `waitFor` between
+  # them, so for the seconds between these two steps one of the job and the
+  # service is ahead of the other. assertJobImageMatches (apps/web/lib/
+  # deploy-runs.ts) refuses to dispatch when they disagree — and if `deploy`
+  # ran first, a service already on the new tag with a job still on the old
+  # one is exactly the state it refuses on. Every customer deploy landing in
+  # that window would 503 with "the job was not updated by the last deploy of
+  # main", which at that moment would be false. Job-ahead-of-service is the
+  # harmless direction: the job briefly carries code the service has not
+  # started serving yet, which the guard has never objected to.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy-job
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run jobs update supersonic-deploy-job \
+          --image=$_IMAGE:$_TAG --update-env-vars=$_LANE_ENV \
+          --region=us-central1 --project=$PROJECT_ID --quiet \
+        || echo "no supersonic-deploy-job yet — skipping (see scripts/setup-deploy-job.sh)"
+
   # Never env vars: the live service carries AUTH_SECRET, PG_PASSWORD, the Stripe
   # keys and the lane flags, and a pipeline that passed --set-env-vars would wipe
   # them. Never --tag or --no-traffic either: a deploy from main is meant to serve,
@@ -108,25 +139,6 @@ steps:
       # daemon image are safe to leave either way.
       - --update-env-vars=$_LANE_ENV
       - --quiet
-
-  # The deploy job runs the SAME image with a different command, so it has to move
-  # with the service or a deploy from main would leave every actual deploy running
-  # the previous commit's pipeline — the worst kind of drift, because the thing
-  # that looks deployed is not the thing doing the work.
-  #
-  # Only --image, and never fails the build: the job may not exist yet in a fresh
-  # environment, and the service being live is what matters. Create or reconfigure
-  # it with scripts/setup-deploy-job.sh.
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    id: deploy-job
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        gcloud run jobs update supersonic-deploy-job \
-          --image=$_IMAGE:$_TAG --update-env-vars=$_LANE_ENV \
-          --region=us-central1 --project=$PROJECT_ID --quiet \
-        || echo "no supersonic-deploy-job yet — skipping (see scripts/setup-deploy-job.sh)"
 
 substitutions:
   # The flags that select WHICH PIPELINE RUNS, in one place because they have to
