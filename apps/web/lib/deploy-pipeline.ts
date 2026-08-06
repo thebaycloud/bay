@@ -44,7 +44,7 @@ import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
-import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
+import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
@@ -2237,16 +2237,18 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // meaning at each call site — see lib/deploy-target.ts for why that
     // re-derivation is exactly how the domain-mapping bug below survived.
     const deployTarget = deployTargetFor(toFleet ? "fleet" : "cloudrun");
-    // The address the database is provisioned at follows `toFleet`, never
-    // `target.runtime` alone. The two differ for exactly the apps this gate
-    // exists for: an app the fleet could serve but is not yet a canary still
-    // deploys to Cloud Run, and handing it FLEET_DB would give that Cloud Run
-    // revision an address it cannot reach — the same failure this whole task
-    // exists to stop, arriving through the back door.
-    const dbAt = toFleet ? FLEET_DB : CLOUD_RUN_DB;
+    // The address the database is provisioned at is `deployTarget`'s, and
+    // that follows `toFleet`, never `target.runtime` alone — the two differ
+    // for exactly the apps this gate exists for: an app the fleet could serve
+    // but is not yet a canary still deploys to Cloud Run, and handing it
+    // FLEET_DB would give that Cloud Run revision an address it cannot reach
+    // — the same failure this whole task exists to stop, arriving through the
+    // back door. `deployTarget` is already built from the same `toFleet` one
+    // line up, so asking it directly here is one fewer place carrying that
+    // condition rather than a second copy of it re-derived by hand.
 
     const pgPromise = wants("database") && s.database?.engine === "postgres"
-      ? provisionPostgres(slug, log, dbAt).then(
+      ? provisionPostgres(slug, log, deployTarget.databaseAddress).then(
           (pg) => ({ ok: true as const, pg }),
           (e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
         )
@@ -2323,7 +2325,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           cloudsql = r.pg.connectionName;
           // Every spelling of the same endpoint. DATABASE_URL alone is not enough:
           // plenty of apps never read it and require POSTGRES_SERVER or PGHOST.
-          dbEnv = databaseEnv(r.pg, dbAt);
+          dbEnv = databaseEnv(r.pg, deployTarget.databaseAddress);
           // Kept whole, because a SIBLING needs the same database at a different
           // address — see `siblingDbEnv` below. Only the four fields that name
           // the connection; nothing here is the primary's placement.
@@ -3791,7 +3793,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      *
      * The SAME branch this deploy took, and it has to be, because the deploy has
      * already committed to a runtime in ways nothing downstream can undo.
-     * `dbAt` resolved to FLEET_DB above, so `DATABASE_URL`, `PGHOST` and
+     * `deployTarget.databaseAddress` resolved to FLEET_DB above, so `DATABASE_URL`, `PGHOST` and
      * `POSTGRES_HOST` all name 10.200.0.1 — the sandbox bridge gateway, an
      * address no Cloud Run revision can route to. A repair that redeployed to
      * Cloud Run therefore produced an app that starts, serves its homepage,
