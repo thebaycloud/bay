@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { stripe, WEBHOOK_SECRET, planForPrice } from "@/lib/stripe";
-import { setPlanByUser, setPlanByCustomer, type Plan, type SubStatus } from "@/lib/entitlements";
+import { setPlanByUser, setPlanByCustomer, setStatusByCustomer, type Plan, type SubStatus } from "@/lib/entitlements";
 import type Stripe from "stripe";
 
 // Collapse Stripe's subscription statuses into ours. active/trialing = usable;
@@ -54,16 +54,26 @@ export async function POST(req: Request) {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = idOf(sub.customer);
         const priceId = sub.items.data[0]?.price?.id ?? "";
-        const plan: Plan = planForPrice(priceId) ?? "basic";
-        // Plan reflects the price; status controls access (locked when not paid).
-        if (customerId) await setPlanByCustomer(customerId, plan, mapStatus(sub.status), sub.id);
+        const plan = planForPrice(priceId);
+        if (customerId) {
+          // An unmappable price updates the status and leaves the plan alone.
+          // The alternative — defaulting to free — silently downgrades a paying
+          // customer whenever a price id is rotated in the Stripe dashboard
+          // without the env var following it.
+          if (plan) await setPlanByCustomer(customerId, plan, mapStatus(sub.status), sub.id);
+          else await setStatusByCustomer(customerId, mapStatus(sub.status), sub.id);
+        }
         break;
       }
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = idOf(sub.customer);
-        // Subscription gone → locked behind the paywall until they resubscribe.
-        if (customerId) await setPlanByCustomer(customerId, "basic", "canceled", null);
+        // Subscription gone → back to free, NOT locked out. Their apps keep
+        // running and they keep the free tier; what they lose is the fourth
+        // app, custom domains, auto-fix and badge removal. Taking away access
+        // to work somebody already deployed, because a card expired, is not a
+        // thing we do — and it saves about a dollar a month.
+        if (customerId) await setPlanByCustomer(customerId, "free", "canceled", null);
         break;
       }
       default:

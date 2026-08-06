@@ -729,6 +729,33 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .plan-line { display: flex; align-items: center; gap: 14px; }
 .plan-tag { border-radius: var(--r); display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; padding: 5px 10px; border: 1px solid var(--line-2); color: var(--ink-2); }
 .plan-tag.pro { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+/* billing: plan, meters, upsell */
+.bill-price { font-family: var(--mono); font-size: 13px; color: var(--ink-2); }
+.plan-line .btn { margin-left: auto; }
+/* Two across on anything with room, one on a phone. `auto-fit` rather than a
+   fixed count so a future fifth meter wraps instead of squeezing. */
+.bill-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 22px; padding: 4px 18px 16px; border-top: 1px solid var(--line); padding-top: 16px; }
+.bill-meter-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); margin-bottom: 6px; }
+.bill-count { color: var(--ink); }
+/* Amber before the wall, red at it — so the meter is a warning rather than an
+   explanation after the fact. */
+.bill-count.near { color: var(--warn, #b07d1c); }
+.bill-count.at { color: var(--down, #c33a2c); }
+.bill-unlimited { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); }
+.bill-unlimited svg { color: var(--faint); }
+.bill-bar { border-radius: var(--r-pill); overflow: hidden; height: 4px; background: var(--line); }
+.bill-bar > span { display: block; height: 100%; background: var(--accent); transition: width .2s var(--ease); }
+.bill-bar > span.near { background: var(--warn, #b07d1c); }
+.bill-bar > span.at { background: var(--down, #c33a2c); }
+.bill-foot { padding: 11px 18px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.bill-foot a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.bill-upsell { padding: 14px 18px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.bill-upsell-h { font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); margin-bottom: 8px; }
+.bill-upsell ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.bill-upsell li { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink); }
+.bill-upsell li svg { color: var(--accent); flex: none; }
+
 .tok-meta { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tok-confirm { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 .tok-confirm .tok-q { font-family: var(--mono); font-size: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; }

@@ -8,6 +8,18 @@ export interface AppRow {
   workspace_id: string;
   owner_id: string;
   owner_email: string;
+  /**
+   * The owner's plan and subscription status, carried so the response path can
+   * decide the badge without a control-plane call on every HTML page. See
+   * `plan.ts`.
+   *
+   * Nullable because `users.status` is nullable in the schema — it was added
+   * after the fact by 007 and only backfilled for rows that existed then.
+   * `badgeRequired` reads null as free and shows the badge, which is both the
+   * safe default and what the proxy did before plans existed.
+   */
+  owner_plan: string | null;
+  owner_status: string | null;
   run_url: string | null;
   visibility: "private" | "shared" | "workspace" | "public";
   status: "deploying" | "live" | "failed";
@@ -70,6 +82,8 @@ export async function lookupApp(slug: string): Promise<AppRow | null> {
   // `deploy_error` is the reason a failed one gives.
   const r = await db().query(
     `SELECT a.*, u.email AS owner_email,
+            u.plan   AS owner_plan,
+            u.status AS owner_status,
             d.status AS deploy_status,
             d.error  AS deploy_error,
             d.updated_at AS deploy_updated_at

@@ -42,6 +42,8 @@ import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
 import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
+import { countIfUnder, claimFreeFix } from "@/lib/usage";
+import { agentLimitMessage } from "@/lib/plan-copy";
 import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, FLEET_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
@@ -3878,13 +3880,41 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         await failure.repaired("skipped", null);
         return;
       }
-      // The auto-fix agent is a Pro feature. Basic gets a paste-ready prompt
-      // for its own coding agent instead of us fixing the code in the cloud.
-      if (!limits.autoFix) {
+      // Whether the repair agent runs at all — three questions now, not one.
+      //
+      // This is the single most expensive thing the platform can do on a user's
+      // behalf: an LLM session that reads a repo, edits it, and redeploys, up to
+      // MAX_REDEPLOYS times. Per-RUN cost was already bounded (MAX_STEPS,
+      // MAX_REDEPLOYS, REPAIR_MAX_CALLS in lib/agent.ts and lib/agents/index.ts).
+      // What was never bounded is how many runs a month can hold, and that is
+      // the hole a free tier would have opened.
+      let runRepair = false;
+      let declined = "";
+      if (limits.autoFix) {
+        runRepair = await countIfUnder(ownerId, "agentRuns", limits.monthlyAgentRuns);
+        if (!runRepair) declined = agentLimitMessage();
+      } else if (limits.lifetimeFreeFixes > 0) {
+        // The one free repair, spent here: on a deploy that has ACTUALLY FAILED,
+        // rather than on the first deploy an account makes. Spent on the first
+        // deploy it would usually be spent on one that was going to succeed —
+        // costing us a session and showing the user nothing. Spent on the first
+        // failure it is the one moment the product does something no other
+        // deploy tool does.
+        //
+        // Claimed before the agent starts rather than after it succeeds: a crash
+        // mid-run must not hand out a second session. `claimFreeFix` is a
+        // conditional UPDATE, so two deploys failing in the same instant cannot
+        // both take it, and it fails CLOSED — unlike every other limit here —
+        // because the fallback costs a paste-ready prompt and the alternative
+        // costs an unbounded LLM session.
+        runRepair = await claimFreeFix(ownerId);
+        if (runRepair) log("Using your one free auto-fix — the repair agent is taking this one.");
+      }
+      if (!runRepair) {
         await rollBackToLastGood();
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
-        log("Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
+        log(declined || "Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
         send({
           type: "error",
           message: result.error,

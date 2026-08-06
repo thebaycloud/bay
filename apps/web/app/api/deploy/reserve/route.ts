@@ -16,6 +16,8 @@ import { cloudRunName } from "@/lib/slug";
 import { getPool } from "@/lib/db";
 import { setDeploy } from "@/lib/deploys";
 import { entitlement, countOwnerApps } from "@/lib/entitlements";
+import { usageFor } from "@/lib/usage";
+import { appLimitMessage, buildLimitMessage, noAccountMessage } from "@/lib/plan-copy";
 import { inFlightForOwner, runIdsForSlug } from "@/lib/deploy-runs";
 
 export async function POST(req: Request) {
@@ -35,19 +37,27 @@ export async function POST(req: Request) {
   // promise anything.
   const ent = await entitlement(uid);
   if (ent.locked) {
-    return Response.json(
-      { error: "Your free trial has ended. Pick a plan at app.supersonic.cv to keep deploying.", paywall: true },
-      { status: 402 }
-    );
+    return Response.json({ error: noAccountMessage(), paywall: true, reason: "no_account" }, { status: 402 });
   }
   if (Number.isFinite(ent.limits.maxApps) && (await countOwnerApps(uid, slug)) >= ent.limits.maxApps) {
-    return Response.json(
-      {
-        error: `Your plan includes ${ent.limits.maxApps} app. Upgrade to Pro for unlimited apps at app.supersonic.cv.`,
-        upgrade: true,
-      },
-      { status: 402 }
-    );
+    return Response.json({ error: appLimitMessage(ent.limits), upgrade: true, reason: "app_limit" }, { status: 402 });
+  }
+
+  // The build meter, read but NOT incremented.
+  //
+  // Advisory by construction: /api/deploy takes the count atomically when it
+  // dispatches the job, and taking it here as well would charge two builds for
+  // every deploy — or one for a reservation that never became a build at all,
+  // which is what happens every time somebody opens the new-app page and
+  // changes their mind. The race this leaves open is a user at 29 of 30 firing
+  // two deploys at once and being told "go ahead" twice; the second is then
+  // refused a moment later by the authoritative check, which is the right
+  // failure and costs nothing.
+  if (Number.isFinite(ent.limits.monthlyBuilds)) {
+    const used = (await usageFor(uid)).builds;
+    if (used >= ent.limits.monthlyBuilds) {
+      return Response.json({ error: buildLimitMessage(ent.limits), upgrade: true, reason: "build_limit" }, { status: 402 });
+    }
   }
 
   // Refused visibly, rather than experienced as a hang.

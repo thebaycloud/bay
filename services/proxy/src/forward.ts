@@ -4,7 +4,7 @@ import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, type VisitorIdenti
 import { mintIdToken } from "./idtoken";
 import { isCloudRunTarget } from "./upstream";
 import { config } from "./config";
-import { injectOverlay, isHtmlDocument } from "./inject";
+import { injectOverlay, isHtmlDocument, hasOverlay } from "./inject";
 import { page502 } from "./pages";
 
 export async function forward(
@@ -13,7 +13,7 @@ export async function forward(
   targetBase: string,
   visitor: VisitorIdentity,
   workspaceDomain: string,
-  inject?: { slug: string; owner: boolean },
+  inject?: { slug: string; owner: boolean; badge: boolean },
   prefix?: string | null
 ): Promise<void> {
   const target = new URL(req.url ?? "/", targetBase);
@@ -82,11 +82,11 @@ export async function forward(
 
         // HTML documents are buffered so we can inject the Supersonic overlay
         // before </body>. Everything else (assets, JSON, SSE) streams untouched.
-        if (inject && isHtmlDocument(upRes.headers["content-type"])) {
+        if (inject && hasOverlay(inject.owner, inject.badge) && isHtmlDocument(upRes.headers["content-type"])) {
           const chunks: Buffer[] = [];
           upRes.on("data", (c: Buffer) => chunks.push(c));
           upRes.on("end", () => {
-            const body = injectOverlay(Buffer.concat(chunks).toString("utf8"), inject.slug, inject.owner);
+            const body = injectOverlay(Buffer.concat(chunks).toString("utf8"), inject.slug, inject.owner, inject.badge);
             const buf = Buffer.from(body, "utf8");
             delete headers["content-encoding"];
             headers["content-length"] = String(buf.length);

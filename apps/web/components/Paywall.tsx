@@ -3,32 +3,89 @@
 import { useState } from "react";
 import { Sparkles, Check, X } from "lucide-react";
 
+// Free is not offered here, because everybody looking at this is already on it.
+// The card that would say "Free — $0 — you have this" is the one thing a person
+// hitting a limit does not need to read.
 const PLANS = [
   {
-    id: "basic", name: "Basic", price: 12, tagline: "Ship one app, share it with your team.",
-    features: ["1 app", "Database, storage & custom domain", "Share with up to 3 people", "Paste-ready fixes when something breaks"],
+    id: "pro", name: "Pro", price: "$20", unit: "/ month", featured: true,
+    tagline: "Unlimited apps, no badge, and deploys that fix themselves.",
+    features: [
+      "Unlimited apps",
+      "Unlimited public apps",
+      "Your own domain",
+      "Auto-fix on every failed deploy",
+      "Remove the Supersonic badge",
+      "Backups and restore",
+    ],
   },
   {
-    id: "pro", name: "Pro", price: 20, tagline: "Unlimited apps, plus auto-fix.", featured: true,
-    features: ["Unlimited apps", "Unlimited sharing + roles", "Failed deploys fix themselves", "Remove the Supersonic badge"],
+    id: "team", name: "Team", price: "Let's talk", unit: "",
+    tagline: "For a team whose internal tools all live in one place.",
+    features: [
+      "Everything in Pro",
+      "Sign in with your company domain",
+      "Roles and an audit log",
+      "Unlimited recipients, always free",
+      "Priority support",
+    ],
   },
 ];
 
-export type PaywallReason = "trial_ended" | "app_limit" | "share_limit" | "choose_plan";
+export type PaywallReason =
+  | "app_limit"
+  | "public_limit"
+  | "build_limit"
+  | "fix_used"
+  | "choose_plan"
+  | "no_account";
 
+// Every one of these is written as an offer rather than a denial. Reaching a
+// limit on the free plan is the best signal we get from a user — they built
+// three things and want a fourth — and "you have hit your limit" is a strange
+// way to answer good news.
 const HEAD: Record<PaywallReason, { title: string; sub: string }> = {
-  trial_ended: { title: "Your free trial has ended", sub: "Pick a plan to keep deploying, sharing, and building." },
-  app_limit: { title: "You've hit your app limit", sub: "Basic includes 1 app — upgrade to Pro for unlimited apps." },
-  share_limit: { title: "You've hit your sharing limit", sub: "Basic shares with 3 people — upgrade to Pro for unlimited sharing." },
-  choose_plan: { title: "Choose your plan", sub: "You're on a free trial with full Pro access. Lock in a plan any time." },
+  app_limit: {
+    title: "You're using all three free apps",
+    sub: "Pro is $20/month for as many as you like. Your three keep running either way.",
+  },
+  public_limit: {
+    title: "Free includes one public app",
+    sub: "You can still share any app by email with as many people as you want — that's never capped.",
+  },
+  build_limit: {
+    title: "You've used this month's builds",
+    sub: "They reset on the 1st. Pro raises the ceiling to 500 a month.",
+  },
+  fix_used: {
+    title: "That was your free auto-fix",
+    sub: "You'll still get a paste-ready fix for your coding agent on every failure. Pro has our agent do it for you.",
+  },
+  choose_plan: {
+    title: "Upgrade Supersonic",
+    sub: "You're on the free plan. Here's what the paid ones add.",
+  },
+  no_account: {
+    title: "We couldn't find your account",
+    sub: "Try signing out and back in — nothing you've deployed has been touched.",
+  },
 };
 
-// Shared plan-selection surface. Full-screen and non-dismissable when the trial
-// has ended (there's nothing behind it to use); a dismissable modal otherwise.
-export function Paywall({ reason = "trial_ended", onClose }: { reason?: PaywallReason; onClose?: () => void }) {
+const TEAM_MAILTO =
+  "mailto:founders@supersonic.cv?subject=Supersonic%20Team%20plan"
+  + "&body=Hi%20—%20I'd%20like%20to%20set%20up%20a%20Team%20plan.%0A%0AHow%20many%20people%20will%20be%20deploying%3A%0AWhat%20you're%20building%3A";
+
+/**
+ * The upgrade surface.
+ *
+ * Always dismissable now, which is the change that matters. It used to be a
+ * wall you could not close when a trial ran out — there was nothing behind it
+ * to use. There is no trial any more, so there is always something behind it:
+ * the free plan, with your apps on it, still running.
+ */
+export function Paywall({ reason = "choose_plan", onClose }: { reason?: PaywallReason; onClose?: () => void }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const dismissable = reason !== "trial_ended" && !!onClose;
   const h = HEAD[reason];
 
   async function pick(plan: string) {
@@ -43,21 +100,28 @@ export function Paywall({ reason = "trial_ended", onClose }: { reason?: PaywallR
   }
 
   return (
-    <div className="pw-overlay" onClick={dismissable ? onClose : undefined}>
+    <div className="pw-overlay" onClick={onClose}>
       <div className="pw-card" onClick={(e) => e.stopPropagation()}>
-        {dismissable && <button className="pw-x" title="Close" onClick={onClose}><X size={16} /></button>}
+        {onClose && <button className="pw-x" title="Close" onClick={onClose}><X size={16} /></button>}
         <div className="pw-head"><h2>{h.title}</h2><p>{h.sub}</p></div>
         <div className="pw-plans">
           {PLANS.map((pl) => (
             <div key={pl.id} className={"pw-plan" + (pl.featured ? " featured" : "")}>
               {pl.featured && <span className="pw-tagbadge"><Sparkles size={11} />Recommended</span>}
               <div className="pw-name">{pl.name}</div>
-              <div className="pw-price"><b>${pl.price}</b> / mo</div>
+              <div className="pw-price"><b>{pl.price}</b> {pl.unit}</div>
               <div className="pw-tag">{pl.tagline}</div>
               <ul className="pw-feats">{pl.features.map((f) => <li key={f}><Check size={13} />{f}</li>)}</ul>
-              <button className={"btn " + (pl.featured ? "primary" : "")} disabled={!!busy} onClick={() => pick(pl.id)}>
-                {busy === pl.id ? "…" : `Choose ${pl.name}`}
-              </button>
+              {/* Team is an email, not a checkout. It is hand-priced while we
+                  learn what it is worth, and routing it through Stripe only to
+                  answer "talk to us" would be a round trip to reach a mailto. */}
+              {pl.id === "team" ? (
+                <a className="btn" href={TEAM_MAILTO}>Talk to us</a>
+              ) : (
+                <button className={"btn " + (pl.featured ? "primary" : "")} disabled={!!busy} onClick={() => pick(pl.id)}>
+                  {busy === pl.id ? "…" : `Choose ${pl.name}`}
+                </button>
+              )}
             </div>
           ))}
         </div>
