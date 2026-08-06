@@ -431,10 +431,10 @@ import assert from "node:assert/strict";
 import { assertJobImageMatches } from "../lib/deploy-runs";
 
 test("dispatch is allowed when the job and the service run the same tag", async () => {
-  await assertJobImageMatches("supersonic-deploy-job", {
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", {
     jobImage: async () => "reg/supersonic/control-plane:abc123",
     serviceImage: async () => "reg/supersonic/control-plane:abc123",
-  });
+  }));
 });
 
 test("dispatch is refused when the job is on an older tag", async () => {
@@ -465,10 +465,10 @@ test("dispatch is refused when either image carries no tag", async () => {
 test("a probe that cannot answer does not block the deploy", async () => {
   // The check exists to catch a stale image, not to become a new way for every
   // deploy to fail. An API that is down must cost the check, not the deploy.
-  await assertJobImageMatches("supersonic-deploy-job", {
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", {
     jobImage: async () => { throw new Error("500 from Cloud Run"); },
     serviceImage: async () => "reg/supersonic/control-plane:abc123",
-  });
+  }));
 });
 
 test("SKIP_JOB_IMAGE_CHECK=1 turns the refusal off without a deploy", async () => {
@@ -477,10 +477,10 @@ test("SKIP_JOB_IMAGE_CHECK=1 turns the refusal off without a deploy", async () =
   // reason cloudbuild.yaml keeps its lane flags as variables.
   process.env.SKIP_JOB_IMAGE_CHECK = "1";
   try {
-    await assertJobImageMatches("supersonic-deploy-job", {
+    await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", {
       jobImage: async () => "reg/supersonic/control-plane:old111",
       serviceImage: async () => "reg/supersonic/control-plane:new222",
-    });
+    }));
   } finally {
     delete process.env.SKIP_JOB_IMAGE_CHECK;
   }
