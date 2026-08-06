@@ -8,6 +8,7 @@ import { getPool } from "@/lib/db";
 import { deleteDeploy, deployOwner } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
+import { unplaceApp } from "@/lib/fleet";
 
 export async function POST(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -41,6 +42,15 @@ export async function POST(_req: Request, { params }: { params: { slug: string }
     // And its deploy history. Left behind, a row still reading 'building' keeps
     // the dashboard showing "Deploying…" for an app that no longer exists.
     await deleteDeploy(slug);
+    // And its fleet placement, on every node — not just the one it last ran
+    // on. Left behind, the row outlives the app: slugs are five characters
+    // and get re-issued (see lib/gcloud.ts's own reasoning for databases and
+    // image caches), and a freed slug taken by a new app that also lands on
+    // the fleet hands its node the previous tenant's spec. Swallowed like the
+    // row deletion above — an app that was never on the fleet has nothing to
+    // clear, and a hiccup here must not turn "delete my app" into a 500 for
+    // everything else this call already did.
+    await unplaceApp(slug).catch(() => {});
     return Response.json({ ok: true });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
