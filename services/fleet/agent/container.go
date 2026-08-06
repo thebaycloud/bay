@@ -638,34 +638,62 @@ func runscStatus(id string) (runscState, error) {
 	return st, nil
 }
 
+// StartTiming is how long the two phases of one Start call took.
+//
+// Split into two fields rather than reported as one span, because the fix for
+// a slow pull (a leaner image, a warmer registry) and the fix for a slow boot
+// (fewer local setup steps, slower secret resolution) are different pieces of
+// work with different owners, and a single number covering both would point
+// whoever reads it at neither. `docs/research/fleet-deploy-time.md` names the
+// combined, unsplit cost of `Start` — pull AND boot together — as the largest
+// unquantified line item in the entire deploy path; folding them back into
+// one measurement here would repeat exactly the mistake that document exists
+// to correct.
+//
+// Boot is deliberately "everything else Start does", not just the sandbox
+// launch: Pull plus Boot always sums to the whole of Start's wall-clock time,
+// with nothing left unaccounted for, rather than requiring a guess at exactly
+// where "boot" begins among rootfs prep, secrets and the launch itself.
+//
+// The zero value is never sent: only a successful Start is timed (see
+// startMany), so there is no reading of "0ms pull" that could be mistaken for
+// a real, if implausible, instant one.
+type StartTiming struct {
+	Pull time.Duration
+	Boot time.Duration
+}
+
 // Start brings one PROCESS of an app up: image, rootfs, network, spec, sandbox.
 //
 // Every kind takes this path. A worker differs from a web process only in having
 // no port to publish and nothing to health-check, and a cron differs only in
 // being started by a clock and waited on. That is the whole point of the model:
 // one primitive, four policies.
-func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
+func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, StartTiming, error) {
 	id := sandboxID(app.Slug, proc)
 	bundle := filepath.Join(bundleRoot, id)
 
+	pullStart := time.Now()
 	img, err := r.EnsureImage(imageFor(app, proc))
 	if err != nil {
-		return nil, err
+		return nil, StartTiming{}, err
 	}
+	pull := time.Since(pullStart)
+	bootStart := time.Now()
 
 	// A leftover sandbox under this id makes every later step fail confusingly.
 	r.Stop(id)
 
 	if err := os.MkdirAll(bundle, 0o711); err != nil {
-		return nil, err
+		return nil, StartTiming{}, err
 	}
 	if err := r.prepareRootfs(id, img, bundle); err != nil {
-		return nil, err
+		return nil, StartTiming{}, err
 	}
 
 	entrypoint, cmd, imgEnv, cwd, err := r.imageConfig(img)
 	if err != nil {
-		return nil, fmt.Errorf("image config: %w", err)
+		return nil, StartTiming{}, fmt.Errorf("image config: %w", err)
 	}
 	// The image's own entrypoint is the web process's command by default —
 	// that is what the Dockerfile said to run. Every other kind MUST declare
@@ -675,10 +703,10 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	if len(proc.Command) > 0 {
 		argv = proc.Command
 	} else if proc.Kind != KindWeb {
-		return nil, fmt.Errorf("%s: a %s process must declare a command", id, proc.Kind)
+		return nil, StartTiming{}, fmt.Errorf("%s: a %s process must declare a command", id, proc.Kind)
 	}
 	if len(argv) == 0 {
-		return nil, fmt.Errorf("%s: image declares no entrypoint or cmd and the process declares no command", id)
+		return nil, StartTiming{}, fmt.Errorf("%s: image declares no entrypoint or cmd and the process declares no command", id)
 	}
 
 	// Checked before secrets are even fetched, let alone the namespace created:
@@ -688,7 +716,7 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	// a start that cannot succeed. Apps with no database skip this entirely.
 	if hasDatabase(app) {
 		if err := dbPathReachable(dbProxyAddr, 3*time.Second); err != nil {
-			return nil, fmt.Errorf("%s: %w", id, err)
+			return nil, StartTiming{}, fmt.Errorf("%s: %w", id, err)
 		}
 	}
 
@@ -698,17 +726,17 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	// health check on "/".
 	resolved, err := resolveAll(gcpProject, app.Secrets)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", id, err)
+		return nil, StartTiming{}, fmt.Errorf("%s: %w", id, err)
 	}
 
 	net, err := SetupSandboxNet(id, index)
 	if err != nil {
-		return nil, err
+		return nil, StartTiming{}, err
 	}
 
 	if err := writeSpec(bundle, app, proc, net, imgEnv, argv, cwd, resolved); err != nil {
 		TeardownSandboxNet(id)
-		return nil, err
+		return nil, StartTiming{}, err
 	}
 
 	// Written BEFORE the sandbox starts, so a sandbox that exists always has a
@@ -716,7 +744,7 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	// running sandbox is unadoptable, and that window is exactly a crash.
 	if err := writeManifest(bundle, app, proc, index); err != nil {
 		TeardownSandboxNet(id)
-		return nil, fmt.Errorf("manifest: %w", err)
+		return nil, StartTiming{}, fmt.Errorf("manifest: %w", err)
 	}
 
 	// `run --detach` rather than create-then-start: one call, and the failure
@@ -727,7 +755,7 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	logPath := processLogPath(app, proc)
 	if err := runscDetached(bundle, id, logPath); err != nil {
 		TeardownSandboxNet(id)
-		return nil, err
+		return nil, StartTiming{}, err
 	}
 
 	// Confirm it actually reached running rather than trusting the exit code.
@@ -744,13 +772,13 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	for time.Now().Before(deadline) {
 		st, err := runscStatus(id)
 		if err == nil && st.Status == "running" {
-			return net, nil
+			return net, StartTiming{Pull: pull, Boot: time.Since(bootStart)}, nil
 		}
 		if err != nil {
 			lastErr = err
 			for _, known := range r.List() {
 				if known == id {
-					return net, nil
+					return net, StartTiming{Pull: pull, Boot: time.Since(bootStart)}, nil
 				}
 			}
 		}
@@ -758,7 +786,7 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, error) {
 	}
 	st, _ := runscStatus(id)
 	r.Stop(id)
-	return nil, fmt.Errorf("%s: sandbox did not reach running (status %q, last state error: %v)",
+	return nil, StartTiming{}, fmt.Errorf("%s: sandbox did not reach running (status %q, last state error: %v)",
 		id, st.Status, lastErr)
 }
 
@@ -794,7 +822,10 @@ var (
 func (r *Runtime) RunToCompletion(app App, proc Process, index int, timeout time.Duration) error {
 	id := sandboxID(app.Slug, proc)
 	defer stopFn(r, id)
-	if _, err := startFn(r, app, proc, index); err != nil {
+	// Timing discarded: a release or cron run is not the placement event
+	// deploy_stages' fleet-pull/fleet-boot rows measure — see startMany, the
+	// only caller that reports it.
+	if _, _, err := startFn(r, app, proc, index); err != nil {
 		return err
 	}
 

@@ -211,6 +211,46 @@ type Agent struct {
 	// this tells the control plane that the something was ours, which is what
 	// keeps a repair agent out of a customer's repository over our own outage.
 	faults map[string]ProcessFault
+
+	// pendingTiming holds one sandbox id's pull/boot duration from its most
+	// recent successful Start, from the moment startMany records it until the
+	// next reportRunning call reads and clears it.
+	//
+	// A map rather than a field on `live` because its lifetime is different:
+	// `live` describes what IS running and lives until the process stops being
+	// desired, but a duration describes an EVENT that is over the instant it
+	// is reported once — see desired.go's ProcessState.PullMs/BootMs for why
+	// that distinction matters on the wire. Keeping it separate means
+	// reportRunning can delete an entry the moment it uses it without touching
+	// the `live` entry that has to survive.
+	pendingTiming map[string]StartTiming
+}
+
+// recordStart remembers how long a process's start just took, for the NEXT
+// reportRunning to attach and then forget.
+//
+// Called once, from startMany, only after Start returns successfully. A
+// failed start has no duration worth reporting — see StartTiming's zero
+// value never being sent — and startMany does not call this for one.
+func (a *Agent) recordStart(id string, t StartTiming) {
+	a.mu.Lock()
+	a.pendingTiming[id] = t
+	a.mu.Unlock()
+}
+
+// forgetPendingTiming drops a sandbox id's unreported timing, if any.
+//
+// Called from reconcileOnce's removal loop, alongside the other per-id
+// bookkeeping it already clears (a.faults, a.startFail's records) when an id
+// stops being desired between a start and the report that would have carried
+// its timing. Without this, an app undeployed in that window leaks one entry
+// forever — small, but sandboxID is deterministic from slug+process, so a
+// later redeploy that lands on the SAME id would otherwise be handed a
+// stranger's duration on its first report.
+func (a *Agent) forgetPendingTiming(id string) {
+	a.mu.Lock()
+	delete(a.pendingTiming, id)
+	a.mu.Unlock()
 }
 
 // forgetStaleCronRecords drops cron failure history for jobs this node is no
@@ -390,7 +430,7 @@ func (a *Agent) reportRunning() []ProcessState {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := make([]ProcessState, 0, len(a.live))
-	for _, l := range a.live {
+	for id, l := range a.live {
 		// A process nobody has confirmed lately is not reported at all. Stale
 		// beats wrong here: no row fails the deploy, and a wrong row passes one.
 		if l.confirmed.IsZero() || now.Sub(l.confirmed) > confirmWindow {
@@ -409,6 +449,15 @@ func (a *Agent) reportRunning() []ProcessState {
 		}
 		if len(l.proc.Command) > 0 {
 			s.Command = append([]string(nil), l.proc.Command...)
+		}
+		// Attach this id's pull/boot timing ONCE, then drop it — the next call
+		// to reportRunning must not restate it. See pendingTiming's own comment
+		// for why this is a map keyed separately from `live` rather than a
+		// field on it.
+		if t, ok := a.pendingTiming[id]; ok {
+			pullMs, bootMs := t.Pull.Milliseconds(), t.Boot.Milliseconds()
+			s.PullMs, s.BootMs = &pullMs, &bootMs
+			delete(a.pendingTiming, id)
 		}
 		out = append(out, s)
 	}
@@ -628,15 +677,16 @@ func main() {
 	}
 
 	a := &Agent{rt: rt, src: src, live: map[string]*live{}, slots: map[int]string{},
-		adopt:      adoptable,
-		released:   map[string]string{},
-		relFail:    newFailTracker(),
-		relRunning: map[string]bool{},
-		startFail:  newFailTracker(),
-		cronFail:   newFailTracker(),
-		quiet:      newLogThrottle(),
-		blocked:    map[string]bool{},
-		faults:     map[string]ProcessFault{}}
+		adopt:         adoptable,
+		released:      map[string]string{},
+		relFail:       newFailTracker(),
+		relRunning:    map[string]bool{},
+		startFail:     newFailTracker(),
+		cronFail:      newFailTracker(),
+		quiet:         newLogThrottle(),
+		blocked:       map[string]bool{},
+		faults:        map[string]ProcessFault{},
+		pendingTiming: map[string]StartTiming{}}
 
 	// Reserve every adopted sandbox's slot before anything can ask for one.
 	for id, ad := range adoptable {
@@ -784,6 +834,12 @@ func (a *Agent) reconcileOnce() error {
 			}
 			delete(a.live, id)
 			a.mu.Unlock()
+			// A start recorded but never reported — this id undeployed inside
+			// the one poll interval between them — must not survive to be handed
+			// to whatever the next process at this same sandbox id turns out to
+			// be; sandboxID is deterministic from slug+process, so a redeploy can
+			// land on it.
+			a.forgetPendingTiming(id)
 
 			// Forget this id's own failure history: the start key carries the
 			// image, so an exact delete can't find it — remove by prefix.
@@ -1264,7 +1320,7 @@ func (a *Agent) startMany(items []work) {
 			a.mu.Unlock()
 
 			started := time.Now()
-			net, err := a.rt.Start(app, proc, idx)
+			net, timing, err := a.rt.Start(app, proc, idx)
 			if err != nil {
 				// Counted, which it was not before. The reconcile loop reads this
 				// on the next pass and stops re-attempting a start that cannot
@@ -1302,6 +1358,16 @@ func (a *Agent) startMany(items []work) {
 			// separately is a window in which the node reports both.
 			delete(a.faults, id)
 			a.mu.Unlock()
+
+			// This start's pull/boot timing, for reportRunning to pick up on the
+			// very next sync — including the ReportNow this same pass sends once
+			// startMany returns (all of it, via wg.Wait, before reconcileOnce
+			// gets there), so the measurement reaches the control plane without
+			// waiting for pass N+1's poll — the same win a45497e gave the
+			// running-report itself. A separate lock/unlock rather than folding
+			// into the section above: recordStart takes a.mu itself, and Go's
+			// Mutex is not reentrant.
+			a.recordStart(id, timing)
 
 			// Publish immediately. An app that is serving and absent from the
 			// routing table is indistinguishable, from outside, from an app that

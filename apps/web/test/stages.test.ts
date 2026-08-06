@@ -35,7 +35,7 @@ function clock(startMs: number, stepMs: number) {
  * is a STRING agreeing across four files — and every way of getting it wrong
  * produces a well-formed query returning zero rather than an error.
  */
-const EMITTERS = ["lib/deploy-pipeline.ts", "app/api/deploy/route.ts", "scripts/deploy-job.ts"];
+const EMITTERS = ["lib/deploy-pipeline.ts", "app/api/deploy/route.ts", "scripts/deploy-job.ts", "lib/fleet.ts"];
 
 function emittedStages(): Set<string> {
   const found = new Set<string>();

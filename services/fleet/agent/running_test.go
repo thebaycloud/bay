@@ -54,16 +54,17 @@ func workerOnlyDesired(t *testing.T) (Desired, App, Process) {
 
 func agentForRunningTests() *Agent {
 	return &Agent{
-		live:       map[string]*live{},
-		slots:      map[int]string{},
-		released:   map[string]string{},
-		relFail:    newFailTracker(),
-		relRunning: map[string]bool{},
-		startFail:  newFailTracker(),
-		cronFail:   newFailTracker(),
-		quiet:      newLogThrottle(),
-		blocked:    map[string]bool{},
-		faults:     map[string]ProcessFault{},
+		live:          map[string]*live{},
+		slots:         map[int]string{},
+		released:      map[string]string{},
+		relFail:       newFailTracker(),
+		relRunning:    map[string]bool{},
+		startFail:     newFailTracker(),
+		cronFail:      newFailTracker(),
+		quiet:         newLogThrottle(),
+		blocked:       map[string]bool{},
+		faults:        map[string]ProcessFault{},
+		pendingTiming: map[string]StartTiming{},
 	}
 }
 

@@ -13,7 +13,7 @@ var releaseStartErr = errors.New(
 
 // swapLifecycle points RunToCompletion at fakes and returns the ids Stop was
 // called with.
-func swapLifecycle(t *testing.T, start func(*Runtime, App, Process, int) (*SandboxNet, error)) *[]string {
+func swapLifecycle(t *testing.T, start func(*Runtime, App, Process, int) (*SandboxNet, StartTiming, error)) *[]string {
 	t.Helper()
 	prevStart, prevStop := startFn, stopFn
 	t.Cleanup(func() { startFn, stopFn = prevStart, prevStop })
@@ -37,8 +37,8 @@ func swapLifecycle(t *testing.T, start func(*Runtime, App, Process, int) (*Sandb
 // will use again. On 5 Aug the node was carrying two of them, from 06:25 and
 // 10:06, hours after the agent had given up.
 func TestAFailedStartIsStillCleanedUp(t *testing.T) {
-	stopped := swapLifecycle(t, func(*Runtime, App, Process, int) (*SandboxNet, error) {
-		return nil, releaseStartErr
+	stopped := swapLifecycle(t, func(*Runtime, App, Process, int) (*SandboxNet, StartTiming, error) {
+		return nil, StartTiming{}, releaseStartErr
 	})
 
 	var r *Runtime // the fakes never touch the receiver
@@ -65,8 +65,8 @@ func TestAFailedStartIsStillCleanedUp(t *testing.T) {
 // RunToCompletion reads as "finished and reaped" — its documented success-by-
 // absence path, and the one a fast migration takes for real.
 func TestASuccessfulRunIsCleanedUpExactlyOnce(t *testing.T) {
-	stopped := swapLifecycle(t, func(*Runtime, App, Process, int) (*SandboxNet, error) {
-		return &SandboxNet{Name: "ss-gzz9j--release."}, nil
+	stopped := swapLifecycle(t, func(*Runtime, App, Process, int) (*SandboxNet, StartTiming, error) {
+		return &SandboxNet{Name: "ss-gzz9j--release."}, StartTiming{}, nil
 	})
 
 	var r *Runtime

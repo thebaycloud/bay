@@ -1,4 +1,5 @@
 import { getPool } from "./db";
+import { postgresSink } from "./stages";
 
 const DB = "supersonic_platform";
 
@@ -313,6 +314,19 @@ export interface ProcessState {
    * worker-only app and every deploy made before the node was rebuilt.
    */
   healthy?: boolean;
+  /**
+   * How long the node's most recent start of this process took to pull its
+   * image and boot the sandbox, in milliseconds. Mirrors
+   * services/fleet/agent/desired.go's ProcessState.PullMs/BootMs — read that
+   * comment for why these are the one pair of fields here that are NOT
+   * present tense: every other field restates the process's current state on
+   * every sync, but a duration describes a single START EVENT and the agent
+   * sends it on exactly one report, then forgets it. `recordStartTiming`
+   * below is what a reader does with that one report; there is no row to
+   * re-read on the next sync because there won't be one.
+   */
+  pullMs?: number;
+  bootMs?: number;
 }
 
 /**
@@ -375,6 +389,78 @@ export function clearsFailedStatus(running: ProcessState[]): boolean {
   return !running.some((p) => p.healthy === false);
 }
 
+/**
+ * Turn a node's one-shot pull/boot timing into deploy_stages rows.
+ *
+ * Two ROWS per process, not one row with two numbers: `fleet-pull` and
+ * `fleet-boot` are their own stage names (lib/stage-names.ts) precisely so a
+ * slow deploy can be attributed to a slow registry or a slow sandbox boot
+ * without a second dashboard. docs/research/fleet-deploy-time.md named the
+ * unsplit cost of the two together the largest blind spot in the whole
+ * deploy path — before this, neither number reached anywhere the control
+ * plane could read, let alone separately.
+ *
+ * `lane` is written as `"unknown"` rather than looked up. This runs off the
+ * node's own async sync, which carries nothing but slug/process/image — a
+ * lane lookup here would be an extra query on every ten-second sync, for
+ * every node, to label a row that is already fully identified by its stage
+ * name and slug. stage-names.ts's own comment on `unpack` sets the
+ * precedent: a LANE_KNOWN stage does not have to be written by something
+ * that knows the lane.
+ *
+ * `runId` is null for the same reason: the node has no notion of a deploy
+ * attempt, only of a slug. A reader that wants to line this up with one
+ * deploy's other stages joins on slug and a time window, the same fallback
+ * every pre-`run_id` row already relies on (stages.ts).
+ *
+ * Authorized the same way recordNodeRunning's own upsert is: a node may only
+ * speak for a slug fleet_placements actually has it running, so a stray or
+ * compromised node cannot attribute its own slow pull to somebody else's app.
+ *
+ * Never allowed to fail the caller. recordNodeRunning's own job — the
+ * running-report upsert above — must complete whether or not this succeeds,
+ * and one process's stage write failing must not stop a SIBLING row (the
+ * other stage, or the next process) from being attempted, so each write gets
+ * its own try/catch. The fleet sync route wraps the whole call in `.catch`
+ * too, but that would blame recordNodeRunning's actual job for a problem
+ * that is really this telemetry's, which is a worse failure than losing one
+ * measurement.
+ */
+async function recordStartTiming(node: string, running: ProcessState[]): Promise<void> {
+  const timed = running.filter((p) => p.pullMs !== undefined || p.bootMs !== undefined);
+  if (timed.length === 0) return;
+
+  const placed = await getPool(DB).query(`SELECT slug FROM fleet_placements WHERE node = $1`, [node]);
+  const placedSlugs = new Set(placed.rows.map((r) => r.slug as string));
+
+  const now = new Date();
+  for (const p of timed) {
+    if (!placedSlugs.has(p.slug)) continue;
+    if (p.pullMs !== undefined) {
+      try {
+        await postgresSink.write({
+          slug: p.slug, lane: "unknown", stage: "fleet-pull",
+          startedAt: new Date(now.getTime() - p.pullMs), endedAt: now,
+          outcome: "ok", runId: null,
+        });
+      } catch (e) {
+        console.error(`fleet sync (${node}): failed to record fleet-pull for ${p.slug}/${p.process}`, e);
+      }
+    }
+    if (p.bootMs !== undefined) {
+      try {
+        await postgresSink.write({
+          slug: p.slug, lane: "unknown", stage: "fleet-boot",
+          startedAt: new Date(now.getTime() - p.bootMs), endedAt: now,
+          outcome: "ok", runId: null,
+        });
+      } catch (e) {
+        console.error(`fleet sync (${node}): failed to record fleet-boot for ${p.slug}/${p.process}`, e);
+      }
+    }
+  }
+}
+
 export async function recordNodeRunning(node: string, running: ProcessState[]): Promise<void> {
   await ensureHealthColumn();
   await getPool(DB).query(
@@ -422,6 +508,15 @@ export async function recordNodeRunning(node: string, running: ProcessState[]): 
       `UPDATE apps SET status = 'live' WHERE slug = ANY($1::text[]) AND status = 'failed'`,
       [recovered]
     );
+  }
+
+  // Best-effort and last: see recordStartTiming's own comment for why this
+  // function's real job, above, must complete regardless of what happens
+  // here.
+  try {
+    await recordStartTiming(node, running);
+  } catch (e) {
+    console.error(`fleet sync (${node}): start-timing recording failed`, e);
   }
 }
 

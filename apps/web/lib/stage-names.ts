@@ -69,9 +69,28 @@ export const PRE_LANE_STAGES = ["clone", "detect", "infer-services", "render"] a
  * is lane-known rather than lane-blind because whether an app can be placed at
  * all is a property of its lane: `static` has no image and `runner`'s image is
  * not the app's, and those are exactly the two that stay on Cloud Run.
+ *
+ * `fleet-pull` and `fleet-boot` decompose `fleet` further: how long the NODE
+ * spent pulling the image and booting the sandbox, which `fleet`'s own span
+ * — placement plus verification, from the control plane's side — never
+ * measured at all. docs/research/fleet-deploy-time.md named the combined,
+ * unmeasured cost of the two the largest blind spot in the deploy path, and
+ * splitting them is the point: a slow registry and a slow sandbox boot have
+ * different fixes, and one number covering both would repeat the exact
+ * mistake docs/superpowers/specs/2026-08-06-deploy-cold-start-design.md
+ * documents making, and unmaking, for `job-cold-start`. New names nothing
+ * has written before, so — same as `fleet` itself — free to add.
+ *
+ * Both are written by lib/fleet.ts's `recordStartTiming`, off the node's own
+ * async sync rather than from inside the deploy pipeline, which is also why
+ * they are the second example (after `unpack`) of a LANE_KNOWN stage whose
+ * writer does not actually know the lane at write time — see
+ * `recordStartTiming`'s own comment for why "unknown" is written there on
+ * purpose rather than looked up.
  */
 export const LANE_KNOWN_STAGES = [
   "unpack", "prepare", "build", "upload", "release", "deploy", "verify", "processes", "repair-agent", "fleet",
+  "fleet-pull", "fleet-boot",
 ] as const;
 
 /** Every stage name this system may write. */

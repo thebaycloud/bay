@@ -256,6 +256,12 @@ test("what the node says it is RUNNING is what the control plane reads", () => {
     // works. Drop it from either side and a redeploy verifies against a process
     // that is crash looping, which is how a broken deploy was announced live.
     healthy: true,
+    // Added so a node's pull/boot timing reaches deploy_stages at all — see
+    // recordStartTiming in lib/fleet.ts. Drop either from the Go side and this
+    // catches it the same way it catches `command`: a field silently missing
+    // from the wire, arriving as `undefined` rather than an error.
+    pullMs: 2500,
+    bootMs: 900,
   };
 
   assert.deepEqual(Object.keys(full).sort(), agentProcessStateFields().sort());

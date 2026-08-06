@@ -94,6 +94,32 @@ type ProcessState struct {
 	// — the same distinction Processes itself makes above, and for the same
 	// reason: an older agent must not have its silence read as a failure.
 	Healthy *bool `json:"healthy,omitempty"`
+	// PullMs and BootMs are how long THIS node's most recent start of this
+	// process took to pull its image and to boot the sandbox, in milliseconds
+	// — see container.go's StartTiming, which splits the two because they have
+	// different fixes (a leaner image and a faster registry fix one; fewer
+	// local setup steps fix the other) and docs/research/fleet-deploy-time.md,
+	// which named the combined, unsplit number the largest blind spot in the
+	// whole deploy path.
+	//
+	// Unlike every other field on ProcessState, these are not present tense.
+	// Slug, Process, Image, Command and Healthy restate the same fact about a
+	// process for as long as it stays confirmed, and that repetition is
+	// harmless — a fact that has not changed costs nothing to say again. A
+	// duration is a fact about one EVENT, the start that just finished, and
+	// resending it on every ten-second sync for a process's whole life would
+	// either flood deploy_stages with the same "started in 4.2s" row forever
+	// or push a "have I already sent this" bookkeeping problem onto every
+	// reader instead of solving it once, here, at the source. reportRunning
+	// (main.go) attaches these on exactly the first report after a start and
+	// clears them before the next.
+	//
+	// Pointers so "nothing to report" is ABSENT from the wire rather than a
+	// zero duration — a zero would read as an instant pull, a claim nothing
+	// here has evidence for, and would be indistinguishable from a genuine
+	// (if implausible) sub-millisecond one.
+	PullMs *int64 `json:"pullMs,omitempty"`
+	BootMs *int64 `json:"bootMs,omitempty"`
 }
 
 // syncBody is what the node POSTs: its identity, plus what it has to say about
