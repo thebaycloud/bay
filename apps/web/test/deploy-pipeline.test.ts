@@ -136,10 +136,12 @@ let probeCode = 200;
  * `rollBackToLastGood` conflated before this ticket, by asking a Cloud-Run-only
  * function the second one and treating its answer as though it were the first.
  *
- * Empty by default, so every test that never touches it keeps exercising
- * exactly what it always did — a slug the fleet has never placed. Only the
- * fleet-rollback tests below seed it, and only they are responsible for
- * clearing it again.
+ * Rebuilt by `run()` on every call, same as `active` above, from the `seed`
+ * that call was given (empty for every test that does not pass one). Used to
+ * leak: a test that placed "demo" via a successful fleet deploy left the row
+ * behind for every test declared after it, and the one test that asserted an
+ * app was NOT placed only passed because of where it happened to sit in the
+ * file, not because anything actually cleared the table for it.
  */
 let placementTable = new Map<string, { node: string; spec: unknown }>();
 
@@ -404,11 +406,19 @@ function input(over: Record<string, unknown> = {}) {
   } as never;
 }
 
-async function run(files: Record<string, string>, over: Record<string, unknown> = {}, replies: Replies = () => ({})) {
+async function run(
+  files: Record<string, string>,
+  over: Record<string, unknown> = {},
+  replies: Replies = () => ({}),
+  seed: Record<string, { node: string; spec: unknown }> = {},
+) {
   const runDeploy = await loadPipeline();
   const rec: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [] };
   active = rec;
   activeReplies = replies;
+  // Fresh on every call, built from `seed` rather than left standing from
+  // whatever the previous test's deploy did to it — see the declaration above.
+  placementTable = new Map(Object.entries(seed));
   // The pipeline swallows nothing at the top level, so a throw here is a real
   // failure of the deploy rather than of the harness — recorded, not hidden,
   // because "what does it do when it fails" is half of what is being pinned.
@@ -723,10 +733,15 @@ test("a deploy that comes up broken puts the last working version back", NEEDS_M
  * test and taken away again — and it MUST be taken away again, or every test
  * declared after this one silently changes runtime.
  */
-async function onFleet(files: Record<string, string>, replies: Replies = detect(), over: Record<string, unknown> = {}) {
+async function onFleet(
+  files: Record<string, string>,
+  replies: Replies = detect(),
+  over: Record<string, unknown> = {},
+  seed: Record<string, { node: string; spec: unknown }> = {},
+) {
   process.env.FLEET_APPS = "demo";
   try {
-    return await run(files, over, replies);
+    return await run(files, over, replies, seed);
   } finally {
     delete process.env.FLEET_APPS;
   }
@@ -747,19 +762,17 @@ test("a fleet redeploy that fails after taking traffic gets the previous version
   // reads it as broken), and checks the fleet ends up back on the seeded
   // version rather than stuck on the one that just failed.
   const seedSpec = { image: "seed-image-marker@sha256:" + "cd".repeat(32), memoryBytes: 999, cpuShares: 999 };
-  placementTable.set("demo", { node: "fleet-lab-0", spec: seedSpec });
   probeCode = 503;
   let rec: Recorded;
-  // Read back before the `finally` clears it — the table has to be reset for
-  // tests that run after this one, but that reset must not run before this
-  // test has had a chance to read what the deploy actually left behind.
+  // Read straight off the module-level table rather than out of `rec`: it is
+  // rebuilt fresh from `seed` on this call (see `run()`) and torn down again
+  // on the next one, so reading it here needs no cleanup of its own.
   let finalPlacement: { node: string; spec: unknown } | undefined;
   try {
-    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" }, undefined, undefined, { demo: { node: "fleet-lab-0", spec: seedSpec } });
     finalPlacement = placementTable.get("demo");
   } finally {
     probeCode = 200;
-    placementTable.delete("demo");
   }
 
   const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
@@ -798,7 +811,9 @@ test("a first-ever fleet deploy that fails has nothing to roll back to, and says
   // ANY app — that exception was caught, so this half already degraded
   // gracefully by accident. The fix must keep it that way on purpose: no throw
   // escapes `rollBackToLastGood`, and the placement table stays empty rather
-  // than growing a row that points at nothing.
+  // than growing a row that points at nothing. Unseeded, so this exercises the
+  // table `run()` builds by default — not a positional accident of which test
+  // ran last, since every call rebuilds it from scratch.
   probeCode = 503;
   let rec: Recorded;
   let finalPlacement: { node: string; spec: unknown } | undefined;
@@ -807,7 +822,6 @@ test("a first-ever fleet deploy that fails has nothing to roll back to, and says
     finalPlacement = placementTable.get("demo");
   } finally {
     probeCode = 200;
-    placementTable.delete("demo");
   }
 
   const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
