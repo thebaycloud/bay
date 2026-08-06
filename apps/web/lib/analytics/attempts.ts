@@ -28,9 +28,16 @@
  *    "this app ships a Dockerfile" — the same string for two different facts.
  *    Reading the lane off the wrong row silently files every static deploy under
  *    generic.
+ *
+ * 4. **`fleet-pull` and `fleet-boot` belong to no deploy in particular.** They
+ *    are written by the fleet node itself on every successful process start —
+ *    restart and reboot included, not just a deploy — with no run id to say
+ *    which attempt, if any, they were part of. See `RESTART_STAGES` below for
+ *    what grouping them by proximity gets wrong and why they are dropped
+ *    before grouping runs at all.
  */
 
-import { ATTEMPT_START_STAGE, HANDOFF_STAGES, PRE_LANE_STAGES } from "../stage-names";
+import { ATTEMPT_START_STAGE, HANDOFF_STAGES, NODE_RESTART_STAGES, PRE_LANE_STAGES } from "../stage-names";
 
 export type StageOutcome = "ok" | "failed" | "skipped";
 
@@ -163,6 +170,36 @@ function endOf(row: RawStage): Date {
 }
 
 /**
+ * `fleet-pull` and `fleet-boot`, dropped before any grouping decision sees them.
+ *
+ * Both are written off the fleet node's own async sync (`recordStartTiming`,
+ * `lib/fleet.ts`) on every successful process start — a genuine deploy, a
+ * crash-loop restart, and a node reboot look identical from there, and none of
+ * the three carries a `run_id`. So unlike every other row this file reads,
+ * there is no fact anywhere in a fleet-pull or fleet-boot row — not `lane`
+ * (always "unknown"), not timing, not order — that says which deploy, if any,
+ * it belongs to. Leaving one in the pool that `sessionizeAttempts` groups from
+ * means the gap heuristic below has to guess, and it guesses by proximity: a
+ * restart landing within `gapMs` of a deploy's last real stage is silently
+ * folded into it, stretching `reachedAt` (and so `endedAt`) to the restart's
+ * end, and overwriting the lane the real stages already established with
+ * "unknown". Two separate deploys 25 minutes apart, bridged by a reboot in
+ * between, merge into one for the same reason. `lib/deploys.ts` and
+ * `scripts/deploy-timing.ts` filter these two out of their own identity
+ * queries for exactly this reason — see `NODE_RESTART_STAGES` in
+ * `lib/stage-names.ts` for the fuller account.
+ *
+ * Dropped rather than kept-but-ignored: nothing here can attribute a
+ * fleet-pull or fleet-boot row to an attempt, so there is no "correct" bucket
+ * to file it under, and filing it under whichever attempt happens to be open
+ * is the bug. A future "how long does pulling an image take, across every
+ * row" question is a different question than this file answers — it wants
+ * `queries.ts`'s unfiltered read directly, the way the per-stage query in
+ * `scripts/deploy-timing.ts` does, not the identity this file reconstructs.
+ */
+const RESTART_STAGES: ReadonlySet<string> = new Set<string>(NODE_RESTART_STAGES);
+
+/**
  * Group raw stage rows into deploys, newest last.
  *
  * Rows may arrive in any order and from any number of slugs; they are grouped by
@@ -174,6 +211,7 @@ export function sessionizeAttempts(rows: RawStage[], opts: SessionizeOptions = {
 
   const bySlug = new Map<string, RawStage[]>();
   for (const row of rows) {
+    if (RESTART_STAGES.has(row.stage)) continue;
     const list = bySlug.get(row.slug);
     if (list) list.push(row);
     else bySlug.set(row.slug, [row]);

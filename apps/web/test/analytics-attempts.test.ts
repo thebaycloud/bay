@@ -274,6 +274,65 @@ test("covered time can never exceed the span of the deploy it describes", () => 
   assert.ok(coveredMs(a.stages) <= a.durationMs!, `${coveredMs(a.stages)} > ${a.durationMs}`);
 });
 
+// fleet-pull and fleet-boot are written on every successful process start —
+// a crash-loop restart or a node reboot as much as a deploy — with no run id
+// to say which attempt they belong to. Grouping them by proximity, the way
+// every other stage is grouped, folds a restart landing soon after a deploy's
+// last real stage into that deploy: this is the 1m34s-shown-as-23m57s bug
+// `lib/deploys.ts` records, reached through the analytics path instead of the
+// dashboard-card path.
+test("a restart row inside the gap window does not extend the attempt it lands near", () => {
+  const rows = [
+    ...handoff(0),
+    s("deploy", 210, 30, "ok", { lane: "runner" }),
+    // 5 minutes after the deploy's last stage ended — well inside the 30
+    // minute gap — a crash-loop restart writes its own pull/boot timing, with
+    // the "unknown" lane recordStartTiming always writes, and an end far past
+    // the deploy's own.
+    s("fleet-pull", 540, 30, "ok", { lane: "unknown" }),
+    s("fleet-boot", 570, 300, "ok", { lane: "unknown" }),
+  ];
+
+  const attempts = sessionizeAttempts(rows);
+  assert.equal(attempts.length, 1);
+  const a = attempts[0];
+  // Without the fix this is 870_000 (240s deploy start to the restart's end
+  // at t=870) instead of the deploy's own 240_000.
+  assert.equal(a.durationMs, 240_000);
+  assert.equal(a.endedAt?.getTime(), 240_000);
+  // The restart's "unknown" lane must not overwrite the lane the real deploy
+  // stages already established.
+  assert.equal(a.lane, "runner");
+});
+
+// A silence bridged only by a restart is not silence a real deploy filled —
+// two attempts 40 minutes apart (past the 30 minute gap on either side of the
+// restart) must stay two, not merge into one because the restart's end
+// advanced `reachedAt` far enough to close the gap between them.
+test("a restart row does not bridge a gap that would otherwise split two attempts", () => {
+  const rows = [
+    ...handoff(0),
+    s("deploy", 210, 30, "ok", { lane: "runner" }),
+    // A reboot 20 minutes after the first deploy ends.
+    s("fleet-boot", 1440, 5, "ok", { lane: "unknown" }),
+    // The next real deploy starts 20 minutes after the reboot — 40 minutes
+    // after the first deploy's own last stage, so on either side of the
+    // restart the real silence is well past the 30 minute gap.
+    ...handoff(2640),
+    s("deploy", 2850, 30, "ok", { lane: "runner" }),
+  ];
+
+  const attempts = sessionizeAttempts(rows);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].endedAt?.getTime(), 240_000);
+  assert.equal(attempts[1].startedAt.getTime(), 2_640_000);
+});
+
+test("a slug whose rows are only restarts produces no attempt at all", () => {
+  const rows = [s("fleet-pull", 0, 30, "ok", { lane: "unknown" }), s("fleet-boot", 30, 300, "ok", { lane: "unknown" })];
+  assert.deepEqual(sessionizeAttempts(rows), []);
+});
+
 test("job-dispatch is recorded as nested, because the job cannot start before it is dispatched", () => {
   const nested = new Map(NESTED_STAGES.map(([inner, outer]) => [inner, outer]));
   assert.equal(nested.get("job-dispatch"), "job-cold-start");
