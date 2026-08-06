@@ -180,6 +180,46 @@ test("a broken sink does not mask a real failure either", async () => {
   );
 });
 
+test("end() stamps the frozen instant, not the started time, and carries the run id", async () => {
+  // The exact shape scripts/deploy-job.ts uses for job-launch and job-import:
+  // by the time that code runs, the interval it is recording already closed,
+  // so `now` is a recorder frozen at that instant rather than the live clock,
+  // and the handle's `startedAt` is a separate, earlier instant read before
+  // construction. `end()` must stamp the frozen instant as `endedAt` rather
+  // than re-reading a clock, and must carry the run id through from the
+  // recorder's own facts — job-cold-start's p50 is computed from exactly this
+  // pairing, so a wrong `endedAt` or a missing `run_id` would silently corrupt
+  // the number the next phase's decision rests on.
+  const { sink, rows } = recordingSink();
+  const frozen = new Date(5_000);
+  const startedAt = new Date(1_000);
+  const r = new StageRecorder("myapp", "unknown", sink, () => frozen, undefined, { runId: "run-abc" });
+
+  await r.end({ stage: "job-launch", startedAt }, "ok");
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].stage, "job-launch");
+  assert.deepEqual(rows[0].startedAt, startedAt);
+  assert.deepEqual(rows[0].endedAt, frozen);
+  assert.equal(rows[0].runId, "run-abc");
+});
+
+test("end() survives a stage write failing, same as around()", async () => {
+  // job-launch and job-import call `end()` directly rather than through
+  // `around()` — the interval is already over by the time this code runs, so
+  // there is no work left to wrap. The property "a broken sink never fails the
+  // deploy" above proves for `around()` has to hold here too, or telemetry for
+  // exactly the two stages the cold-start fix decision rests on could take the
+  // deploy down with it.
+  const errors: unknown[] = [];
+  const exploding: StageSink = { async write() { throw new Error("database is down"); } };
+  const r = new StageRecorder("myapp", "unknown", exploding, () => new Date(5_000), (e) => errors.push(e), { runId: "run-abc" });
+
+  await assert.doesNotReject(() => r.end({ stage: "job-import", startedAt: new Date(1_000) }, "ok"));
+
+  assert.equal(errors.length, 1);
+});
+
 test("a skipped stage is recorded with zero work", async () => {
   const { sink, rows } = recordingSink();
   const r = new StageRecorder("myapp", "static", sink, clock(5_000, 0));
