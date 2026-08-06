@@ -21,6 +21,7 @@ import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppS
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
+import { deployTargetFor } from "@/lib/deploy-target";
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec, type AgentProcess } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
@@ -2229,6 +2230,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
     const target = chooseRuntime({ lane, image: processImage ?? "", staticServe: !!staticServe, serviceless, hasDockerfile: hasDockerfileNow, workers: workerCount });
     const toFleet = target.runtime === "fleet" && fleetPlacementWanted(process.env, slug);
+    // Which target THIS deploy actually lands on — not `target` above, which is
+    // only what the fleet is capable of before `fleetPlacementWanted` gates it.
+    // Asked once, here, so the rest of this function answers a capability
+    // question (`deployTarget.supports(...)`) instead of re-deriving `toFleet`'s
+    // meaning at each call site — see lib/deploy-target.ts for why that
+    // re-derivation is exactly how the domain-mapping bug below survived.
+    const deployTarget = deployTargetFor(toFleet ? "fleet" : "cloudrun");
     // The address the database is provisioned at follows `toFleet`, never
     // `target.runtime` alone. The two differ for exactly the apps this gate
     // exists for: an app the fleet could serve but is not yet a canary still
@@ -4214,11 +4222,25 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // pointing at a service that no longer serves. `remove` means remove.
       await removeDomainMapping(slug, log);
       log(`Running — this app has no web process, so it has no URL. Logs: supersonic logs ${friendlyName}`);
-    } else if (SEAL_APPS || staticServe) {
+    } else if (SEAL_APPS || staticServe || !deployTarget.supports("domainMapping")) {
       // A static app has no service of its own to map a name onto — the
       // proxy routes it by apps.run_url to the shared static server, the
       // same way it routes everything else. So the visibility rules apply
       // with no special case, and there is no per-app mapping to create.
+      //
+      // A fleet app belongs in this branch for a different reason: the
+      // per-app mapping this `else` creates points `<slug>.supersonic.cv`
+      // straight at a Cloud Run SERVICE, and a fleet app was deliberately
+      // never given one — see docs/research/cloud-run-shape.md, "the gap".
+      // The call used to run anyway, fail against a service that doesn't
+      // exist, get caught, and get logged on every such deploy: a permanent
+      // error line in a healthy app's log, teaching everyone that errors
+      // there are normal. `deployTarget.supports("domainMapping")` is the
+      // capability question that call site should have asked from the
+      // start (see lib/deploy-target.ts) — asking it here means a fleet app
+      // is reached the same way a sealed or static one already is, through
+      // the proxy's own wildcard `*.supersonic.cv`, once its `run_url` is
+      // the fleet load balancer address `markAppLive` writes below.
       log(`Live at ${slug}.supersonic.cv`);
     } else {
       await createDomainMapping(slug, log);

@@ -1168,3 +1168,30 @@ test("a deploy that goes to Cloud Run says so, so the node stops being handed th
     `a Cloud Run deploy claimed the fleet: ${JSON.stringify(rec.runtimeWrites)}`,
   );
 });
+
+/** Did the pipeline ask Cloud Run's domain-mapping API to map this app's name? */
+const mappedADomain = (rec: Recorded) =>
+  rec.argv.some((a) => a[0] === "gcloud" && a.includes("domain-mappings") && a.includes("create"));
+
+test("a fleet deploy makes no domain-mapping call", NEEDS_MOCKS, async () => {
+  // docs/research/cloud-run-shape.md's "the gap": `resources.ts`'s `domain`
+  // resource has no runtime field, so a non-sealed, non-static fleet app fell
+  // through to `createDomainMapping` against a Cloud Run service that was
+  // deliberately never created for it. The call failed, was caught, and was
+  // logged — on every such fleet deploy — which is exactly the kind of error
+  // line that teaches everyone errors in these logs are normal.
+  const rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+
+  assert.ok(!mappedADomain(rec), `a fleet deploy must never call Cloud Run's domain-mapping API: ${JSON.stringify(rec.argv.filter((a) => a.includes("domain-mappings")))}`);
+  assert.ok(
+    !rec.events.some((e) => JSON.stringify(e).includes("custom domain skipped")),
+    "the dead call's log line must be gone, and nothing may replace it",
+  );
+});
+
+test("a Cloud Run deploy still gets its domain mapping", NEEDS_MOCKS, async () => {
+  // The other half — this removes a call on the fleet path, not the feature.
+  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
+
+  assert.ok(mappedADomain(rec), `a Cloud Run deploy must still map its domain: ${JSON.stringify(rec.argv.map((a) => a.slice(0, 4)))}`);
+});
