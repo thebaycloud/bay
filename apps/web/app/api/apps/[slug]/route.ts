@@ -39,7 +39,7 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
       if (placed) {
         const running = await runningOnNode(slug, placed.node);
         return Response.json({
-          ...statusFromFleet(slug, placed.node, placed.spec, running),
+          ...statusFromFleet(slug, placed.spec, running),
           deploying,
           stage: deploy?.stage ?? "",
         });

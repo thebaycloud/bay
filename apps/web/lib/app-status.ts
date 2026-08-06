@@ -35,12 +35,15 @@ export interface AppStatus {
   envKeys: string[];
   cloudsql: string;
   repo: string;
-  /** Which runtime answered. The CLI prints it; support reads it first. */
-  served: "fleet" | "cloudrun" | "static";
-  /** The node holding it, when it is on the fleet. */
-  node?: string;
   processes?: { name: string; kind: string; running: boolean }[];
 }
+
+// Deliberately NOT in this response: which runtime answered, and which node
+// holds the app. Where we run someone's container is our problem, not theirs —
+// a node name in an API response is internal topology leaking into a product
+// surface, and it would become something users notice changing. What they asked
+// for is whether their app is up and what it is running; that is what this
+// returns, and it returns the same shape wherever the app lives.
 
 /**
  * Which env var names an app has, secret-backed ones included.
@@ -87,14 +90,12 @@ function databaseFor(slug: string, spec: AppSpec): string {
 /**
  * Status for an app on the fleet, from its placement and the node's own report.
  *
- * `revision` stays empty on purpose. A fleet app has no Cloud Run revision, and
- * inventing one — the node name, the image digest — would make a field mean two
- * different things depending on where the app landed. `node` and `image` carry
- * the same information honestly.
+ * `revision` stays empty on purpose. There is no revision to name, and inventing
+ * one would make a field mean two different things depending on where the app
+ * landed. `image` is the thing that actually identifies what is running.
  */
 export function statusFromFleet(
   slug: string,
-  node: string,
   spec: AppSpec,
   running: ProcessState[],
 ): AppStatus {
@@ -113,8 +114,6 @@ export function statusFromFleet(
     envKeys: envNames(spec),
     cloudsql: databaseFor(slug, spec),
     repo: "",
-    served: "fleet",
-    node,
     processes: (spec.processes ?? []).map((p) => ({
       name: p.name,
       kind: p.kind,

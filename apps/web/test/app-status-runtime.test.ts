@@ -44,14 +44,18 @@ const RUNNING_WEB: ProcessState[] = [
 ];
 
 test("a fleet app reports the image it is actually running", () => {
-  const s = statusFromFleet("t1ppt", "fleet-lab-2", SPEC, RUNNING_WEB);
+  const s = statusFromFleet("t1ppt", SPEC, RUNNING_WEB);
   assert.equal(s.image, SPEC.image, "the image comes from the node, not from an em-dash");
-  assert.equal(s.served, "fleet");
-  assert.equal(s.node, "fleet-lab-2");
+  // And nothing about WHERE. Which machine holds someone's container is our
+  // problem; a node name in an API response is internal topology on a product
+  // surface, and it would become a thing users notice changing.
+  const body = JSON.stringify(s);
+  assert.ok(!body.includes("fleet"), `status must not name the runtime: ${body}`);
+  assert.ok(!body.includes("lab-"), "status must not name the node");
 });
 
 test("a fleet app reports the env it was given, secret NAMES included", () => {
-  const s = statusFromFleet("t1ppt", "fleet-lab-2", SPEC, RUNNING_WEB);
+  const s = statusFromFleet("t1ppt", SPEC, RUNNING_WEB);
   // Names only. A value here would be a database password in an API response.
   assert.ok(s.envKeys.includes("DATABASE_URL"), "secret-backed vars are env the app has");
   assert.ok(s.envKeys.includes("SUPERSONIC_URL"));
@@ -61,12 +65,12 @@ test("a fleet app reports the env it was given, secret NAMES included", () => {
 });
 
 test("a healthy web process means ready", () => {
-  const s = statusFromFleet("t1ppt", "fleet-lab-2", SPEC, RUNNING_WEB);
+  const s = statusFromFleet("t1ppt", SPEC, RUNNING_WEB);
   assert.equal(s.ready, true);
 });
 
 test("a web process the node cannot reach is NOT ready", () => {
-  const s = statusFromFleet("t1ppt", "fleet-lab-2", SPEC,
+  const s = statusFromFleet("t1ppt", SPEC,
     [{ slug: "t1ppt", process: "web", image: SPEC.image, healthy: false }]);
   assert.equal(s.ready, false, "explicit false is the only failure signal");
 });
@@ -77,13 +81,13 @@ test("a worker-only app is ready when its worker runs, not when a probe answers"
   // as down, which is the defect the nullable health field was added to end.
   const spec: AppSpec = { ...SPEC, slug: "sxou5",
     processes: [{ name: "bot", kind: "worker", command: ["python", "bot.py"] }] };
-  const s = statusFromFleet("sxou5", "fleet-lab-2", spec,
+  const s = statusFromFleet("sxou5", spec,
     [{ slug: "sxou5", process: "bot", image: spec.image }]);
   assert.equal(s.ready, true, "a running worker with nothing to probe is up");
 });
 
 test("an app placed but running nothing is not ready", () => {
-  const s = statusFromFleet("t1ppt", "fleet-lab-2", SPEC, []);
+  const s = statusFromFleet("t1ppt", SPEC, []);
   assert.equal(s.ready, false, "placed is not running");
 });
 
@@ -91,19 +95,19 @@ test("the database is reported when the app has one", () => {
   // ISSUE-003: `database none` was printed for every app ever, including ones
   // whose env is full of DATABASE_URL. The app knows: a database-backed app is
   // given DATABASE_URL, and the fleet gives it as a SECRET reference.
-  const s = statusFromFleet("t1ppt", "fleet-lab-2", SPEC, RUNNING_WEB);
+  const s = statusFromFleet("t1ppt", SPEC, RUNNING_WEB);
   assert.equal(s.cloudsql, "t1ppt", "the database name follows the slug");
 });
 
 test("an app with no database says so", () => {
   const spec: AppSpec = { ...SPEC, slug: "uibz5", secrets: {}, env: { PORT: "8080" } };
-  const s = statusFromFleet("uibz5", "fleet-lab-2", spec,
+  const s = statusFromFleet("uibz5", spec,
     [{ slug: "uibz5", process: "web", image: spec.image, healthy: true }]);
   assert.equal(s.cloudsql, "", "no database is an empty string, which the CLI prints as none");
 });
 
 test("processes are reported, so a user can see what their app actually runs", () => {
-  const s = statusFromFleet("t1ppt", "fleet-lab-2", SPEC, RUNNING_WEB);
+  const s = statusFromFleet("t1ppt", SPEC, RUNNING_WEB);
   const kinds = (s.processes ?? []).map((p) => `${p.name}:${p.kind}`);
   assert.deepEqual(kinds.sort(), ["nightly:cron", "release:release", "web:web"]);
   // And which of them is actually up right now.
