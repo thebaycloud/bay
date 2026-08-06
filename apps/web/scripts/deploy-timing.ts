@@ -9,7 +9,7 @@
  * Run: npm run timing [days]   (defaults to 14)
  */
 import { getPool } from "@/lib/db";
-import { ATTEMPT_START_STAGE } from "@/lib/stage-names";
+import { ATTEMPT_START_STAGE, ACTIVATION_STAGE } from "@/lib/stage-names";
 
 const DB = "supersonic_platform";
 const days = Number(process.argv[2] || 14);
@@ -21,7 +21,12 @@ const days = Number(process.argv[2] || 14);
  * that has none. The fallback splits a slug's rows at each ATTEMPT_START_STAGE,
  * which is what that stage is for. It does NOT extend an attempt to the start of
  * the next one — the end is the last stage's own end — so idle time between
- * deploys is never counted, unlike the thirty-minute window 018 replaced.
+ * deploys is never counted.
+ *
+ * Limit: a deploy that wrote no ATTEMPT_START_STAGE — anything predating the
+ * job handoff — merges into the attempt before it rather than splitting off.
+ * That is why the spec treats this reconstructed per-deploy total as good to
+ * about ±15%, while the single-stage numbers above are exact.
  */
 const ATTEMPTS = `
   WITH marked AS (
@@ -33,7 +38,7 @@ const ATTEMPTS = `
     SELECT deploy_key, min(started_at) AS t0, max(COALESCE(ended_at, started_at)) AS t1,
       bool_or(stage = 'repair-agent') AS had_repair,
       bool_or(outcome = 'failed') AS had_failure,
-      bool_or(stage = 'deploy' AND outcome = 'ok') AS went_live,
+      bool_or(stage = '${ACTIVATION_STAGE}' AND outcome = 'ok') AS went_live,
       (array_agg(lane ORDER BY started_at DESC) FILTER (WHERE lane <> 'unknown'))[1] AS lane
     FROM marked GROUP BY deploy_key)`;
 
