@@ -225,6 +225,30 @@ async function install() {
     },
   });
 
+  // Failure rows: swallowed rather than written, for the same reason and by the
+  // same means as stage rows just above. `FailureRecorder` was built with an
+  // identical injectable-sink constructor (`sink: FailureSink = postgresSink`)
+  // specifically so a caller can replace only the part that talks to Postgres —
+  // its own logic (one row per deploy, "skipped" never left as an uninformative
+  // null) stays real and under test in deploy-failures.test.ts. Without this,
+  // every test below that fails a deploy reached the live sink and printed
+  // `ECONNREFUSED` into passing test output.
+  const deployFailures = await import("@/lib/deploy-failures");
+  const noopFailureSink = {
+    async insert() { return "test-failure-row"; },
+    async setRepair() {},
+  };
+  mock.module("@/lib/deploy-failures", {
+    namedExports: {
+      ...deployFailures,
+      FailureRecorder: class extends deployFailures.FailureRecorder {
+        constructor() {
+          super(noopFailureSink as never);
+        }
+      },
+    },
+  });
+
   // Secret Manager, object storage, the model, and the side effects.
   mock.module("@/lib/app-secrets", { namedExports: {
     putAppSecrets: async () => ({ stored: [], skipped: [] }),

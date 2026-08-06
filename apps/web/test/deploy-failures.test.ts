@@ -4,6 +4,7 @@ import {
   causeOf, NO_REASON, FailureRecorder,
   type FailureRow, type FailureSink, type Repair,
 } from "../lib/deploy-failures";
+import { classify } from "../lib/deploy-errors";
 
 function recordingSink() {
   const rows: FailureRow[] = [];
@@ -75,4 +76,28 @@ test("a sink that throws costs the record, never the deploy", async () => {
   await assert.doesNotReject(() => r.record(row()));
   await assert.doesNotReject(() => r.repaired("fixed", "fixed it"));
   assert.equal(errors.length, 1, "the insert threw and was reported; the repair had no row to update");
+});
+
+test("the blame stored is whatever classify returned, not a copy of its rules", () => {
+  // classify carries a PLATFORM_MARKERS list and an `app` fallback. A second
+  // implementation of "is this the platform's fault" would drift from it, and the
+  // drift would be invisible: both answers are plausible strings.
+  // Must be a string `classify` genuinely matches, not one that merely looks
+  // like a platform failure: a fixture picked from a truncated log excerpt is
+  // not evidence of what the function returns, only of what got displayed.
+  // IAM_FAILURE is a marker classify actually recognizes (see PLATFORM_MARKERS
+  // in lib/deploy-errors.ts).
+  const platform = "IAM_FAILURE: the deploy service account is missing a role";
+  const app = "SyntaxError: unexpected token";
+  assert.equal(classify(platform).blame, "platform");
+  assert.equal(classify(app).blame, "app");
+});
+
+test("a failure with no error text is recorded as a platform failure with the not-captured cause", async () => {
+  // The two halves of the same six rows: classify already calls a reasonless
+  // failure the platform's fault, and causeOf gives it a cause that says so.
+  const { sink, rows } = recordingSink();
+  await new FailureRecorder(sink).record(row({ cause: causeOf(""), blame: classify("").blame }));
+  assert.equal(rows[0].cause, NO_REASON);
+  assert.equal(rows[0].blame, "platform");
 });

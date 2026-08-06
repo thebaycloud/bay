@@ -48,6 +48,7 @@ import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOS
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
+import { causeOf, FailureRecorder } from "@/lib/deploy-failures";
 import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, proxyWait } from "@/lib/release-job";
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
@@ -3854,12 +3855,27 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         result = { ...result, error: `${result.error}\n  (failed during: ${failedIn})` };
       }
       const blame = classify(result.error);
+      // The cause, recorded before the verdict branches the flow — this is the
+      // last point at which it is still intact. Below, a platform verdict
+      // returns, a non-Pro app verdict returns, and the repair agent overwrites
+      // `deploys.error` with its own summary; `deploys` also holds one row per
+      // app, so the next deploy discards whatever survived that.
+      const failure = new FailureRecorder();
+      await failure.record({
+        runId: input.runId ?? null,
+        slug,
+        ownerId: ownerId ?? null,
+        stage: failedIn,
+        cause: causeOf(result.error),
+        blame: blame.blame,
+      });
       if (blame.blame === "platform") {
         if (blame.reason && blame.reason !== result.error) log(blame.reason);
         await rollBackToLastGood();
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: result.error });
+        await failure.repaired("skipped", null);
         return;
       }
       // The auto-fix agent is a Pro feature. Basic gets a paste-ready prompt
@@ -3875,6 +3891,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           fixPrompt: fixPrompt(slug, result.error ?? "deploy failed"),
           upgrade: true,
         });
+        await failure.repaired("skipped", null);
         return;
       }
       log("Repair agent taking over — reading the repo, fixing, retrying…");
@@ -3921,6 +3938,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           });
       await stages.end(repair, fixed.ok ? "ok" : "failed");
       if (fixed.ok) {
+        await failure.repaired("fixed", fixed.summary);
         result = { ok: true, url: fixed.url };
         log(`Agent fixed it (${fixed.changes.join(", ")})`);
         // Keep what the repair taught us about BUILDING this app, so the next
@@ -3957,6 +3975,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       else {
         await rollBackToLastGood();
         setDeploy(slug, { status: "failed", error: fixed.summary });
+        await failure.repaired("gave-up", fixed.summary);
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: fixed.summary });
         return;
