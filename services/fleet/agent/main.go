@@ -1036,15 +1036,21 @@ func (a *Agent) reconcileOnce() error {
 	// Keyed on the image exactly as the check below is, so this adds no re-runs:
 	// an app whose release has already succeeded for its current image is skipped
 	// there, and one that has never had a release has no release process to find.
-	for _, u := range units {
-		if u.proc.Kind != KindRelease {
-			continue
-		}
-		a.mu.Lock()
-		ran := a.released[u.app.Slug] == imageFor(u.app, u.proc)
-		a.mu.Unlock()
-		if !ran {
-			needRelease[u.app.Slug] = u.app
+	// Over DESIRED STATE, not over `units` — `units` excludes release by
+	// construction, because a release is not a long-running thing to reconcile.
+	// Looking for it there found nothing, which is how the first version of this
+	// shipped and changed nothing.
+	for _, app := range d.Apps {
+		for _, p := range processesOf(app) {
+			if p.Kind != KindRelease {
+				continue
+			}
+			a.mu.Lock()
+			ran := a.released[app.Slug] == imageFor(app, p)
+			a.mu.Unlock()
+			if !ran {
+				needRelease[app.Slug] = app
+			}
 		}
 	}
 
