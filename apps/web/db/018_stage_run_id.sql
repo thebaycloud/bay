@@ -14,6 +14,12 @@
 -- Nullable, because every row written before this exists and the reader still
 -- has to answer for those: with no run id it falls back to the window it used
 -- to use, which is exactly today's behaviour rather than a gap.
+-- migrate: no-transaction
+--
+-- CREATE INDEX CONCURRENTLY cannot run inside a transaction block, and a whole
+-- migration file sent as one query IS an implicit one. The directive makes the
+-- runner send these two statements separately, which is what 010 already does
+-- for the same reason.
 ALTER TABLE deploy_stages ADD COLUMN IF NOT EXISTS run_id text;
 
 -- CONCURRENTLY, because deploy_stages already exists and is written on every
