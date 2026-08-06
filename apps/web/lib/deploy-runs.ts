@@ -462,11 +462,18 @@ function liveProbe(job: string, region: string): ImageProbe {
  *
  * `scripts/deploy-job.ts` states the guarantee this replaces: "the job and the
  * API are the same image, so they can never drift." Nothing enforced it.
- * `cloudbuild.yaml:126` updates the job and ends in `|| echo`, so a failed
- * update never fails the build — the job keeps the previous commit's pipeline
- * while the service moves, and every deploy runs code nobody believes is
- * running. That is the worst kind of drift, because the thing that looks
- * deployed is not the thing doing the work.
+ * `cloudbuild.yaml`'s job step used to update the job unconditionally with
+ * `|| echo`, so a failed update never failed the build — the job kept the
+ * previous commit's pipeline while the service moved, and every deploy ran
+ * code nobody believed was running. That is the worst kind of drift, because
+ * the thing that looks deployed is not the thing doing the work.
+ *
+ * The build now fails on a real update failure too (the job step there tells
+ * a missing job apart from a broken one), which closes off the common case.
+ * This guard is the belt to that suspenders: it catches a job stuck on a
+ * stale image for any OTHER reason — a stalled rollout, a hand edit, a bug in
+ * that very branch — by asking the job and the service directly rather than
+ * trusting that the step which was supposed to update the job actually did.
  *
  * A probe that cannot answer does NOT block the deploy. The check exists to
  * catch a stale image, not to become a fresh way for every deploy to fail when

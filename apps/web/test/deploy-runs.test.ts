@@ -29,9 +29,10 @@ test("dispatch is allowed when the job and the service run the same tag", async 
 });
 
 test("dispatch is refused when the job is on an older tag", async () => {
-  // cloudbuild.yaml's job step ends in `|| echo`, so a failed job update never
-  // fails the build. The job is then left on the previous commit's pipeline
-  // while the service moves — every deploy runs code nobody thinks is running.
+  // cloudbuild.yaml's job step now fails the build on a real update failure,
+  // but this guard is the belt to that suspenders: a job can still end up on a
+  // stale image for other reasons (a stalled rollout, a hand edit), and every
+  // deploy would then run code nobody believes is running.
   await assert.rejects(
     () => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
       jobImage: async () => "reg/supersonic/control-plane:old111",
