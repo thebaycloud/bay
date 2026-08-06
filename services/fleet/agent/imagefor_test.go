@@ -91,3 +91,41 @@ func TestSameStringMapIsNotOrderOrIdentity(t *testing.T) {
 		t.Error("same content is the same environment")
 	}
 }
+
+// A release is only queued where something STARTS or restarts. That misses the
+// case where an app is already running the right image and its RELEASE is what
+// changed — measured: the FastAPI template gained a release once the pipeline
+// learned to read compose, redeployed onto the same digest, and the migration
+// never ran while every request answered `relation "user" does not exist`.
+
+func TestAReleaseNeverRunForThisImageIsQueued(t *testing.T) {
+	a := &Agent{live: map[string]*live{}, released: map[string]string{}, quiet: newLogThrottle()}
+	app := App{Slug: "a", Image: "registry/a@sha256:aaa"}
+	proc := Process{Name: "release", Kind: KindRelease, Command: []string{"/bin/sh", "-c", "migrate"}}
+
+	need := map[string]App{}
+	for _, u := range []work{{app: app, proc: proc}} {
+		if u.proc.Kind != KindRelease {
+			continue
+		}
+		if a.released[u.app.Slug] != imageFor(u.app, u.proc) {
+			need[u.app.Slug] = u.app
+		}
+	}
+	if _, ok := need["a"]; !ok {
+		t.Error("a release that has never run for this image should be queued")
+	}
+}
+
+func TestAReleaseAlreadyRunForThisImageIsNotQueuedAgain(t *testing.T) {
+	// The counterweight. Re-running a customer's migration on every reconcile
+	// pass is what the `released` map exists to prevent, and this must not
+	// reintroduce it.
+	a := &Agent{live: map[string]*live{}, released: map[string]string{"a": "registry/a@sha256:aaa"}, quiet: newLogThrottle()}
+	app := App{Slug: "a", Image: "registry/a@sha256:aaa"}
+	proc := Process{Name: "release", Kind: KindRelease}
+
+	if a.released[app.Slug] != imageFor(app, proc) {
+		t.Error("an image whose release already succeeded must not be queued again")
+	}
+}

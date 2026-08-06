@@ -1024,6 +1024,30 @@ func (a *Agent) reconcileOnce() error {
 	// synchronous call here let one app's slow release stop the other nineteen.
 	// While it is in flight its own app stays blocked, which is the property that
 	// mattered; nothing else waits.
+	// A release this node has never run for the image it is holding.
+	//
+	// `needRelease` is populated only where something STARTS or restarts, which
+	// misses the case where an app is already running the right image and its
+	// release is what changed. Measured: the full-stack FastAPI template gained a
+	// release once the pipeline learned to read compose, redeployed onto the same
+	// digest, and the migration never ran — the web process matched, nothing was
+	// queued, and every request kept answering `relation "user" does not exist`.
+	//
+	// Keyed on the image exactly as the check below is, so this adds no re-runs:
+	// an app whose release has already succeeded for its current image is skipped
+	// there, and one that has never had a release has no release process to find.
+	for _, u := range units {
+		if u.proc.Kind != KindRelease {
+			continue
+		}
+		a.mu.Lock()
+		ran := a.released[u.app.Slug] == imageFor(u.app, u.proc)
+		a.mu.Unlock()
+		if !ran {
+			needRelease[u.app.Slug] = u.app
+		}
+	}
+
 	blocked := map[string]bool{}
 	now := time.Now()
 	for slug, app := range needRelease {
