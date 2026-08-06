@@ -120,10 +120,13 @@ were going to write — and it was the only part of the stack that did not work.
 - Apps get **no GCP identity**. There is no metadata server for them to ask,
   which closes the `APP_RUNTIME_SERVICE_ACCOUNT`-is-unset hole `docs/CUTOVER.md`
   defers.
-- The node runs as `supersonic-fleet-node@`, holding four roles:
+- **The node does NOT run as `supersonic-fleet-node@`, and this bullet used to
+  say it did.** That account exists and is set up exactly as intended —
   `artifactregistry.reader`, `cloudsql.client`, `logging.logWriter`, and
-  `secretmanager.secretAccessor` **conditioned to `app-*` secrets only** — so a
-  node cannot read platform secrets.
+  `secretmanager.secretAccessor` conditioned to
+  `projects/540236122367/secrets/app-*` — but nothing was ever attached to it.
+  See "What the node actually runs as" below for what is true. Checked against
+  the live IAM policy on 6 Aug 2026.
 - Secrets are resolved at start and passed in the process environment. They are
   never written to node disk, never logged, and never placed in `config.json`,
   which is readable inside the sandbox. A secret that cannot be resolved fails
@@ -133,12 +136,45 @@ were going to write — and it was the only part of the stack that did not work.
   refuses to work when it is unset. It should become a GCE instance identity
   token before the fleet leaves one project.
 
+## What the node actually runs as
+
+`fleet-lab-1` runs as **`540236122367-compute@developer.gserviceaccount.com`**,
+the Compute Engine default service account. Read off the instance on 6 Aug 2026,
+because the section above asserted otherwise for long enough that it is worth
+saying where the number came from.
+
+That account holds, project-wide and unconditioned:
+
+```
+artifactregistry.writer      cloudsql.client        run.admin
+cloudbuild.builds.builder    logging.logWriter      storage.admin
+iam.serviceAccountUser       secretmanager.secretAccessor
+```
+
+Two things follow, and they point in opposite directions.
+
+**The narrowing is already built.** `supersonic-fleet-node@` exists with the four
+roles the posture section describes, including `secretmanager.secretAccessor`
+conditioned to `app-*` — so a node running as it could not read a platform
+secret. Everything needed is there except the one step that attaches it to the
+instance.
+
+**Until that step, the box holding every tenant's code also holds `run.admin`,
+`storage.admin`, `cloudbuild.builds.builder`, `artifactregistry.writer` and
+`iam.serviceAccountUser`** — none of which an app host needs, and any of which
+turns one sandbox escape into control of the project rather than a read of one
+database password.
+
+The remaining step is not free: `gcloud compute instances set-service-account`
+requires the instance to be TERMINATED, and local SSD does not survive a stop, so
+`/srv` comes back empty and every app re-places from desired state. That is a
+real outage of the whole node, not a rolling change, which is why it is written
+down here rather than done quietly.
+
 ## What the node may read
 
-The node's service account —
-`540236122367-compute@developer.gserviceaccount.com`, the project default —
-holds **`roles/secretmanager.secretAccessor` on the whole project**. It reads
-every app's secrets, not only the apps placed on it.
+Its `roles/secretmanager.secretAccessor` is **on the whole project**, with no
+condition. It reads every app's secrets, not only the apps placed on it.
 
 Recorded here because it is not in any file the deploy runs: it was applied with
 `gcloud projects add-iam-policy-binding` on 5 Aug 2026, and IAM in this project
