@@ -87,6 +87,9 @@ export { ATTEMPT_START_STAGE };
 export const NESTED_STAGES: ReadonlyArray<[inner: string, outer: string]> = [
   ["run-fetch", "job-cold-start"],
   ["job-dispatch", "job-cold-start"],
+  // Both halves of the split fall entirely within the span they split.
+  ["job-launch", "job-cold-start"],
+  ["job-import", "job-cold-start"],
 ];
 
 /**

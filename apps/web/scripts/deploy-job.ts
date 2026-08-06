@@ -25,12 +25,16 @@ import { StageRecorder } from "@/lib/stages";
 const runId = (process.argv[2] || process.env.SUPERSONIC_RUN_ID || "").trim();
 
 /**
- * When this process started running its own code.
+ * When this process began, versus when its own code did.
  *
- * Taken at module load, before anything is awaited, so that the difference
- * between it and the run row's created_at is everything that happened outside
- * this process: scheduling, image pull, container start.
+ * `performance.timeOrigin` is process start — BEFORE the import tree at the top
+ * of this file was resolved and transpiled by tsx. `enteredAt` is after it. The
+ * gap between them is what boot and transpilation cost, and until now it was
+ * invisible: `enteredAt` is taken at module load, which in ESM runs after the
+ * imports, so that cost sat inside `job-cold-start` indistinguishable from the
+ * image pull.
  */
+const startedAt = new Date(performance.timeOrigin);
 const enteredAt = new Date();
 
 async function main() {
@@ -67,6 +71,17 @@ async function main() {
     await cold.end({ stage: "job-cold-start", startedAt: createdAt }, "ok");
     // The part of that which was ours: fetching and decrypting the bundle.
     await cold.end({ stage: "run-fetch", startedAt: enteredAt }, "ok");
+
+    // Cloud Run's half: scheduling, image pull, container start. It ended the
+    // instant this process existed, which is before the line reporting it runs —
+    // so it is written by a recorder whose clock is frozen there, rather than by
+    // `cold`, whose `end` stamps the current time.
+    const atStart = new StageRecorder(request.slug, "unknown", undefined, () => startedAt, undefined, { runId });
+    await atStart.end({ stage: "job-launch", startedAt: createdAt }, "ok");
+
+    // Our half: Node booting and tsx transpiling the import tree above.
+    const atEntry = new StageRecorder(request.slug, "unknown", undefined, () => enteredAt, undefined, { runId });
+    await atEntry.end({ stage: "job-import", startedAt }, "ok");
   }
 
   const input: DeployInput = {

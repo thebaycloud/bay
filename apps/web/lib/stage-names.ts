@@ -29,8 +29,21 @@
 /**
  * Written OUTSIDE the pipeline — `app/api/deploy/route.ts` and
  * `scripts/deploy-job.ts` — before a lane exists at all.
+ *
+ * `job-launch` and `job-import` split `job-cold-start`, which measured 104s p50
+ * over the fortnight to 6 Aug — half of a deploy, none of it the user's build.
+ * The split is the whole point: `job-launch` is Cloud Run's half (scheduling,
+ * image pull, container start) and `job-import` is ours (Node booting and tsx
+ * transpiling the import tree). A smaller image fixes the first and a
+ * precompiled entry point fixes the second, so which one dominates decides
+ * which work is worth doing.
+ *
+ * `job-cold-start` stays exactly as it was. It is the number the fix is measured
+ * against, and a redefined baseline measures nothing.
  */
-export const HANDOFF_STAGES = ["run-record", "job-dispatch", "job-cold-start", "run-fetch"] as const;
+export const HANDOFF_STAGES = [
+  "run-record", "job-dispatch", "job-cold-start", "job-launch", "job-import", "run-fetch",
+] as const;
 
 /**
  * Written inside the pipeline before the lane is chosen.
