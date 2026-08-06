@@ -372,13 +372,19 @@ export function runJobUrl(job: string, project: string = PROJECT, region: string
  *
  * Split at the LAST colon, and only when it comes after the last slash: a
  * registry host may carry a port, so the first colon can belong to
- * `localhost:5000/…`. An untagged or digest-pinned reference returns "" rather
+ * `localhost:5000/…`. A digest-pinned reference (`@sha256:…`) is checked first
+ * and separately, because its "@" also sits after the last slash and the digest
+ * itself contains a colon — `control-plane@sha256:dead` would otherwise read
+ * "dead" off the end as if it were a tag. An untagged or digest-pinned
+ * reference returns "" rather
  * than the conventional "latest" — the caller compares two of these for
  * equality, and a guess that makes two different images compare equal defeats
  * the comparison.
  */
 export function imageTag(image: string): string {
   const slash = image.lastIndexOf("/");
+  const at = image.lastIndexOf("@");
+  if (at > slash) return "";
   const colon = image.lastIndexOf(":");
   return colon > slash ? image.slice(colon + 1) : "";
 }
