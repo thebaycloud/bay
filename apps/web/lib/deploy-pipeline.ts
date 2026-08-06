@@ -3806,7 +3806,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // invents work — it once invented an app, wrote a fake .env, deleted a
       // migrate script, and spent 428k tokens reaching `gcloud exited 1`.
       /**
-       * Put the app back on the last revision that worked.
+       * Put the app back on the last version that worked.
        *
        * A deploy that FAILS TO START never takes traffic — Cloud Run refuses to
        * promote a revision that cannot pass its own startup probe, and gcloud
@@ -3826,17 +3826,69 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
        *
        * Never fatal, and never for static — a static app has no service of its own
        * and its previous release is a different mechanism entirely.
+       *
+       * WHAT "ROLL BACK" MEANS ON THE FLEET, AND WHY IT ISN'T THE SAME OPERATION.
+       *
+       * `rollback()` is Cloud-Run-shaped end to end: `gcloud run revisions list`
+       * reads a history that only Cloud Run keeps. The fleet has no such history to
+       * read — `fleet_placements` stores one `spec` row per `(slug, node)`,
+       * overwritten on every deploy (see docs/adr/0001-fleet-is-the-only-target-
+       * for-server-apps.md, which names instant revision rollback as one of four
+       * capabilities that do not survive the move). Calling `rollback()` here for a
+       * fleet app used to throw `gcloud run revisions list` against a service that
+       * was never created, caught and logged as noise — a silent no-op dressed up
+       * as a safety net.
+       *
+       * The only copy of "the version that was working" a fleet deploy ever has is
+       * read once, in memory, by `placeOnFleet` itself — right before it overwrites
+       * the placement row (fleet-place.ts:509-510, "read BEFORE placing"). If THAT
+       * attempt's own verify then fails, `placeOnFleet` already puts it straight
+       * back (fleet-place.ts:638-644) before this function is ever called — or, on
+       * a first deploy, correctly drops the placement rather than leaving it
+       * pointing at something that never served. By the time we get here there is
+       * no second, independent copy of "previous" left to act on: the one chance to
+       * use it was inside that same call, and it was already taken (or there was
+       * nothing to take). So this function's job for a fleet app is not to perform
+       * a restore — it has nothing left to restore with — but to say, honestly,
+       * which of those two things already happened. Inventing a fleet revision
+       * history here just to give this function something to do would be recording
+       * a capability the platform does not have, which is exactly the dishonesty
+       * the dedicated `/rollback` route (`rollback/route.ts:13-26`) already refuses
+       * to commit for a manual rollback. This is the same refusal, automatic.
        */
-      const rollBackToLastGood = async () => {
-        if (staticServe || serviceless) return;
+      const rollBackToLastGood = async (): Promise<string | null> => {
+        if (staticServe || serviceless) return null;
+        if (toFleet) {
+          const stillPlaced = await placementFor(slug);
+          if (stillPlaced) {
+            // Not phrased as "we rolled back": nothing here did. The version now
+            // placed is either the one `placeOnFleet` restored moments ago, on
+            // THIS attempt's own failed verify, or the one that was never touched
+            // because this attempt never got as far as placing anything. Either
+            // way it is the fact worth telling the user — not the mechanism.
+            log(`${slug} is on the version that was working before this deploy — the fleet has no revision history to roll back further than that.`);
+            return "The previous version is still (or already back) serving — the fleet keeps one spec per app, not a history, so this is as far back as an automatic rollback can go.";
+          }
+          // No placement at all: either this was the first deploy (nothing ever
+          // served, so there is nothing to fall back to) or the one placement
+          // attempt failed verify and, having no previous spec of its own to
+          // restore, correctly unplaced rather than leaving a broken address on
+          // the books. Both are the same user-facing fact: there is no previous
+          // version of this app on the fleet.
+          log(`No previous version of ${slug} exists on the fleet to roll back to — this looks like its first deploy. Fix the error above and redeploy.`);
+          return "Nothing to roll back to on the fleet: this app has no previous placement. Fix the error and redeploy.";
+        }
         try {
           const to = await rollback(slug);
-          log(`Rolled back to ${to} — the previous version is serving again while you fix this.`);
+          const note = `Rolled back to ${to} — the previous version is serving again while you fix this.`;
+          log(note);
+          return note;
         } catch (e) {
           // A first deploy has nothing to go back to, which is the common case
           // here and not worth alarming anybody about.
           const why = e instanceof Error ? e.message : String(e);
           if (!/no previous revision|never started/i.test(why)) log(`! could not roll back (${why})`);
+          return null;
         }
       };
 
@@ -3871,7 +3923,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       });
       if (blame.blame === "platform") {
         if (blame.reason && blame.reason !== result.error) log(blame.reason);
-        await rollBackToLastGood();
+        // Folded into `result.error` itself, not logged and dropped — so the
+        // deploy row, the error event and the fix prompt below all carry the
+        // same honest account of what rollback did (or, on the fleet, could not
+        // do), matching `failedIn`'s append two lines above rather than adding a
+        // second, differently-visible channel for the same fact.
+        const rollbackNote = await rollBackToLastGood();
+        if (rollbackNote) result = { ...result, error: `${result.error ?? "deploy failed"}\n\n${rollbackNote}` };
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         send({ type: "error", message: result.error });
@@ -3881,7 +3939,8 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // The auto-fix agent is a Pro feature. Basic gets a paste-ready prompt
       // for its own coding agent instead of us fixing the code in the cloud.
       if (!limits.autoFix) {
-        await rollBackToLastGood();
+        const rollbackNote = await rollBackToLastGood();
+        if (rollbackNote) result = { ...result, error: `${result.error ?? "deploy failed"}\n\n${rollbackNote}` };
         setDeploy(slug, { status: "failed", error: result.error ?? "deploy failed" });
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
         log("Deploy failed — here's a fix to hand your coding agent (auto-fix is on Pro).");
@@ -3973,11 +4032,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         }
       }
       else {
-        await rollBackToLastGood();
-        setDeploy(slug, { status: "failed", error: fixed.summary });
-        await failure.repaired("gave-up", fixed.summary);
+        const rollbackNote = await rollBackToLastGood();
+        const summary = rollbackNote ? `${fixed.summary}\n\n${rollbackNote}` : fixed.summary;
+        setDeploy(slug, { status: "failed", error: summary });
+        await failure.repaired("gave-up", summary);
         if (ownerId && ownerWorkspace) await markAppFailed(slug).catch(() => {});
-        send({ type: "error", message: fixed.summary });
+        send({ type: "error", message: summary });
         return;
       }
     }

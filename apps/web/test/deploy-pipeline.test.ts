@@ -126,6 +126,24 @@ let digestReply: string | null = A_DIGEST;
 let probeCode = 200;
 
 /**
+ * The fleet's placement table, in memory — one row per slug, overwritten on
+ * every `placeApp` and dropped on `unplaceApp`, exactly like the real
+ * `fleet_placements` upsert (`fleet.ts:78-86`) this stands in for.
+ *
+ * A map rather than an appended log, unlike `active.placements` below: that
+ * recorder answers "what did the pipeline try, in order" and this answers "what
+ * does the fleet currently believe this app runs" — the two questions
+ * `rollBackToLastGood` conflated before this ticket, by asking a Cloud-Run-only
+ * function the second one and treating its answer as though it were the first.
+ *
+ * Empty by default, so every test that never touches it keeps exercising
+ * exactly what it always did — a slug the fleet has never placed. Only the
+ * fleet-rollback tests below seed it, and only they are responsible for
+ * clearing it again.
+ */
+let placementTable = new Map<string, { node: string; spec: unknown }>();
+
+/**
  * What Secret Manager holds for the app, switchable per test.
  *
  * Empty by default, so every test written before this one keeps exercising the
@@ -293,9 +311,12 @@ async function install() {
       chooseNode: async () => "fleet-lab-1",
       placeApp: async (slug: string, node: string, spec: never) => {
         active.placements.push({ slug, node, spec });
+        placementTable.set(slug, { node, spec });
       },
-      unplaceApp: asyncNoop,
-      placementFor: async () => null,
+      unplaceApp: async (slug: string) => {
+        placementTable.delete(slug);
+      },
+      placementFor: async (slug: string) => placementTable.get(slug) ?? null,
       runtimeOf: async () => "cloudrun",
       setRuntime: async (slug: string, runtime: string) => {
         active.runtimeWrites.push({ slug, runtime });
@@ -710,6 +731,90 @@ async function onFleet(files: Record<string, string>, replies: Replies = detect(
     delete process.env.FLEET_APPS;
   }
 }
+
+test("a fleet redeploy that fails after taking traffic gets the previous version back", NEEDS_MOCKS, async () => {
+  // The bug docs/research/cloud-run-shape.md found and the GitHub issue named:
+  // `rollBackToLastGood` guarded `staticServe || serviceless` but not `toFleet`,
+  // so a failed fleet deploy called Cloud Run's OWN `rollback()` — `gcloud run
+  // revisions list` against a service that was never created — which threw and
+  // was swallowed as noise. Nothing target-aware ever ran.
+  //
+  // What actually undoes a broken fleet placement is `placeOnFleet` itself
+  // (fleet-place.ts:638-644): it reads the previous spec before overwriting the
+  // row, and puts it straight back the moment its own verify fails. This test
+  // seeds that previous placement, forces the verify to fail the way the issue
+  // describes (the container answers, so it takes traffic — then the probe
+  // reads it as broken), and checks the fleet ends up back on the seeded
+  // version rather than stuck on the one that just failed.
+  const seedSpec = { image: "seed-image-marker@sha256:" + "cd".repeat(32), memoryBytes: 999, cpuShares: 999 };
+  placementTable.set("demo", { node: "fleet-lab-0", spec: seedSpec });
+  probeCode = 503;
+  let rec: Recorded;
+  // Read back before the `finally` clears it — the table has to be reset for
+  // tests that run after this one, but that reset must not run before this
+  // test has had a chance to read what the deploy actually left behind.
+  let finalPlacement: { node: string; spec: unknown } | undefined;
+  try {
+    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+    finalPlacement = placementTable.get("demo");
+  } finally {
+    probeCode = 200;
+    placementTable.delete("demo");
+  }
+
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.ok(errors.length > 0, "a fleet app that fails its verify must still report a failed deploy");
+
+  // Cloud Run's OWN rollback machinery must never run for a fleet app — there is
+  // no service for `gcloud run revisions list` to find, and running it anyway is
+  // exactly the wrong-target call this ticket removes.
+  assert.ok(
+    !rec.argv.some((a) => a[1] === "run" && a[2] === "revisions"),
+    `a fleet failure must not ask Cloud Run for revisions; argv was ${JSON.stringify(rec.argv.map((a) => a.slice(0, 3)))}`,
+  );
+  assert.ok(
+    !rec.argv.some((a) => a.includes("update-traffic")),
+    "a fleet failure must not move Cloud Run traffic — there is no Cloud Run service to move it on",
+  );
+
+  // The fleet's own placement table — not just the append-only log of attempts —
+  // must end up back on the seeded version. `placeOnFleet`'s restore call is the
+  // last write for this slug in a failed verify, so the LAST entry in the log is
+  // also the one worth reading.
+  assert.equal(rec.placements.at(-1)?.node, "fleet-lab-0", "the previous placement's node must be restored, not the node this failed attempt chose");
+  assert.deepEqual(rec.placements.at(-1)?.spec, seedSpec, "the previous spec must be restored verbatim");
+  assert.deepEqual(finalPlacement, { node: "fleet-lab-0", spec: seedSpec }, "the fleet's placement table must read back the restored version, not the broken one");
+
+  // Said honestly, not silently: the log line and the recorded failure both
+  // have to tell the user what actually happened, per the ticket.
+  const text = JSON.stringify(errors);
+  assert.match(text, /previous version/i, `the failure must say what happened to the previous version, not stay silent about rollback; got ${text.slice(0, 400)}`);
+});
+
+test("a first-ever fleet deploy that fails has nothing to roll back to, and says so instead of erroring", NEEDS_MOCKS, async () => {
+  // The other half of the acceptance criteria: a slug with no prior placement
+  // must fail cleanly. Before this ticket the generic safety net called Cloud
+  // Run's `rollback()`, which throws "no previous revision to roll back to" for
+  // ANY app — that exception was caught, so this half already degraded
+  // gracefully by accident. The fix must keep it that way on purpose: no throw
+  // escapes `rollBackToLastGood`, and the placement table stays empty rather
+  // than growing a row that points at nothing.
+  probeCode = 503;
+  let rec: Recorded;
+  let finalPlacement: { node: string; spec: unknown } | undefined;
+  try {
+    rec = await onFleet({ "Dockerfile": "FROM alpine\n", "index.js": "" });
+    finalPlacement = placementTable.get("demo");
+  } finally {
+    probeCode = 200;
+    placementTable.delete("demo");
+  }
+
+  const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.ok(errors.length > 0, "a first fleet deploy that fails its verify must still report a failed deploy");
+  assert.equal(rec.events.some((e) => (e as { type?: string }).type === "threw"), false, "rollBackToLastGood must never throw on a slug with nothing to roll back to");
+  assert.equal(finalPlacement, undefined, "a first deploy with no previous placement must end up unplaced, not pointing at a broken version");
+});
 
 /** Pro, so the repair agent runs at all — Basic gets a paste-ready prompt instead. */
 const AUTO_FIX = { limits: { maxApps: 10, maxGrants: 10, autoFix: true, canRemoveBadge: false } };
