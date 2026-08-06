@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "db:migrate": "node --import tsx db/migrate.ts",
+    "timing": "node --import tsx scripts/deploy-timing.ts",
     "test": "node --experimental-test-module-mocks --import tsx --test 'test/**/*.test.ts'",
     "test:collapse": "RUNNER=0 node --experimental-test-module-mocks --import tsx --test test/deploy-pipeline.test.ts"
   },
