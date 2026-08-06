@@ -34,8 +34,8 @@ steps:
   # that looks deployed is not the thing doing the work.
   #
   # Only --image, and the job's absence is the one failure this step is allowed
-  # to shrug off: a fresh environment has no job yet, and Create or reconfigure
-  # it with scripts/setup-deploy-job.sh. Everything else — a bad flag, a quota
+  # to shrug off: a fresh environment has no job yet (create or reconfigure it
+  # with scripts/setup-deploy-job.sh). Everything else — a bad flag, a quota
   # error, an update that Cloud Run rejects — has to fail the build.
   #
   # That was not always true. This step used to run LAST, where a swallowed
