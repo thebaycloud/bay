@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 
 /**
  * The deploy-target abstraction: one named thing answering "where does this
- * app run", with both current targets behind it. Nothing here is called from
- * production code yet (see lib/deploy-target.ts's own doc comment) — this
- * file is what "exercised by tests, not yet by production call sites" means.
+ * app run", with both current targets behind it. Two of `supports`'s four
+ * capabilities are wired to a real call site now — `domainMapping` and
+ * `autoRollbackOnFailure`, both in deploy-pipeline.ts (see
+ * lib/deploy-target.ts's own doc comment) — but every fact this module states
+ * is pinned here regardless, so a caller migrating onto it has a target that
+ * was already proven correct rather than a fresh guess.
  *
  * Its own file, `mock.module`'d, for the same reason as
  * test/delete-app-fleet.test.ts: `mock.module` is process-wide within a
@@ -50,10 +53,14 @@ test("only the fleet owns its own process lifecycle", async () => {
   assert.equal(FLEET_TARGET.ownsProcessLifecycle, true);
 });
 
-test("only Cloud Run has release as a stage with its own deploy_stages row", async () => {
+test("both targets have release as a stage with its own deploy_stages row", async () => {
+  // Fleet caught up: deploy-pipeline.ts now writes a real `release` row for a
+  // fleet deploy (:3754) the same way it always has for Cloud Run's (:2757).
+  // Kept as its own assertion rather than deleted now that the two agree —
+  // see the field's own doc comment for why the fact is still worth pinning.
   const { CLOUD_RUN_TARGET, FLEET_TARGET } = await loadedTarget;
   assert.equal(CLOUD_RUN_TARGET.hasReleaseStage, true);
-  assert.equal(FLEET_TARGET.hasReleaseStage, false);
+  assert.equal(FLEET_TARGET.hasReleaseStage, true);
 });
 
 test("cloud run supports everything asked of it at the 21 sites today", async () => {
@@ -63,12 +70,13 @@ test("cloud run supports everything asked of it at the 21 sites today", async ()
   }
 });
 
-test("the fleet supports none of the four — including the two nobody guards on yet", async () => {
-  // exec and rollback are refused today, at the API. domainMapping and
-  // autoRollbackOnFailure are NOT refused anywhere in deploy-pipeline.ts —
-  // they run unconditionally and fail silently for a fleet app. This target
-  // states their true value regardless of whether a caller checks it yet,
-  // so a later guard is a one-line `if`, not a rediscovery.
+test("the fleet supports none of the four", async () => {
+  // exec and rollback are refused at the API. domainMapping and
+  // autoRollbackOnFailure are now both guarded in deploy-pipeline.ts through
+  // this same `supports(...)` call (:4225 and :3918) rather than left to run
+  // unconditionally and fail silently for a fleet app. This target still
+  // states their value independently of any one call site, so the next site
+  // that needs the answer asks here instead of re-deriving it.
   const { FLEET_TARGET } = await loadedTarget;
   for (const capability of ["exec", "rollback", "domainMapping", "autoRollbackOnFailure"] as const) {
     assert.equal(FLEET_TARGET.supports(capability), false, capability);

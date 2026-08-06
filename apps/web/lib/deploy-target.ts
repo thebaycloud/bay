@@ -4,17 +4,29 @@ import { CLOUD_RUN_DB, FLEET_DB, type DbAddress } from "./db-address";
 /**
  * Deploy target: where an app's processes end up running. See CONTEXT.md.
  *
- * Today that question is a boolean re-read at 21 separate places — 16 inside
- * deploy-pipeline.ts (`toFleet`) and 5 more API routes that independently
- * recompute `runtimeOf(slug) === "fleet"` — none sharing an accessor. Two of
- * those 21 needed to ask a question they never did (see `supports` below) and
- * shipped live bugs as a result. This module is the one place that answer
- * lives, so the next site that needs it asks once instead of re-deriving it.
+ * When this module was written, that question was a boolean re-read at 21
+ * separate places with no shared accessor: 16 inside deploy-pipeline.ts
+ * (`toFleet`) and 5 more API routes that independently recomputed
+ * `runtimeOf(slug) === "fleet"`. Two of those 21 needed to ask a question
+ * they never did (see `supports` below) and shipped live bugs as a result.
+ * This module is the one place that answer lives, so the next site that
+ * needs it asks once instead of re-deriving it.
  *
- * Nothing here is wired to a call site yet. Every one of the 21 keeps
- * re-deriving its own answer exactly as before — this exists beside them,
- * proven by tests, so migrating one at a time (a later ticket) has somewhere
- * to move to.
+ * Migrated onto it since: all 5 API-route sites (48af6bc) — exec, env
+ * (twice), the app route and rollback now call `deployTargetForApp` once and
+ * branch on `.kind` or `.supports(...)` — and, inside the pipeline, the two
+ * capability questions this module exists for: `domainMapping` (f50143b) and
+ * `autoRollbackOnFailure` (deploy-pipeline.ts:3926).
+ *
+ * NOT migrated: `toFleet` itself. deploy-pipeline.ts still computes it once
+ * (:2232) and branches on it directly at roughly a dozen more sites, but
+ * every one of those asks WHICH FUNCTION to call or WHICH STRING to write
+ * (`runFleetDeploy` vs `runDeploy`, `"fleet"` vs `"cloudrun"` for
+ * `apps.runtime`) — a routing decision `.kind` already answers, not a yes/no
+ * capability `supports(...)` was built for. Collapsing those onto `.kind` is
+ * its own later ticket (#14, named when the API routes migrated) — this
+ * module has had somewhere for that migration to land since it was written,
+ * whether or not anything has taken it yet.
  */
 
 /**
@@ -27,12 +39,15 @@ import { CLOUD_RUN_DB, FLEET_DB, type DbAddress } from "./db-address";
  *   (app/api/apps/[slug]/exec/route.ts, .../rollback/route.ts) — there is no
  *   per-app job image to exec into, and a placement holds one spec, not a
  *   history to roll back to.
- * - `domainMapping` and `autoRollbackOnFailure` are NOT refused anywhere
- *   today. `deploy-pipeline.ts`'s domain-mapping branch and its own
- *   rollback-on-failure safety net both run unconditionally and fail
- *   silently for a fleet app — see docs/research/cloud-run-shape.md, "the
- *   gap". They're listed here at their true value so that guarding them
- *   later is a one-line `if (!target.supports(...))`, not a new investigation.
+ * - `domainMapping` and `autoRollbackOnFailure` used to run unconditionally
+ *   and fail silently for a fleet app — `deploy-pipeline.ts`'s domain-mapping
+ *   branch and its own rollback-on-failure safety net, see
+ *   docs/research/cloud-run-shape.md, "the gap". Both are guarded by
+ *   `target.supports(...)` at their call sites now (:4248 and :3926) — the
+ *   one-line change this list was listing them for. Kept here rather than
+ *   folded away now that the gap is closed: the guard reads `supports(...)`
+ *   because this type says these are refusable facts, not because someone
+ *   remembered to add an `if`.
  *
  * Not the ADR's full list of lost capabilities (traffic splitting,
  * scale-to-zero, IAM-scoped auth) — those are real, but no call site asks
@@ -47,8 +62,10 @@ export type DeployCapability = "exec" | "rollback" | "domainMapping" | "autoRoll
  * `runFleetDeploy`) that are not even exported. Reimplementing them here
  * would be a second copy to keep in sync by hand — the exact failure mode
  * fleet-spec.ts's own doc comment already reports once (the agent's `App`
- * struct drifted silently). Moving call sites onto a shared implementation is
- * for the tickets that follow; this one only names the seam.
+ * struct drifted silently). Moving call sites onto a shared implementation
+ * started with the 5 API routes and the two `supports(...)` guards named in
+ * the module doc above; deploy/describe/exec staying out of here is still
+ * true of all of them.
  */
 export interface DeployTarget {
   /** "cloudrun" | "fleet" — the value already stored in `apps.runtime`. */
@@ -69,9 +86,16 @@ export interface DeployTarget {
 
   /**
    * Whether "release" is its own pipeline stage with its own `deploy_stages`
-   * row, or folded into the app's startup with no row at all. False here is
-   * why a reliability read of `deploy_stages` is Cloud-Run-only by
-   * construction today, silently — see docs/research/cloud-run-shape.md §3.
+   * row, or folded into the app's startup with no row at all. Both targets
+   * answer true today: a reliability read of `deploy_stages` used to be
+   * Cloud-Run-only by construction, silently — see
+   * docs/research/cloud-run-shape.md §3 — until `deploy-pipeline.ts` started
+   * writing a real `release` row for a fleet deploy too (:3755), the same
+   * `stages.start("release")` shape its Cloud Run branch already used (:2759),
+   * each one only when the app actually declares a release process. Kept as
+   * its own field rather than deleted now that both agree: the fact it
+   * records is a property of the TARGET, not a coincidence of the two that
+   * happen to exist, and the next one is not guaranteed to have it.
    */
   readonly hasReleaseStage: boolean;
 
@@ -82,8 +106,10 @@ export interface DeployTarget {
 const CAPABILITIES: Record<Runtime, ReadonlySet<DeployCapability>> = {
   cloudrun: new Set<DeployCapability>(["exec", "rollback", "domainMapping", "autoRollbackOnFailure"]),
   // Empty, not partially filled: nothing on this list works for a fleet app
-  // today, whether or not the code currently agrees with that (see the two
-  // bugs above).
+  // today. Two call sites disagreed with that operationally until they were
+  // guarded (see `domainMapping`/`autoRollbackOnFailure` above) — this set
+  // was already right while they were wrong, which is the whole reason a
+  // stated fact is worth more than an inline re-derivation.
   fleet: new Set<DeployCapability>(),
 };
 
@@ -101,7 +127,7 @@ export const FLEET_TARGET: DeployTarget = {
   kind: "fleet",
   databaseAddress: FLEET_DB,
   ownsProcessLifecycle: true,
-  hasReleaseStage: false,
+  hasReleaseStage: true,
   supports: (capability) => CAPABILITIES.fleet.has(capability),
 };
 
@@ -111,9 +137,11 @@ export function deployTargetFor(kind: Runtime): DeployTarget {
 }
 
 /**
- * The target an app is on right now. The read-and-branch every one of the 5
- * API-route sites does inline (`runtimeOf(slug) === "fleet"`), collapsed to
- * one call — not used by any of them yet, so today's behavior is untouched.
+ * The target an app is on right now. What the 5 API-route sites used to do
+ * inline (`runtimeOf(slug) === "fleet"`, one recompute per site), collapsed
+ * to one call — and, since 48af6bc, the one they actually make: exec, env
+ * (twice), the app route and rollback all resolve their target through here
+ * now instead of re-deriving it.
  */
 export async function deployTargetForApp(slug: string): Promise<DeployTarget> {
   return deployTargetFor(await runtimeOf(slug));
