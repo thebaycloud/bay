@@ -868,6 +868,13 @@ func (a *Agent) reconcileOnce() error {
 	todo := []work{}
 	needRelease := map[string]App{}
 
+	// Whether this pass put anything new in `a.live` — by adoption or by a
+	// fresh start — as opposed to merely re-confirming a process the control
+	// plane already knows about from an earlier pass. Only the first kind is
+	// what a redeploy's corroboration is waiting on; see the ReportNow call at
+	// the end of this function.
+	justPlaced := false
+
 	for id, u := range units {
 		a.mu.Lock()
 		l, running := a.live[id]
@@ -895,6 +902,7 @@ func (a *Agent) reconcileOnce() error {
 				}
 				l, running = a.live[id], true
 				a.mu.Unlock()
+				justPlaced = true
 				log.Printf("%s: adopted at %s (survived the agent restart)", id, ad.Net.IP)
 			} else {
 				a.mu.Unlock()
@@ -1171,12 +1179,33 @@ func (a *Agent) reconcileOnce() error {
 		start = append(start, t)
 	}
 	if len(start) > 0 {
+		justPlaced = true
 		a.startMany(start)
 	}
 
 	a.syncCron(d)
 	a.probeAll()
-	return a.writeRoutes()
+	if err := a.writeRoutes(); err != nil {
+		return err
+	}
+
+	// loadDesired's Fetch, at the top of this function, already sent a sync —
+	// but before any of the placing, starting and confirming above, so it could
+	// only describe the pass before this one. If this pass placed anything new,
+	// send another sync now that the placing is done, so the process reaches
+	// the control plane on THIS pass rather than waiting for pass N+1's poll —
+	// see desired.go's ReportNow for why that gap exists and what it costs a
+	// redeploy waiting on it.
+	//
+	// Gated on justPlaced rather than sent unconditionally: most passes place
+	// nothing, and a node with nothing new to say does not need a second POST
+	// every ten seconds on top of the one loadDesired already sends — nothing
+	// is waiting on THIS pass's stale-but-unchanged confirmations, only on a
+	// fresh one.
+	if justPlaced {
+		a.src.ReportNow()
+	}
+	return nil
 }
 
 // startMany brings up a set of processes concurrently and publishes each one

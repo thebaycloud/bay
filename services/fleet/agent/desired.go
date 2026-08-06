@@ -193,8 +193,10 @@ type Source struct {
 	Token    string
 	Identity NodeIdentity
 	Local    string // fallback file for a node with no control plane
-	// Report answers "what is failing on this node right now", called once per
-	// sync. A nil Report means this node does not report at all, which is a
+	// Report answers "what is failing on this node right now", read fresh on
+	// every sync — and reconcileOnce triggers more than one of those per pass
+	// now, via ReportNow below, so this can be called more than once between
+	// polls. A nil Report means this node does not report at all, which is a
 	// different statement from reporting nothing — see syncBody.
 	Report func() []ProcessFault
 	// ReportRunning answers "what am I confirmed to be running right now", on
@@ -229,6 +231,35 @@ func (s *Source) Fetch() (Desired, error) {
 		return cached, nil
 	}
 	return Desired{}, err
+}
+
+// ReportNow pushes a fresh sync immediately, carrying whatever Report and
+// ReportRunning answer right now, without waiting for the next reconcile
+// pass's poll to send it.
+//
+// It exists because Fetch's POST — the one that asks "what should I be
+// running" — goes out at the TOP of reconcileOnce, before that same pass has
+// placed or started anything. So the report riding on it is necessarily about
+// the pass before this one, and a process this pass just confirmed does not
+// reach the control plane until the NEXT pass's Fetch, a full poll interval
+// later. The redeploy corroboration a deploy waits on reads exactly this
+// report, so that interval became a wait the app was already past. Calling
+// this again once reconcileOnce has done its own work lets the report catch
+// up within the same pass instead.
+//
+// The desired state that comes back is discarded: the caller already has this
+// pass's copy, and acting on a second one here would run the placement logic
+// twice for one pass. A no-op on the lab path (no Endpoint) and errors are
+// logged, not returned — this is an extra chance to speak sooner, and a node
+// that could not take it is no worse off than one that never tried; the
+// regular Fetch on the next pass is still the fallback that must not fail.
+func (s *Source) ReportNow() {
+	if s.Endpoint == "" {
+		return
+	}
+	if _, err := s.fromControlPlane(); err != nil {
+		log.Printf("report: control plane unavailable (%v)", err)
+	}
 }
 
 func (s *Source) fromControlPlane() (Desired, error) {
