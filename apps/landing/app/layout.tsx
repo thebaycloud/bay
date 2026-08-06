@@ -18,7 +18,7 @@ export const viewport = { width: "device-width", initialScale: 1 };
 
 const TITLE = "Supersonic — Deploy your app in one click";
 const DESCRIPTION =
-  "The cloud for vibecoders. Point us at the app you built and we turn it into a real, live product — database, domain, everything — in one click. No infra, no GitHub required.";
+  "A cloud for small software. Point us at the app you built and we turn it into a real, live product — database, domain, everything — in one command. No infra, no GitHub required.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://supersonic.cv"),
