@@ -48,7 +48,7 @@ import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOS
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
-import { causeOf, FailureRecorder } from "@/lib/deploy-failures";
+import { causeOf, failureSentence, FailureRecorder } from "@/lib/deploy-failures";
 import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, proxyWait } from "@/lib/release-job";
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
@@ -2840,7 +2840,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       } catch (e) {
         const buildLog = await builds.error();
         const reason = buildLog || (e instanceof Error ? e.message : String(e));
-        return { ok: false, error: `Build failed:\n${reason}` };
+        return { ok: false, error: failureSentence("Build failed", reason) };
       }
 
       // A green Cloud Build is not evidence that anything was uploaded — the
@@ -3383,7 +3383,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
           || btail.slice(-6).join("\n")
           || (e instanceof Error ? e.message : String(e));
-        return { ok: false, error: reason ? `Build failed:\n${reason}` : "the build failed — check the logs" };
+        return { ok: false, error: failureSentence("Build failed", reason) };
       }
       const digest = await resolveImageDigest(`${IMAGE}:latest`);
       if (!digest) {
@@ -3442,7 +3442,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           });
         } catch (e) {
           const buildLog = await builds.error();
-          return { ok: false, error: `Prepare failed:\n${buildLog || (e instanceof Error ? e.message : String(e))}` };
+          return { ok: false, error: failureSentence("Prepare failed", buildLog || (e instanceof Error ? e.message : String(e))) };
         }
         const rel = await runRelease({ lane: "runner", service: slug, image, env: extraEnv, release: releaseCmd });
         if (!rel.ok) return { ok: false, error: rel.error };

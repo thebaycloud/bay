@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  causeOf, NO_REASON, FailureRecorder,
+  causeOf, NO_REASON, FailureRecorder, failureSentence,
   type FailureRow, type FailureSink, type Repair,
 } from "../lib/deploy-failures";
 import { classify } from "../lib/deploy-errors";
@@ -100,4 +100,18 @@ test("a failure with no error text is recorded as a platform failure with the no
   await new FailureRecorder(sink).record(row({ cause: causeOf(""), blame: classify("").blame }));
   assert.equal(rows[0].cause, NO_REASON);
   assert.equal(rows[0].blame, "platform");
+});
+
+test("a build failure with a reason reads as the reason", () => {
+  assert.equal(failureSentence("Build failed", "missing module 'x'"), "Build failed:\nmissing module 'x'");
+});
+
+test("a build failure with no reason says the reason is missing, not nothing", () => {
+  // Three rows on file read exactly "Build failed:" or "Prepare failed:" with
+  // nothing after the colon — a header whose body was empty. That is
+  // indistinguishable from a message someone truncated, and it sends a reader
+  // looking for a cause that was never captured.
+  for (const blank of [null, undefined, "", "  \n"]) {
+    assert.equal(failureSentence("Build failed", blank), `Build failed — ${NO_REASON}`);
+  }
 });

@@ -25,6 +25,20 @@ export function causeOf(error: string | null | undefined): string {
   return e === "" ? NO_REASON : error!;
 }
 
+/**
+ * A failure headline joined to its reason, or an honest sentence when there is none.
+ *
+ * `Build failed:\n${reason}` renders as exactly `Build failed:` when the reason is
+ * empty, and three rows on file are that. A header with nothing after the colon
+ * reads like a message somebody truncated, so it sends its reader hunting for a
+ * cause that was never captured — while a sentence saying the reason is missing
+ * points at the reporting gap, which is where the bug actually is.
+ */
+export function failureSentence(headline: string, reason: string | null | undefined): string {
+  const r = (reason ?? "").trim();
+  return r === "" ? `${headline} — ${NO_REASON}` : `${headline}:\n${reason}`;
+}
+
 export type Repair = "skipped" | "fixed" | "gave-up";
 
 export interface FailureRow {
