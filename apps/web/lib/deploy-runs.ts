@@ -437,20 +437,22 @@ async function fetchImage(url: string, pick: (body: any) => string | undefined):
 }
 
 /**
- * A function of `job` rather than a constant: `jobImage` has to ask about the
- * same job `assertJobImageMatches` was asked about, not re-derive one from the
- * environment. The single call site passes the same name either way, so this
- * is silent today — but a second caller checking a different job would
- * otherwise be told about `DEPLOY_JOB_NAME`'s job while believing it had
- * checked its own.
+ * A function of `job` and `region` rather than constants: `jobImage` has to ask
+ * about the same job, in the same region, that `assertJobImageMatches` was
+ * asked about, not re-derive either from the environment. Both call sites pass
+ * the same values either way today, so `region` defaulting to gcp-rest.ts's own
+ * constant was silent — but a job running in a different region from this
+ * service would have been compared against the wrong URL with nothing to say
+ * so, the same failure shape `job` re-deriving from `DEPLOY_JOB_NAME` would
+ * have been.
  */
-function liveProbe(job: string): ImageProbe {
+function liveProbe(job: string, region: string): ImageProbe {
   return {
     jobImage: () => fetchImage(
-      runJobUrl(job),
+      runJobUrl(job, undefined, region),
       (b) => b?.template?.template?.containers?.[0]?.image),
     serviceImage: () => fetchImage(
-      runServiceUrl(process.env.K_SERVICE || "supersonic-control-plane"),
+      runServiceUrl(process.env.K_SERVICE || "supersonic-control-plane", undefined, region),
       (b) => b?.spec?.template?.spec?.containers?.[0]?.image),
   };
 }
@@ -470,7 +472,7 @@ function liveProbe(job: string): ImageProbe {
  * catch a stale image, not to become a fresh way for every deploy to fail when
  * an API is having a bad minute.
  */
-export async function assertJobImageMatches(job: string, deps: ImageProbe = liveProbe(job)): Promise<void> {
+export async function assertJobImageMatches(job: string, region: string, deps: ImageProbe = liveProbe(job, region)): Promise<void> {
   // The switch-off, in the shape BUILDER and the other lane flags already use. A
   // guard that can refuse every deploy has to be removable in one variable
   // rather than in a revert and a build.
@@ -500,7 +502,7 @@ export async function assertJobImageMatches(job: string, deps: ImageProbe = live
  * debugging a lost deploy will look first.
  */
 export async function startDeployJob(runId: string, region: string, job: string): Promise<void> {
-  await assertJobImageMatches(job);
+  await assertJobImageMatches(job, region);
   return gcloud([
     "run", "jobs", "execute", job,
     "--region", region, "--project", PROJECT,

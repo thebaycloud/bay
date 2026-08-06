@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 test("dispatch is allowed when the job and the service run the same tag", async () => {
-  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", {
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
     jobImage: async () => "reg/supersonic/control-plane:abc123",
     serviceImage: async () => "reg/supersonic/control-plane:abc123",
   }));
@@ -33,7 +33,7 @@ test("dispatch is refused when the job is on an older tag", async () => {
   // fails the build. The job is then left on the previous commit's pipeline
   // while the service moves — every deploy runs code nobody thinks is running.
   await assert.rejects(
-    () => assertJobImageMatches("supersonic-deploy-job", {
+    () => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
       jobImage: async () => "reg/supersonic/control-plane:old111",
       serviceImage: async () => "reg/supersonic/control-plane:new222",
     }),
@@ -45,7 +45,7 @@ test("dispatch is refused when either image carries no tag", async () => {
   // Two untagged references both read as "" and would compare equal, which is
   // the one case where equality is not evidence of agreement.
   await assert.rejects(
-    () => assertJobImageMatches("supersonic-deploy-job", {
+    () => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
       jobImage: async () => "reg/supersonic/control-plane",
       serviceImage: async () => "reg/supersonic/control-plane",
     }),
@@ -56,7 +56,7 @@ test("dispatch is refused when either image carries no tag", async () => {
 test("a probe that cannot answer does not block the deploy", async () => {
   // The check exists to catch a stale image, not to become a new way for every
   // deploy to fail. An API that is down must cost the check, not the deploy.
-  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", {
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
     jobImage: async () => { throw new Error("500 from Cloud Run"); },
     serviceImage: async () => "reg/supersonic/control-plane:abc123",
   }));
@@ -77,7 +77,7 @@ test("a probe that resolves to a body with no image does not block the deploy", 
     return { ok: true, status: 200, json: async () => ({ unexpected: "shape" }) };
   }) as unknown as typeof fetch;
 
-  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job"));
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", "us-central1"));
 });
 
 test("a probe that resolves to a body whose image field is not a string does not block the deploy", async () => {
@@ -106,7 +106,7 @@ test("a probe that resolves to a body whose image field is not a string does not
     };
   }) as unknown as typeof fetch;
 
-  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job"));
+  await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", "us-central1"));
 });
 
 test("SKIP_JOB_IMAGE_CHECK=1 turns the refusal off without a deploy", async () => {
@@ -115,11 +115,36 @@ test("SKIP_JOB_IMAGE_CHECK=1 turns the refusal off without a deploy", async () =
   // reason cloudbuild.yaml keeps its lane flags as variables.
   process.env.SKIP_JOB_IMAGE_CHECK = "1";
   try {
-    await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", {
+    await assert.doesNotReject(() => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
       jobImage: async () => "reg/supersonic/control-plane:old111",
       serviceImage: async () => "reg/supersonic/control-plane:new222",
     }));
   } finally {
     delete process.env.SKIP_JOB_IMAGE_CHECK;
+  }
+});
+
+test("the job and service are probed in the region passed in, not a default", async () => {
+  // startDeployJob has a `region` in scope and, before this fix, passed only
+  // `job` to assertJobImageMatches — so liveProbe re-derived the region from
+  // gcp-rest.ts's own module constant instead. Silent only because that
+  // constant and every caller's region happen to be "us-central1" today. A
+  // region requested here that does not match the default proves the value
+  // actually flows through rather than being silently substituted.
+  const requested: string[] = [];
+  globalThis.fetch = (async (input: unknown) => {
+    const url = String(input);
+    if (isMetadata(url)) {
+      return { ok: true, status: 200, json: async () => ({ access_token: "test-token", expires_in: 3600 }) };
+    }
+    requested.push(url);
+    return { ok: true, status: 200, json: async () => ({ unexpected: "shape" }) };
+  }) as unknown as typeof fetch;
+
+  await assertJobImageMatches("supersonic-deploy-job", "europe-west1");
+
+  assert.ok(requested.length > 0, "expected at least one non-metadata request");
+  for (const url of requested) {
+    assert.match(url, /europe-west1/, `${url} was not built from the region passed to assertJobImageMatches`);
   }
 });
