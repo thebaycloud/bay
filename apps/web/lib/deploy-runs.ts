@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPool } from "./db";
+import { accessToken, imageTag, runJobUrl, runServiceUrl } from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
 
 const DB = "supersonic_platform";
@@ -396,6 +397,68 @@ export async function pruneRuns(hours = 6): Promise<void> {
 export const DEPLOY_JOB_ARGS = ["--import", "tsx", "scripts/deploy-job.ts"];
 
 /**
+ * Where the two images come from. Injected so the check can be tested without
+ * reaching Cloud Run.
+ */
+export interface ImageProbe {
+  jobImage: () => Promise<string>;
+  serviceImage: () => Promise<string>;
+}
+
+async function fetchImage(url: string, pick: (body: any) => string | undefined): Promise<string> {
+  const token = await accessToken();
+  if (!token) throw new Error("no access token");
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+  return pick(await res.json()) ?? "";
+}
+
+const liveProbe: ImageProbe = {
+  jobImage: () => fetchImage(
+    runJobUrl(process.env.DEPLOY_JOB_NAME || "supersonic-deploy-job"),
+    (b) => b?.template?.template?.containers?.[0]?.image),
+  serviceImage: () => fetchImage(
+    runServiceUrl(process.env.K_SERVICE || "supersonic-control-plane"),
+    (b) => b?.spec?.template?.spec?.containers?.[0]?.image),
+};
+
+/**
+ * Refuse to hand a deploy to a job running different code from this service.
+ *
+ * `scripts/deploy-job.ts` states the guarantee this replaces: "the job and the
+ * API are the same image, so they can never drift." Nothing enforced it.
+ * `cloudbuild.yaml:126` updates the job and ends in `|| echo`, so a failed
+ * update never fails the build — the job keeps the previous commit's pipeline
+ * while the service moves, and every deploy runs code nobody believes is
+ * running. That is the worst kind of drift, because the thing that looks
+ * deployed is not the thing doing the work.
+ *
+ * A probe that cannot answer does NOT block the deploy. The check exists to
+ * catch a stale image, not to become a fresh way for every deploy to fail when
+ * an API is having a bad minute.
+ */
+export async function assertJobImageMatches(job: string, deps: ImageProbe = liveProbe): Promise<void> {
+  // The switch-off, in the shape BUILDER and the other lane flags already use. A
+  // guard that can refuse every deploy has to be removable in one variable
+  // rather than in a revert and a build.
+  if (process.env.SKIP_JOB_IMAGE_CHECK === "1") return;
+  let jobRef: string, serviceRef: string;
+  try {
+    [jobRef, serviceRef] = await Promise.all([deps.jobImage(), deps.serviceImage()]);
+  } catch (e) {
+    console.error(`could not compare ${job}'s image against this service's`, e);
+    return;
+  }
+  const a = imageTag(jobRef), b = imageTag(serviceRef);
+  if (!a || !b) {
+    throw new Error(`refusing to deploy: an untagged image (job "${jobRef}", service "${serviceRef}") cannot be compared`);
+  }
+  if (a !== b) {
+    throw new Error(`refusing to deploy: ${job} runs image tag ${a} but this service runs ${b} — the job was not updated by the last deploy of main`);
+  }
+}
+
+/**
  * Start the job that will run this deploy.
  *
  * The run id goes in as an argument, not an environment variable: an env-var
@@ -403,7 +466,8 @@ export const DEPLOY_JOB_ARGS = ["--import", "tsx", "scripts/deploy-job.ts"];
  * in one place and visible in the execution record, which is where anyone
  * debugging a lost deploy will look first.
  */
-export function startDeployJob(runId: string, region: string, job: string): Promise<void> {
+export async function startDeployJob(runId: string, region: string, job: string): Promise<void> {
+  await assertJobImageMatches(job);
   return gcloud([
     "run", "jobs", "execute", job,
     "--region", region, "--project", PROJECT,
