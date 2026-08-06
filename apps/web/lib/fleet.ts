@@ -351,6 +351,30 @@ function ensureHealthColumn(): Promise<void> {
   return healthColumn;
 }
 
+/**
+ * Whether what a node is running is evidence that an app is NOT failed.
+ *
+ * A `failed` status is written by a deploy and never revisited. `a8ebb` has
+ * carried one for days while serving perfectly on the fleet: the deploy that set
+ * it really did fail — its Cloud Run revision could not start — and then the app
+ * moved and started working, and nothing said so. The dashboard shows it as
+ * down, because the list's `ready` is `status === 'live'`. 21 of 83 apps carry
+ * the flag today.
+ *
+ * The node's report is the ground truth, and it already arrives every few
+ * seconds, so the correction costs nothing extra.
+ *
+ * Absent health does not block it: a worker has no port, nobody asked, and
+ * requiring a probe would leave every worker-only app marked failed forever —
+ * the same mistake the nullable health field was introduced to end. An explicit
+ * `false` DOES block it: a web process that is up and answering nothing is not a
+ * working app, and clearing the flag there would hide a real outage.
+ */
+export function clearsFailedStatus(running: ProcessState[]): boolean {
+  if (running.length === 0) return false;
+  return !running.some((p) => p.healthy === false);
+}
+
 export async function recordNodeRunning(node: string, running: ProcessState[]): Promise<void> {
   await ensureHealthColumn();
   await getPool(DB).query(
@@ -382,6 +406,23 @@ export async function recordNodeRunning(node: string, running: ProcessState[]): 
             reported_at = now()`,
     [node, JSON.stringify(running)]
   );
+
+  // Correct a `failed` an app has outlived. Grouped by slug, because one app can
+  // report several processes and a single silent web process disqualifies the
+  // whole app — see clearsFailedStatus.
+  //
+  // Only `failed` is touched. `deploying` must not be overwritten: a node can be
+  // running the PREVIOUS image of an app whose new deploy is still building, and
+  // flipping that row to live would report the new deploy as finished.
+  const bySlug = new Map<string, ProcessState[]>();
+  for (const p of running) bySlug.set(p.slug, [...(bySlug.get(p.slug) ?? []), p]);
+  const recovered = [...bySlug.entries()].filter(([, ps]) => clearsFailedStatus(ps)).map(([s]) => s);
+  if (recovered.length) {
+    await getPool(DB).query(
+      `UPDATE apps SET status = 'live' WHERE slug = ANY($1::text[]) AND status = 'failed'`,
+      [recovered]
+    );
+  }
 }
 
 /**
