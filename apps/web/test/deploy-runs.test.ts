@@ -124,6 +124,40 @@ test("SKIP_JOB_IMAGE_CHECK=1 turns the refusal off without a deploy", async () =
   }
 });
 
+test("SKIP_JOB_IMAGE_CHECK accepts the obvious spellings of \"on\", not just \"1\"", async () => {
+  // Unlike BUILDER and the other lane flags, which are typed once into
+  // cloudbuild.yaml and left alone, this one is reached for BY HAND mid-incident
+  // by someone who does not have this file open. An exact match on "1" means
+  // "true" or "yes" silently does nothing, and the minutes lost finding that out
+  // are exactly the minutes this lever exists to save.
+  for (const value of ["1", "true", "TRUE", "yes", "Yes"]) {
+    process.env.SKIP_JOB_IMAGE_CHECK = value;
+    try {
+      await assert.doesNotReject(
+        () => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
+          jobImage: async () => "reg/supersonic/control-plane:old111",
+          serviceImage: async () => "reg/supersonic/control-plane:new222",
+        }),
+        `"${value}" should have turned the check off`,
+      );
+    } finally {
+      delete process.env.SKIP_JOB_IMAGE_CHECK;
+    }
+  }
+});
+
+test("SKIP_JOB_IMAGE_CHECK ignores a value that is not one of the accepted spellings", async () => {
+  process.env.SKIP_JOB_IMAGE_CHECK = "0";
+  try {
+    await assert.rejects(() => assertJobImageMatches("supersonic-deploy-job", "us-central1", {
+      jobImage: async () => "reg/supersonic/control-plane:old111",
+      serviceImage: async () => "reg/supersonic/control-plane:new222",
+    }));
+  } finally {
+    delete process.env.SKIP_JOB_IMAGE_CHECK;
+  }
+});
+
 test("the job and service are probed in the region passed in, not a default", async () => {
   // startDeployJob has a `region` in scope and, before this fix, passed only
   // `job` to assertJobImageMatches — so liveProbe re-derived the region from

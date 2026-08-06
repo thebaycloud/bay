@@ -473,10 +473,13 @@ function liveProbe(job: string, region: string): ImageProbe {
  * an API is having a bad minute.
  */
 export async function assertJobImageMatches(job: string, region: string, deps: ImageProbe = liveProbe(job, region)): Promise<void> {
-  // The switch-off, in the shape BUILDER and the other lane flags already use. A
-  // guard that can refuse every deploy has to be removable in one variable
-  // rather than in a revert and a build.
-  if (process.env.SKIP_JOB_IMAGE_CHECK === "1") return;
+  // The switch-off, in the shape BUILDER and the other lane flags already use —
+  // except looser about how "on" is spelled. Those are set once in
+  // cloudbuild.yaml and left alone; this one is reached for BY HAND, mid-incident,
+  // by someone who does not have this file open. Exact-match "1" means the
+  // obvious "true"/"yes" silently does nothing, and the minutes lost to that
+  // are exactly the minutes this lever exists to save.
+  if (/^(1|true|yes)$/i.test(process.env.SKIP_JOB_IMAGE_CHECK ?? "")) return;
   let jobRef: string, serviceRef: string;
   try {
     [jobRef, serviceRef] = await Promise.all([deps.jobImage(), deps.serviceImage()]);
