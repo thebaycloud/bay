@@ -7,6 +7,7 @@
     "apps/web/lib/app-config.ts",
     "apps/web/lib/db-address.ts",
     "apps/web/lib/detect.ts",
+    "apps/web/lib/dockerfile-context.ts",
     "apps/web/lib/infer-services.ts",
     "apps/web/lib/lanes.ts",
     "apps/web/lib/plan-deps.ts",
