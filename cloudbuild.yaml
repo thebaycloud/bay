@@ -257,7 +257,22 @@ substitutions:
   # comma and `p6mx8` becomes a malformed variable name — the second canary
   # would silently not exist, and every flag after it would shift. The same
   # escape is already used by gcloud.ts:368 and :696 for exactly this reason.
-  _LANE_ENV: ^~~^FLEET_APPS=i6xce,gzz9j~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
+  # FLEET_APPS was `i6xce,gzz9j` until 6 Aug and had been pointing at nothing for a
+  # day: both apps were deleted in the 5 Aug cleanup, so no deploy could reach the
+  # fleet through this list at all. Worth stating because the list looked healthy —
+  # two entries, both described at length above — and a canary list naming deleted
+  # apps is indistinguishable from one that works until somebody checks.
+  #
+  # `q6doa` is examples/shapes/plainweb, deployed for one purpose: the node now
+  # records how long it spends pulling an image and booting a sandbox
+  # (`fleet-pull`, `fleet-boot`), and nothing had exercised that path since it
+  # shipped. Those two numbers gate the decision between shrinking the image and
+  # precompiling the entry point, so they are measured before that work starts
+  # rather than after — see docs/superpowers/specs/2026-08-06-fastest-first-deploy-design.md.
+  #
+  # Ours, throwaway, and its downtime belongs to nobody, which is the same reason
+  # the entries it replaces were chosen.
+  _LANE_ENV: ^~~^FLEET_APPS=q6doa~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
   # passes whatever it likes. The default keeps a hand-run build from failing on an
