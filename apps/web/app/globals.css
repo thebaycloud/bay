@@ -611,7 +611,15 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .success-live .d { width: 6px; height: 6px; background: var(--live); animation: pulse 2.6s var(--ease) infinite; }
 .success .big { font-family: var(--mono); font-size: 24px; font-weight: 500; letter-spacing: -.02em; margin: 10px 0 4px; }
 .success .u { font-family: var(--mono); font-size: 13px; }
-.success .acts { display: flex; gap: 12px; justify-content: center; margin-top: 20px; }
+.success .acts { display: flex; gap: 12px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+
+/* The paste-ready fix on the failure screen. Left-aligned inside a centred
+   card because it is a block of text to be read and copied, not a headline —
+   and scrollable rather than wrapping, since a wrapped shell command is one a
+   person pastes and then has to repair. */
+.fixbox { border: 1px solid var(--line); background: var(--paper); margin-top: 18px; text-align: left; }
+.fixbox-h { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); padding: 9px 14px; border-bottom: 1px solid var(--line); }
+.fixbox-body { margin: 0; padding: 14px; max-height: 320px; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .detected { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .detected .chip { font-family: var(--mono); font-size: 11.5px; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line); padding: 3px 8px; }

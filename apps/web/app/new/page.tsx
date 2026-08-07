@@ -58,6 +58,9 @@ export default function NewApp() {
   const [liveUrl, setLiveUrl] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
+  const [fixPrompt, setFixPrompt] = useState("");
+  const [canUpgrade, setCanUpgrade] = useState(false);
+  const [fixCopied, setFixCopied] = useState(false);
   const [paywall, setPaywall] = useState<PaywallReason | null>(null);
   const [isStatic, setIsStatic] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -71,6 +74,9 @@ export default function NewApp() {
   function reset() {
     setPhase("idle"); setLogs([]); setDetected(null); setSecretsNeeded([]); setSecretVals({});
     setDetectMeta(null); setSlug(""); setLiveUrl(""); setElapsed(0); setError("");
+    // Cleared with everything else, or the previous failure's fix is still on
+    // screen underneath the next attempt's logs.
+    setFixPrompt(""); setCanUpgrade(false); setFixCopied(false);
   }
 
   const repoArg = () => (door === "github" ? `github.com/${repo}` : repo);
@@ -106,6 +112,9 @@ export default function NewApp() {
 
   async function runDeploy(secrets: Record<string, string>) {
     setPhase("deploying"); setLogs([]); setDetected(null); setLiveUrl(""); setError(""); setElapsed(0);
+    // A retry that keeps the last attempt's fix would show a fix for an error
+    // the user is no longer looking at.
+    setFixPrompt(""); setCanUpgrade(false);
     const t0 = performance.now();
     if (timer.current) clearInterval(timer.current);
     timer.current = setInterval(() => setElapsed(Math.floor((performance.now() - t0) / 1000)), 250);
@@ -143,7 +152,25 @@ export default function NewApp() {
           else if (ev.type === "log") setLogs((l) => [...l, ev.line]);
           else if (ev.type === "detected") setDetected(ev.stack);
           else if (ev.type === "done") { setLiveUrl(ev.url); setSlug(ev.slug); setPhase("done"); }
-          else if (ev.type === "error") { setError(ev.message); setPhase("error"); }
+          // A failed deploy carries more than a message. `fixPrompt` is a
+          // paste-ready brief for the user's own coding agent, written by the
+          // server on every failure and — until now — dropped on the floor
+          // here: this branch read `ev.message` and ignored the other two
+          // fields entirely. That made the dashboard's failure screen a dead
+          // end while the CLI, hitting its own endpoint, showed the fix.
+          //
+          // It is the free plan's headline feature, so the person it failed was
+          // whoever deployed from the web and had it not work — the first
+          // experience a new account is likely to have.
+          else if (ev.type === "error") {
+            setError(ev.message);
+            setFixPrompt(typeof ev.fixPrompt === "string" ? ev.fixPrompt : "");
+            // `upgrade` is set when the repair agent was declined by a plan
+            // limit rather than by the failure itself — a spent free fix, or a
+            // month's auto-fix runs used up.
+            setCanUpgrade(Boolean(ev.upgrade));
+            setPhase("error");
+          }
         }
       }
     } catch (e) {
@@ -333,7 +360,37 @@ export default function NewApp() {
               <div className="success" style={{ borderColor: "var(--ink-2)" }}>
                 <span className="fix-badge">DEPLOY FAILED</span>
                 <div className="u muted" style={{ marginTop: 12, maxWidth: "56ch", marginInline: "auto" }}>{error}</div>
+                {/* The fix, when the server wrote one. Shown in full rather than
+                    behind a disclosure: it is meant to be read once and pasted,
+                    and a person who has just watched a deploy fail should not
+                    have to find it. */}
+                {fixPrompt && (
+                  <div className="fixbox">
+                    <div className="fixbox-h">Hand this to your coding agent</div>
+                    <pre className="fixbox-body">{fixPrompt}</pre>
+                  </div>
+                )}
                 <div className="acts">
+                  {fixPrompt && (
+                    <button
+                      className="btn primary"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(fixPrompt);
+                        setFixCopied(true);
+                        setTimeout(() => setFixCopied(false), 2000);
+                      }}
+                    >
+                      <Copy size={13} />{fixCopied ? "Copied" : "Copy the fix"}
+                    </button>
+                  )}
+                  {/* Only where a PLAN decided this, not where the build simply
+                      broke. Offering an upgrade for a failure money cannot fix
+                      is the kind of prompt that reads as a shakedown. */}
+                  {canUpgrade && (
+                    <button className="btn" onClick={() => setPaywall("fix_used")}>
+                      Have us fix it instead
+                    </button>
+                  )}
                   <button className="btn" onClick={reset}><RotateCcw size={13} />Start over</button>
                 </div>
               </div>
