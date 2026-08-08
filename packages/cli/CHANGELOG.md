@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.0
+
+**`ship` is the word now. `deploy` is an alias and always will be.**
+
+`supersonic ship` is the act of sending your work out — it is what people
+say, and it leaves "deploy" to mean the thing sysadmins do. `deploy` keeps
+working, unchanged, forever: it is typed by every existing user and written
+into every agent prompt and script that already exists, so it is not
+deprecated, not warned about, and not going anywhere. `reship` joins
+`redeploy` on the same terms.
+
+**A flag `ship` does not understand now stops it.**
+
+It used to be dropped in silence and the deploy went ahead anyway, so a
+single typo — `--drt-run` — reserved a slug, uploaded a folder and created
+an app nobody asked for. Found by doing exactly that by accident. The cost
+lands hardest on agents: a person sees a stray app appear, an agent reads
+"deploying — your app will be live at" and reports success for something it
+never requested.
+
 ## 0.11.0
 
 **`--dev-cmd`, `--dev-port` and `--no-preview` are gone, and the link they were

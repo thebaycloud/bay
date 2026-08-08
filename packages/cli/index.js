@@ -502,13 +502,40 @@ async function check(args) {
  */
 const REMOVED_DEPLOY_FLAGS = ["dev-cmd", "dev-port", "no-preview"];
 
+/**
+ * Every flag `ship` understands.
+ *
+ * `parse()` accepts anything that starts with `--`, which is fine for a command
+ * that only reads. It is not fine for this one: a typo'd flag was silently
+ * dropped and the deploy went ahead anyway, so `--drt-run` reserved a slug,
+ * uploaded a folder and created an app. Found by doing exactly that by accident
+ * while testing the alias below.
+ *
+ * The cost lands on agents hardest. A person sees the app appear; an agent reads
+ * "deploying — your app will be live at" and reports success for the thing it did
+ * not ask for.
+ */
+const SHIP_FLAGS = ["run", "wait", "no-env", "github", "repo", "prebuilt", "json", "help"];
+
 async function deploy(args) {
+  if (args.help) return usage(true);
   const removed = REMOVED_DEPLOY_FLAGS.filter((f) => args[f] !== undefined);
   if (removed.length) {
     die(
       `${removed.map((f) => "--" + f).join(", ")} ${removed.length > 1 ? "were" : "was"} removed in 0.11.0.\n` +
-      "  Nothing needs to run on your machine any more: the URL is live the moment you deploy\n" +
-      "  and shows the build itself, then becomes your app. Drop the flag and deploy."
+      "  Nothing needs to run on your machine any more: the URL is live the moment you ship\n" +
+      "  and shows the build itself, then becomes your app. Drop the flag and ship."
+    );
+  }
+  const unknown = Object.keys(args).filter(
+    (k) => k !== "_" && k !== "_raw" && k !== "_cmd" && !SHIP_FLAGS.includes(k),
+  );
+  if (unknown.length) {
+    die(
+      `${unknown.map((f) => "--" + f).join(", ")} ${unknown.length > 1 ? "are not flags" : "is not a flag"} ` +
+      `supersonic ship understands.\n` +
+      `  It takes: ${SHIP_FLAGS.map((f) => "--" + f).join(", ")}\n` +
+      "  Nothing was shipped. Fix the flag and run it again."
     );
   }
   // One command: sign in automatically the first time, then deploy. No separate
@@ -1061,10 +1088,11 @@ function usage(all = false) {
     print(`${bold("supersonic")} — publish your app in one command
 
 ${bold("just run this in your project folder:")}
-  ${green("supersonic deploy")}          publish this folder and print the live URL
-                             (opens a browser to sign in the first time)
+  ${green("supersonic ship")}            publish this folder and print the live URL
+                             (opens a browser to sign in the first time;
+                              ${dim("`deploy` is the same command")})
 
-${bold("before you deploy")} ${dim("(local, ~2s, no cloud)")}
+${bold("before you ship")} ${dim("(local, ~2s, no cloud)")}
   supersonic init            write a draft supersonic.json from this repo
   supersonic check           what each phase would run, and what would fail
 
@@ -1090,15 +1118,16 @@ ${bold("author")} ${dim("(local: no cloud, no build, no model — about two seco
   supersonic init [dir] [--force]               write a DRAFT supersonic.json for an agent to correct
   supersonic check [dir]                        resolve + validate it, and print what each phase would run
 
-${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the background)")}
-  supersonic deploy                             deploy this folder — live URL now, build behind it
-  supersonic deploy --run "<prod start cmd>"    how to run it in PROD — you know the stack
+${bold("ship")} ${dim("(URL-first: a live link in ~0.1s, the build drawn on it while it runs)")}
+  supersonic ship                               ship this folder — live URL now, build behind it
+  ${dim("(`deploy` does the same thing and always will — every flag below works with either)")}
+  supersonic ship --run "<prod start cmd>"    how to run it in PROD — you know the stack
                                                   e.g. --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
-  supersonic deploy --wait                      stay attached and stream the build (default: returns once live)
-  supersonic deploy --no-env                    don't carry .env up (default: sets vars your app doesn't have yet)
-  supersonic deploy --github [--repo <url>]     deploy from GitHub / a git URL instead
-  supersonic deploy --prebuilt                  old path: build here, upload the result
-  supersonic redeploy <app>                     rebuild from the app's source
+  supersonic ship --wait                      stay attached and stream the build (default: returns once live)
+  supersonic ship --no-env                    don't carry .env up (default: sets vars your app doesn't have yet)
+  supersonic ship --github [--repo <url>]     deploy from GitHub / a git URL instead
+  supersonic ship --prebuilt                  old path: build here, upload the result
+  supersonic reship <app>                       rebuild from the app's source
   supersonic patch <app>                        the repair agent's fix, to pipe into git apply
   supersonic rollback <app>                     roll back to the previous revision
 
@@ -1135,7 +1164,16 @@ function parse(argv) {
   return args;
 }
 
-const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, init, check, deploy, redeploy, "__deploy-worker": deployWorker };
+/**
+ * `ship` is the word; `deploy` is the alias, and it is permanent.
+ *
+ * The product language calls the act of sending your work out `ship` — it is
+ * what people say, and it leaves `deploy` free to mean the thing sysadmins do.
+ * But `deploy` is typed by every existing user and written into every agent
+ * prompt, README and script that already exists, so it does not get deprecated,
+ * warned about, or removed. Two words, one command, forever.
+ */
+const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, init, check, ship: deploy, deploy, reship: redeploy, redeploy, "__deploy-worker": deployWorker };
 
 (async () => {
   const [, , cmd, ...rest] = process.argv;

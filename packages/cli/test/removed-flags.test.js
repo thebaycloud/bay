@@ -7,8 +7,8 @@ const CLI = path.join(__dirname, "..", "index.js");
 
 function deployWith(...flags) {
   try {
-    execFileSync(process.execPath, [CLI, "deploy", ...flags], { encoding: "utf8", stdio: "pipe" });
-    return { code: 0, out: "" };
+    const out = execFileSync(process.execPath, [CLI, "deploy", ...flags], { encoding: "utf8", stdio: "pipe" });
+    return { code: 0, out: String(out ?? "") };
   } catch (e) {
     return { code: e.status, out: String(e.stderr ?? "") + String(e.stdout ?? "") };
   }
@@ -32,4 +32,22 @@ test("the failure happens before anything reaches the network", () => {
   // which is the only way an agent gets a usable message rather than an auth wall.
   const { out } = deployWith("--dev-cmd", "x");
   assert.equal(/sign in|login|unauthor/i.test(out), false);
+});
+
+test("a flag ship does not understand stops it, rather than being ignored", () => {
+  // Found the hard way: `parse()` takes anything starting with `--`, so a typo
+  // was dropped and the deploy went ahead — reserving a slug, uploading a folder
+  // and creating an app nobody asked for. An agent reads "deploying — your app
+  // will be live at" and reports success for the thing it did not request.
+  const { code, out } = deployWith("--drt-run");
+  assert.equal(code, 1);
+  assert.match(out, /--drt-run is not a flag/);
+  assert.match(out, /Nothing was shipped/);
+});
+
+test("the flags ship does understand still work", () => {
+  // The guard must not become the reason a real flag stops working.
+  const { out } = deployWith("--help");
+  assert.match(out, /supersonic ship/);
+  assert.equal(/is not a flag/.test(out), false);
 });
