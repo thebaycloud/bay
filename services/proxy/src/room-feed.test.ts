@@ -85,3 +85,43 @@ test("quiet is rarer than the ordinary gap between build lines", async () => {
   assert.ok(ms > 8_000, `quiet at ${ms}ms trips inside the measured p90 gap of 8s`);
   assert.ok(ms >= 15_000, `quiet at ${ms}ms is too eager for a 2.9s median line rate`);
 });
+
+// Both found by classifying a real 26-line deploy of a Python app with a
+// database — the first build long enough and varied enough to exercise the
+// whole grammar. Neither was visible on the shorter Node deploys.
+test("a finished image is a build, not the app starting", () => {
+  // `built` is not matched by /\bbuild/ — buil+t against buil+d — so this line
+  // fell through to `boot` on the word "deployed" later in it, and the most
+  // consequential line in a deploy was drawn as the app coming up.
+  assert.equal(
+    classify('Built sha256:27108542e866… — deployed by digest, so "the new version" is a fact rather than a tag.'),
+    "build",
+  );
+});
+
+test("planning is working out what this is, not starting it", () => {
+  // A bare `ready` in the boot test caught "Plan ready".
+  assert.equal(classify("Plan ready: supersonic.json"), "detect");
+  assert.equal(classify("Using supersonic.json — no planning needed"), "detect");
+  assert.equal(classify("planner picked the fast lane"), "detect");
+  // And the app actually answering is still boot.
+  assert.equal(classify("Live at izuvx.supersonic.cv"), "boot");
+  assert.equal(classify("verifying the app responds…"), "boot");
+});
+
+test("a database-backed deploy fills the room rather than the fallback", () => {
+  // The real sequence, in order. Nine of these ten used to be generic walks.
+  const real = [
+    ["Unpacking your project…", "unpack"],
+    ["Detecting stack…", "detect"],
+    ["Detected Flask · Python (90%)", "detect"],
+    ["Provision postgres (via psycopg)", "provision"],
+    ["Provisioning Postgres…", "provision"],
+    ["Database isolated — this app connects as app_izuvx", "provision"],
+    ["Deploying izuvx to the fleet…", "boot"],
+    ["release runs on the node, before the app starts", "release"],
+    ["Building with layer cache (buildkit)", "build"],
+    ["Live at izuvx.supersonic.cv", "boot"],
+  ] as const;
+  for (const [line, kind] of real) assert.equal(classify(line), kind, line);
+});

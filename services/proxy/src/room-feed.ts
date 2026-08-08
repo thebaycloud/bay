@@ -60,12 +60,6 @@ export interface RoomStep {
  * a minute is a slideshow. The lines arrive at the speed of the build, which is
  * the speed the room wants.
  *
- * This is interpretation, and interpretation is allowed — the count of movements
- * still equals the count of real lines. What is not allowed is inventing a line.
- */
-/**
- * Which kind of movement a build line is.
- *
  * ORDER IS THE WHOLE THING. These tests are not disjoint — "Building an image on
  * node 24" contains both `building` and `image`, and the first version checked
  * `image` first, so the single most important line in a deploy was drawn as a
@@ -89,9 +83,19 @@ export function classify(line: string): StepKind {
   // …@ sha256" is the base image arriving.
   if (/\bbase pinned\b|\bpulling\b|\bdownloading\b/.test(l)) return "pull";
   if (/\bprepar/.test(l)) return "prepare";
-  if (/\bbuild|\bcompil|\bbundl|\bvite\b|\btsc\b/.test(l)) return "build";
+  // Planning is part of working out what this app is, not part of starting it.
+  // `plan` covers "Plan ready", "planner …" and "no planning needed" — 44 lines
+  // of the corpus that used to fall through to a generic walk.
+  if (/\bplan/.test(l)) return "detect";
+  // `built` is NOT matched by /\bbuild/ — the word is buil+t, and the regex wants
+  // buil+d. So the line announcing a finished image fell through to `boot` on the
+  // strength of the word "deployed" later in it, and the most consequential line
+  // in the build was drawn as the app starting.
+  if (/\bbuild|\bbuilt\b|\bcompil|\bbundl|\bvite\b|\btsc\b/.test(l)) return "build";
   if (/\brelease\b/.test(l)) return "release";
-  if (/\bdeploy|\brevision\b|\bverifying\b|\blive\b|\blisten|\bserving\b|\bready\b/.test(l)) return "boot";
+  // No bare `ready`: "Plan ready" is not an app coming up, and it is handled
+  // above. What belongs here is the app itself answering.
+  if (/\bdeploy|\brevision\b|\bverifying\b|\blive\b|\blisten|\bserving\b/.test(l)) return "boot";
   return "work";
 }
 
