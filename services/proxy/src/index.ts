@@ -4,6 +4,7 @@ import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./regis
 import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "./pages";
 import { pageRoom } from "./room-page";
 import { serveRoomEvents } from "./room";
+import { xray } from "./xray";
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
@@ -75,6 +76,19 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // working app having a bad moment, which is not what either of these is.
     if (action.page === "failed") return html(res, 503, pageFailed(slug, action.reason));
     return html(res, 503, pageStalled(slug));
+  }
+
+  // The x-ray's numbers. Owner-only, and answered here rather than forwarded,
+  // so a visitor cannot learn that the path means anything: to anyone who is not
+  // the owner this is an ordinary request and the app answers it however it
+  // likes — including with its own /_xray, if it has one.
+  if ((req.url ?? "/") === "/_xray") {
+    const viewer = await readVisitor(req);
+    if (viewer && viewer.userId === app.owner_id) {
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(xray(slug)));
+      return;
+    }
   }
 
   // Which service gets this request. One-service apps have no routes and land on
