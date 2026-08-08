@@ -204,19 +204,33 @@ function paint(now){
   }
 }
 
+function arrive(){
+  if (world.opened) return;
+  world.opened = true;
+  // The reload happens behind the light, so the swap to the real app is not a
+  // flash of white — it is the door finishing its swing.
+  setTimeout(function(){ location.reload(); }, 260);
+}
+
 function frame(now){
   nextAction(now);
   if (world.opening) world.opening += 0.02;
   paint(now);
-  if (world.opening >= 1 && !world.opened){
-    world.opened = true;
-    // The reload happens behind the light, so the swap to the real app is not a
-    // flash of white — it is the door finishing its swing.
-    setTimeout(function(){ location.reload(); }, 260);
-  }
+  if (world.opening >= 1) arrive();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// A hidden tab does not get animation frames at all, so everything above stops:
+// the door never finishes swinging and the reload that rides on it never fires.
+// Someone who sent themselves the link and switched away would come back to a
+// room frozen mid-open, with their app live behind it the whole time.
+//
+// Nobody is watching a hidden tab, so there is no animation to protect. If the
+// app opened while we were away, just be the app.
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible' && world.opening) arrive();
+});
 
 // ---- the feed ----
 function say(msg){ hintEl.innerHTML = msg; }
