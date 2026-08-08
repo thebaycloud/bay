@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.11.0
+
+**`--dev-cmd`, `--dev-port` and `--no-preview` are gone, and the link they were
+for is better without them.**
+
+Those flags ran your app locally and tunnelled your public URL to it while the
+real build ran, so the address showed something instead of a placeholder. What
+the address shows now is the room: the build itself, drawn, live, at the app's
+own URL — for you and for anyone you send the link to. It needs nothing running
+on your machine, works the same for every stack, and turns into the app the
+moment it first answers.
+
+Passing the removed flags is now an unknown-flag error rather than a silent
+no-op, so a script still passing them says so instead of quietly changing
+behaviour.
+
+One thing the tunnel got wrong goes with it. A redeploy flips an app back to
+"deploying", and an open tunnel outranked the published build for that whole
+window — visitors to a working app were sent to a laptop mid-edit. A landed
+build is now served whatever the status says.
+
 ## 0.10.1
 
 **`env set` and `env unset` stop announcing a rollout that is not happening.**

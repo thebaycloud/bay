@@ -491,14 +491,32 @@ async function check(args) {
   if (problems.length) process.exit(1);
 }
 
+/**
+ * Flags that used to run the app on this machine and tunnel the public URL to it.
+ *
+ * Named rather than ignored. `parse()` accepts any `--flag` it is handed, so a
+ * removed one would be swallowed in silence — and the caller would go on believing
+ * a preview was being served from their laptop while the address showed something
+ * else entirely. Silence is the wrong answer to "I asked for a thing you no longer
+ * do", especially for the agents that make up most of the callers here.
+ */
+const REMOVED_DEPLOY_FLAGS = ["dev-cmd", "dev-port", "no-preview"];
+
 async function deploy(args) {
+  const removed = REMOVED_DEPLOY_FLAGS.filter((f) => args[f] !== undefined);
+  if (removed.length) {
+    die(
+      `${removed.map((f) => "--" + f).join(", ")} ${removed.length > 1 ? "were" : "was"} removed in 0.11.0.\n` +
+      "  Nothing needs to run on your machine any more: the URL is live the moment you deploy\n" +
+      "  and shows the build itself, then becomes your app. Drop the flag and deploy."
+    );
+  }
   // One command: sign in automatically the first time, then deploy. No separate
   // `supersonic login` step required.
   await ensureAuth();
-  // URL-first by default: a live link appears in ~0.1s (a "deploying…" page, or a
-  // live preview tunnelled to the dev server when one can be started) while the
-  // real build runs on the server. `--prebuilt` opts back into the old build-here-
-  // and-upload path for a project that has no server side to preview.
+  // URL-first by default: a live link appears in ~0.1s — the address answers with
+  // the room, which draws the build as it happens — while the real build runs on
+  // the server. `--prebuilt` opts back into the old build-here-and-upload path.
   if (!args.prebuilt) return urlFirstDeploy(args);
   // GitHub / a git URL is a pickable option — the default is straight from this folder.
   if (args.github || args.repo) {
@@ -540,11 +558,10 @@ async function deploy(args) {
 /**
  * URL-first deploy — a live URL in ~0.1s, the real build behind it. The default.
  *
- * Reserve the slug → print the URL (already live: a "deploying…" page for any
- * stack, or a live preview if a dev server can be started) → run the real build on
- * the server → the proxy serves the build on the same URL when it lands. The tunnel
- * preview is best-effort (reliable for Node's `npm run dev`); when it can't start
- * one, the URL is still live instantly with the deploying page. No stack is blocked.
+ * Reserve the slug → print the URL, which is already live and showing the room →
+ * run the real build on the server → the same URL becomes the app when it lands.
+ * Every stack gets the same thing; nothing has to run locally for the link to be
+ * worth sending to somebody.
  */
 async function urlFirstDeploy(args) {
   let repo = args.repo;
@@ -567,7 +584,7 @@ async function urlFirstDeploy(args) {
   // background worker that keeps the deploy connection open (the server keeps
   // building, CPU allocated, until it lands) and logs to
   // ~/.supersonic/deploys/<slug>.log. Pass --wait to stay attached and stream the
-  // build here instead (keeps the live-preview tunnel up the whole time).
+  // build here instead.
   if (!args.wait) {
     const logDir = path.join(CFG_DIR, "deploys");
     fs.mkdirSync(logDir, { recursive: true });
@@ -581,43 +598,16 @@ async function urlFirstDeploy(args) {
         ...process.env,
         SS_BG_SLUG: slug, SS_BG_URL: url, SS_BG_REPO: repo || "",
         SS_BG_FOLDER: folderName,
-        SS_BG_DEVCMD: args["dev-cmd"] || "", SS_BG_DEVPORT: args["dev-port"] || "",
         SS_BG_NOENV: args["no-env"] ? "1" : "",
-        SS_BG_NOPREVIEW: args["no-preview"] ? "1" : "",
         SS_BG_RUN: args["run"] || "",
       },
     });
     child.unref();
     // Say — in the foreground, where the agent actually sees it — what the link
-    // shows while the build runs. A live preview needs a way to run the app
-    // locally; without one the URL is a "building…" page until the real build lands.
-    const hasDevCmd = !!(args["dev-cmd"] || args["dev-port"]);
-    let hasDevScript = false;
-    try { hasDevScript = !!((JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")).scripts) || {}).dev; } catch { /* not a node app */ }
-    if (args["no-preview"]) {
-      // Said, rather than left to be inferred from silence — and said instead of
-      // "starting a live preview", which this branch used to print even when the
-      // flag had just turned the preview off.
-      print(dim("  no live preview (--no-preview) — nothing will run in this folder"));
-    } else if (hasDevCmd || hasDevScript) {
-      print(dim("  starting a live preview at that URL now; the real build swaps in when ready"));
-      // Name the command that is about to run in THIS folder. The preview is a
-      // process in the user's checkout, and on a fresh one it installs first —
-      // which on 1 Aug wrote a package-lock.json into a bun project and rewrote a
-      // tracked generated file, two minutes after the command had returned, with
-      // nothing on screen to connect the two.
-      if (!hasDevCmd && !args["no-preview"]) {
-        try {
-          const { packageManager } = require("./lib/tunnel");
-          const pm = packageManager(process.cwd());
-          const fresh = !fs.existsSync(path.join(process.cwd(), "node_modules"));
-          print(dim("  it runs ") + bold(fresh ? `${pm.install} && ${pm.dev}` : pm.dev) + dim(" here — ") + bold("--no-preview") + dim(" to skip"));
-        } catch { /* not a node project after all */ }
-      }
-    } else {
-      print("  " + bold("no live preview") + dim(" — the link shows a “building…” page until the build finishes (~1–2 min)."));
-      print(dim("  for an instant preview, redeploy with ") + bold('--dev-cmd "<how to run your app>"'));
-    }
+    // shows while the build runs. It is not a placeholder any more: the address
+    // answers with the room, which draws the build as it happens and turns into
+    // the app the moment it first responds.
+    print(dim("  the link is live now — it shows the build, and becomes your app when it comes up"));
     // Said here, not in the worker's log, because this is the only output the agent
     // that ran the deploy will read. Names only — the values must never reach a log.
     if (!args["no-env"]) {
@@ -679,13 +669,14 @@ function ownedHere() {
 }
 
 /**
- * Steps 2–3 of a URL-first deploy: bring up the live-preview tunnel, kick off the
- * real build on the server, and stream it to completion. Runs either in the
- * foreground (`--wait`) or inside the detached background worker.
+ * Steps 2–3 of a URL-first deploy: kick off the real build on the server and
+ * stream it to completion. Runs either in the foreground (`--wait`) or inside
+ * the detached background worker.
+ *
+ * The address is already live while this runs — it was reserved in step 1 and
+ * the edge answers it with the room, which draws the build as it happens.
  */
 async function runBuildAndWait({ slug, url, repo, folderName, args }) {
-  const { startDevServer, openTunnel } = require("./lib/tunnel");
-
   // Keep a local copy of the build output whichever path this is.
   //
   // The log file used to be written only by the detached worker, because that is
@@ -694,36 +685,6 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
   // `supersonic logs` then reads from the server and shows the RUNNING app's logs,
   // which for a failed deploy is nothing at all.
   startDeployLog(slug);
-
-  // Live preview: tunnel the URL to a dev server. The agent supplies how to run it
-  // (--dev-cmd / --dev-port) for any stack; a Node `dev` script we start ourselves.
-  // Until it's up the URL shows the deploying page, never a dead link.
-  // Announced only once there is something to announce. Said up front, it was
-  // immediately contradicted by the very next line on every project without a dev
-  // server — the CLI promising a preview and retracting it one line later.
-  // --no-preview: do not run anything in the user's folder. The preview is a
-  // convenience; a process writing to someone's checkout is not one they should
-  // be unable to decline.
-  const { proc, port } = args["no-preview"]
-    ? { proc: null, port: null }
-    : await startDevServer(process.cwd(), { devCmd: args["dev-cmd"], devPort: args["dev-port"] });
-  if (port) info(dim("  bringing up a live preview at that URL…"));
-  const tunnelWs = process.env.SUPERSONIC_TUNNEL_WS || `wss://${slug}.supersonic.cv/_tunnel`;
-  let ws = null;
-  if (port) {
-    ws = openTunnel({
-      wsUrl: tunnelWs, slug, token: token(), devHost: "127.0.0.1", devPort: port,
-      onOpen: () => info(green("● ") + "live preview at " + bold(url) + dim(" — go do your thing")),
-      onClose: (code) => { if (code === 1008) info(red("preview tunnel rejected — token/ownership")); },
-    });
-  } else {
-    info(dim("  (no dev server — pass --dev-cmd \"<how to run your app>\" for an instant live preview)"));
-  }
-  const cleanup = () => { try { ws && ws.close(); } catch { /* */ } try { proc && proc.kill(); } catch { /* */ } };
-  // consumeDeploy exits the process on the terminal event, so guarantee the dev
-  // server / tunnel are torn down however this process ends.
-  process.on("exit", cleanup);
-  process.on("SIGINT", () => { cleanup(); process.exit(0); });
 
   // The app's own secrets, from the project's local .env. They ride the deploy request
   // rather than the tarball, so they land on the first revision — an app that needs an
@@ -791,10 +752,7 @@ async function deployWorker() {
     repo: process.env.SS_BG_REPO || "",
     folderName: process.env.SS_BG_FOLDER || "app",
     args: {
-      "dev-cmd": process.env.SS_BG_DEVCMD || undefined,
-      "dev-port": process.env.SS_BG_DEVPORT || undefined,
       "no-env": process.env.SS_BG_NOENV === "1" || undefined,
-      "no-preview": process.env.SS_BG_NOPREVIEW === "1" || undefined,
       _: [],
     },
   });
@@ -1134,10 +1092,6 @@ ${bold("author")} ${dim("(local: no cloud, no build, no model — about two seco
 
 ${bold("deploy")} ${dim("(URL-first: a live link in ~0.1s, real build in the background)")}
   supersonic deploy                             deploy this folder — live URL now, build behind it
-  supersonic deploy --dev-cmd "<run in dev>"    tunnel the URL to your app live while it builds
-  supersonic deploy --no-preview                never run anything in this folder
-                                                  e.g. --dev-cmd "uvicorn main:app --port 8000"
-  supersonic deploy --dev-port <n>              tunnel to a dev server you already started
   supersonic deploy --run "<prod start cmd>"    how to run it in PROD — you know the stack
                                                   e.g. --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
   supersonic deploy --wait                      stay attached and stream the build (default: returns once live)

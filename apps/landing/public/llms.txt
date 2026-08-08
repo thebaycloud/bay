@@ -12,17 +12,14 @@ From the project's root folder:
 
 Then deploy, and WAIT for the answer:
 
-    # 1. Work out how to run THIS app in dev mode from its stack — you know how:
-    #      FastAPI → uvicorn main:app --port 8000     Flask → flask run --port 8000
-    #      Vite/Next/Node → npm run dev                Go → go run .   Rails → bin/rails s
-    # 2. Work out the PRODUCTION run command too — how it should run once deployed,
+    # 1. Work out the PRODUCTION run command — how the app should run once deployed,
     #    binding 0.0.0.0 and the $PORT the platform injects:
     #      FastAPI → uvicorn main:app --host 0.0.0.0 --port $PORT
     #      Flask   → gunicorn app:app --bind 0.0.0.0:$PORT
     #      Django  → gunicorn <proj>.wsgi --bind 0.0.0.0:$PORT
     #      Next    → next start        Node/Express → node server.js (must read process.env.PORT)
-    # 3. Pass both. Supersonic reserves the URL, tunnels the dev server live instantly,
-    #    and runs the app in production with --run when the real build is ready.
+    # 2. Pass it with --run. Supersonic reserves the URL immediately — the address is
+    #    live and shows the build happening — and runs the app there when it is ready.
     supersonic deploy --wait
 
 Supersonic reads the repo itself and works out how to install, build, and run the app —
@@ -30,12 +27,10 @@ including the production run command (Python, Node, static SPAs, and databases a
 handled). You do NOT need to tell it how to run the app; `supersonic deploy --wait` with
 no other flags is the normal path.
 
-Two optional flags, only if you want them:
+One optional flag, only if you want it:
 - `--run "<production command>"` — an OVERRIDE. Pass it only if you know a quirk the
   platform can't infer (an unusual monorepo entrypoint, a custom server). When present it
   wins; when absent Supersonic decides. Example: `--run "uvicorn main:app --host 0.0.0.0 --port $PORT"`.
-- `--dev-cmd "<how to run in dev>"` — powers the instant live preview (the tunnel). Pass
-  it when you can; it doesn't affect the deployed app.
 
 `supersonic deploy`:
 
@@ -79,8 +74,7 @@ what it is and where to get it.
 
 ## CLI commands
 
-- `supersonic deploy --dev-cmd "<how to run in dev>"` — URL-first: live link now, tunnelled to the app, real build behind it (auto sign-in the first time)
-- `supersonic deploy --dev-port <n>` — same, tunnel to a dev server you already started
+- `supersonic deploy` — URL-first: the live link now, showing the build as it happens; the real build lands on the same URL (auto sign-in the first time)
 - `supersonic deploy --github [--repo <url>]` — publish from a git URL instead
 - `supersonic deploy --prebuilt` — build locally and upload the result (old path)
 - `supersonic apps` — list the user's apps
