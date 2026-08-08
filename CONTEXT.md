@@ -6,7 +6,22 @@ implementation details, no decisions, no plans. Those live in `docs/`.
 Started 2026-08-06, during the grilling that opened the move from Cloud Run to
 the fleet. Terms are added the moment they are resolved, not in batches.
 
-## Language
+## Two vocabularies
+
+There are two, and they do not mix.
+
+**Platform language** is what the code, the tables and the logs say. It is precise
+and it is ours. It never appears in front of a person — not in a page, not in a
+CLI line, not in an error.
+
+**Product language** is what a person reads. Every word in it is one a ten-year-old
+already knows. That is not decoration: the words are also what a model learns us
+by, so a short, plain, self-describing vocabulary is the interface, not the skin.
+
+A term that appears in both lists means the same thing in both. A platform term
+with no product counterpart is a term a person should never encounter.
+
+## Platform language
 
 **Fleet**:
 The Compute Engine VMs that run users' apps, taken together. The canonical word
@@ -29,11 +44,69 @@ _Avoid_: assignment, scheduling, allocation.
 One thing an app runs — `web`, `worker`, `cron`, `release`. An app has one or
 more. Distinct from a container: two processes can share an image.
 _Avoid_: service (that word belongs to Cloud Run), job, task.
+Has no product counterpart. A person never reads this word.
 
 **Deploy target**:
 Where an app's processes end up running. Today there are two — the **Fleet**, and
 Cloud Run. Naming the concept is what makes "which one" a decision rather than
 an assumption.
+Has no product counterpart.
+
+## Product language
+
+**App**:
+The thing a person made. The only word for it.
+_Avoid_: project, site, service, workload, deploy target.
+
+**Room**:
+Where a person watches their app get built, at the app's own address, before the
+app has ever answered. Every movement in it stands for a real event; a room that
+animates without something having happened is a lie.
+_Avoid_: build page, loading screen, progress page, preview.
+
+**Open**:
+The moment the **Room** becomes the app. Not a transition between two pages — the
+same address, now answering for itself.
+_Avoid_: launch, go live, cut over, promote, handover.
+
+**Door**:
+A way into an app from outside.
+_Avoid_: route, endpoint, path, ingress.
+
+**Shadow**:
+A copy of an app that is given the same real traffic and answers nobody. Exists
+so a change can be watched before it is real.
+_Avoid_: canary, blue-green, preview environment, staging.
+
+**X-ray**:
+The layer a person can bring up over their own live app to see what it is doing.
+Visible to the owner, never to a visitor.
+_Avoid_: dashboard, console, overlay, panel, devtools, observability.
+
+**Secrets**:
+The only thing that cannot be written in the code.
+_Avoid_: environment variables, config, settings.
+
+**Timeline**:
+Every version of an app, in order, walkable. Moving along it is **rewind**;
+going back to a version that worked is **undo**.
+_Avoid_: releases, revisions, deployments, history, rollback.
+
+**Ship**:
+What a person does when they send their work out. The act.
+_Avoid_: deploy (as a noun in front of a person), publish, push, release.
+
+**Build**:
+One attempt at shipping. Has a beginning, an end and an outcome.
+_Avoid_: deployment, run, job, revision.
+
+**What happened**:
+Everything an app did, in one place, for a person and for an agent to read.
+_Avoid_: logs, metrics, traces, telemetry, events.
+
+**Who's here**:
+The people in an app right now.
+_Avoid_: analytics, sessions, active users, presence.
 
 ## Terms being retired
 
@@ -51,10 +124,14 @@ it in the meantime.
 - A **Node** holds many **Placements**
 - A **Placement** names one app on one **Node**
 - An app runs one or more **Processes**
+- An **App** has a **Timeline** of **Builds**
+- An **App** has one **Room**, until it **opens** for the first time
+- An **App** may have a **Shadow**
 
-## Flagged ambiguities
+## Resolved ambiguities
 
-- **"Deploy"** is used for two things: the act a user performs (`supersonic
-  deploy`) and one attempt at it recorded in `deploy_stages`. The second is
-  bounded by a `run_id`. Not yet resolved — flagged so the next person who needs
-  the distinction names it rather than guessing.
+- **"Deploy"** named two things: the act a person performs and one attempt at it
+  recorded in `deploy_stages`. Resolved 2026-08-08 by splitting them in product
+  language: the act is **ship**, one attempt is a **build**. `deploy` survives as
+  a CLI alias for `ship` and throughout platform language, where the `run_id`
+  bound already makes the second meaning unambiguous.
