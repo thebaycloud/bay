@@ -6,6 +6,7 @@ import { isCloudRunTarget } from "./upstream";
 import { config } from "./config";
 import { injectOverlay, isHtmlDocument, hasOverlay } from "./inject";
 import { page502 } from "./pages";
+import { record } from "./xray";
 
 export async function forward(
   req: IncomingMessage,
@@ -62,6 +63,29 @@ export async function forward(
 
   const doRequest = target.protocol === "https:" ? httpsRequest : httpRequest;
 
+  // What the x-ray panel is made of. Measured here because this is the one place
+  // that sees every request to every hosted app — the owner instruments nothing.
+  //
+  // The clock starts before the upstream call and stops when the response is
+  // finished, so it is the number the visitor actually waited, not the app's own
+  // idea of how fast it was.
+  const startedAt = Date.now();
+  let measured = false;
+  const measure = (status: number) => {
+    if (measured) return;
+    measured = true;
+    record(inject?.slug ?? "", {
+      url: req.url ?? "/",
+      status,
+      ms: Date.now() - startedAt,
+      // Identity only where the platform already knows it. On a public app the
+      // visitor is anonymous here and stays anonymous in the panel; the fallback
+      // key is per-connection so two anonymous people are two people.
+      who: visitor.email ?? "",
+      anonId: String(req.socket?.remotePort ?? Math.random()),
+    });
+  };
+
   await new Promise<void>((resolve) => {
     // This proxy fronts every hosted app, so an unhandled stream 'error' would
     // not fail one request — it would take the process down for every tenant.
@@ -92,6 +116,7 @@ export async function forward(
             headers["content-length"] = String(buf.length);
             res.writeHead(upRes.statusCode ?? 502, headers);
             res.end(buf);
+            measure(upRes.statusCode ?? 502);
             done();
           });
           upRes.on("error", (e) => {
@@ -104,7 +129,7 @@ export async function forward(
 
         res.writeHead(upRes.statusCode ?? 502, headers);
         upRes.pipe(res);
-        upRes.on("end", done);
+        upRes.on("end", () => { measure(upRes.statusCode ?? 502); done(); });
         upRes.on("error", (e) => {
           console.error("upstream response error", e);
           res.destroy();
@@ -121,6 +146,9 @@ export async function forward(
       // opened a link deserves to be told which of their apps is down.
       if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
       res.end(page502(inject?.slug ?? ""));
+      // An app that will not answer is the single most useful thing the panel can
+      // show, so a failed forward is recorded exactly like a slow one.
+      measure(502);
       done();
     });
 
