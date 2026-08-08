@@ -119,6 +119,35 @@ export async function stepsAfter(runId: string, afterId: number, limit = 40): Pr
   }
 }
 
+/**
+ * The end of a run, for someone who has just walked in.
+ *
+ * A room opened at minute nine of a build starts empty otherwise, which reads as
+ * "nothing is happening" when a great deal has. This is the backlog, and it is
+ * the tail rather than the head for the same reason a log is: the interesting
+ * part of a build in progress is where it has got to.
+ */
+export async function tailSteps(runId: string, limit = 30): Promise<StepPage> {
+  try {
+    const r = await db().query(
+      `SELECT id, event FROM (
+         SELECT id, event FROM deploy_events WHERE run_id = $1 ORDER BY id DESC LIMIT $2
+       ) t ORDER BY id`,
+      [runId, limit],
+    );
+    let cursor = 0;
+    const steps: RoomStep[] = [];
+    for (const row of r.rows as Array<{ id: string | number; event: Record<string, unknown> }>) {
+      cursor = Number(row.id);
+      const step = stepOf(cursor, row.event ?? {});
+      if (step) steps.push(step);
+    }
+    return { steps, cursor };
+  } catch {
+    return { steps: [], cursor: 0 };
+  }
+}
+
 /** Strip what a guest must not read. */
 export function forGuest(steps: RoomStep[]): RoomStep[] {
   return steps.map(({ id, kind }) => ({ id, kind }));
