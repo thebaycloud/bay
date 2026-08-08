@@ -1,5 +1,5 @@
-import { Pool } from "pg";
 import { createHash } from "node:crypto";
+import { db } from "./db";
 import { parseRoutes, type Route } from "./routes";
 
 export interface AppRow {
@@ -60,16 +60,6 @@ function remember(slug: string, row: AppRow | null): void {
     if (oldest !== undefined) cache.delete(oldest);
   }
   cache.set(slug, { row, at: Date.now() });
-}
-
-let pool: Pool | null = null;
-function db(): Pool {
-  if (pool) return pool;
-  const connectionName = process.env.PG_CONN ?? "supersonic-deploy-prod:us-central1:supersonic-shared-pg";
-  pool = process.env.K_SERVICE
-    ? new Pool({ host: `/cloudsql/${connectionName}`, user: process.env.PG_USER ?? "postgres", password: process.env.PG_PASSWORD, database: "supersonic_platform", max: 5 })
-    : new Pool({ host: "127.0.0.1", port: 5433, user: process.env.PG_USER ?? "postgres", password: process.env.PG_PASSWORD, database: "supersonic_platform", max: 5 });
-  return pool;
 }
 
 export async function lookupApp(slug: string): Promise<AppRow | null> {
