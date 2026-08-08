@@ -60,3 +60,24 @@ test("only real HTML documents are decorated", () => {
   assert.equal(isHtmlDocument("application/json"), false);
   assert.equal(isHtmlDocument(undefined), false);
 });
+
+test("the panel is defined once and used in both places", async () => {
+  // It started inside the overlay, which covers every app that serves HTML and
+  // no app that does not. Now it is also a page at /_xray, and both import the
+  // same source — two copies would drift within a week, and the one that drifted
+  // would be the one nobody was looking at.
+  const { XRAY_JS } = await import("./xray-panel");
+  const { xrayPage } = await import("./xray-page");
+  assert.ok(XRAY_JS.includes("function drawXray"), "the panel's code lives in the shared module");
+  const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
+  assert.ok(overlay.includes("function drawXray"), "the overlay uses it");
+  assert.ok(xrayPage("q6doa").includes("function drawXray"), "the page uses it");
+});
+
+test("the standalone page is self-contained and reads its own origin", async () => {
+  const { xrayPage } = await import("./xray-page");
+  const page = xrayPage("q6doa");
+  assert.equal(/src\s*=\s*["']https?:/.test(page), false, "no third-party host");
+  assert.ok(page.includes("fetch('/_xray'"), "reads its own origin");
+  assert.doesNotThrow(() => new Function(/<script>([\s\S]*)<\/script>/.exec(page)![1]));
+});

@@ -5,6 +5,7 @@ import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "
 import { pageRoom } from "./room-page";
 import { serveRoomEvents } from "./room";
 import { xray } from "./xray";
+import { xrayPage } from "./xray-page";
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
@@ -85,6 +86,12 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if ((req.url ?? "/") === "/_xray") {
     const viewer = await readVisitor(req);
     if (viewer && viewer.userId === app.owner_id) {
+      // One address, two readers. A browser asking for a page gets the panel —
+      // which is the only x-ray an API-shaped app can have, since there is no
+      // HTML of its own to inject into. Anything else gets the numbers.
+      if (/text\/html/i.test(String(req.headers.accept ?? ""))) {
+        return html(res, 200, xrayPage(slug));
+      }
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify(xray(slug)));
       return;
