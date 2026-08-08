@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
 import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./registry";
-import { page403, page404, pageGate, pageBuilding, pageFailed, pageStalled, pageNoWeb } from "./pages";
+import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "./pages";
+import { pageRoom } from "./room-page";
+import { serveRoomEvents } from "./room";
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
@@ -55,16 +57,36 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     now: Date.now(),
   });
   if ("page" in action) {
-    if (action.page === "building") return html(res, 200, pageBuilding(slug));
-    // 503, not 200 and not 502. A URL with nothing behind it must not answer OK —
-    // monitoring reads that as healthy and an agent reads it as shipped — and 502
-    // ("deployed but not answering") describes a working app having a bad moment,
-    // which is not what either of these is.
-    if (action.page === "failed") return html(res, 503, pageFailed(slug, action.reason));
     // 404, not 503. The app is healthy; this URL just does not exist for it.
     // A 5xx here says the platform is broken, which is what it said about a
-    // working bot for two days.
+    // working bot for two days. Checked before the room, because an app that
+    // deployed fine as a worker was never being born — there is nothing to watch.
     if (action.page === "noweb") return html(res, 404, pageNoWeb(slug));
+
+    // The room. An app that has never once come up gets it, whatever state the
+    // deploy is in — building, failed, or stopped — because for that app all
+    // three are the same event: it is still being born and the owner is watching.
+    // `run_url` is the test: it is set on the first successful build and never
+    // cleared, so it means "has this address ever answered for itself". Once it
+    // has, the plain pages below take over and the room is never shown again.
+    if (!app.run_url) {
+      // Read even on a public app, where the request path skips the session
+      // entirely: the room shows real build lines to the owner and withholds
+      // them from everyone else, so it has to know which one this is.
+      const visitor = await readVisitor(req);
+      const owner = !!visitor && visitor.userId === app.owner_id;
+      if ((req.url ?? "/").startsWith("/_room/events")) return serveRoomEvents(req, res, { slug, owner });
+      // Same page, different status. A build in progress is a 200 as it always
+      // was; a URL whose deploy failed or stopped must not answer OK — monitoring
+      // reads that as healthy and an agent reads it as shipped. The visitor sees
+      // the same room either way, which is the honest picture; the status line is
+      // for the machines.
+      return html(res, action.page === "building" ? 200 : 503, pageRoom(slug, { owner }));
+    }
+
+    // 503, not 200 and not 502. 502 ("deployed but not answering") describes a
+    // working app having a bad moment, which is not what either of these is.
+    if (action.page === "failed") return html(res, 503, pageFailed(slug, action.reason));
     return html(res, 503, pageStalled(slug));
   }
 

@@ -61,17 +61,6 @@ export function page502(slug: string): string {
 <p><code>${escapeHtml(slug)}</code> is deployed but not answering right now.</p>`);
 }
 
-/** Shown at a reserved URL that has neither a build nor a tunnel yet. Reloads
- *  itself, so it becomes the live app the moment either appears. */
-export function pageBuilding(slug: string): string {
-  // The refresh goes through `shell`'s head slot. Prepending a second
-  // `<!doctype html><meta charset>` in front of a document that already opens
-  // with both emitted two doctypes on every deploying page.
-  return shell("Deploying…", `<h1>🚀 Deploying <code>${escapeHtml(slug)}</code></h1>
-<p>Your app is going live — this page updates itself. Hang tight.</p>`,
-    "", `<meta http-equiv="refresh" content="3">`);
-}
-
 /**
  * Shown when the deploy failed.
  *
