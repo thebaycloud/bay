@@ -284,8 +284,17 @@ es.onmessage = function(ev){
   }
   if (m.t === 'broke'){
     world.smoke = 1; world.act = 'idle';
+    // No "try again" button here, and it is not an omission. A deploy's request
+    // — the app's secrets included — lives in one deploy_runs row, and finishRun
+    // DELETES that row and the encrypted source the moment the build ends, so a
+    // secret is only readable for the length of one build. Verified against
+    // production: zero rows, including for every failed app. Retrying from the
+    // server would mean keeping somebody's secrets around on the chance they
+    // press a button. The command below re-sends them from the machine that owns
+    // them, which is the whole design.
     if (OWNER) say('This build stopped.' + (m.reason ? ' ' + escapeText(m.reason) : '') +
-                   '<br>Ship it again from the folder: <code>supersonic deploy</code>');
+                   '<br>Ship it again from the folder: <code>supersonic deploy</code>' +
+                   '<br>The full log: <code>supersonic logs ' + escapeText(SLUG) + '</code>');
     else say('This app is still being built. Nothing to see yet.');
     return;
   }
