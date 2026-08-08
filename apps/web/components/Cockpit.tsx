@@ -5,7 +5,7 @@ import { signOut } from "next-auth/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown, LayoutGrid, Database, HardDrive, Server, Copy,
-  ArrowUpRight, Check, Lock, AlertTriangle, Settings2, GitBranch, Users, X, LogOut,
+  ArrowUpRight, Check, Lock, AlertTriangle, Settings2, Users, X, LogOut,
 } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { ThemeToggle } from "./ThemeToggle";
@@ -14,7 +14,6 @@ import { StoragePanel } from "./StoragePanel";
 import { JobsPanel } from "./JobsPanel";
 import { IssuesPanel } from "./IssuesPanel";
 import { SettingsSection } from "./SettingsSection";
-import { DeploymentsSection } from "./DeploymentsSection";
 
 interface ServiceInfo {
   slug: string; name: string; url: string; ready: boolean; region: string;
@@ -23,13 +22,12 @@ interface ServiceInfo {
   workers?: { name: string; ready: boolean }[];
 }
 
-type Tab = "overview" | "issues" | "data" | "deployments" | "settings";
+type Tab = "overview" | "issues" | "data" | "settings";
 
 const tabs: { id: Tab; icon: typeof LayoutGrid; label: string }[] = [
   { id: "overview", icon: LayoutGrid, label: "Overview" },
   { id: "issues", icon: AlertTriangle, label: "Issues" },
   { id: "data", icon: Database, label: "Data" },
-  { id: "deployments", icon: GitBranch, label: "Deployments" },
   { id: "settings", icon: Settings2, label: "Settings" },
 ];
 
@@ -97,7 +95,8 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
       .then((w) => setFetchedWorkers(w?.workers ?? []))
       .catch(() => setFetchedWorkers([]));
   }, []);
-  // Deep-link: /apps/<slug>?tab=deployments (used by the dashboard's Building card).
+  // Deep-link: /apps/<slug>?tab=data — an unknown tab is ignored, which is what
+  // now happens to the ?tab=deployments links the dashboard used to make.
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
     if (t && tabs.some((x) => x.id === t)) setTab(t as Tab);
@@ -284,12 +283,6 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
                 <DatabasePanel slug={appName} hasDb={hasDb} />
                 <StoragePanel slug={appName} hasStorage={hasStorage} />
                 <JobsPanel slug={appName} />
-              </section>
-            )}
-
-            {tab === "deployments" && (
-              <section className="section-page reveal">
-                <DeploymentsSection slug={appName} repo={d.repo} />
               </section>
             )}
 

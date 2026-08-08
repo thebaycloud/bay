@@ -460,9 +460,9 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                   <span className="nm">{a.name || a.slug}</span>
                   <span className="st fail"><span className="d" />Deploy failed</span>
                   <div className="head-acts">
-                    <Link className="row-btn primary" href={`/apps/${a.slug}?tab=deployments`}>
-                      <Rocket size={13} />Fix and redeploy
-                    </Link>
+                    <a className="row-btn primary" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">
+                      <Rocket size={13} />See what happened
+                    </a>
                     <Link className="row-btn" href={`/apps/${a.slug}?tab=settings`}>
                       <SlidersHorizontal size={13} />Settings
                     </Link>
@@ -478,9 +478,9 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
             </article>
           ) : a.status === "building" ? (
             <article key={a.slug} className="shelf-row building">
-              <Link href={`/apps/${a.slug}?tab=deployments`} className="shelf-preview" aria-label={`${a.name || a.slug} — deployments`}>
+              <a href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer" className="shelf-preview" aria-label={`${a.name || a.slug} — watch it build`}>
                 <div className="thumb"><span className="thumb-build">◐</span></div>
-              </Link>
+              </a>
               <div className="shelf-main">
                 <div className="shelf-head">
                   <span className="nm">{a.name || a.slug}</span>
@@ -488,9 +488,9 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                       says "deploying…", the thumbnail is a spinner, and the word
                       in the corner was a third telling of the same fact. */}
                   <div className="head-acts">
-                    <Link className="row-btn primary" href={`/apps/${a.slug}?tab=deployments`}>
-                      <Rocket size={13} />Watch deploy
-                    </Link>
+                    <a className="row-btn primary" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">
+                      <Rocket size={13} />Watch it build
+                    </a>
                   </div>
                 </div>
                 <div className="shelf-host">{a.stage}</div>
@@ -592,7 +592,6 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                 */}
                 <div className="shelf-actions">
                   <div className="seg">
-                    <Link className="act" href={`/apps/${a.slug}?tab=deployments`}><Rocket size={13} />Deployments</Link>
                     <Link className="act" href={`/apps/${a.slug}?tab=issues`}><TriangleAlert size={13} />Issues</Link>
                     <Link className="act" href={`/apps/${a.slug}?tab=settings`}><SlidersHorizontal size={13} />Settings</Link>
                   </div>

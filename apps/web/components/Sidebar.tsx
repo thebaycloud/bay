@@ -189,7 +189,7 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
           */}
           <div className={"dep-stack" + (fleet.building.length > 1 ? " many" : "")}>
           {fleet.building.slice(0, 4).map((b) => (
-            <Link key={b.slug} className="dep-strip" href={`/apps/${b.slug}?tab=deployments`}>
+            <a key={b.slug} className="dep-strip" href={`https://${b.slug}.supersonic.cv`} target="_blank" rel="noreferrer">
               <div className="ds-top">
                 <span className="ds-nm">{b.name || b.slug}</span>
                 <Loader2 size={13} className="spin" />
@@ -198,7 +198,7 @@ export function Sidebar({ active, apps: initialApps }: { active?: "apps" | "sett
               {/* Indeterminate on purpose: the pipeline reports stages, not a
                   percentage, and a bar that invents one is a lie that ticks. */}
               <div className="ds-bar"><span /></div>
-            </Link>
+            </a>
           ))}
           </div>
           {fleet.building.length > 4 && (
