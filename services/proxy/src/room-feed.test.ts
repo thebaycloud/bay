@@ -53,3 +53,15 @@ test("a guest gets the movement and never the words", () => {
   assert.equal(JSON.stringify(seen).includes("secret-project"), false);
   assert.equal(JSON.stringify(seen).includes(".env"), false);
 });
+
+test("quiet is rarer than the ordinary gap between build lines", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./room.ts", import.meta.url), "utf8");
+  const ms = Number(/const QUIET_AFTER_MS = ([\d_]+)/.exec(src)?.[1].replace(/_/g, ""));
+  // Measured over 7,556 gaps in production deploy_events: p50 2.9s, p90 8.0s.
+  // A threshold at or under p90 fires during healthy builds, and a message that
+  // appears during normal work stops meaning anything. It must clear p90 with
+  // room to spare — the tail it exists for (cold start) is minutes, not seconds.
+  assert.ok(ms > 8_000, `quiet at ${ms}ms trips inside the measured p90 gap of 8s`);
+  assert.ok(ms >= 15_000, `quiet at ${ms}ms is too eager for a 2.9s median line rate`);
+});

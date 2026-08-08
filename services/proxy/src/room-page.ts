@@ -250,7 +250,7 @@ es.onmessage = function(ev){
     // Said out loud rather than animated over. The long silence at the start of a
     // deploy is the job's own cold start, and pretending otherwise is the one
     // thing this page is not allowed to do.
-    say('Waiting — nothing has happened for a few seconds.');
+    say('Waiting — the build has not said anything for a while.');
     return;
   }
   if (m.t === 'broke'){

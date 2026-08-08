@@ -44,13 +44,23 @@ const TICK_MS = 700;
 /**
  * Silence long enough to be worth admitting to.
  *
- * The first 104 seconds of a deploy are the job's own cold start — a 892 MB image
- * pull and a Node boot — and the build has not emitted a line yet because the
- * build has not started. The room must not fill that with invented motion, so it
- * says it is waiting. This is also the number that makes the wait visible to
- * everyone the link was sent to, which is the honest pressure to shorten it.
+ * What this is for: the first ~104 seconds of a deploy are the job's own cold
+ * start — a 892 MB image pull and a Node boot — and no line has been emitted
+ * because the build has not started. The room must not fill that with invented
+ * motion, so it says it is waiting, which also makes the wait visible to everyone
+ * the link was sent to.
+ *
+ * The number is measured, not chosen. Across 7,556 gaps between consecutive build
+ * lines in `deploy_events`: p50 2.9s, p75 and p90 both 8.0s, p99 52.6s. At the 6s
+ * this started as, **40% of the gaps in a perfectly healthy build** would trip it
+ * — the room would spend most of a normal deploy announcing that nothing was
+ * happening, between lines arriving every three seconds. At 20s it trips on 2.3%,
+ * which is the tail that actually is dead air.
+ *
+ * If build output ever gets chattier or quieter, re-measure rather than adjust by
+ * feel: the whole value of the message is that it is rare and true.
  */
-const QUIET_AFTER_MS = 6_000;
+const QUIET_AFTER_MS = 20_000;
 
 function send(w: Watcher, payload: unknown): boolean {
   try {
