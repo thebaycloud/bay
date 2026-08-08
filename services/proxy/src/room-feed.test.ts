@@ -2,29 +2,49 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classify, stepOf, forGuest, type RoomStep } from "./room-feed";
 
-test("a build line becomes the movement it describes", () => {
-  assert.equal(classify("Pulling image supersonic/runner:latest"), "pull");
-  assert.equal(classify("added 214 packages in 9s"), "deps");
-  assert.equal(classify("vite v5.4.2 building for production..."), "build");
-  assert.equal(classify("Listening on port 8080"), "boot");
+// Every line below is a real one, taken from production `deploy_events`, with
+// its observed frequency. The first version of classify() was written against
+// imagined npm/docker output and put almost all of these in "work".
+test("the pipeline's own vocabulary maps to movements", () => {
+  assert.equal(classify("Unpacking your project…"), "unpack");                       // 89
+  assert.equal(classify("Detecting stack…"), "detect");                              // 90
+  assert.equal(classify("Detected Node · JavaScript (60%)"), "detect");              // 51
+  assert.equal(classify("preparing…"), "prepare");                                   // 185
+  assert.equal(classify("building…"), "build");                                      // 589
+  assert.equal(classify("building api…"), "build");                                  // 53
+  assert.equal(classify("Provisioning Postgres…"), "provision");                     // 45
+  assert.equal(classify("deploying…"), "boot");                                      // 144
+  assert.equal(classify("verifying the app responds…"), "boot");                     // 27
+  assert.equal(classify("release runs on the node, before the app starts"), "release"); // 44
+});
+
+test("a build is not a download, however much it talks about images", () => {
+  // The defect this replaced: `image` was tested before `build`, so the single
+  // most important line in a deploy was drawn as a download.
+  assert.equal(classify("Building an image on node 24 — platform default."), "build");
+  assert.equal(classify("Building with layer cache (buildkit) — the first build warms it"), "build");
+  // And the line that IS the base image arriving still reads as one.
+  assert.equal(classify("Base pinned to us-central1-docker.pkg.dev/…/node:24 @ sha256:934240a…"), "pull");
+});
+
+test("the repair agent is its own actor, not a build step", () => {
+  // `agent` is the second most common opening word in the whole table (368).
+  assert.equal(classify("agent: rebuilding after the fix"), "repair");
+  assert.equal(classify("Repair agent taking over"), "repair");
+  // Even when its line also says "build", which several of them do.
+  assert.equal(classify("agent is retrying the build"), "repair");
 });
 
 test("a line that says nothing recognisable is still a movement", () => {
-  // The room's rule is one real line, one movement. An unclassifiable line is
-  // still something that happened, so it moves the agent — it just moves them
-  // generically rather than being dropped.
-  assert.equal(classify("â”€â”€â”€â”€â”€â”€â”€"), "work");
+  // One real line, one movement. An unclassifiable line still happened, so it
+  // moves the agent — it just moves them generically rather than being dropped.
   assert.equal(classify("some tool nobody has heard of says hello"), "work");
-});
-
-test("classification reads the whole line, not its first word", () => {
-  assert.equal(classify("RUN npm ci --omit=dev"), "deps");
-  assert.equal(classify("Step 4/9 : COPY . ."), "work");
+  assert.equal(classify("Private by default — anyone opening this link has to sign in."), "work");
 });
 
 test("only events that happened on screen become steps", () => {
-  assert.deepEqual(stepOf(7, { type: "log", line: "added 3 packages" }), {
-    id: 7, kind: "deps", text: "added 3 packages",
+  assert.deepEqual(stepOf(7, { type: "log", line: "building…" }), {
+    id: 7, kind: "build", text: "building…",
   });
   assert.deepEqual(stepOf(8, { type: "error", message: "exit code 1" }), {
     id: 8, kind: "broke", text: "exit code 1",
@@ -42,11 +62,11 @@ test("a blank line is not a movement", () => {
 
 test("a guest gets the movement and never the words", () => {
   const steps: RoomStep[] = [
-    { id: 1, kind: "deps", text: "npm ERR! /Users/someone/secret-project/src/keys.ts" },
+    { id: 1, kind: "prepare", text: "npm ERR! /Users/someone/secret-project/src/keys.ts" },
     { id: 2, kind: "broke", text: "Error: ENOENT /home/build/app/.env.production" },
   ];
   const seen = forGuest(steps);
-  assert.deepEqual(seen, [{ id: 1, kind: "deps" }, { id: 2, kind: "broke" }]);
+  assert.deepEqual(seen, [{ id: 1, kind: "prepare" }, { id: 2, kind: "broke" }]);
   // The count is preserved: a guest sees the same amount of work happening.
   assert.equal(seen.length, steps.length);
   // And nothing carries text through by another name.

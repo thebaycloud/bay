@@ -37,3 +37,23 @@ test("nothing in the page animates on a timer alone", () => {
   const enqueueCalls = html.match(/enqueue\(/g) ?? [];
   assert.equal(enqueueCalls.length, 2); // the definition, and the one call site
 });
+
+test("the page's script actually parses as JavaScript", () => {
+  // The client script lives inside a String.raw template, so to TypeScript it is
+  // just text — a stray backtick in a comment silently ends the template and the
+  // rest becomes garbage. That happened while writing this file, and nothing in
+  // tsc or the type system noticed. Parsing it here is the only check that would.
+  const html = pageRoom("q6doa", { owner: true });
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
+  assert.ok(script && script.length > 500, "no script found in the page");
+  assert.doesNotThrow(() => new Function(script as string), "the room's script does not parse");
+});
+
+test("the room draws every kind the feed can send", () => {
+  // A kind with no branch in the renderer is a real line that produces no visible
+  // movement, which breaks the one-line-one-movement promise silently.
+  const html = pageRoom("q6doa", { owner: true });
+  for (const kind of ["unpack", "detect", "prepare", "build", "pull", "provision", "release", "boot", "repair", "work", "broke"]) {
+    assert.ok(html.includes("'" + kind + "'"), `the renderer never mentions ${kind}`);
+  }
+});

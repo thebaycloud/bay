@@ -93,6 +93,8 @@ var world = {
   x: 40, dir: 1, phase: 0,          // the agent
   act: 'idle', actUntil: 0,         // what they are doing
   boxes: 0, crates: 0, lamp: 0.25,  // what the room has accumulated
+  db: 0,                            // a provisioned database, once there is one
+  helper: 0,                        // the repair agent, once it has taken over
   smoke: 0, quiet: false, opening: 0, opened: false,
   watching: 1
 };
@@ -115,10 +117,15 @@ function nextAction(now){
   var pace = queue.length > 40 ? 110 : queue.length > 12 ? 220 : 420;
   world.act = step.kind;
   world.actUntil = now + pace;
-  if (step.kind === 'deps')  world.boxes  = Math.min(world.boxes + 1, 14);
-  if (step.kind === 'pull')  world.crates = Math.min(world.crates + 1, 6);
-  if (step.kind === 'boot')  world.lamp = Math.min(world.lamp + 0.12, 1);
-  if (step.kind === 'broke') world.smoke = 1;
+  if (step.kind === 'prepare')   world.boxes  = Math.min(world.boxes + 1, 14);
+  if (step.kind === 'unpack')    world.crates = Math.min(world.crates + 1, 6);
+  if (step.kind === 'pull')      world.crates = Math.min(world.crates + 1, 6);
+  if (step.kind === 'provision') world.db = 1;
+  if (step.kind === 'boot')      world.lamp = Math.min(world.lamp + 0.12, 1);
+  if (step.kind === 'broke')     world.smoke = 1;
+  // The repair agent arriving is the one thing that clears the smoke: it is the
+  // moment the room stops being a failure and starts being a rescue.
+  if (step.kind === 'repair')  { world.helper = 1; world.smoke = 0; }
   if (step.text && OWNER) { lineEl.textContent = step.text; }
 }
 
@@ -164,13 +171,25 @@ function paint(now){
     g.fillRect(0,0,160,90);
   }
 
-  // the agent
+  // a provisioned database, standing where it was put
+  if (world.db){
+    g.fillStyle = P.trim; g.fillRect(74,44,12,20);
+    g.fillStyle = P.go;   g.fillRect(76,46,8,3);
+    g.fillStyle = P.dim;  g.fillRect(76,52,8,2); g.fillRect(76,57,8,2);
+  }
+
+  // the agent. Each kind of line sends them somewhere: the shelf for
+  // dependencies, the doorway for a release, the lamp when the app comes up.
   var a = world.act, bob = Math.sin(t*6) * (a==='idle'||world.quiet ? 0.6 : 1.4);
-  if (a === 'deps')  world.x += (118 - world.x) * 0.08;
-  else if (a === 'pull')  world.x += (18 - world.x) * 0.08;
-  else if (a === 'build') world.x += (68 - world.x) * 0.08;
-  else if (a === 'boot')  world.x += (26 - world.x) * 0.08;
-  else if (a === 'work')  world.x += Math.sin(t*1.7) * 0.7;
+  if (a === 'prepare')        world.x += (118 - world.x) * 0.08;
+  else if (a === 'unpack')    world.x += (18 - world.x) * 0.08;
+  else if (a === 'pull')      world.x += (12 - world.x) * 0.08;
+  else if (a === 'build')     world.x += (68 - world.x) * 0.08;
+  else if (a === 'provision') world.x += (80 - world.x) * 0.08;
+  else if (a === 'release')   world.x += (120 - world.x) * 0.08;
+  else if (a === 'boot')      world.x += (26 - world.x) * 0.08;
+  else if (a === 'detect')    world.x += Math.sin(t*2.3) * 1.1;
+  else if (a === 'work')      world.x += Math.sin(t*1.7) * 0.7;
   world.x = Math.max(8, Math.min(140, world.x));
 
   var ax = Math.round(world.x), ay = Math.round(50 + bob);
@@ -182,8 +201,18 @@ function paint(now){
     g.fillRect(ax+6, ay+1+sw, 3, 2);
     g.fillStyle = P.trim; g.fillRect(64,58,14,6);  // bench
   }
-  if (a === 'pull' && world.crates){              // carrying
+  if ((a === 'pull' || a === 'unpack') && world.crates){   // carrying something in
     g.fillStyle = P.trim; g.fillRect(ax+6, ay, 6, 6);
+  }
+
+  // The repair agent. A second figure, in the platform's own green rather than
+  // white, so it reads as somebody else having turned up — which is exactly what
+  // has happened. Its lines are the second most common opener in a deploy.
+  if (world.helper){
+    var hx = Math.round(world.x) - 14 + Math.round(Math.sin(t*2)*2);
+    g.fillStyle = P.go;
+    g.fillRect(hx, ay + 1, 6, 8);
+    g.fillRect(hx + 1, ay - 4, 4, 4);
   }
 
   // smoke, when it broke

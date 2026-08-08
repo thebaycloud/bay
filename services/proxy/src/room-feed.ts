@@ -14,8 +14,28 @@ import { db } from "./db";
  * a second reader of a log that exists rather than a new pipe out of the build.
  */
 
-/** What a step looks like on screen. Not a stage name — a thing the agent does. */
-export type StepKind = "pull" | "deps" | "build" | "boot" | "work" | "broke";
+/**
+ * What a step looks like on screen. Not a stage name — a thing that happens in
+ * the room.
+ *
+ * The list is drawn from what this pipeline actually says, counted over the
+ * 8,140 events in `deploy_events`, not from what a build is imagined to say. The
+ * first version of this module guessed at `npm install` and `docker pull` output
+ * and was nearly useless against the real thing, which narrates in prose written
+ * for people: "Unpacking your project…", "Detecting stack…", "Plan ready".
+ */
+export type StepKind =
+  | "unpack"    // the source arrives — "Unpacking your project…" (89)
+  | "detect"    // working out what this is — "Detecting stack…" (90), "Detected Node · JavaScript" (51)
+  | "prepare"   // dependencies — "preparing…" (185)
+  | "build"     // "building…" (589), "building api…", "Building with layer cache"
+  | "pull"      // the base image — "Base pinned to …node:24 @ sha256…" (39)
+  | "provision" // a database or bucket appears — "Provisioning Postgres…" (45)
+  | "release"   // "release runs on the node, before the app starts" (44)
+  | "boot"      // "deploying…" (144), "Creating Revision…", "verifying the app responds…"
+  | "repair"    // the repair agent takes over — `agent …` is the SECOND most common opener (368)
+  | "work"      // something happened that none of the above describes
+  | "broke";
 
 export interface RoomStep {
   /** The `deploy_events` id. Also the cursor to resume from. */
@@ -43,12 +63,35 @@ export interface RoomStep {
  * This is interpretation, and interpretation is allowed — the count of movements
  * still equals the count of real lines. What is not allowed is inventing a line.
  */
+/**
+ * Which kind of movement a build line is.
+ *
+ * ORDER IS THE WHOLE THING. These tests are not disjoint — "Building an image on
+ * node 24" contains both `building` and `image`, and the first version checked
+ * `image` first, so the single most important line in a deploy was drawn as a
+ * download. The most specific claim wins, and the frequencies above decide what
+ * "specific" means here.
+ *
+ * Interpretation is allowed; invention is not. Every branch below maps one real
+ * line to one movement, and the count of movements still equals the count of
+ * real lines. When the pipeline's wording changes, re-count and rewrite this —
+ * that is cheaper than it looks and it is the only thing keeping the room honest.
+ */
 export function classify(line: string): StepKind {
   const l = line.toLowerCase();
-  if (/\b(pull|pulling|download|downloading|layer|image)\b/.test(l)) return "pull";
-  if (/\b(npm|pnpm|yarn|pip|poetry|bundle|go mod|cargo|install|installing|added \d|packages)\b/.test(l)) return "deps";
-  if (/\b(build|building|compil|bundl|webpack|vite|tsc|transpil)\b/.test(l)) return "build";
-  if (/\b(start|starting|listen|listening|boot|booting|ready|serving|health)\b/.test(l)) return "boot";
+  // The repair agent, before anything else: its lines describe another actor
+  // entirely, and several of them also contain "build".
+  if (/^agent\b|repair agent|\bagent (took|takes|is|has)\b/.test(l)) return "repair";
+  if (/\bunpack/.test(l)) return "unpack";
+  if (/\bdetect/.test(l)) return "detect";
+  if (/\bprovision|\bdatabase\b|\bpostgres\b|\bbucket\b/.test(l)) return "provision";
+  // Before `build`: "Building with layer cache" is a build, but "Base pinned to
+  // …@ sha256" is the base image arriving.
+  if (/\bbase pinned\b|\bpulling\b|\bdownloading\b/.test(l)) return "pull";
+  if (/\bprepar/.test(l)) return "prepare";
+  if (/\bbuild|\bcompil|\bbundl|\bvite\b|\btsc\b/.test(l)) return "build";
+  if (/\brelease\b/.test(l)) return "release";
+  if (/\bdeploy|\brevision\b|\bverifying\b|\blive\b|\blisten|\bserving\b|\bready\b/.test(l)) return "boot";
   return "work";
 }
 
