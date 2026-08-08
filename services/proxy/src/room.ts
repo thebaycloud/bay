@@ -137,7 +137,6 @@ async function tick(slug: string): Promise<void> {
   if (!app) return;
   const action = decideEdge({
     buildLive: !!app.run_url,
-    tunnelUp: false,
     status: app.status,
     deploy: app.deploy,
     hasWeb: app.has_web,

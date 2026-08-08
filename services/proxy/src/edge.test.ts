@@ -7,27 +7,30 @@ const at = (msAgo: number) => NOW - msAgo;
 
 function edge(over: Partial<EdgeInput> = {}) {
   return decideEdge({
-    buildLive: false, tunnelUp: false, status: "deploying",
+    buildLive: false, status: "deploying",
     deploy: { status: "building", error: null, updatedAt: at(5_000) },
     now: NOW,
     ...over,
   });
 }
 
-test("a landed build outranks a preview tunnel of it", () => {
-  // The tunnel is the live preview of a deploy in flight, and `--wait` holds it
-  // open for the whole build. Once the build has landed, visitors must get the
-  // build — not whatever the developer's laptop is still serving.
-  assert.deepEqual(edge({ status: "live", buildLive: true, tunnelUp: true }), { serve: "build" });
-  assert.deepEqual(edge({ status: "live", buildLive: true, tunnelUp: false }), { serve: "build" });
+test("a landed build is served, whatever the status says", () => {
+  assert.deepEqual(edge({ status: "live", buildLive: true }), { serve: "build" });
 });
 
-test("during a deploy the tunnel still wins — that is what it is for", () => {
-  // A redeploy flips status back to 'deploying', which is exactly the window in
-  // which the preview should show the code being deployed rather than the
-  // previous release.
-  assert.deepEqual(edge({ status: "deploying", buildLive: true, tunnelUp: true }), { serve: "tunnel" });
-  assert.deepEqual(edge({ status: "deploying", buildLive: true, tunnelUp: false }), { serve: "build" });
+test("a redeploy keeps serving the release it is replacing", () => {
+  // A redeploy flips status back to 'deploying'. Visitors must go on getting the
+  // version that works for the whole build — this is the case the preview tunnel
+  // used to take over, pointing them at a developer's laptop instead.
+  assert.deepEqual(edge({ status: "deploying", buildLive: true }), { serve: "build" });
+});
+
+test("a failed redeploy still serves the release that worked", () => {
+  // The failure belongs to the owner, not to the visitors of an app that is up.
+  assert.deepEqual(
+    edge({ status: "failed", buildLive: true, deploy: { status: "failed", error: "boom", updatedAt: at(1_000) } }),
+    { serve: "build" },
+  );
 });
 
 test("a deploy still making progress says so", () => {

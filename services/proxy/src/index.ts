@@ -10,7 +10,6 @@ import { decideEdge } from "./edge";
 import { pickRoute, pickPrefix } from "./routes";
 import { badgeRequired } from "./plan";
 import { forward } from "./forward";
-import { attachTunnel, hasTunnel, forwardToTunnel } from "./tunnel";
 
 function slugFromHost(host: string | undefined): string | null {
   if (!host) return null;
@@ -37,20 +36,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // What this URL should answer with, argued from the deploy's own record rather
   // than from apps.status alone — which cannot tell a build in progress from one
   // whose process died, since both read 'deploying' forever. See edge.ts.
-  //
-  // The tunnel/build ordering lives there too. A tunnel exists only while a deploy
-  // is running: the CLI opens it and drops it when the build lands, so during that
-  // window the URL shows the code being deployed rather than the previous release,
-  // which is the point of the live preview. It used to be the other way round, and
-  // that made the preview reachable exactly once in an app's life — `run_url` is
-  // set on the first successful build and never cleared, so from the second deploy
-  // onwards the proxy always had a build to prefer and the connected tunnel was
-  // never asked. What edge.ts adds is the other end of that: once the deploy has
-  // LANDED, the build wins again, so `--wait` holding its tunnel open does not
-  // leave visitors pointed at a developer's laptop.
   const action = decideEdge({
     buildLive: !!app.run_url,
-    tunnelUp: hasTunnel(slug),
     status: app.status,
     deploy: app.deploy,
     hasWeb: app.has_web,
@@ -103,9 +90,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // app row that has already been fetched and cached, so this costs nothing.
   const badge = badgeRequired(app.owner_plan, app.owner_status);
   const serve = (visitorCtx: { userId: string; email: string; name: string }, wd: string, owner: boolean) =>
-    action.serve === "tunnel"
-      ? Promise.resolve(forwardToTunnel(req, res, slug))
-      : forward(req, res, target as string, visitorCtx, wd, { slug, owner, badge }, prefix);
+    forward(req, res, target as string, visitorCtx, wd, { slug, owner, badge }, prefix);
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
   if (app.visibility === "public") {
@@ -142,7 +127,6 @@ const server = createServer((req, res) => {
     res.end("internal error");
   });
 });
-attachTunnel(server);
 server.listen(config.port, () => {
   console.log(`proxy listening on :${config.port}`);
   // Which side of the rollout this revision is on, said once. The silent

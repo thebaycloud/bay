@@ -23,8 +23,6 @@
  */
 
 export type EdgeAction =
-  /** Forward to the deploy-time preview tunnel. */
-  | { serve: "tunnel" }
   /** Forward to the published build. */
   | { serve: "build" }
   /** 200, self-refreshing: a deploy is genuinely in progress. */
@@ -39,8 +37,6 @@ export type EdgeAction =
 export interface EdgeInput {
   /** The app has a published build to forward to. */
   buildLive: boolean;
-  /** A preview tunnel is currently connected for this slug. */
-  tunnelUp: boolean;
   /** apps.status */
   status: "deploying" | "live" | "failed";
   /** The latest deploy record, or null for an app that predates the table. */
@@ -68,14 +64,14 @@ export interface EdgeInput {
 export const STALE_AFTER_MS = 15 * 60_000;
 
 export function decideEdge(input: EdgeInput): EdgeAction {
-  const { buildLive, tunnelUp, status, deploy, hasWeb, now } = input;
+  const { buildLive, status, deploy, hasWeb, now } = input;
   const staleAfterMs = input.staleAfterMs ?? STALE_AFTER_MS;
 
-  // A landed build outranks a preview of it. The tunnel exists for the deploy
-  // window; holding it open afterwards (which `--wait` does for the whole build)
-  // must not keep visitors pointed at a developer's machine.
-  if (status === "live" && buildLive) return { serve: "build" };
-  if (tunnelUp) return { serve: "tunnel" };
+  // A build that has landed is served, whatever the app's status says. During a
+  // redeploy that means visitors keep getting the previous release for the whole
+  // build — which is the behaviour a live app should have and, until the preview
+  // tunnel was removed, the one case where it did not: an open tunnel outranked
+  // the published build and pointed visitors at a developer's laptop instead.
   if (buildLive) return { serve: "build" };
 
   // Nothing to serve. The only honest answers left are "still coming",
