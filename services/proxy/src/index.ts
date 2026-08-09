@@ -4,8 +4,9 @@ import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./regis
 import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "./pages";
 import { pageRoom } from "./room-page";
 import { serveRoomEvents } from "./room";
-import { xray } from "./xray";
 import { xrayPage } from "./xray-page";
+import { assembleReading, liveDeps } from "./reading";
+import { wantsHtml } from "./negotiate";
 import { readVisitor, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
@@ -22,7 +23,11 @@ function slugFromHost(host: string | undefined): string | null {
 }
 
 function html(res: ServerResponse, status: number, body: string) {
-  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "private, no-store",
+    "Vary": "Accept, Cookie",
+  });
   res.end(body);
 }
 
@@ -89,11 +94,19 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       // One address, two readers. A browser asking for a page gets the panel —
       // which is the only x-ray an API-shaped app can have, since there is no
       // HTML of its own to inject into. Anything else gets the numbers.
-      if (/text\/html/i.test(String(req.headers.accept ?? ""))) {
+      if (wantsHtml(String(req.headers.accept ?? ""))) {
         return html(res, 200, xrayPage(slug));
       }
-      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(JSON.stringify(xray(slug)));
+      const reading = await assembleReading(slug, liveDeps(async () => ({
+        door: `${slug}.supersonic.cv`,
+        open: Boolean(app.run_url),
+      })));
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Vary": "Accept, Cookie",
+      });
+      res.end(JSON.stringify(reading));
       return;
     }
   }
