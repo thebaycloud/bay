@@ -6,6 +6,25 @@ import { db } from "./db";
 
 export interface Visitor { userId: string; email: string; name: string }
 
+/**
+ * One Visitor, whichever door the person came through.
+ *
+ * Both paths call this, which is the only way the promise below — that nothing
+ * downstream learns which was used — can actually hold. The email is lowercased
+ * because it does not stay here: forward.ts sends it to the tenant app as
+ * `x-supersonic-email`, and an app keying accounts on that header saw the same
+ * human as `Ada@Example.com` from their agent and `ada@example.com` from their
+ * browser, and made them two people. The same value is also what `hasGrant`
+ * matches a shared app's invitations against.
+ */
+export function oneVisitor(userId: unknown, email: unknown, name: unknown): Visitor {
+  return {
+    userId: String(userId ?? ""),
+    email: String(email ?? "").toLowerCase(),
+    name: String(name ?? ""),
+  };
+}
+
 export function bearerFrom(header: string | undefined): string | null {
   if (!header) return null;
   const m = /^bearer\s+(\S+)\s*$/i.exec(header);
@@ -58,7 +77,7 @@ async function queryPlatformToken(token: string): Promise<Visitor | null> {
     if (!r.rows.length) return null;
     const u = await db().query(`SELECT id, email, name FROM users WHERE id = $1`, [r.rows[0].user_id]);
     if (!u.rows.length) return null;
-    return { userId: u.rows[0].id, email: u.rows[0].email, name: u.rows[0].name ?? "" };
+    return oneVisitor(u.rows[0].id, u.rows[0].email, u.rows[0].name);
   } catch {
     return null;
   }
@@ -131,7 +150,7 @@ export async function readVisitor(req: IncomingMessage): Promise<Visitor | null>
       salt: config.sessionCookieName,
     });
     if (!token?.sub || !token.email) return null;
-    return { userId: token.sub, email: String(token.email).toLowerCase(), name: String(token.name ?? "") };
+    return oneVisitor(token.sub, token.email, token.name);
   } catch {
     return null;
   }

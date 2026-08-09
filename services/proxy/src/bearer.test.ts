@@ -8,7 +8,7 @@ import type { IncomingMessage } from "node:http";
 // process, so the env has to be set before the import, which means a dynamic
 // one, exactly as forward.test.ts and config.test.ts do.
 process.env.AUTH_SECRET ??= "test-only-config-secret-do-not-log";
-const { bearerFrom, platformTokenFrom, hashToken, readVisitor, viewerOnce, setPlatformTokenResolver } = await import("./session");
+const { bearerFrom, platformTokenFrom, hashToken, readVisitor, viewerOnce, oneVisitor, setPlatformTokenResolver } = await import("./session");
 const { config } = await import("./config");
 const { encode } = await import("@auth/core/jwt");
 
@@ -61,6 +61,33 @@ test("an ss_ token that fails to resolve returns null and never falls through to
   } finally {
     restore();
   }
+});
+
+test("the same person is one identity, whichever door they came through", async () => {
+  // The email does not stay in the proxy: forward.ts hands it to the tenant app
+  // as x-supersonic-email. While the bearer path returned users.email raw and
+  // the cookie path lowercased it, an app keying accounts on that header made
+  // two accounts for one human — one for their agent, one for their browser.
+  //
+  // Both paths build their Visitor with this one call, so they cannot disagree.
+  assert.deepEqual(
+    oneVisitor("user-1", "Ada@Example.com", "Ada"),
+    { userId: "user-1", email: "ada@example.com", name: "Ada" },
+  );
+  // A users row with no name is a Visitor with no name, not the string "null".
+  assert.deepEqual(oneVisitor("user-1", "ADA@EXAMPLE.COM", null),
+    { userId: "user-1", email: "ada@example.com", name: "" });
+
+  // And the cookie path really is built from it, end to end.
+  const cookieToken = await encode({
+    token: { sub: "user-1", email: "Ada@Example.com", name: "Ada" },
+    secret: config.authSecret,
+    salt: config.sessionCookieName,
+  });
+  const req = {
+    headers: { cookie: `${config.sessionCookieName}=${encodeURIComponent(cookieToken)}` },
+  } as unknown as IncomingMessage;
+  assert.deepEqual(await readVisitor(req), oneVisitor("user-1", "Ada@Example.com", "Ada"));
 });
 
 test("one request asks who is here once, however many branches want to know", async () => {
