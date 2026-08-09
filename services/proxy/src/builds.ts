@@ -35,8 +35,17 @@ export function linesGone(startedAtMs: number, nowMs: number, retentionDays = 7)
   return nowMs - startedAtMs > retentionDays * 86_400_000;
 }
 
-/** This app's builds, newest first. */
-export async function listBuilds(slug: string, limit = 50): Promise<Tick[]> {
+/**
+ * This app's builds, newest first — or `null` when the durable half could not
+ * be read at all.
+ *
+ * The distinction is the whole point. An empty list is a fact ("this app has
+ * never been built"); a database that would not answer is not a fact about the
+ * app, and returning `[]` for it renders as "nothing ever happened" — the one
+ * thing every reading carries a `since` to prevent. The caller turns the `null`
+ * into the window it reports; nothing here retries and nothing here caches.
+ */
+export async function listBuilds(slug: string, limit = 50): Promise<Tick[] | null> {
   const now = Date.now();
   try {
     const r = await db().query(
@@ -54,6 +63,10 @@ export async function listBuilds(slug: string, limit = 50): Promise<Tick[]> {
       };
     });
   } catch {
-    return [];
+    // Swallowed on purpose — an unreadable database must not take the live half
+    // of the reading down with it — but never flattened into an empty list. The
+    // error itself is not returned: it would carry connection details into a
+    // response the owner's agent reads.
+    return null;
   }
 }

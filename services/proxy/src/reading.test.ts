@@ -25,6 +25,25 @@ test("who did it survives into the reading", async () => {
   assert.equal(r.builds[0].linesGone, true);
 });
 
+test("a durable half that could not be read says so, rather than saying nothing happened", async () => {
+  // The failure mode this exists to stop: Postgres is down, the build list comes
+  // back empty, and the reading is indistinguishable from an app that has never
+  // been built. Both a person and an agent would read that as "nothing ever
+  // happened" — which is exactly what `since` is carried to prevent.
+  const outage = { ...deps, listBuilds: async () => null };
+  const r = await assembleReading("lilna", outage);
+  assert.equal(r.since.builds, "unreadable");
+  assert.deepEqual(r.builds, []);
+});
+
+test("an app with no builds is durable and empty, not unreadable", async () => {
+  // The other side of the same coin: a real empty answer must keep saying it is
+  // a real answer, or the honest degradation swallows the honest fact.
+  const r = await assembleReading("new", { ...deps, listBuilds: async () => [] });
+  assert.equal(r.since.builds, "durable");
+  assert.deepEqual(r.builds, []);
+});
+
 test("a reading is produced even when every source is empty", async () => {
   // An app that has never come up must still have a reading; the page and the
   // agent both need something with the right shape to render "nothing yet".
