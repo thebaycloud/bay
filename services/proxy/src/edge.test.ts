@@ -148,3 +148,29 @@ test("an app from before the deploys table keeps its old behaviour", () => {
   assert.deepEqual(edge({ deploy: null }), { page: "building" });
   assert.deepEqual(edge({ deploy: { status: "building", error: null, updatedAt: null } }), { page: "building" });
 });
+
+test("the owner's reading outranks every page this function can answer with", () => {
+  // The four states a reading exists to express include the three that produce
+  // a page of their own here — building, failed, stalled — plus the worker-only
+  // app that produces a 404. Decided after the edge, as it was, the x-ray was
+  // reachable for none of them: the owner and their agent got HTML and a status
+  // chosen for a visitor, and `open` could never be false on a served reading.
+  assert.deepEqual(edge({ xrayForOwner: true }), { serve: "xray" });
+  assert.deepEqual(
+    edge({ xrayForOwner: true, status: "failed", deploy: { status: "failed", error: "boom", updatedAt: at(1000) } }),
+    { serve: "xray" });
+  assert.deepEqual(
+    edge({ xrayForOwner: true, deploy: { status: "building", error: null, updatedAt: at(STALE_AFTER_MS + 1000) } }),
+    { serve: "xray" });
+  assert.deepEqual(
+    edge({ xrayForOwner: true, status: "live", hasWeb: false, deploy: { status: "live", error: null, updatedAt: at(1000) } }),
+    { serve: "xray" });
+});
+
+test("nothing about who may see a reading is decided here", () => {
+  // Anyone who is not the owner is not carrying this flag, and the URL goes on
+  // being an ordinary request to the app — which is what stops a visitor
+  // learning that /_xray means anything at all.
+  assert.deepEqual(edge({ xrayForOwner: false, buildLive: true }), { serve: "build" });
+  assert.deepEqual(edge({ xrayForOwner: false }), { page: "building" });
+});

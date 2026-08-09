@@ -25,6 +25,8 @@
 export type EdgeAction =
   /** Forward to the published build. */
   | { serve: "build" }
+  /** Answer with the app's reading — a page or the object, split on Accept. */
+  | { serve: "xray" }
   /** 200, self-refreshing: a deploy is genuinely in progress. */
   | { page: "building" }
   /** 503: the deploy failed, and we know why. */
@@ -35,6 +37,17 @@ export type EdgeAction =
   | { page: "noweb" };
 
 export interface EdgeInput {
+  /**
+   * This request is the owner asking for `/_xray`.
+   *
+   * The caller does the deciding about WHO — this is only told the answer, so
+   * nothing about who may see a reading lives here. It is an input to this
+   * function rather than a branch beside it because "what does this URL serve"
+   * has to have exactly one answer: asked after the edge, the x-ray was
+   * unreachable for every app the edge answers with a page of its own, which is
+   * every app that has never come up. See the note at the top of decideEdge.
+   */
+  xrayForOwner?: boolean;
   /** The app has a published build to forward to. */
   buildLive: boolean;
   /** apps.status */
@@ -66,6 +79,14 @@ export const STALE_AFTER_MS = 15 * 60_000;
 export function decideEdge(input: EdgeInput): EdgeAction {
   const { buildLive, status, deploy, hasWeb, now } = input;
   const staleAfterMs = input.staleAfterMs ?? STALE_AFTER_MS;
+
+  // The owner's own reading outranks every page below, and has to: those pages
+  // are exactly what the reading is FOR. An app mid-first-deploy, a failed one,
+  // a stalled one — each is one of the states the reading exists to express, and
+  // while this was decided after the edge, an agent polling `/_xray` through a
+  // first deploy was handed the room page, as HTML, with a 200, and threw on
+  // r.json(). Nothing about access is decided here; see EdgeInput.
+  if (input.xrayForOwner) return { serve: "xray" };
 
   // A build that has landed is served, whatever the app's status says. During a
   // redeploy that means visitors keep getting the previous release for the whole

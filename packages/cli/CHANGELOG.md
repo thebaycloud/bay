@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.1
+
+**A ship now says who is shipping.**
+
+Every deploy request carries `x-supersonic-who`, set from `SUPERSONIC_WHO` and
+nothing else — no TTY check, no `CI` check, no guessing. An agent that sets
+`SUPERSONIC_WHO=agent` is recorded as one; anything else, including a CI
+runner with no terminal at all, is recorded as `someone`. Reporting "agent"
+just because there was no TTY would have been a confident lie in the one
+field this feature exists to keep honest, so the CLI declares only what it
+was told and otherwise says it doesn't know.
+
 ## 0.12.0
 
 **`ship` is the word now. `deploy` is an alias and always will be.**

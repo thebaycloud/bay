@@ -19,6 +19,7 @@
 import { runDeploy, type DeployInput } from "@/lib/deploy-pipeline";
 import { eventSink } from "@/lib/deploy-events";
 import { claimRun, finishRun, type DeployRunRequest } from "@/lib/deploy-runs";
+import { finishBuild, watchOutcome } from "@/lib/builds";
 import { setDeploy } from "@/lib/deploys";
 import { StageRecorder } from "@/lib/stages";
 
@@ -104,20 +105,33 @@ async function main() {
     limits: request.limits as DeployInput["limits"],
   };
 
+  // Every event the deploy emits passes through here on its way to the sink, so
+  // the row written below says the same thing the log does. Wrapped rather than
+  // read back afterwards: the outcome is a fact this process already has, and a
+  // second reader of it would be a second answer to drift from the first.
+  const watch = watchOutcome();
+  const emit = (e: unknown) => { watch.saw(e); sink.emit(e); };
+
   try {
-    await runDeploy(input, sink.emit);
+    await runDeploy(input, emit);
   } catch (e) {
     // runDeploy handles its own failures; reaching here means it threw on the way
     // out. Say so in the log the client is reading, or the deploy just stops
     // mid-sentence and the reader waits for an event that will never come.
     const msg = e instanceof Error ? e.message : String(e);
-    sink.emit({ type: "error", message: msg });
+    emit({ type: "error", message: msg });
     setDeploy(request.slug, { status: "failed", error: msg });
   } finally {
     // Order matters: the events must be durable before the row that let anyone
     // find this run is deleted.
     await sink.drain();
     await finishRun(runId);
+    // The build's own ending. Without this the row stays `ended_at: null,
+    // outcome: null` forever — the app's timeline claims every build it ever
+    // ran is still in flight, and a failure is indistinguishable from a
+    // success. Best-effort by construction (see lib/builds): losing the record
+    // of a build must never change whether the deploy succeeded.
+    await finishBuild(runId, watch.outcome);
   }
 }
 
