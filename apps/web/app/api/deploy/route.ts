@@ -13,6 +13,7 @@ import { runDeploy } from "@/lib/deploy-pipeline";
 import { createRun, startDeployJob, finishRun, pruneRuns, isOwnSourceObject, readUploadedSource, type UploadedSource } from "@/lib/deploy-runs";
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
 import { getDeploy } from "@/lib/deploys";
+import { startBuild, finishBuild } from "@/lib/builds";
 import { StageRecorder } from "@/lib/stages";
 import { randomUUID } from "node:crypto";
 
@@ -264,6 +265,10 @@ export async function POST(req: Request) {
     // taken from createRun's return, because the first stage starts before that
     // call returns and a stage with no id is a stage the reader cannot group.
     runId = randomUUID();
+    // The durable record of this attempt, written before anything can fail, so a
+    // build that dies in its first second still appears on the app's timeline.
+    // `who` is whatever the caller declared and nothing more — see lib/builds.
+    void startBuild(runId, slug, req.headers.get("x-supersonic-who"));
     const handoff = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId });
     try {
       const recording = handoff.start("run-record");
@@ -279,6 +284,7 @@ export async function POST(req: Request) {
       // six-hour sweep — the window those secrets are stored for should be the
       // length of a build, not the length of a timeout nobody is watching.
       if (runId) await finishRun(runId).catch(() => {});
+      if (runId) await finishBuild(runId, "failed").catch(() => {});
       // Nothing has started, so this is an honest, immediate failure rather than
       // a deploy that will quietly never happen.
       return Response.json({ error: `could not start the deploy: ${e instanceof Error ? e.message : String(e)}` }, { status: 503 });
