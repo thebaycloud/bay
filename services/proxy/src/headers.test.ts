@@ -237,6 +237,27 @@ test("a platform CLI token is stripped before it reaches the upstream", () => {
   assert.equal(out.authorization, undefined);
 });
 
+test("what counts as ours is the scheme's case, never the prefix's", () => {
+  const strip = (authorization: string) => buildUpstreamHeaders(
+    { authorization },
+    { userId: "u1", email: "a@b.c", name: "A" },
+    "__Secure-authjs.session-token",
+  ).authorization;
+
+  // The scheme is case-insensitive, per RFC 9110 §11.1 — a client that sends
+  // `bearer` is sending the same credential we would strip as `Bearer`.
+  assert.equal(strip("bearer ss_abc123"), undefined);
+  assert.equal(strip("BEARER ss_abc123"), undefined);
+
+  // The prefix is not. session.ts and apps/web/lib/cli-tokens.ts both test it
+  // with startsWith("ss_"), so `SS_` is NOT a platform token to either of them
+  // — and a hosted app that issues its own uppercase SS_ bearers would have had
+  // its users' credentials removed at the edge while it went on being handed
+  // every other shape untouched.
+  assert.equal(strip("Bearer SS_abc123"), "Bearer SS_abc123");
+  assert.equal(strip("Bearer Ss_abc123"), "Bearer Ss_abc123");
+});
+
 test("an inbound x-serverless-authorization is never trusted through", () => {
   // The slot the invoker token now lives in. A visitor who could set it would be
   // choosing what we present to Cloud Run.

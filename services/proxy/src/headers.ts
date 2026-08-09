@@ -77,7 +77,25 @@ const CLIENT_IP = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f:.]{2,45})$/;
 // module pulls in config.ts, which throws at import time without AUTH_SECRET,
 // and this one has no business acquiring that requirement just to recognise a
 // prefix. If the prefix ever changes, change it in both places.
-const PLATFORM_BEARER = /^bearer\s+ss_\S+\s*$/i;
+//
+// Two tests, not one pattern with /i over all of it. The SCHEME is
+// case-insensitive because RFC 9110 §11.1 says it is; the PREFIX is not,
+// because the only two places that decide whether a token is ours —
+// session.ts's platformTokenFrom and apps/web/lib/cli-tokens.ts — both ask
+// `startsWith("ss_")`, which is case-sensitive. A single /i made this file the
+// odd one out: `Bearer SS_x` was stripped here as a platform credential and
+// treated as the app's own everywhere else, so a hosted app issuing uppercase
+// SS_ bearer tokens would have had its users' credentials silently removed at
+// the edge — the drift class this repo retired the word `lane` over. Written as
+// the same match-then-startsWith that session.ts performs, so the three agree
+// by construction.
+const BEARER_SCHEME = /^bearer\s+(\S+)\s*$/i;
+const PLATFORM_TOKEN_PREFIX = "ss_";
+
+function isPlatformBearer(value: string): boolean {
+  const m = BEARER_SCHEME.exec(value);
+  return m !== null && m[1].startsWith(PLATFORM_TOKEN_PREFIX);
+}
 
 export interface VisitorIdentity { userId: string; email: string; name: string }
 
@@ -141,7 +159,7 @@ export function buildUpstreamHeaders(
       // See the note above DROP: this is the one shape of Authorization that
       // does not belong to the visitor, so it is the one that does not survive.
       const raw = Array.isArray(value) ? value[0] : value;
-      if (raw && PLATFORM_BEARER.test(raw)) continue;
+      if (raw && isPlatformBearer(raw)) continue;
       if (raw !== undefined) out.authorization = raw;
       continue;
     }
