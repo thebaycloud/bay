@@ -79,9 +79,19 @@ so a change can be watched before it is real.
 _Avoid_: canary, blue-green, preview environment, staging.
 
 **X-ray**:
-The layer a person can bring up over their own live app to see what it is doing.
+What an owner sees when they look inside their own app: what it is doing, what
+happened to it, and who is in it. Reached two ways — brought up over the live app
+at its own address, or opened as the app's own page. One thing seen from two
+sides, never two things.
 Visible to the owner, never to a visitor.
 _Avoid_: dashboard, console, overlay, panel, devtools, observability.
+
+**Reading**:
+Everything the X-ray shows about one app at one moment, as a single thing. A
+person and an agent are given the same reading and only the rendering differs;
+two readings built separately would drift, and the one that drifted would be the
+one nobody was looking at. Every reading says what window it is true for.
+_Avoid_: state, payload, response, DTO, model, view model.
 
 **Secrets**:
 The only thing that cannot be written in the code.
@@ -107,6 +117,12 @@ _Avoid_: logs, metrics, traces, telemetry, events.
 **Who's here**:
 The people in an app right now.
 _Avoid_: analytics, sessions, active users, presence.
+
+**Who did it**:
+Which of *you*, *an agent* or *the platform* caused a thing that happened. Asked
+of every **Build**. When nobody said, the answer is *someone* — never a guess,
+because a wrong name here is worse than no name.
+_Avoid_: actor, trigger, source, initiator, user_id.
 
 ## Terms being retired
 
