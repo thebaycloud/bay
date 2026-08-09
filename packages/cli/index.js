@@ -15,6 +15,7 @@ const http = require("http");
 const { spawn, spawnSync } = require("child_process");
 const { readEnvFiles, selectEnv, encodeEnvHeader } = require("./lib/envfile");
 const { joinExecArgs } = require("./lib/exec-args");
+const { whoHeader } = require("./lib/who");
 
 const CFG_DIR = path.join(os.homedir(), ".supersonic");
 const CFG = path.join(CFG_DIR, "config.json");
@@ -105,6 +106,7 @@ async function api(pathname, { method = "GET", body, stream = false } = {}) {
     method,
     headers: {
       Authorization: "Bearer " + tok,
+      "x-supersonic-who": whoHeader(process.env),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -573,7 +575,13 @@ async function deploy(args) {
   if (!tok) die("not authenticated — run: supersonic login");
   const res = await fetch(baseUrl() + "/api/deploy", {
     method: "POST",
-    headers: { Authorization: "Bearer " + tok, "Content-Type": "application/gzip", "x-supersonic-upload": "1", "x-supersonic-app": appName },
+    headers: {
+      Authorization: "Bearer " + tok,
+      "Content-Type": "application/gzip",
+      "x-supersonic-upload": "1",
+      "x-supersonic-app": appName,
+      "x-supersonic-who": whoHeader(process.env),
+    },
     body,
   });
   if (res.status === 401) die("token invalid or expired — run: supersonic login");
@@ -733,7 +741,14 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
     const tgz = await packageFolder();
     const body = fs.readFileSync(tgz);
     try { fs.unlinkSync(tgz); } catch { /* ignore */ }
-    const headers = { Authorization: "Bearer " + token(), "Content-Type": "application/gzip", "x-supersonic-upload": "1", "x-supersonic-app": folderName, "x-supersonic-slug": slug };
+    const headers = {
+      Authorization: "Bearer " + token(),
+      "Content-Type": "application/gzip",
+      "x-supersonic-upload": "1",
+      "x-supersonic-app": folderName,
+      "x-supersonic-slug": slug,
+      "x-supersonic-who": whoHeader(process.env),
+    };
     // How to run the app in production, worked out by the agent. Encoded because it
     // has spaces/flags. The runner uses it as SUPERSONIC_RUN.
     if (runCmd) headers["x-supersonic-run"] = encodeURIComponent(runCmd);
