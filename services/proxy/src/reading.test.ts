@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assembleReading } from "./reading";
+import { decideEdge } from "./edge";
 
 const deps = {
   xray: () => ({ since: 1000, here: { count: 2, names: ["ada", "grace"] }, paths: [], dropped: 0 }),
@@ -56,4 +57,30 @@ test("a reading is produced even when every source is empty", async () => {
   assert.equal(r.open, false);
   assert.deepEqual(r.builds, []);
   assert.equal(r.live.here.count, 0);
+});
+
+test("an app that has never come up answers with a reading, not with the room page", async () => {
+  // The state the reading could not be fetched in. `/_xray` used to be decided
+  // after the edge, and the edge answers for an app with no run_url with the
+  // room — as HTML, with a 200, whatever the request asked for. An agent
+  // polling https://new-app.supersonic.cv/_xray during a first deploy called
+  // r.json() on that page and threw.
+  const mid = {
+    buildLive: false, status: "deploying" as const,
+    deploy: { status: "building", error: null, updatedAt: Date.now() },
+    now: Date.now(),
+  };
+  // Same app, same moment: a visitor still gets the room, and only the owner
+  // asking for /_xray gets the reading.
+  assert.deepEqual(decideEdge(mid), { page: "building" });
+  assert.deepEqual(decideEdge({ ...mid, xrayForOwner: true }), { serve: "xray" });
+
+  // And that reading says the app is not open, which no served reading could
+  // say while the edge answered first.
+  const r = await assembleReading("new", {
+    xray: () => ({ since: 42, here: { count: 0, names: [] }, paths: [], dropped: 0 }),
+    listBuilds: async () => [],
+    door: async () => ({ door: "new.supersonic.cv", open: false }),
+  });
+  assert.equal(r.open, false);
 });
