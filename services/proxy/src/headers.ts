@@ -36,15 +36,23 @@ const DROP = new Set([
   // carries the client-facing name that the app has to put in its own URLs.
   "host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade",
-  // `authorization` is deliberately NOT dropped. It used to be, because the
-  // invoker token for Cloud Run was written into that same slot — so the app's
-  // own credentials were destroyed to make room for ours, and any app
-  // authenticating with a bearer token appeared to log its users out the instant
-  // they signed in. The invoker token moved to x-serverless-authorization
+  // `authorization` is deliberately NOT dropped outright. It used to be,
+  // because the invoker token for Cloud Run was written into that same slot —
+  // so the app's own credentials were destroyed to make room for ours, and any
+  // app authenticating with a bearer token appeared to log its users out the
+  // instant they signed in. The invoker token moved to x-serverless-authorization
   // (see forward.ts) and this header now belongs to the visitor again.
   //
   // Ours must still never leak the other way: a token minted for one app's
-  // audience is stripped on the way back, not passed to another upstream.
+  // audience is stripped on the way back, not passed to another upstream. The
+  // same is true of a platform token arriving IN this header: an agent's `ss_`
+  // CLI token (see session.ts's platformTokenFrom, which resolves it at the
+  // edge) is a full platform identity — apps/web/lib/session.ts accepts it as
+  // currentUserId — so forwarding it verbatim would hand that credential to
+  // whichever tenant app it was addressed to, in that app's own request logs.
+  // Stripped by shape (PLATFORM_BEARER below), not by key, because only some
+  // Authorization values are ours; an app's own bearer must still reach it
+  // untouched, which is the whole point of not dropping this header at all.
   "x-serverless-authorization",
   // RFC 7239's header, dropped for the same reason as the x-forwarded-* family.
   "forwarded",
@@ -64,6 +72,12 @@ const PREFIX = /^\/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*$/;
 // v4, or v6 in any of its spellings. Same reason as HOST: this ends up inside
 // `forwarded`, so it is checked before it is spliced, never repaired.
 const CLIENT_IP = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f:.]{2,45})$/;
+// A platform CLI token, shaped `Bearer ss_...` — the same shape session.ts's
+// platformTokenFrom resolves at the edge. Duplicated rather than imported: that
+// module pulls in config.ts, which throws at import time without AUTH_SECRET,
+// and this one has no business acquiring that requirement just to recognise a
+// prefix. If the prefix ever changes, change it in both places.
+const PLATFORM_BEARER = /^bearer\s+ss_\S+\s*$/i;
 
 export interface VisitorIdentity { userId: string; email: string; name: string }
 
@@ -121,6 +135,14 @@ export function buildUpstreamHeaders(
     if (key === "cookie") {
       const kept = stripSessionCookie(String(value ?? ""), sessionCookieName);
       if (kept) out.cookie = kept;
+      continue;
+    }
+    if (key === "authorization") {
+      // See the note above DROP: this is the one shape of Authorization that
+      // does not belong to the visitor, so it is the one that does not survive.
+      const raw = Array.isArray(value) ? value[0] : value;
+      if (raw && PLATFORM_BEARER.test(raw)) continue;
+      if (raw !== undefined) out.authorization = raw;
       continue;
     }
     out[key] = value;

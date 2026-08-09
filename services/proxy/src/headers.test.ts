@@ -223,6 +223,20 @@ test("the visitor's own Authorization reaches the app", () => {
   assert.equal(out.authorization, "Bearer app-users-own-jwt");
 });
 
+test("a platform CLI token is stripped before it reaches the upstream", () => {
+  // The complement of "the visitor's own Authorization reaches the app" above:
+  // an ss_ token is a full platform identity (apps/web/lib/session.ts accepts
+  // it as currentUserId), so forwarding it verbatim would hand an agent's
+  // platform credential to whichever tenant app it was addressed to — including
+  // one it does not own — in that app's own request logs.
+  const out = buildUpstreamHeaders(
+    { authorization: "Bearer ss_abc123", cookie: "x=1" },
+    { userId: "u1", email: "a@b.c", name: "A" },
+    "__Secure-authjs.session-token",
+  );
+  assert.equal(out.authorization, undefined);
+});
+
 test("an inbound x-serverless-authorization is never trusted through", () => {
   // The slot the invoker token now lives in. A visitor who could set it would be
   // choosing what we present to Cloud Run.

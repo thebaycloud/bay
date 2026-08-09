@@ -25,7 +25,11 @@ function ensure(): Promise<void> {
   return ensured;
 }
 
-function hash(token: string): string {
+// Exported so the proxy's own edge auth (services/proxy/src/session.ts,
+// hashToken) can assert agreement with this one in a test — the failure mode
+// if the two ever drift is silent and fails closed: no CLI token resolves,
+// and nothing says why.
+export function hash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
