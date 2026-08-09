@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normaliseWho, buildStartSql, buildFinishSql } from "../lib/builds";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { normaliseWho, buildStartSql, buildFinishSql, watchOutcome } from "../lib/builds";
 
 test("an undeclared actor is someone, never a guess", () => {
   // The whole point of the field. A wrong name here is worse than no name:
@@ -38,4 +40,50 @@ test("finishing a build records its outcome and nothing else", () => {
   const { text, values } = buildFinishSql("run-1", "failed");
   assert.match(text, /UPDATE builds/);
   assert.deepEqual(values, ["run-1", "failed"]);
+});
+
+test("a build that said nothing about its ending is failed, never ok", () => {
+  // The default has to be the answer that gets corrected if it is wrong. A run
+  // that emitted neither `done` nor `error` did not succeed, and recording `ok`
+  // there would put a green tick on the app's timeline that nothing else in the
+  // system disagrees with.
+  assert.equal(watchOutcome().outcome, "failed");
+});
+
+test("the deploy's own narration decides the outcome", () => {
+  const ok = watchOutcome();
+  ok.saw({ type: "start", slug: "lilna" });
+  ok.saw({ type: "log", line: "building…" });
+  ok.saw({ type: "done", slug: "lilna", url: "https://lilna.supersonic.cv" });
+  assert.equal(ok.outcome, "ok");
+
+  // The dominant failure path: runDeploy RETURNS after sending `error`, so the
+  // job's catch never runs and the call it awaited resolves exactly as it does
+  // on success. Only the event tells the two apart.
+  const bad = watchOutcome();
+  bad.saw({ type: "start", slug: "lilna" });
+  bad.saw({ type: "error", message: "Build failed" });
+  assert.equal(bad.outcome, "failed");
+
+  // And nothing that is not one of those two moves it.
+  const noise = watchOutcome();
+  noise.saw({ type: "patch", patch: "diff --git" });
+  noise.saw(null);
+  noise.saw("not an object");
+  assert.equal(noise.outcome, "failed");
+});
+
+test("the deploy job records the build's ending beside the run's", () => {
+  // The defect this covers cannot be reached by a unit test: scripts/deploy-job.ts
+  // runs main() at import, and every ending it has is inside one finally. What is
+  // being defended is that the finally has BOTH endings in it — for the whole of
+  // this branch it had only finishRun, so every build in production read
+  // `ended_at: null, outcome: null` forever. Source-level, like stages.test.ts's
+  // emitter scan, and for the same reason.
+  const src = readFileSync(join(__dirname, "..", "scripts", "deploy-job.ts"), "utf8");
+  assert.match(src, /await finishRun\(runId\);\s*(?:\/\/[^\n]*\n\s*)*await finishBuild\(runId, watch\.outcome\);/,
+    "deploy-job must finish the build wherever it finishes the run");
+  // The outcome must come from what the deploy said, not from reaching the end
+  // of the function: `runDeploy` resolves the same way whether it shipped or not.
+  assert.match(src, /watchOutcome\(\)/);
 });

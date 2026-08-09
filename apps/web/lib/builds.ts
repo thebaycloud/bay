@@ -52,3 +52,36 @@ export async function finishBuild(runId: string, outcome: "ok" | "failed"): Prom
   const q = buildFinishSql(runId, outcome);
   try { await getPool(DB).query(q.text, q.values); } catch { /* ignore */ }
 }
+
+export interface OutcomeWatch {
+  /** Show it one of the deploy's events. */
+  saw(event: unknown): void;
+  /** How the build ended, as of everything seen so far. */
+  readonly outcome: "ok" | "failed";
+}
+
+/**
+ * What the deploy said about its own ending, so the job can record it.
+ *
+ * The job cannot learn this from the call it makes: `runDeploy` returns
+ * `Promise<void>`, and an ordinary failure RETURNS after sending an `error`
+ * event rather than throwing — only a failure on the way out reaches the job's
+ * catch. So the outcome is read from the deploy's own narration, which is also
+ * what the owner reads back out of `deploy_events`: the two can never disagree,
+ * because they are the same sentence.
+ *
+ * Starts at `failed` and is only ever moved by an event. A run that ended
+ * without saying anything did not succeed — and `ok` is the one answer that
+ * leaves nothing behind for anyone to correct later.
+ */
+export function watchOutcome(): OutcomeWatch {
+  let outcome: "ok" | "failed" = "failed";
+  return {
+    saw(event: unknown): void {
+      const type = (event as { type?: unknown } | null | undefined)?.type;
+      if (type === "done") outcome = "ok";
+      else if (type === "error") outcome = "failed";
+    },
+    get outcome() { return outcome; },
+  };
+}
