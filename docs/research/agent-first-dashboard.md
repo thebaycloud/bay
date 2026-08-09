@@ -853,3 +853,40 @@ Stated explicitly, as asked:
 - **GitHub's `github.com` JSON payload.** Observed live, undocumented by GitHub.
   It could change or disappear without notice; do not build on it, cite it only
   as evidence that the pattern is deployable.
+
+---
+
+## What the first real readings measured — 9 Aug 2026
+
+Recorded at merge (`d16f6dc`), immediately after both deploy workflows went
+green. Numbers, not impressions, per the standing habit.
+
+**A reading is 203 bytes** for an app with no traffic and no builds — `oh6sn`
+and `q6doa` both, to the byte. All six top-level keys present: `slug`, `door`,
+`open`, `live`, `builds`, `since`.
+
+**`since.builds` came back `"durable"`**, which is the fix from the final review
+working: the durable half read successfully and said so. Had Postgres been
+unreachable it would have said `"unreadable"` instead of flattening to an empty
+list — the failure that would otherwise render as "this app has never been
+deployed".
+
+**`builds` is empty, and that is correct.** The table was created today and
+nothing has shipped since. It fills from the next deploy onward. It was
+deliberately NOT backfilled from `deploy_stages`: those rows carry no actor, and
+inventing one would put a name in the single field this design exists to keep
+honest.
+
+**`here` and `paths` are both zero, with a `since.live` of the same minute** —
+the proxy instance had just restarted for the deploy. This is the exact reading
+the mandatory `since` exists for: an empty live half after a release is not an
+app with no traffic.
+
+**An anonymous request to another owner's `/_xray` returns 404**, unchanged.
+
+**Not verified, and worth stating plainly:** no build has yet been shipped
+through the new CLI, so `who` has not been observed arriving end to end in
+production. It cannot reach real users regardless — `publish-cli` is still red
+for the token reason in the previous handoff's §6.1, so every build production
+records will read `someone` until that credential is replaced. The plumbing is
+tested on both sides; the round trip is not.
