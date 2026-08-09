@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normaliseWho } from "../lib/builds";
+import { normaliseWho, buildStartSql, buildFinishSql } from "../lib/builds";
 
 test("an undeclared actor is someone, never a guess", () => {
   // The whole point of the field. A wrong name here is worse than no name:
@@ -23,4 +23,19 @@ test("anything else falls to someone rather than being interpreted", () => {
   assert.equal(normaliseWho("ci"), "someone");
   assert.equal(normaliseWho("human"), "someone");
   assert.equal(normaliseWho("robot"), "someone");
+});
+
+test("a build is recorded under its run id, with who normalised", () => {
+  // The SQL is thin; what is worth testing is that an undeclared actor reaches
+  // the database as `someone` rather than as an empty string or a NULL that the
+  // CHECK constraint would reject at 3am during a deploy.
+  const { text, values } = buildStartSql("run-1", "lilna", "ci");
+  assert.match(text, /INSERT INTO builds/);
+  assert.deepEqual(values, ["run-1", "lilna", "someone"]);
+});
+
+test("finishing a build records its outcome and nothing else", () => {
+  const { text, values } = buildFinishSql("run-1", "failed");
+  assert.match(text, /UPDATE builds/);
+  assert.deepEqual(values, ["run-1", "failed"]);
 });
