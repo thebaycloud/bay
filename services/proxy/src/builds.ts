@@ -1,5 +1,17 @@
 import { db } from "./db";
 
+/**
+ * Who caused a build: you, an agent, the platform — or `someone`, when nobody
+ * said.
+ *
+ * This type is declared again in apps/web/lib/builds.ts. The proxy and the app
+ * are separate services with separate packages, so the type is declared twice
+ * rather than imported — there is no shared package between them. The `builds_who`
+ * CHECK constraint in the database schema keeps the two declarations honest:
+ * if one side's values drift from the other's, the database will reject the write
+ * at source. This is what prevents the silent disagreement that retired the
+ * `lane` term entirely from this codebase.
+ */
 export type Who = "you" | "agent" | "platform" | "someone";
 
 export interface Tick {
