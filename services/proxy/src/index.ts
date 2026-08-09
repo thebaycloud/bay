@@ -7,7 +7,7 @@ import { serveRoomEvents } from "./room";
 import { xrayPage } from "./xray-page";
 import { assembleReading, liveDeps } from "./reading";
 import { wantsHtml } from "./negotiate";
-import { readVisitor, authUrls } from "./session";
+import { viewerOnce, authUrls } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
 import { pickRoute, pickPrefix } from "./routes";
@@ -40,6 +40,13 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   const app = await lookupApp(slug);
   if (!app) return html(res, 404, page404());
 
+  // Who is asking, resolved on demand and only ever once. Three of the branches
+  // below need it and no two of them are on the same path, so each asks for it
+  // where it is needed; a /_xray request from someone who is not the owner used
+  // to ask twice and pay for it twice. Lazy, not up front: an ordinary request
+  // to a public app never read the session at all and must not start now.
+  const viewer = viewerOnce(req);
+
   // The x-ray is owner-only, and answered here rather than forwarded, so a
   // visitor cannot learn that the path means anything: to anyone who is not the
   // owner this is an ordinary request and the app answers it however it likes —
@@ -47,7 +54,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // WHEN it is made moved. The session is read for this URL and no other, so an
   // ordinary request to a public app acquires nothing it did not have.
   const wantsXray = (req.url ?? "/") === "/_xray";
-  const xrayViewer = wantsXray ? await readVisitor(req) : null;
+  const xrayViewer = wantsXray ? await viewer() : null;
 
   // What this URL should answer with, argued from the deploy's own record rather
   // than from apps.status alone — which cannot tell a build in progress from one
@@ -99,8 +106,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       // Read even on a public app, where the request path skips the session
       // entirely: the room shows real build lines to the owner and withholds
       // them from everyone else, so it has to know which one this is.
-      const visitor = await readVisitor(req);
-      const owner = !!visitor && visitor.userId === app.owner_id;
+      const roomViewer = await viewer();
+      const owner = !!roomViewer && roomViewer.userId === app.owner_id;
       if ((req.url ?? "/").startsWith("/_room/events")) return serveRoomEvents(req, res, { slug, owner });
       // Same page, different status. A build in progress is a 200 as it always
       // was; a URL whose deploy failed or stopped must not answer OK — monitoring
@@ -138,7 +145,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  const visitor = await readVisitor(req);
+  const visitor = await viewer();
   if (!visitor) {
     // Soft gate instead of an abrupt login redirect: offer sign-in or sign-up,
     // both carrying a callback so they land back on this app afterward.

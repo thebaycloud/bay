@@ -8,7 +8,7 @@ import type { IncomingMessage } from "node:http";
 // process, so the env has to be set before the import, which means a dynamic
 // one, exactly as forward.test.ts and config.test.ts do.
 process.env.AUTH_SECRET ??= "test-only-config-secret-do-not-log";
-const { bearerFrom, platformTokenFrom, hashToken, readVisitor, setPlatformTokenResolver } = await import("./session");
+const { bearerFrom, platformTokenFrom, hashToken, readVisitor, viewerOnce, setPlatformTokenResolver } = await import("./session");
 const { config } = await import("./config");
 const { encode } = await import("@auth/core/jwt");
 
@@ -58,6 +58,39 @@ test("an ss_ token that fails to resolve returns null and never falls through to
       },
     } as unknown as IncomingMessage;
     assert.equal(await readVisitor(req), null);
+  } finally {
+    restore();
+  }
+});
+
+test("one request asks who is here once, however many branches want to know", async () => {
+  // The edge has three places that need the viewer and a path that reached two
+  // of them — /_xray from someone who is not the owner. With a bearer token
+  // each resolution is an UPDATE plus a SELECT, so that request cost four
+  // queries and two writes to learn one thing.
+  let calls = 0;
+  const restore = setPlatformTokenResolver(async () => {
+    calls += 1;
+    return { userId: "user-1", email: "ada@example.com", name: "Ada" };
+  });
+  try {
+    const req = { headers: { authorization: "Bearer ss_a-token" } } as unknown as IncomingMessage;
+    const viewer = viewerOnce(req);
+    const first = await viewer();
+    const second = await viewer();
+    assert.equal(calls, 1);
+    // The same answer, not merely an equal one: two branches must never be able
+    // to disagree about who is asking.
+    assert.equal(first, second);
+    assert.equal(first?.userId, "user-1");
+
+    // A second request resolves for itself — this is scoped to one request and
+    // remembers nobody between them — and its concurrent askers still share one
+    // resolution, because the promise is held rather than its result.
+    const other = viewerOnce(req);
+    const [a, b] = await Promise.all([other(), other()]);
+    assert.equal(calls, 2);
+    assert.equal(a, b);
   } finally {
     restore();
   }

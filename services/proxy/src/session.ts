@@ -137,6 +137,24 @@ export async function readVisitor(req: IncomingMessage): Promise<Visitor | null>
   }
 }
 
+/**
+ * The viewer of ONE request, resolved at most once however many branches ask.
+ *
+ * Not a cache: the closure is made per request and dies with it, so nothing is
+ * remembered about anybody between requests and no invalidation question exists.
+ * It is here rather than inline at the call site because the cost being avoided
+ * belongs to this module — with a bearer token each resolution is an UPDATE
+ * plus a SELECT, so a request that asked twice paid four queries and two writes
+ * to learn one thing, and the edge had a path that asked twice.
+ *
+ * The promise is held, not its result, so two callers in flight together still
+ * share one resolution.
+ */
+export function viewerOnce(req: IncomingMessage): () => Promise<Visitor | null> {
+  let pending: Promise<Visitor | null> | null = null;
+  return () => (pending ??= readVisitor(req));
+}
+
 /** Where to send an anonymous visitor, preserving the page they wanted. */
 export function signInRedirect(req: IncomingMessage): string {
   const host = (req.headers.host ?? "").split(":")[0];
