@@ -53,20 +53,23 @@ function sec(title){ var e=document.createElement('sec'); e.appendChild(h('div',
 
 function drawXray(d){
   if(!xr)return;
+  // The panel is one rendering of the reading; d.live is the same shape this
+  // used to receive whole, back when /_xray answered with the live half only.
+  var live=d.live;
   xr.innerHTML='';
   var head=h('h4'); head.appendChild(h('span',null,'X-ray · '+C.slug));
-  head.appendChild(h('span','since','watching since '+clock(d.since)));
+  head.appendChild(h('span','since','watching since '+clock(d.since.live)));
   xr.appendChild(head);
 
   // who's here
   var s1=sec("Who's here");
-  if(!d.here.count){ s1.appendChild(h('div','none','Nobody is in this app right now.')); }
+  if(!live.here.count){ s1.appendChild(h('div','none','Nobody is in this app right now.')); }
   else {
-    var line=h('div','who'); line.textContent=d.here.count===1?'1 person':d.here.count+' people';
-    if(d.here.names.length){ var n=h('span','n',' — '+d.here.names.join(', ')); line.appendChild(n); }
-    if(d.here.names.length<d.here.count){
-      var rest=d.here.count-d.here.names.length;
-      line.appendChild(h('span','n',(d.here.names.length?', ':' — ')+rest+' not signed in'));
+    var line=h('div','who'); line.textContent=live.here.count===1?'1 person':live.here.count+' people';
+    if(live.here.names.length){ var n=h('span','n',' — '+live.here.names.join(', ')); line.appendChild(n); }
+    if(live.here.names.length<live.here.count){
+      var rest=live.here.count-live.here.names.length;
+      line.appendChild(h('span','n',(live.here.names.length?', ':' — ')+rest+' not signed in'));
     }
     s1.appendChild(line);
   }
@@ -74,13 +77,13 @@ function drawXray(d){
 
   // speed
   var s2=sec('Speed');
-  if(!d.paths.length){
+  if(!live.paths.length){
     // Empty is not zero. The edge only remembers since it last started, and a
     // panel that showed "0 requests" after a release would be lying.
-    s2.appendChild(h('div','none','Nothing has been asked of this app since '+clock(d.since)+'.'));
+    s2.appendChild(h('div','none','Nothing has been asked of this app since '+clock(d.since.live)+'.'));
   } else {
     var t=document.createElement('table');
-    d.paths.slice(0,12).forEach(function(p){
+    live.paths.slice(0,12).forEach(function(p){
       var tr=document.createElement('tr');
       var td1=h('td','p',p.path);
       var td2=h('td','n'+(p.p95>=1000?' slow':''),p.p95+'ms');
@@ -90,12 +93,12 @@ function drawXray(d){
       t.appendChild(tr);
     });
     s2.appendChild(t);
-    if(d.dropped) s2.appendChild(h('div','drop',d.dropped+' more paths seen than this keeps — the busiest are shown.'));
+    if(live.dropped) s2.appendChild(h('div','drop',live.dropped+' more paths seen than this keeps — the busiest are shown.'));
   }
   xr.appendChild(s2);
 
   // breaks
-  var bad=d.paths.filter(function(p){return p.errors>0});
+  var bad=live.paths.filter(function(p){return p.errors>0});
   var s3=sec('Breaks');
   if(!bad.length) s3.appendChild(h('div','none','Nothing has failed.'));
   else {
@@ -119,7 +122,7 @@ function toggleXray(){
   if(xr){ xr.remove(); xr=null; clearInterval(xrTimer); xrTimer=null; return; }
   if(pop){ pop.remove(); pop=null; }
   xr=h('div','xr'); root.appendChild(xr);
-  drawXray({since:Date.now(),here:{count:0,names:[]},paths:[],dropped:0});
+  drawXray({since:{live:Date.now()},live:{here:{count:0,names:[]},paths:[],dropped:0}});
   pullXray();
   xrTimer=setInterval(pullXray,3000);
 }
