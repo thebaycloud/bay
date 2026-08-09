@@ -875,6 +875,7 @@ async function tryPrebuilt(appName, args) {
       "x-supersonic-prebuilt": "1",
       "x-supersonic-hash": hash,
       "x-supersonic-app": appName,
+      "x-supersonic-who": whoHeader(process.env),
     },
     body,
   });
