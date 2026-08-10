@@ -116,7 +116,11 @@ function drawXray(d){
 }
 
 function pullXray(){
-  fetch('/_xray',{credentials:'include'}).then(function(r){return r.json()}).then(drawXray).catch(function(){});
+  // Never swallowed. A mismatch between what /_xray serves and what drawXray
+  // reads throws here, and an empty catch turns that into a panel that drew
+  // once and stopped -- a healthy 200 in the network tab and nothing anywhere
+  // else. Reporting it costs a line and is the only signal this surface has.
+  fetch('/_xray',{credentials:'include'}).then(function(r){return r.json()}).then(drawXray).catch(function(e){console.error('x-ray:',e)});
 }
 function toggleXray(){
   if(xr){ xr.remove(); xr=null; clearInterval(xrTimer); xrTimer=null; return; }

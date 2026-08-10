@@ -114,3 +114,12 @@ test("the panel reads the reading's live half and its own since, not the top lev
   assert.doesNotMatch(XRAY_JS, /[^.]\bd\.paths\b/);
   assert.doesNotMatch(XRAY_JS, /[^.]\bd\.dropped\b/);
 });
+
+test("the poll reports a draw error instead of swallowing it", () => {
+  // The empty catch is why the d.here/d.live regression reached a browser and
+  // stayed invisible: drawXray threw, the catch ate it, and the panel simply
+  // stopped refreshing. The owner is a developer; the console is the right
+  // place for this.
+  assert.doesNotMatch(XRAY_JS, /\.catch\(\s*function\s*\(\s*\)\s*\{\s*\}\s*\)/);
+  assert.match(XRAY_JS, /console\.error/);
+});
