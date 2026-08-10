@@ -47,7 +47,12 @@ export const XRAY_JS = String.raw`// ---- x-ray: what this app is doing right no
 // request to every hosted app, so the owner instruments nothing and a visitor
 // can never tell this exists.
 var xr=null,xrTimer=null;
-function ago(sec){ if(sec<60)return sec+'s ago'; if(sec<3600)return Math.round(sec/60)+'m ago'; return Math.round(sec/3600)+'h ago'; }
+// Builds are durable and the live half is not, so this has to reach further
+// than it once did: zpjsb has been in flight since 2 Aug, and "216h" is not a
+// reading. ago() is defined through dur() rather than beside it, so the two
+// cannot disagree about where an hour ends.
+function dur(sec){ if(sec<60)return sec+'s'; if(sec<3600)return Math.round(sec/60)+'m'; if(sec<86400)return Math.round(sec/3600)+'h'; return Math.round(sec/86400)+'d'; }
+function ago(sec){ return dur(sec)+' ago'; }
 function clock(ms){ var d=new Date(ms); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
 function sec(title){ var e=document.createElement('sec'); e.appendChild(h('div','k',title)); return e; }
 

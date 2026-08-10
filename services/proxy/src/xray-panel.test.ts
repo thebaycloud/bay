@@ -123,3 +123,30 @@ test("the poll reports a draw error instead of swallowing it", () => {
   assert.doesNotMatch(XRAY_JS, /\.catch\(\s*function\s*\(\s*\)\s*\{\s*\}\s*\)/);
   assert.match(XRAY_JS, /console\.error/);
 });
+
+/**
+ * Pulls the helpers out of the shipped source and calls them. XRAY_JS is only
+ * function declarations and two `var`s at top level, so it evaluates with no
+ * host at all -- `h`, `C` and `root` are referenced inside function bodies,
+ * never at parse time.
+ */
+function helpers(): { dur: (s: number) => string; ago: (s: number) => string } {
+  return new Function(`${XRAY_JS}
+    return { dur: dur, ago: ago };`)();
+}
+
+test("dur reads as a duration and reaches past hours", () => {
+  const { dur } = helpers();
+  assert.equal(dur(45), "45s");
+  assert.equal(dur(720), "12m");
+  assert.equal(dur(18000), "5h");
+  // A build stuck since 2 Aug is the reason this branch exists at all.
+  assert.equal(dur(691200), "8d");
+});
+
+test("ago is dur plus a suffix, so the two cannot drift", () => {
+  const { dur, ago } = helpers();
+  for (const s of [45, 720, 18000, 691200]) {
+    assert.equal(ago(s), dur(s) + " ago");
+  }
+});
