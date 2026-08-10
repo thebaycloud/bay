@@ -118,6 +118,53 @@ function drawXray(d){
     s3.appendChild(t2);
   }
   xr.appendChild(s3);
+
+  // what happened
+  //
+  // The durable half. Four states, and the order they are tested in is the
+  // design: each has its own words, and none is allowed to borrow another's.
+  var s4=sec('What happened');
+  if(!d.builds){
+    // Not read yet. The placeholder toggleXray paints carries no builds key,
+    // and inventing an empty list for it would draw "never been built" over an
+    // app that has shipped a hundred times, for one frame, every time the panel
+    // opens. This branch also absorbs an older-shaped object, which is how the
+    // live half broke once already.
+    s4.appendChild(h('div','none','Reading...'));
+  } else if(d.since.builds==='unreadable'){
+    // Never flattened into an empty list. A database that will not answer is
+    // not a fact about this app, and the window beside the list exists to keep
+    // those two apart.
+    s4.appendChild(h('div','none','Could not read the build history for this app.'));
+  } else if(!d.builds.length){
+    s4.appendChild(h('div','none','This app has never been built.'));
+  } else {
+    var t3=document.createElement('table');
+    var bnow=Date.now();
+    d.builds.slice(0,8).forEach(function(b){
+      var since=Math.round((bnow-b.startedAt)/1000);
+      var tr=document.createElement('tr');
+      tr.appendChild(h('td','p',ago(since)));
+      // Printed verbatim: you, agent, platform, someone. "someone" means nobody
+      // said, and dressing it up as anything else is the one thing this column
+      // must never do.
+      tr.appendChild(h('td','n',b.who));
+      var out,cls;
+      if(b.outcome==='ok'){ out='ok'; cls='n'; }
+      else if(b.outcome==='failed'){ out='failed'; cls='n bad'; }
+      // Elapsed rather than a spinner: a build stuck for a week should look
+      // wrong, not busy.
+      else if(b.endedAt===null){ out='in flight, '+dur(since); cls='n'; }
+      // Ended without an outcome should be impossible. It is drawn, and drawn
+      // as bad, because the alternative is that it reads as success.
+      else { out='ended, unrecorded'; cls='n bad'; }
+      if(b.linesGone) out+=' · lines pruned';
+      tr.appendChild(h('td',cls,out));
+      t3.appendChild(tr);
+    });
+    s4.appendChild(t3);
+  }
+  xr.appendChild(s4);
 }
 
 function pullXray(){

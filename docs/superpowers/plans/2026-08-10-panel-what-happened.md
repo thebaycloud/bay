@@ -343,7 +343,7 @@ red, not a second gate:
 ```bash
 cd services/proxy
 grep -n '[*]/' src/xray-panel.ts          # expect: only inside the file's own /** */ doc blocks, never inside XRAY_JS
-grep -c '[`]' src/xray-panel.ts           # expect: 4 -- the lines opening and closing each String.raw literal
+grep -n '[`]' src/xray-panel.ts           # expect: 10 lines -- 4 are the String.raw delimiters (18, 34, 44, 185), 6 are backticks in the file's own JSDoc prose. What matters is that no new one lands between 44 and 185.
 ```
 
 - [ ] **Step 6: Commit**

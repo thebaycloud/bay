@@ -56,6 +56,27 @@ function runDrawXray(reading: unknown) {
   return fn(document, h, C, fakeXr, reading);
 }
 
+/**
+ * Every string the fake host was given, so a test can assert which of the four
+ * states was drawn rather than only that drawing survived.
+ *
+ * Kept as separate cells on purpose. Joined into one blob, an assertion for
+ * "failed" also passes on the Breaks section's "Nothing has failed." -- a test
+ * that looks strict and checks nothing. Cell equality cannot do that.
+ */
+function cellsOf(node: unknown): string[] {
+  const out: string[] = [];
+  const walk = (n: any): void => {
+    if (!n || typeof n !== "object") return;
+    if (typeof n.textContent === "string") out.push(n.textContent);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
+const textOf = (node: unknown): string => cellsOf(node).join(" ");
+
 test("drawXray runs against a real Reading without throwing", async () => {
   const reading = await assembleReading("lilna", {
     xray: () => ({ since: 1000, here: { count: 2, names: ["ada", "grace"] }, paths: [], dropped: 0 }),
@@ -149,4 +170,68 @@ test("ago is dur plus a suffix, so the two cannot drift", () => {
   for (const s of [45, 720, 18000, 691200]) {
     assert.equal(ago(s), dur(s) + " ago");
   }
+});
+
+const liveNone = { since: 1000, here: { count: 0, names: [] }, paths: [], dropped: 0 };
+const door = async () => ({ door: "lilna.supersonic.cv", open: true });
+
+test("an unreadable durable half says so, and never reads as never-built", async () => {
+  const reading = await assembleReading("lilna", {
+    xray: () => liveNone,
+    listBuilds: async () => null,
+    door,
+  });
+  assert.equal(reading.since.builds, "unreadable");
+  const text = textOf(runDrawXray(reading));
+  assert.match(text, /Could not read/);
+  assert.doesNotMatch(text, /never been built/);
+});
+
+test("an empty durable half states the fact", async () => {
+  const reading = await assembleReading("new", {
+    xray: () => liveNone,
+    listBuilds: async () => [],
+    door: async () => ({ door: "new.supersonic.cv", open: false }),
+  });
+  assert.match(textOf(runDrawXray(reading)), /never been built/);
+});
+
+test("builds draw who, and each outcome state distinctly", async () => {
+  const now = Date.now();
+  const reading = await assembleReading("lilna", {
+    xray: () => liveNone,
+    listBuilds: async () => [
+      { runId: "r1", who: "you", startedAt: now - 60_000, endedAt: now - 30_000, outcome: "ok", linesGone: false },
+      { runId: "r2", who: "agent", startedAt: now - 120_000, endedAt: now - 90_000, outcome: "failed", linesGone: false },
+      { runId: "r3", who: "platform", startedAt: now - 300_000, endedAt: null, outcome: null, linesGone: false },
+      { runId: "r4", who: "someone", startedAt: now - 900_000, endedAt: now - 800_000, outcome: null, linesGone: true },
+    ],
+    door,
+  });
+  const cells = cellsOf(runDrawXray(reading));
+  // Exact cells, not a substring search over the whole panel.
+  for (const who of ["you", "agent", "platform", "someone"]) assert.ok(cells.includes(who), who);
+  assert.ok(cells.includes("ok"));
+  assert.ok(cells.includes("failed"));
+  // A dispatched build that never starts reads in-flight forever (handoff
+  // 5.3). It must look stuck, not busy, so the elapsed time is on the row.
+  assert.ok(cells.includes("in flight, 5m"));
+  // outcome null with endedAt set is the shape a finishBuild that never fires
+  // would leave behind (handoff 4). If it ever appears it must not read as ok,
+  // and the pruned marker rides on the same cell.
+  assert.ok(cells.includes("ended, unrecorded · lines pruned"));
+});
+
+test("the placeholder draws not-read-yet, not never-built", () => {
+  const call = /drawXray\((\{[\s\S]*?\})\);\s*\n\s*pullXray/.exec(XRAY_JS);
+  assert.ok(call, "the placeholder drawXray(...) call was not found in XRAY_JS");
+  const placeholder = new Function(`return ${call![1]};`)();
+  const text = textOf(runDrawXray(placeholder));
+  assert.match(text, /Reading/);
+  assert.doesNotMatch(text, /never been built/);
+});
+
+test("the panel reads the reading's durable half", () => {
+  assert.match(XRAY_JS, /d\.builds/);
+  assert.match(XRAY_JS, /d\.since\.builds/);
 });
