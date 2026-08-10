@@ -355,6 +355,25 @@ git commit -m "Panel: draw what happened, and who did it"
 
 ---
 
+## What the plan got wrong, found after it ran
+
+Recorded here rather than edited away, because both were caught by looking at
+the running thing and neither could have been caught by the suite.
+
+- **Two states drew the same duration twice.** An in-flight row read
+  `15m ago | someone | in flight, 15m` — for a build that has not ended, "when
+  did it start" and "how long has it run" are one number. The right-hand cell is
+  now just `in flight`. Found by rendering the panel in a browser.
+- **"This app has never been built" was a lie about every app older than the
+  builds table.** Production's `oh6sn` returns `since.builds: "durable"` with
+  zero rows, because the table began on 10 Aug and the app predates it. Now
+  "No builds recorded for this app." Found by reading production, not the tests.
+- **The Global Constraints section was violated by the fix for the second one.**
+  A comment written to explain the honesty rule contained backticks around a
+  field name, inside `String.raw`, which closed the literal — the exact failure
+  the constraint names, on the third consecutive session for this file. `tsc`
+  and three test files went red immediately, which is the system working.
+
 ## After the plan
 
 Two corrections to `~/supersonic-handoff-2026-08-10.md` fall out of this work and belong in the next handoff rather than in this branch:

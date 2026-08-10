@@ -184,7 +184,7 @@ test("an unreadable durable half says so, and never reads as never-built", async
   assert.equal(reading.since.builds, "unreadable");
   const text = textOf(runDrawXray(reading));
   assert.match(text, /Could not read/);
-  assert.doesNotMatch(text, /never been built/);
+  assert.doesNotMatch(text, /No builds recorded/);
 });
 
 test("an empty durable half states the fact", async () => {
@@ -193,7 +193,7 @@ test("an empty durable half states the fact", async () => {
     listBuilds: async () => [],
     door: async () => ({ door: "new.supersonic.cv", open: false }),
   });
-  assert.match(textOf(runDrawXray(reading)), /never been built/);
+  assert.match(textOf(runDrawXray(reading)), /No builds recorded/);
 });
 
 test("builds draw who, and each outcome state distinctly", async () => {
@@ -230,7 +230,7 @@ test("the placeholder draws not-read-yet, not never-built", () => {
   const placeholder = new Function(`return ${call![1]};`)();
   const text = textOf(runDrawXray(placeholder));
   assert.match(text, /Reading/);
-  assert.doesNotMatch(text, /never been built/);
+  assert.doesNotMatch(text, /No builds recorded/);
 });
 
 test("the panel reads the reading's durable half", () => {

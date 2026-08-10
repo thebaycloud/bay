@@ -51,10 +51,18 @@ State is decided in this order, and the order matters:
    codebase was written to prevent, and the panel breaks the rule the object
    keeps.
 
-3. **`d.builds` is empty, window `durable`** → "This app has never been built."
+3. **`d.builds` is empty, window `durable`** → "No builds recorded for this app."
 
-   A fact, and it is safe to state as one because the window above says the read
-   succeeded.
+   A fact about the record, deliberately not about the app. The first wording
+   here was "This app has never been built", which the window above does license
+   — the read succeeded, the list really is empty. It was still wrong: the
+   `builds` table began on 10 Aug, so every app older than it reads empty while
+   plainly being built and running. Verified on production an hour after this
+   shipped — `oh6sn` returned `since.builds: "durable"` with zero rows.
+
+   That is the same substitution `since` and `BuildsWindow` were written to
+   prevent, told one field further along: a gap in the record rendered as an
+   absence in the world.
 
 4. **Otherwise, rows** — newest first, which `listBuilds` already guarantees
    (`ORDER BY started_at DESC`). Capped at 8, matching `Breaks`.

@@ -137,7 +137,12 @@ function drawXray(d){
     // those two apart.
     s4.appendChild(h('div','none','Could not read the build history for this app.'));
   } else if(!d.builds.length){
-    s4.appendChild(h('div','none','This app has never been built.'));
+    // A fact about the record, not about the app. The builds table began on
+    // 10 Aug, so every app older than it reads empty here while plainly being
+    // built and running -- oh6sn did, an hour after this shipped. "Never been
+    // built" would be the same lie that the since fields and BuildsWindow exist
+    // to stop, told one field further along.
+    s4.appendChild(h('div','none','No builds recorded for this app.'));
   } else {
     var t3=document.createElement('table');
     var bnow=Date.now();
