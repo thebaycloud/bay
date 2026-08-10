@@ -152,9 +152,11 @@ function drawXray(d){
       var out,cls;
       if(b.outcome==='ok'){ out='ok'; cls='n'; }
       else if(b.outcome==='failed'){ out='failed'; cls='n bad'; }
-      // Elapsed rather than a spinner: a build stuck for a week should look
-      // wrong, not busy.
-      else if(b.endedAt===null){ out='in flight, '+dur(since); cls='n'; }
+      // No elapsed time here: for a build that has not ended, "how long has it
+      // run" and the row's own "when did it start" are the same number, and it
+      // was printed twice until someone looked at it. The left column is what
+      // makes a stuck build look stuck -- "9d ago  platform  in flight".
+      else if(b.endedAt===null){ out='in flight'; cls='n'; }
       // Ended without an outcome should be impossible. It is drawn, and drawn
       // as bad, because the alternative is that it reads as success.
       else { out='ended, unrecorded'; cls='n bad'; }

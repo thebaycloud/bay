@@ -214,8 +214,10 @@ test("builds draw who, and each outcome state distinctly", async () => {
   assert.ok(cells.includes("ok"));
   assert.ok(cells.includes("failed"));
   // A dispatched build that never starts reads in-flight forever (handoff
-  // 5.3). It must look stuck, not busy, so the elapsed time is on the row.
-  assert.ok(cells.includes("in flight, 5m"));
+  // 5.3). The row's own "5m ago" is what makes that look stuck; repeating the
+  // same duration in this cell said nothing twice.
+  assert.ok(cells.includes("in flight"));
+  assert.ok(cells.includes("5m ago"));
   // outcome null with endedAt set is the shape a finishBuild that never fires
   // would leave behind (handoff 4). If it ever appears it must not read as ok,
   // and the pruned marker rides on the same cell.
