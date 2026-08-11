@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getPool } from "./db";
-import { HTTP_TIMEOUT_MS, accessToken, imageTag, runJobUrl, runServiceUrl } from "./gcp-rest";
+import { HTTP_TIMEOUT_MS, accessToken, identityToken, imageTag, runJobUrl, runServiceUrl } from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
 
 const DB = "supersonic_platform";
@@ -306,7 +306,28 @@ export async function supersedeRunsFor(slug: string): Promise<void> {
   const ids = await runIdsForSlug(slug);
   if (!ids.length) return;
   for (const id of ids) await finishRun(id).catch(() => {});
-  await cancelExecutionsFor(ids).catch(() => {});
+  // Both places a deploy can be running. Cancelling only the Job would have
+  // made this function quietly half-effective the moment the worker started
+  // taking deploys — superseding would delete the row and leave the previous
+  // deploy running, which is the exact race the cancel exists to close.
+  await Promise.all([
+    cancelExecutionsFor(ids).catch(() => {}),
+    cancelOnWorker(ids).catch(() => {}),
+  ]);
+}
+
+/** Stop a superseded run if the warm worker is the one running it. */
+async function cancelOnWorker(runIds: string[]): Promise<void> {
+  const url = workerUrl();
+  if (!url) return;
+  const token = await identityToken(url);
+  if (!token) return;
+  await fetch(`${url}/cancel`, {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ runIds }),
+    signal: AbortSignal.timeout(WORKER_ACCEPT_MS),
+  });
 }
 
 /** Cancel the job executions carrying any of these run ids. */
@@ -523,6 +544,106 @@ export async function startDeployJob(runId: string, region: string, job: string)
     // build back on the request's clock, which is the entire thing being fixed.
     "--async", "--quiet",
   ]);
+}
+
+/**
+ * Where the warm worker is, and the commit this service is running.
+ *
+ * Unset means there is no worker — every deploy takes the Job, which is what
+ * happened before this existed and what happens in any environment that has
+ * not been given one. That is the switch-off: clear DEPLOY_WORKER_URL on the
+ * service and the next deploy is dispatched the old way, with no code change
+ * and nothing to roll back.
+ */
+function workerUrl(): string {
+  return (process.env.DEPLOY_WORKER_URL || "").trim().replace(/\/+$/, "");
+}
+function imageTagOfThisService(): string {
+  return (process.env.IMAGE_TAG || "").trim();
+}
+
+/**
+ * How long to wait for the worker to say yes.
+ *
+ * This is on the deploy path — a person is watching — and the whole reason the
+ * worker exists is to make this hop small. A warm worker answers in
+ * milliseconds; anything approaching this bound means it is not answering, and
+ * the Job is a better answer than a longer wait. Deliberately far below
+ * HTTP_TIMEOUT_MS (20s), which is sized for Google APIs rather than for one
+ * hop to a service that is by construction already running.
+ */
+const WORKER_ACCEPT_MS = 4_000;
+
+/** What the worker said when asked to take a run. */
+export type WorkerVerdict = "accepted" | "declined";
+
+/**
+ * Offer a run to the warm worker.
+ *
+ * Every failure is "declined", and that is the design rather than laziness:
+ * the Job path is still there, still correct, and still the thing that ran
+ * every deploy until now. There is no failure of this call that is better
+ * handled by failing the customer's deploy than by taking 104 seconds longer.
+ * The one thing it must not do is claim a deploy started when it did not, so
+ * only an explicit 202 counts.
+ */
+export async function offerToWorker(runId: string): Promise<WorkerVerdict> {
+  const url = workerUrl();
+  if (!url) return "declined";
+  try {
+    // The worker is deployed without public access, so this is an IAM call and
+    // needs an identity token for the worker's own url as audience — the same
+    // mechanism, and the same helper, that reaching a sealed app uses.
+    const token = await identityToken(url);
+    if (!token) return "declined";
+    const res = await fetch(`${url}/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ runId, imageTag: imageTagOfThisService() }),
+      signal: AbortSignal.timeout(WORKER_ACCEPT_MS),
+    });
+    if (res.status === 202) return "accepted";
+    // 429 (already deploying) and 409 (running a different commit) are the two
+    // designed refusals and are normal. Logged all the same: a worker that
+    // refuses EVERY deploy looks exactly like a worker that is not configured,
+    // and the difference should not need a debugger to find.
+    console.error(`deploy worker declined ${runId}: ${res.status} ${(await res.text()).slice(0, 200)}`);
+    return "declined";
+  } catch (e) {
+    console.error(`deploy worker could not be reached for ${runId}`, e);
+    return "declined";
+  }
+}
+
+/**
+ * Start the deploy — on the warm worker if it will take it, on the Job if not.
+ *
+ * The Job costs 104s p50 before the pipeline's first line (114 executions), and
+ * `job-launch` says 116s of that is Cloud Run's own scheduling and container
+ * start rather than anything this repository controls: a hello-world image took
+ * 54-103s to first log in the same project. The worker is already running, so
+ * that entire span becomes one HTTP hop.
+ *
+ * ORDER MATTERS AND SO DOES THE FALLBACK. The worker takes one deploy at a
+ * time and refuses the second, so a busy minute still deploys — it just pays
+ * the old price for the overflow. Nothing here can leave a run undispatched:
+ * every path that is not an accepted 202 goes to the Job, and a Job that
+ * cannot start throws, which the route already turns into an honest 503 and a
+ * deleted run row.
+ */
+export interface DispatchDeps {
+  offer: (runId: string) => Promise<WorkerVerdict>;
+  toJob: (runId: string, region: string, job: string) => Promise<void>;
+}
+
+export async function startDeployRun(
+  runId: string,
+  region: string,
+  job: string,
+  deps: DispatchDeps = { offer: offerToWorker, toJob: startDeployJob },
+): Promise<void> {
+  if (await deps.offer(runId) === "accepted") return;
+  await deps.toJob(runId, region, job);
 }
 
 /**

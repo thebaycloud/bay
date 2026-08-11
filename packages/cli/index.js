@@ -1032,6 +1032,11 @@ async function consumeDeploy(res, args, knownSlug) {
   // The deploy stream announces the slug up front, so even the call paths that
   // let the server pick one can follow the deploy after the stream dies.
   let slug = knownSlug || null;
+  // The server's id for this deploy, announced as the stream's first event. It
+  // is what joins this run to its rows in deploy_stages / deploy_events /
+  // deploy_failures; without it a caller measuring a deploy has only the slug
+  // and a guess at the time window.
+  let runId = null;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -1043,10 +1048,12 @@ async function consumeDeploy(res, args, knownSlug) {
       if (!raw) continue;
       let ev; try { ev = JSON.parse(raw); } catch { continue; }
       if (ev.slug) slug = ev.slug;
+      if (ev.runId) runId = ev.runId;
+      if (ev.type === "run") continue;   // bookkeeping, not narration
       if (ev.type === "log") info("  " + dim(ev.line));
       else if (ev.type === "detected") info("  " + cyan(`detected ${ev.stack?.framework || "app"}`));
-      else if (ev.type === "done") { writeLockfile(ev.decided, ev.slug); if (args.json) json({ ok: true, slug: ev.slug, url: ev.url }); else print(green("✓ live: ") + ev.url); process.exit(0); }
-      else if (ev.type === "error") { if (args.json) json({ ok: false, error: ev.message }); die(ev.message); }
+      else if (ev.type === "done") { writeLockfile(ev.decided, ev.slug); if (args.json) json({ ok: true, slug: ev.slug, url: ev.url, runId }); else print(green("✓ live: ") + ev.url); process.exit(0); }
+      else if (ev.type === "error") { if (args.json) json({ ok: false, error: ev.message, slug, runId }); die(ev.message); }
     }
   }
   // The server can answer with a plain JSON error instead of a stream — a plan limit,
@@ -1069,18 +1076,18 @@ async function consumeDeploy(res, args, knownSlug) {
     const deploy = await followDeployOnServer(slug);
     if (deploy?.status === "live") {
       const url = deploy.url || `https://${slug}.supersonic.cv`;
-      if (args.json) json({ ok: true, slug, url });
+      if (args.json) json({ ok: true, slug, url, runId });
       else print(green("✓ live: ") + url);
       process.exit(0);
     }
     if (deploy?.status === "failed") {
       const why = deploy.error || deploy.stage || "the deploy failed";
-      if (args.json) json({ ok: false, slug, error: why });
+      if (args.json) json({ ok: false, slug, error: why, runId });
       die(why);
     }
     // Still building when we ran out of patience. Say that, rather than calling a
     // deploy failed that may be minutes from landing.
-    if (args.json) json({ ok: false, slug, error: "still building — connection lost", pending: true });
+    if (args.json) json({ ok: false, slug, error: "still building — connection lost", pending: true, runId });
     die(`lost contact with the build and it was still running after 3 minutes. It may still land — check: supersonic logs ${slug}`);
   }
 

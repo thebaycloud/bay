@@ -7,6 +7,7 @@ import { startBridge, redeployScript, type Redeploy } from "./bridge";
 import { CodexBackend } from "./codex";
 import { runAgent } from "./harness";
 import { PLAN_SCHEMA, fromStructured } from "./plan-schema";
+import { recordAgentRun } from "../agent-usage";
 import type { AgentBackend } from "./types";
 import {
   AGENT_MD,
@@ -84,6 +85,15 @@ export async function planDeploy(opts: {
   dir: string;
   log: (l: string) => void;
   timeoutMs?: number;
+  /**
+   * Who this plan is for, so its cost can be charged to a deploy.
+   *
+   * Optional because the planner is also run from tests and by hand, where
+   * there is no deploy to charge. A missing slug means the run is not recorded,
+   * not that it is recorded against nobody.
+   */
+  slug?: string;
+  runId?: string | null;
 }): Promise<DeployPlan> {
   if (agentName() === "opencode") return opencodePlanDeploy(opts);
 
@@ -110,9 +120,22 @@ export async function planDeploy(opts: {
         "then answer with the plan as your final message. Do not narrate.",
     };
 
+    const startedAt = Date.now();
     const run = await runAgent({ backend, spec, log, label: "planner", timeoutMs });
     text = run.text;
     structured = backend.structured(spec);
+
+    // Recorded here rather than at the return, because the tokens are spent by
+    // now and several paths below throw — a partial plan, no usable JSON. A run
+    // that cost money and then failed is exactly the one worth having on file.
+    if (opts.slug) {
+      await recordAgentRun({
+        runId: opts.runId, slug: opts.slug, role: "planner",
+        engine: "codex", model: bareModel(MODEL),
+        tokens: run.tokens, steps: run.steps, durationMs: Date.now() - startedAt,
+        outcome: run.ended === "timeout" ? "timeout" : run.error ? "error" : "ok",
+      });
+    }
 
     // A run that produced an answer is not a failure even if it was killed for
     // looping afterwards — the answer is read either way.
@@ -168,10 +191,26 @@ export async function agentRepair(opts: {
   runtime: Runtime;
   log: (l: string) => void;
   timeoutMs?: number;
+  /** The deploy this repair belongs to, so its cost lands on that deploy. */
+  runId?: string | null;
 }): Promise<RepairResult> {
-  if (agentName() === "opencode") return opencodeRepair(opts);
+  if (agentName() === "opencode") {
+    // Wrapped rather than recorded inside opencode-deploy.ts: the result already
+    // carries the tokens, so the switch is the one place that can charge either
+    // backend without either of them knowing this table exists.
+    const startedAt = Date.now();
+    const r = await opencodeRepair(opts);
+    await recordAgentRun({
+      runId: opts.runId, slug: opts.slug, role: "repair",
+      engine: "opencode", model: bareModel(MODEL),
+      tokens: r.tokens, steps: r.steps, redeploys: r.redeploys,
+      durationMs: Date.now() - startedAt, outcome: r.ok ? "fixed" : "gave-up",
+    });
+    return r;
+  }
 
   const { dir, slug, initialError, plan, facts, redeploy, runtime, log } = opts;
+  const repairStartedAt = Date.now();
   const timeoutMs = opts.timeoutMs ?? Number(process.env.REPAIR_TIMEOUT_MS || 900000);
   const ws = mkdtempSync(join(tmpdir(), "ss-repair-"));
 
@@ -238,6 +277,14 @@ export async function agentRepair(opts: {
     `tokens · total ${tokens.total} (in ${tokens.input} / out ${tokens.output} / reasoning ${tokens.reasoning}` +
     ` / cacheRead ${tokens.cacheRead}) · ${run?.steps ?? 0} steps · ${bridge.redeploys()} redeploys`
   );
+
+  await recordAgentRun({
+    runId: opts.runId, slug, role: "repair",
+    engine: "codex", model: bareModel(MODEL),
+    tokens, steps: run?.steps ?? 0, redeploys: bridge.redeploys(),
+    durationMs: Date.now() - repairStartedAt,
+    outcome: ok ? "fixed" : run?.ended === "timeout" ? "timeout" : "gave-up",
+  });
 
   return {
     ok, url, changes, steps: run?.steps ?? 0, redeploys: bridge.redeploys(), tokens,

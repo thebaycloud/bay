@@ -1608,7 +1608,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             log("Plan unchanged since the last deploy of these files — skipping the planner");
           } else {
             log("Planning the deploy — the agent reads the repo…");
-            plan = await planDeploy({ dir, log });
+            plan = await planDeploy({ dir, log, slug, runId: input.runId });
             worthCaching = true;
           }
         }
@@ -4108,6 +4108,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const fixed = useAgent
         ? await agentRepair({
             dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy, log,
+            runId: input.runId,
             // Named, not inferred: the agent is told which runtime its
             // `redeploy` reaches, so its prompt cannot describe one while the
             // closure runs the other.
