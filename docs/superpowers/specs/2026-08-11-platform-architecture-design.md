@@ -492,6 +492,22 @@ The degenerate case is deliberate: with a single node, a majority is that node,
 so a lone node going silent never triggers eviction — there is nowhere to move it
 to anyway, and `chooseNode` would return null.
 
+**Two nodes is the awkward count, and it is the count actually running.** This
+paragraph reasoned about one and about three and skipped two; measured on 11 Aug,
+the fleet is `fleet-lab-1` (22 sandboxes) and `fleet-lab-2` (8), both on agent
+`e6f6314`. A majority of two is two, so ONE silent node puts the fleet below the
+threshold and eviction never fires — for either node, at any silence. The
+two-node fleet has the single-node behaviour while paying for two machines.
+
+That is not an argument for lowering the threshold. Lowering it to "any one node
+reported" makes a two-node fleet evict on a partition in whichever direction the
+control plane happens to be reachable from, which is the two-copies hazard this
+section exists to close. It is an argument that **the eviction guarantee arrives
+at three nodes, not at two**, and that §10 should say so rather than leaving the
+reader to derive it. Until then, a silent node is a human's problem, and the
+honest thing is for the reconciler to log that it is holding rather than to look
+like it is deciding.
+
 **A database lock for singleton processes.** Where two copies genuinely hurt — a
 queue-consuming worker, a bot polling `getUpdates`, both already named in this
 codebase as things that do not survive being run twice — the process takes a lock
@@ -664,7 +680,10 @@ Dependency order, not priority order. Each entry is a separate spec.
 7. **Workers and crons off Cloud Run** onto the node.
 8. **The build plane** — Railpack, our own BuildKit, local cache.
 9. **The secret broker.**
-10. **Node two and node three**, then the provider decision.
+10. **Node three**, then the provider decision. Node two already exists —
+    `fleet-lab-2` was running 8 sandboxes on 11 Aug, arrived outside this order,
+    and is not represented in the placement model. Three is not a round number
+    here: it is the count at which the quorum rule in §5 can evict at all.
 
 ## What this does not decide
 
