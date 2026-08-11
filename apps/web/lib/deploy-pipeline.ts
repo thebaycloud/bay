@@ -1969,10 +1969,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // keeps its frontend in `frontend/`, which is exactly where the
           // FastAPI template's `.env` sits, and an unbounded walk of a stranger's
           // repository is a cost with no matching gain.
+          //
+          // Best-effort, and the try matters: this is an OPTIONAL improvement to
+          // a build that is otherwise fine, sitting inside a block whose catch
+          // abandons the whole render and deploys the app "the way it would have
+          // been deployed before". An unreadable directory taking the image with
+          // it would be a wildly disproportionate failure.
           const envFiles: string[] = [];
-          const roots = [dir, ...readdirSync(dir, { withFileTypes: true })
-            .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules")
-            .map((e) => join(dir, e.name))];
+          let roots = [dir];
+          try {
+            roots = [dir, ...readdirSync(dir, { withFileTypes: true })
+              .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules")
+              .map((e) => join(dir, e.name))];
+          } catch { /* the root alone, then */ }
           for (const root of roots) {
             for (const name of ENV_FILENAMES) {
               const p = join(root, name);
