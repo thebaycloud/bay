@@ -148,12 +148,31 @@ export async function desiredFor(node: string): Promise<AppSpec[]> {
  * and the agent would then need to understand all of it. It understands one
  * shape instead, and the translation happens once, here, at deploy time.
  */
-export async function placeApp(slug: string, node: string, spec: AppSpec): Promise<void> {
+export async function placeApp(
+  slug: string,
+  node: string,
+  spec: AppSpec,
+  /**
+   * Which release this placement runs, when the caller knows. Absent leaves it
+   * as it was — which is what a RESTORE wants: putting the previous spec back
+   * should keep pointing at the release that spec belongs to, not at the one
+   * that just failed.
+   */
+  release?: number,
+  /** Instance 0 unless told otherwise. A deploy places one; the reconciler adds. */
+  instance = 0,
+): Promise<void> {
   await getPool(DB).query(
-    `INSERT INTO fleet_placements(slug, node, spec)
-     VALUES($1, $2, $3::jsonb)
-     ON CONFLICT(slug, node) DO UPDATE SET spec = EXCLUDED.spec, placed_at = now()`,
-    [slug, node, JSON.stringify(spec)]
+    `INSERT INTO fleet_placements(slug, node, instance, spec, release_id, lease_until)
+     VALUES($1, $2, $5, $3::jsonb, $4, now() + interval '2 minutes')
+     ON CONFLICT(slug, node) DO UPDATE SET
+       spec = EXCLUDED.spec,
+       instance = EXCLUDED.instance,
+       -- COALESCE, so a restore that names no release keeps the one it had.
+       release_id = COALESCE(EXCLUDED.release_id, fleet_placements.release_id),
+       lease_until = EXCLUDED.lease_until,
+       placed_at = now()`,
+    [slug, node, JSON.stringify(spec), release ?? null, instance]
   );
   await bumpFleetGeneration();
 }
