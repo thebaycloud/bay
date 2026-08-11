@@ -620,8 +620,17 @@ func main() {
 		routerAddr = flag.String("router", ":8080", "app traffic address (behind the load balancer)")
 		rootDomain = flag.String("domain", "supersonic.cv", "wildcard domain apps are served under")
 		interval   = flag.Duration("interval", 10*time.Second, "reconcile interval")
+		showVer    = flag.Bool("version", false, "print the build version and exit")
 	)
 	flag.Parse()
+
+	// Before anything else touches the machine. The updater runs this on a
+	// freshly downloaded binary to prove it executes at all, and that check has
+	// to be free of side effects: no state directory, no bridge, no containerd.
+	if *showVer {
+		fmt.Println(versionLine())
+		return
+	}
 
 	if err := os.MkdirAll("/run/supersonic", 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
