@@ -17,9 +17,24 @@ import assert from "node:assert/strict";
 
 let unplaceCalls: string[] = [];
 let unplaceShouldThrow = false;
+/** Slugs whose in-flight deploys were stopped, in the order it happened. */
+let supersedeCalls: string[] = [];
+let supersedeShouldThrow = false;
+/** Everything the route did, in order, so "before" can be asserted as before. */
+let order: string[] = [];
 
 mock.module("@/lib/gcloud", {
-  namedExports: { deleteApp: async () => {} },
+  namedExports: { deleteApp: async () => { order.push("deleteApp"); } },
+});
+
+mock.module("@/lib/deploy-runs", {
+  namedExports: {
+    supersedeRunsFor: async (slug: string) => {
+      order.push("supersede");
+      supersedeCalls.push(slug);
+      if (supersedeShouldThrow) throw new Error("cancel API unreachable");
+    },
+  },
 });
 
 mock.module("@/lib/apps", {
@@ -95,6 +110,57 @@ test("a broken placement lookup does not stop the app from being deleted", async
   // asked for their app to be gone. Losing the whole delete over the one
   // best-effort cleanup step would be a worse outcome than a placement row
   // that lingers a little longer.
+  const res = await post("myapp");
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(unplaceCalls, ["myapp"]);
+});
+
+/* -------------------------------------------------------------------------- */
+/* The deploy that is running while you delete                                */
+/* -------------------------------------------------------------------------- */
+
+test("deleting an app stops the deploy that is running for it", async () => {
+  supersedeCalls = [];
+  supersedeShouldThrow = false;
+  order = [];
+
+  const res = await post("myapp");
+
+  assert.equal(res.status, 200);
+  // Nothing used to stop it. The delete tore down the app and left the build
+  // running against a slug that no longer existed — free to recreate, seconds
+  // later, the very resources this call had just deleted. It also left the run
+  // row standing, which counts against the owner's concurrent-deploy cap for an
+  // hour and holds the app's secrets until the six-hour sweep, even though
+  // bounding exactly that is what deleting the row is for.
+  assert.deepEqual(supersedeCalls, ["myapp"]);
+});
+
+test("the running deploy is stopped BEFORE the app is torn down", async () => {
+  supersedeCalls = [];
+  supersedeShouldThrow = false;
+  order = [];
+
+  await post("myapp");
+
+  // Order is the whole point, not tidiness. Tear the app down first and the
+  // still-running deploy spends the next two minutes recreating a service,
+  // a database and an image for an app the user has been told is gone — which
+  // is one way to manufacture the orphans bench/cleanup.ts was written to hunt.
+  assert.deepEqual(order.slice(0, 2), ["supersede", "deleteApp"]);
+});
+
+test("a deploy that cannot be cancelled does not stop the app being deleted", async () => {
+  supersedeCalls = [];
+  supersedeShouldThrow = true;
+  unplaceCalls = [];
+  unplaceShouldThrow = false;
+  order = [];
+
+  // Same rule as every other cleanup step here: the user asked for their app to
+  // be gone. A build that will not cancel is a smaller problem than a delete
+  // that returns 500 for everything it already did.
   const res = await post("myapp");
 
   assert.equal(res.status, 200);
