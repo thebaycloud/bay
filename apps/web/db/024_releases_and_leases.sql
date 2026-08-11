@@ -106,6 +106,30 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- The planner already spreads for exactly that reason — two instances of one app
 -- on one machine is one machine away from none — so the constraint records a
 -- rule we already keep rather than inventing one to make a migration convenient.
+-- Number the rows that already exist before the index is built, because some
+-- apps have more than one and every one of them defaulted to instance 0.
+--
+-- Found by this migration failing on production: `Key (slug, instance)=(be47q,
+-- 0) is duplicated`. An app has two placement rows on two nodes, because
+-- `placeApp` upserts on (slug, node) — so a deploy that chose a different node
+-- from the last one wrote a second row rather than moving the first — and
+-- `placementFor` reads with LIMIT 1, so nothing in the code has ever seen the
+-- second. `fleet-place.ts` names this exact shape in its own comment: "two
+-- copies of the app running at once, which is exactly what this sequence exists
+-- to prevent." It was already happening.
+--
+-- Newest first, so the placement the LAST deploy intended keeps instance 0 and
+-- the older ones become surplus. The reconciler removes surplus, so this
+-- converges to one instance without anything being deleted here — a migration
+-- that decided which of two live copies to kill would be making that call with
+-- less information than the reconciler has, and irreversibly.
+UPDATE fleet_placements p
+   SET instance = n.rn
+  FROM (SELECT slug, node,
+               row_number() OVER (PARTITION BY slug ORDER BY placed_at DESC, node) - 1 AS rn
+          FROM fleet_placements) n
+ WHERE n.slug = p.slug AND n.node = p.node AND p.instance <> n.rn;
+
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS fleet_placements_instance
   ON fleet_placements (slug, instance);
 

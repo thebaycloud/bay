@@ -121,9 +121,27 @@ export function planPlacements(
   // stop-then-start with extra steps.
   const ready = wanted.filter((p) => p.state === "ready").length;
 
-  const draining = stale.filter((p) => p.state === "draining");
+  const draining = placements.filter((p) => p.state === "draining");
   if (draining.length) {
     return draining.map((p) => ({ kind: "remove" as const, slug, instance: p.instance }));
+  }
+
+  // More instances than were asked for. Production had this and the planner did
+  // not: `placeApp` upserts on (slug, node), so a deploy that chose a different
+  // node from the last one wrote a SECOND row rather than moving the first, and
+  // `placementFor` reads with LIMIT 1 — so nothing in the code ever saw it.
+  // fleet-place.ts had already named the shape: "two copies of the app running
+  // at once, which is exactly what this sequence exists to prevent."
+  //
+  // The lowest-numbered instances are kept, so the choice is stable across
+  // passes: a rule that picked by node or by age could pick differently on the
+  // next pass and remove the one it had just decided to keep.
+  if (wanted.length > desired.replicas) {
+    return wanted
+      .slice()
+      .sort((a, b) => a.instance - b.instance)
+      .slice(desired.replicas)
+      .map((p) => ({ kind: "remove" as const, slug, instance: p.instance }));
   }
 
   if (stale.length && ready >= desired.replicas) {

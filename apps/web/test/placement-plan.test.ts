@@ -122,3 +122,32 @@ test("a second instance goes to a different node from the first", () => {
   assert.equal(steps.length, 1);
   assert.notEqual(place(steps).node, "n1", "two instances on one node is not two instances");
 });
+
+// The case production had and the planner did not: an app with MORE instances
+// than it is asked for. placeApp upserts on (slug, node), so a deploy that
+// chose a different node from the last one wrote a second row rather than
+// moving the first — and placementFor reads with LIMIT 1, so nothing in the
+// code ever saw the second. fleet-place.ts warned about exactly this shape:
+// "two copies of the app running at once, which is exactly what this sequence
+// exists to prevent."
+test("an app with more instances than it asked for loses the extra ones", () => {
+  const steps = planPlacements(desired({ replicas: 1 }),
+    [placed({ instance: 0, node: "n1" }), placed({ instance: 1, node: "n2" })], alive, NOW, true);
+  assert.deepEqual(kinds(steps), ["remove"]);
+  assert.equal(steps[0].instance, 1, "the lowest-numbered instances are the ones kept");
+});
+
+// Draining first, because an instance that is already going does not need a
+// second decision — and counting it as surplus would remove it before it had
+// finished the requests it is holding.
+test("surplus is counted among what is running, not among what is already leaving", () => {
+  const steps = planPlacements(desired({ replicas: 1 }),
+    [placed({ instance: 0 }), placed({ instance: 1, node: "n2", state: "draining" })], alive, NOW, true);
+  assert.deepEqual(kinds(steps), ["remove"], "the draining one is removed because it is draining, not because it is surplus");
+  assert.equal(steps[0].instance, 1);
+});
+
+test("asking for no instances at all removes them without asking for a release change", () => {
+  const steps = planPlacements(desired({ replicas: 0 }), [placed()], alive, NOW, true);
+  assert.deepEqual(kinds(steps), ["remove"]);
+});
