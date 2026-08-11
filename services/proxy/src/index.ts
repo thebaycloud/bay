@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
-import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf } from "./registry";
+import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf, registryStaleFor } from "./registry";
 import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "./pages";
 import { pageRoom } from "./room-page";
 import { serveRoomEvents } from "./room";
@@ -32,7 +32,21 @@ function html(res: ServerResponse, status: number, body: string) {
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse) {
-  if (req.url === "/_healthz") { res.writeHead(200).end("ok"); return; }
+  if (req.url === "/_healthz") {
+    // 200 while serving from memory, and saying so. The edge IS serving — the
+    // whole point of the last-known state in registry.ts is that a database
+    // outage is not an outage out here — so a failing health check would be the
+    // wrong report and would take this instance out for doing its job.
+    //
+    // But an edge running on memory must not look identical to one reading the
+    // database. `staleFor` is null when it is healthy and a number of
+    // milliseconds when it is not, which is the one fact monitoring needs and
+    // the one a person asks first.
+    const staleFor = registryStaleFor();
+    res.writeHead(200, { "Content-Type": "application/json" })
+       .end(JSON.stringify({ ok: true, staleFor }));
+    return;
+  }
 
   const slug = slugFromHost(req.headers.host);
   if (!slug) return html(res, 404, page404());

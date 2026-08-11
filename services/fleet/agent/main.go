@@ -92,6 +92,21 @@ type Desired struct {
 	// address that reaches it. Absent from an older control plane, in which case
 	// the node forwards nothing and behaves exactly as it did.
 	Peers []PeerRoute `json:"peers,omitempty"`
+	// Generation is the control plane's counter at the moment it answered. The
+	// node echoes it back on the next poll; an unchanged counter means it may
+	// keep what it has. Zero from a control plane too old to send one, which
+	// `Source` reads as "do not claim a generation" — so such a node keeps
+	// receiving the full set exactly as it did.
+	Generation int64 `json:"generation,omitempty"`
+	// Unchanged is the control plane saying the answer is the one already held.
+	//
+	// It is NOT an empty desired set, and the difference is every app on this
+	// node: `reconcileOnce` stops what it is not told to run, so returning an
+	// empty Desired here would take the whole machine down on the first poll
+	// after a quiet minute. `Fetch` turns this into a read of the cache — the
+	// same path a control-plane outage already takes, and one this node only
+	// ever gets to reach because it cached successfully.
+	Unchanged bool `json:"unchanged,omitempty"`
 }
 
 // PeerRoute is one app on another node.

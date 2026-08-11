@@ -25,7 +25,12 @@ import (
 	"time"
 )
 
-const cachePath = "/srv/state/desired.cache.json"
+// cachePath is where the last good answer from the control plane is kept.
+//
+// A var rather than a const only so a test can drive Fetch without writing to
+// /srv on the machine running it — the same reason and the same shape as
+// routesPath in main.go. Nothing in the agent reassigns it.
+var cachePath = "/srv/state/desired.cache.json"
 
 // NodeIdentity is what this node tells the control plane about itself.
 type NodeIdentity struct {
@@ -161,6 +166,11 @@ type syncBody struct {
 	// shows them as unknown, which is the honest rendering of "this node has not
 	// told us".
 	Version string `json:"version,omitempty"`
+	// Generation is the counter this node last received together with a payload
+	// it cached. Zero means "I claim nothing" — from an agent too old to send it,
+	// and from one whose last cache write failed — and the control plane answers
+	// either with the full set.
+	Generation int64 `json:"generation,omitempty"`
 }
 
 func metadata(path string) (string, error) {
@@ -232,6 +242,13 @@ type Source struct {
 	// now, via ReportNow below, so this can be called more than once between
 	// polls. A nil Report means this node does not report at all, which is a
 	// different statement from reporting nothing — see syncBody.
+	// lastGeneration is the counter the control plane last sent ALONGSIDE a
+	// payload this node successfully cached. That pairing is the safety
+	// property: the node only ever claims a generation it can fall back on, so
+	// an "unchanged" answer always has a cache behind it. A cache write that
+	// fails leaves this at zero, the next poll claims nothing, and the control
+	// plane sends the full set.
+	lastGeneration int64
 	Report func() []ProcessFault
 	// ReportRunning answers "what am I confirmed to be running right now", on
 	// the same sync. Nil carries the same meaning as a nil Report and is the
@@ -246,13 +263,49 @@ func (s *Source) Fetch() (Desired, error) {
 
 	d, err := s.fromControlPlane()
 	if err == nil {
+		// Nothing has moved since the last poll, so the answer is the one already
+		// on disk. Reading the cache rather than returning `d` is not an
+		// optimisation — `d` is EMPTY here, and reconcileOnce stops whatever it is
+		// not told to run.
+		if d.Unchanged {
+			// `fromFile` reads an ABSENT file as "nothing is desired, no error" —
+			// which is right for the lab path, where a missing file means this node
+			// has been given nothing to run, and catastrophic here, where it would
+			// turn "you are up to date" into an empty desired set and stop every
+			// app on the machine. Ask whether the file exists before trusting what
+			// fromFile makes of it.
+			if _, statErr := os.Stat(cachePath); statErr != nil {
+				log.Printf("desired: told unchanged at generation %d with no cache on disk (%v); asking for the full set next poll",
+					s.lastGeneration, statErr)
+				s.lastGeneration = 0
+				return Desired{}, fmt.Errorf("unchanged at generation %d but no cached state: %w", s.lastGeneration, statErr)
+			}
+			cached, cErr := s.fromFile(cachePath)
+			if cErr == nil {
+				return cached, nil
+			}
+			// Claimed a generation and cannot produce the state behind it. Forget
+			// the claim so the next poll asks for everything, and fail this pass
+			// rather than reconciling against a set we cannot vouch for.
+			log.Printf("desired: told unchanged at generation %d but the cache is unreadable (%v); asking for the full set next poll",
+				s.lastGeneration, cErr)
+			s.lastGeneration = 0
+			return Desired{}, cErr
+		}
 		// Cache only a good answer. Writing the cache on failure would let one
 		// bad response become the node's permanent idea of the world.
+		cached := false
 		if b, mErr := json.MarshalIndent(d, "", "  "); mErr == nil {
 			tmp := cachePath + ".tmp"
 			if os.WriteFile(tmp, b, 0o600) == nil {
-				_ = os.Rename(tmp, cachePath)
+				cached = os.Rename(tmp, cachePath) == nil
 			}
+		}
+		// The generation is remembered ONLY with a cache behind it. Remembering it
+		// after a failed write would let this node answer "I am at 7" with nothing
+		// to show for 7, and the next unchanged reply would be unanswerable.
+		if cached {
+			s.lastGeneration = d.Generation
 		}
 		return d, nil
 	}
@@ -298,7 +351,7 @@ func (s *Source) ReportNow() {
 
 func (s *Source) fromControlPlane() (Desired, error) {
 	var d Desired
-	payload := syncBody{NodeIdentity: s.Identity, Version: Version}
+	payload := syncBody{NodeIdentity: s.Identity, Version: Version, Generation: s.lastGeneration}
 	if s.Report != nil {
 		// Never a nil slice behind the pointer: json.Marshal writes `null` for
 		// one, and `null` is not an array, so the control plane would read it as
