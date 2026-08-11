@@ -32,7 +32,12 @@ import type { Runtime, ProcessState } from "./fleet";
 
 export interface PlacementPorts {
   chooseNode: () => Promise<string | null>;
-  placeApp: (slug: string, node: string, spec: AppSpec) => Promise<void>;
+  /**
+   * `release` is the id this placement runs, and it is absent on a RESTORE:
+   * putting the previous spec back keeps the release that spec belongs to
+   * rather than claiming the one that just failed.
+   */
+  placeApp: (slug: string, node: string, spec: AppSpec, release?: number) => Promise<void>;
   unplaceApp: (slug: string) => Promise<void>;
   /**
    * What is placed for this app right now, and where — before this deploy
@@ -530,7 +535,11 @@ export async function placeOnFleet(
   await p.setDesired(slug, release);
 
   // 1. place. Nothing routes here yet; run_url still points at wherever it did.
-  await p.placeApp(slug, node, spec);
+  // With the release, or `desired` and the placement diverge permanently: the
+  // deploy records N, asks for N, and places a row still claiming N-1. The
+  // reconciler then rolls a second instance forward on every pass, for a deploy
+  // that had already placed the right thing.
+  await p.placeApp(slug, node, spec, release);
   // desiredFor only hands a node placements for apps whose runtime is 'fleet',
   // so this has to happen before the probe even though it is not yet proven —
   // there is nothing for step 2 to verify otherwise.

@@ -1188,3 +1188,38 @@ test("a first deploy that fails leaves no desired release rather than inventing 
   }).p);
   assert.deepEqual(said, [1, null]);
 });
+
+// The placement must carry the release it is running, or `desired` and the
+// placement diverge permanently: the deploy records release N, asks for it, and
+// then places a row still claiming N-1. The reconciler then sees an app whose
+// only instance runs the wrong release and rolls a second one forward on every
+// pass — for a deploy that had already placed the right thing.
+//
+// Caught by a real deploy of q6doa: desired moved to 29 and the placement stayed
+// on 25.
+test("the placement records which release it is running", async () => {
+  const placed: unknown[] = [];
+  await placeOnFleet("lilna", spec, "10.0.0.1", ports({
+    recordRelease: async () => 42,
+    placeApp: async (...args: unknown[]) => { placed.push(args); },
+  }).p);
+  assert.equal(placed.length, 1);
+  assert.equal((placed[0] as unknown[])[3], 42, "placeApp must be told the release it is placing");
+});
+
+// The restore is the exception, and it must stay one. Putting the previous spec
+// back should keep pointing at the release that spec belongs to — naming the
+// release that just failed would make the rollback claim to be the thing it
+// rolled back from.
+test("a restore names no release, so the placement keeps the one its spec belongs to", async () => {
+  const placed: unknown[][] = [];
+  await placeOnFleet("lilna", spec, "10.0.0.1", ports({
+    probe: async () => ({ code: 503 }),
+    recordRelease: async () => 42,
+    readPlacement: async () => ({ node: "fleet-lab-2", spec }),
+    placeApp: async (...args: unknown[]) => { placed.push(args); },
+  }).p);
+  assert.equal(placed.length, 2, "one place, then one restore");
+  assert.equal(placed[0][3], 42);
+  assert.equal(placed[1][3], undefined, "the restore must not claim the failed release");
+});
