@@ -8,8 +8,15 @@
  * `"cachedBuildConfig" is not a valid Route export field`.
  */
 
-/** Which image builder the container lanes use. */
-export type Builder = "kaniko" | "buildkit";
+/**
+ * Which image builder the container lanes use.
+ *
+ * `railpack` is not a fourth kind of daemon — it is buildx again, running
+ * Railpack as a BuildKit frontend (`--build-arg BUILDKIT_SYNTAX`, plan passed as
+ * `-f`). It is a distinct Builder because it changes what gets built FROM: a
+ * plan Railpack generated, rather than a Dockerfile we emitted.
+ */
+export type Builder = "kaniko" | "buildkit" | "railpack";
 
 /**
  * Kaniko was archived by Google on 2025-06-03, and buildx/BuildKit caches
@@ -40,8 +47,14 @@ export function selectedBuilder(
   env: Record<string, string | undefined> = process.env,
   slug?: string,
 ): Builder {
-  const canaries = (env.BUILDKIT_APPS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (slug && canaries.includes(slug)) return "buildkit";
+  const list = (v: string | undefined) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+
+  // Railpack is checked first, so an app named in both lists takes it. It is the
+  // newer and narrower instruction, and buildkit is what railpack runs on in any
+  // case — preferring buildkit would make a railpack canary silently not happen.
+  if (slug && list(env.RAILPACK_APPS).includes(slug)) return "railpack";
+  if (slug && list(env.BUILDKIT_APPS).includes(slug)) return "buildkit";
+  if (env.BUILDER === "railpack") return "railpack";
   return env.BUILDER === "buildkit" ? "buildkit" : "kaniko";
 }
 
@@ -272,6 +285,43 @@ export function kanikoBuildConfig(image: string, slug?: string, inputs: BuildInp
  */
 const SAFE_IMAGE_REF = /^[A-Za-z0-9._:/@-]+$/;
 
+/**
+ * Whether a lane can mount a build secret without baking it into the image.
+ *
+ * A predicate rather than an equality because the question outlives the answer.
+ * Three sites asked `builder === "buildkit"` — one choosing the Cloud Build
+ * config, two in deploy-pipeline.ts deciding whether to mount secrets at all —
+ * and every one of them silently excluded railpack the moment the union grew. A
+ * railpack build of a Prisma app would have dropped its build secret and
+ * reported success.
+ *
+ * Kaniko is false: its only channel is `--build-arg`, whose values remain
+ * readable in the history of an image pushed to a SHARED repository and deleted
+ * by nothing.
+ */
+export function mountsBuildSecrets(builder: Builder): boolean {
+  return builder === "buildkit" || builder === "railpack";
+}
+
+/**
+ * The plan `railpack prepare` writes, and that buildx is pointed at with `-f`.
+ *
+ * The name is Railpack's own default rather than one of ours, so the file the
+ * pipeline writes and the file the docs describe are the same file. It lives in
+ * the build context beside the source, which is where `-f` expects it.
+ */
+export const RAILPACK_PLAN = "railpack-plan.json";
+
+/**
+ * The BuildKit frontend that reads that plan.
+ *
+ * Unversioned deliberately, for now: Railpack ships the frontend and the CLI
+ * together and a plan is produced by a CLI of some version, so pinning the
+ * frontend without pinning the CLI in our image would be pinning half a pair.
+ * The CLI version in the image is the thing to pin, and it is pinned there.
+ */
+export const RAILPACK_FRONTEND = "ghcr.io/railwayapp/railpack-frontend";
+
 export function buildkitImage(env: Record<string, string | undefined> = process.env): string | null {
   const ref = (env.BUILDKIT_IMAGE ?? "").trim();
   return ref && SAFE_IMAGE_REF.test(ref) ? ref : null;
@@ -354,6 +404,20 @@ export function cachedBuildConfig(
   inputs: BuildInputs = {},
 ): string {
   const needsSecrets = Boolean(inputs.secretEnv?.length);
+
+  // Railpack is buildx with a frontend, so both halves are attached HERE rather
+  // than by the caller. Supplying one without the other is the failure this
+  // guards: `-f railpack-plan.json` with no BUILDKIT_SYNTAX feeds a build plan to
+  // the Dockerfile parser, which fails on the first `{` with a message naming
+  // neither Railpack nor the plan.
+  if (builder === "railpack") {
+    return buildkitBuildConfig(image, buildkitImage(), slug, {
+      ...inputs,
+      dockerfile: RAILPACK_PLAN,
+      buildArgs: [...(inputs.buildArgs ?? []), { key: "BUILDKIT_SYNTAX", value: RAILPACK_FRONTEND }],
+    });
+  }
+
   return builder === "buildkit" || needsSecrets
     ? buildkitBuildConfig(image, buildkitImage(), slug, inputs)
     : kanikoBuildConfig(image, slug, inputs);

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  cachedBuildConfig, kanikoBuildConfig, buildkitBuildConfig, selectedBuilder,
+  cachedBuildConfig, kanikoBuildConfig, buildkitBuildConfig, selectedBuilder, RAILPACK_PLAN, mountsBuildSecrets,
   buildkitImage, buildLogLine, CACHE_MISS_NOISE, cloudBuildIdFrom, appBuildTag,
   runnerPrepareConfig,
 } from "../lib/build-config";
@@ -343,4 +343,63 @@ test("every config we generate is tagged with its app", () => {
 
   // No slug (a caller that has none yet) must not emit a malformed empty block.
   assert.doesNotMatch(kanikoBuildConfig(IMAGE), /tags:/);
+});
+
+// Railpack is a third lane, canaried the same way and for the same reason. The
+// failure it is probing is different from buildkit's: not registry auth, but
+// whether Railpack's detection agrees with ours about what an app IS. That
+// answer varies per repository, so unlike the buildkit rollout — where one app
+// either proved the IAM grant or disproved it for everyone — this one genuinely
+// has to walk through apps one at a time.
+test("railpack is a lane of its own, and one app can take it alone", () => {
+  const env = { RAILPACK_APPS: "demo" };
+  assert.equal(selectedBuilder(env, "demo"), "railpack");
+  assert.equal(selectedBuilder(env, "other"), "kaniko", "a railpack canary moves one app, not the default");
+  assert.equal(selectedBuilder({ BUILDER: "railpack" }, "anything"), "railpack");
+
+  // Both lists naming the same app: railpack wins, because it is the newer and
+  // narrower instruction and because buildkit is what railpack runs on anyway —
+  // the frontend is executed by the same buildx step. Silently preferring
+  // buildkit would make a railpack canary look like it ran when it did not.
+  assert.equal(selectedBuilder({ BUILDKIT_APPS: "demo", RAILPACK_APPS: "demo" }, "demo"), "railpack");
+});
+
+// The union grew and the dispatch is a ternary, not an exhaustive switch, so
+// `railpack` fell through to Kaniko — and tsc was happy, because falling into
+// the wrong branch of a correct ternary is not a type error. A railpack canary
+// would have built a Dockerfile with Kaniko and reported success.
+test("the railpack lane is buildx, and cannot quietly become Kaniko", () => {
+  const c = cachedBuildConfig("img", "railpack", "demo");
+  assert.equal(c.includes("docker buildx build"), true, "railpack runs as a buildx frontend");
+  assert.equal(c.includes("kaniko"), false);
+});
+
+// Both halves are supplied by the lane rather than by its caller. Passing one
+// without the other is the failure this prevents: `-f railpack-plan.json` with
+// no BUILDKIT_SYNTAX hands a build plan to the Dockerfile parser, which fails on
+// the first `{` with a syntax error that names neither Railpack nor the plan.
+test("the railpack lane supplies both the frontend and the plan, or neither", () => {
+  const c = cachedBuildConfig("img", "railpack", "demo");
+  assert.equal(c.includes("BUILDKIT_SYNTAX=ghcr.io/railwayapp/railpack-frontend"), true);
+  assert.equal(c.includes(`-f ${RAILPACK_PLAN}`), true);
+  assert.equal(c.includes("-f Dockerfile"), false);
+
+  // And the other lanes are untouched — they still build a Dockerfile.
+  assert.equal(cachedBuildConfig("img", "buildkit", "demo").includes("-f Dockerfile"), true);
+  assert.equal(cachedBuildConfig("img", "buildkit", "demo").includes("BUILDKIT_SYNTAX"), false);
+});
+
+// Two more sites in deploy-pipeline.ts asked `builder === "buildkit"` when the
+// question they meant was "can this lane mount a secret without baking it into
+// the image?". Kaniko cannot — its only channel is `--build-arg`, whose values
+// stay readable in the history of an image pushed to a SHARED repository. That
+// is why the check exists.
+//
+// Railpack IS buildx, so it can. Left as an equality, a railpack build of a
+// Prisma app would have dropped its build secret and reported success — the
+// same shape as the Kaniko fall-through above, one file over.
+test("the question is what a lane can mount, not what it is called", () => {
+  assert.equal(mountsBuildSecrets("buildkit"), true);
+  assert.equal(mountsBuildSecrets("railpack"), true, "railpack is buildx with a frontend");
+  assert.equal(mountsBuildSecrets("kaniko"), false, "no --mount=type=secret, and --build-arg is not a substitute");
 });

@@ -46,7 +46,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
-import { cachedBuildConfig, selectedBuilder, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
@@ -2577,7 +2577,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // not a degraded cache". So this waits for BUILDER=buildkit rather than
       // deciding for the operator, and says so when it is skipping something.
       const wanted = buildSecrets(secretRefs);
-      const mountable = builder === "buildkit" ? wanted : [];
+      const mountable = mountsBuildSecrets(builder) ? wanted : [];
       if (wanted.length && !mountable.length) {
         log(`! ${wanted.map((r) => r.key).join(", ")} will not be readable during the build — `
           + `the current builder cannot mount a secret without baking it into the image. Set BUILDER=buildkit.`);
@@ -2985,7 +2985,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
 
       try {
         await stages.around(generatedBuild ? "build" : "prepare", async () => {
-          const mountable = builder === "buildkit" ? buildSecrets(secretRefs) : [];
+          const mountable = mountsBuildSecrets(builder) ? buildSecrets(secretRefs) : [];
           // Where the build runs from, and what it reads as its Dockerfile. Both
           // are the service's own directory unless the author's file says
           // otherwise, and the config is named per service so two of them cannot
