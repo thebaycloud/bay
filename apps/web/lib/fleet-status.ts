@@ -195,6 +195,16 @@ export interface RawNodeRow {
   memory_bytes: number | string;
   drain: boolean;
   last_seen_age_s: number | string;
+  /**
+   * Which build of the agent the node last reported.
+   *
+   * Optional and nullable, and both states mean the same thing: this node has
+   * not said. `db/022_node_agent_version.sql` adds the column with no backfill,
+   * so every node carries null until its agent is new enough to report — and a
+   * reader that filled that in with a guess would recreate exactly the
+   * confident-wrong-answer this column was added to end.
+   */
+  agent_version?: string | null;
 }
 
 export interface RawPlacementRow {
@@ -222,6 +232,8 @@ export interface NodeRow {
   memoryBytes: number;
   drain: boolean;
   lastSeenAgeS: number;
+  /** Null or absent both mean "this node has not told us". */
+  agentVersion?: string | null;
 }
 
 export interface PlacementRow {
@@ -262,6 +274,7 @@ export function toNodeRow(r: RawNodeRow): NodeRow {
     memoryBytes: age(r.memory_bytes),
     drain: Boolean(r.drain),
     lastSeenAgeS: age(r.last_seen_age_s),
+    agentVersion: r.agent_version ?? null,
   };
 }
 
@@ -355,6 +368,16 @@ export interface NodeView {
   lastSeenAgeS: number;
   /** Two values only. `drain` is a SEPARATE fact and never replaces this one. */
   freshness: NodeFreshness;
+  /**
+   * Which agent build the node last reported, or null when it has not.
+   *
+   * Null is rendered as "unknown" rather than as blank: an empty cell reads as a
+   * rendering bug, and the fact here — a node running an agent too old to say
+   * what it is — is precisely the one that cost the fleet-pull and fleet-boot
+   * stages, which shipped and wrote zero rows because nothing could tell an
+   * out-of-date node from a current one.
+   */
+  agentVersion: string | null;
   placed: number;
   faults: number;
 }
@@ -500,6 +523,7 @@ export function buildFleetView(rows: FleetRows): FleetView {
     drain: n.drain,
     lastSeenAgeS: n.lastSeenAgeS,
     freshness: nodeFreshness(n.lastSeenAgeS),
+    agentVersion: n.agentVersion ?? null,
     placed: rows.placements.filter((p) => p.node === n.name).length,
     faults: faults.filter((f) => f.node === n.name).length,
   }));
@@ -538,6 +562,7 @@ const NODES_SQL = `
          n.cpus,
          n.memory_bytes,
          n.drain,
+         n.agent_version,
          extract(epoch from now() - n.last_seen)::float8 AS last_seen_age_s
     FROM fleet_nodes n
    ORDER BY n.name`;

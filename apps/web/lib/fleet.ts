@@ -33,6 +33,32 @@ export interface NodeReport {
   internalIp: string;
   memoryBytes: number;
   cpus: number;
+  /** Which build of the agent is speaking. Absent from an agent too old to say. */
+  agentVersion?: string;
+}
+
+/**
+ * The heartbeat write, as a query rather than as an effect.
+ *
+ * Separated so the one rule that is easy to get wrong can be tested without a
+ * database: an agent that does not report a version must not clear the stored
+ * one. `EXCLUDED.agent_version` is null for such an agent, and a plain
+ * assignment would blank the column on every one of its heartbeats — so a
+ * rolling agent update would read as the whole fleet losing its version.
+ */
+export function heartbeatSql(n: NodeReport) {
+  return {
+    text: `INSERT INTO fleet_nodes(name, zone, internal_ip, memory_bytes, cpus, agent_version, last_seen)
+             VALUES($1,$2,$3,$4,$5,$6, now())
+           ON CONFLICT (name) DO UPDATE SET
+             zone = EXCLUDED.zone,
+             internal_ip = EXCLUDED.internal_ip,
+             memory_bytes = EXCLUDED.memory_bytes,
+             cpus = EXCLUDED.cpus,
+             agent_version = COALESCE(EXCLUDED.agent_version, fleet_nodes.agent_version),
+             last_seen = now()`,
+    values: [n.name, n.zone, n.internalIp, n.memoryBytes, n.cpus, n.agentVersion ?? null],
+  };
 }
 
 /**
@@ -43,17 +69,8 @@ export interface NodeReport {
  * would orphan every app on it.
  */
 export async function heartbeatNode(n: NodeReport): Promise<void> {
-  await getPool(DB).query(
-    `INSERT INTO fleet_nodes(name, zone, internal_ip, memory_bytes, cpus, last_seen)
-     VALUES($1, $2, $3, $4, $5, now())
-     ON CONFLICT(name) DO UPDATE SET
-       zone = EXCLUDED.zone,
-       internal_ip = EXCLUDED.internal_ip,
-       memory_bytes = EXCLUDED.memory_bytes,
-       cpus = EXCLUDED.cpus,
-       last_seen = now()`,
-    [n.name, n.zone, n.internalIp, n.memoryBytes, n.cpus]
-  );
+  const q = heartbeatSql(n);
+  await getPool(DB).query(q.text, q.values);
 }
 
 /** Everything a given node should be running right now. */
@@ -569,6 +586,8 @@ export interface FleetNodeRow {
   drain: boolean;
   last_seen: Date;
   placed: string;
+  /** Null when the node has never reported one — an agent too old to say. */
+  agent_version: string | null;
 }
 
 export async function listNodes(): Promise<FleetNodeRow[]> {

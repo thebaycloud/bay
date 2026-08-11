@@ -119,7 +119,7 @@ export default async function FleetPage() {
                 <Section title="Nodes" blurb="The machines, and how long ago each last said anything.">
                   <Panel title={<>{snap.nodes.length} node{snap.nodes.length === 1 ? "" : "s"}</>}>
                     <Table
-                      columns={["node", "zone", "address", "cpus", "memory", "state", "last heard from", "placed", "failing"]}
+                      columns={["node", "zone", "address", "cpus", "memory", "state", "agent", "last heard from", "placed", "failing"]}
                       rows={snap.nodes.map((n) => [
                         n.name,
                         n.zone,
@@ -130,6 +130,11 @@ export default async function FleetPage() {
                         // draining AND silent, and reading that as an orderly
                         // drain is how a silent machine gets ignored.
                         n.drain ? `${n.freshness} · draining` : n.freshness,
+                        // "unknown", never blank: a node whose agent is too old
+                        // to say which build it is looks identical to a current
+                        // one, and that is the confusion that let fleet-pull and
+                        // fleet-boot ship and write zero rows.
+                        n.agentVersion ?? "unknown",
                         ago(n.lastSeenAgeS),
                         n.placed,
                         n.faults,

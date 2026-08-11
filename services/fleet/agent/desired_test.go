@@ -150,3 +150,20 @@ func TestAClassifiedFaultSendsItsDetailBounded(t *testing.T) {
 		t.Fatalf("detail is unbounded: %d runes", len([]rune(d)))
 	}
 }
+
+func TestSyncBodyCarriesTheAgentVersion(t *testing.T) {
+	old := Version
+	defer func() { Version = old }()
+	Version = "abc1234"
+
+	b, err := json.Marshal(syncBody{
+		NodeIdentity: NodeIdentity{Name: "n1", Zone: "z", InternalIP: "10.0.0.1"},
+		Version:      Version,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"version":"abc1234"`) {
+		t.Fatalf("version missing from sync body: %s", b)
+	}
+}

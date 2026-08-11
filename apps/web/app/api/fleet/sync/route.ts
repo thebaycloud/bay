@@ -58,7 +58,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown };
+  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown; version?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -77,6 +77,9 @@ export async function POST(req: Request) {
       internalIp,
       memoryBytes: Number(body.memoryBytes ?? 0),
       cpus: Number(body.cpus ?? 0),
+      // Only when the node said. `undefined` means "this agent does not report",
+      // which heartbeatSql turns into a COALESCE that leaves the stored value be.
+      agentVersion: typeof body.version === "string" && body.version ? body.version : undefined,
     });
     // Only when the node actually sent the field. Absent means "this agent does
     // not report" — an agent built before the field existed sends nothing, and

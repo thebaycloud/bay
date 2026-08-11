@@ -153,6 +153,14 @@ type syncBody struct {
 	NodeIdentity
 	Processes *[]ProcessFault `json:"processes,omitempty"`
 	Running   *[]ProcessState `json:"running,omitempty"`
+	// Version is which build of this agent is speaking.
+	//
+	// Absent from an older agent, which is why it is omitempty rather than a
+	// required field: a rolling update must not make every not-yet-updated node
+	// look broken. The control plane stores null for those and the admin page
+	// shows them as unknown, which is the honest rendering of "this node has not
+	// told us".
+	Version string `json:"version,omitempty"`
 }
 
 func metadata(path string) (string, error) {
@@ -290,7 +298,7 @@ func (s *Source) ReportNow() {
 
 func (s *Source) fromControlPlane() (Desired, error) {
 	var d Desired
-	payload := syncBody{NodeIdentity: s.Identity}
+	payload := syncBody{NodeIdentity: s.Identity, Version: Version}
 	if s.Report != nil {
 		// Never a nil slice behind the pointer: json.Marshal writes `null` for
 		// one, and `null` is not an array, so the control plane would read it as

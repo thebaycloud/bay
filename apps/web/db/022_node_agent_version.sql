@@ -1,0 +1,11 @@
+-- Which build of the agent a node is running.
+--
+-- Nothing recorded this, and the cost was concrete: `fleet-pull` and
+-- `fleet-boot` were built on both sides, merged, and wrote zero rows, because
+-- fleet-lab-1 was running an older agent and nothing could say so. The
+-- instrumentation looked broken; the deploy path was.
+--
+-- Nullable with no backfill, deliberately. Null means "this node has not told
+-- us" — an agent built before the field existed sends nothing — and that is a
+-- different fact from any version string we could invent for it.
+ALTER TABLE fleet_nodes ADD COLUMN IF NOT EXISTS agent_version text;
