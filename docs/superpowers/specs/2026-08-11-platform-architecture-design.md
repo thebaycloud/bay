@@ -481,8 +481,16 @@ tasks keep running when servers are unreachable.
 Two things close the two-copies hazard that this reopens:
 
 **Quorum on the control plane side.** The reconciler re-places from a silent node
-only if it can also see the rest of the fleet as healthy. If it hears *nobody*,
-the isolated party is probably itself, and the correct action is none.
+only while a **majority of registered, non-draining nodes have reported within
+the lease window**. Below that, the isolated party is probably the control plane
+itself, and the correct action is none. Stated as a threshold rather than as
+"sees the fleet as healthy", because the latter has two readings and the
+difference between them is whether a three-node fleet evicts on one silence or
+on two.
+
+The degenerate case is deliberate: with a single node, a majority is that node,
+so a lone node going silent never triggers eviction — there is nowhere to move it
+to anyway, and `chooseNode` would return null.
 
 **A database lock for singleton processes.** Where two copies genuinely hurt — a
 queue-consuming worker, a bot polling `getUpdates`, both already named in this
@@ -605,6 +613,40 @@ deploy path.
 | Volumes | pin, unstated | pin, expressed in the model |
 | Platform DB | shares an instance with tenants | its own instance |
 | Watching | nothing | the reconciler |
+
+## Where the 238 seconds goes
+
+Stated explicitly, because speed is the complaint that gets voiced and the order
+of work below does not obviously address it. It does, but not where a reader
+would look first.
+
+| Block | Today | Removed by | What is left |
+|---|---|---|---|
+| `job-cold-start` | 118 s | items 4 + 5 | nothing — there is no per-deploy container to start |
+| `deploy` activation | 81 s | items 5, 6, 9 | the pull and the boot, which are real work |
+| `build` | 54 s | item 8 | the app's own install and build, and only when its dependencies changed |
+| our own logic | 2.5 s | — | 2.5 s |
+
+The 118 seconds exist for one reason: `DEPLOY_JOB=1` runs the pipeline inside a
+Cloud Run Job, and it needs a container of its own because it is a *procedure*
+lasting minutes. Once §9 turns the deploy into build → write a release → set
+desired, what remains is seconds of database work with no container to
+cold-start. The build still needs somewhere to run, and item 8 gives it a
+long-lived BuildKit — warm, not started per deploy.
+
+Of the activation, the outside-in probe disappears (readiness is reported by the
+node, §9) and the up-to-ten-second poll delay disappears (long-poll, item 6).
+What is left is a genuine image pull and sandbox boot, which the base-plus-code
+split and a local layer cache attack directly.
+
+**No number is promised here.** The measurement to compare against does not exist
+yet: `fleet-pull` and `fleet-boot` have zero rows, and they will not have rows
+until item 1 ships. Promising a target before the instrument works would be the
+same mistake as reading the doc comments instead of the table.
+
+**The first three items buy no speed at all.** They buy the ability to measure,
+the removal of a known outage mode, and an evening's cheap risk reduction. That
+is worth saying plainly rather than letting it be discovered.
 
 ## Order of work
 
