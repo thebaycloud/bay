@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import {
   heartbeatNode, desiredFor, recordNodeFaults, recordNodeRunning, peersFor,
+  fleetGeneration, decideSync,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
 
@@ -58,7 +59,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown; version?: unknown };
+  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown; version?: unknown; generation?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -111,6 +112,29 @@ export async function POST(req: Request) {
       });
     }
 
+    // The generation is read BEFORE the desired state, and the order is the
+    // whole correctness argument.
+    //
+    // Read this way, a placement landing between the two reads gives the node
+    // newer data carrying an older generation: it refetches on its next poll and
+    // receives the same thing, which costs one redundant payload. Read the other
+    // way round, the node would get older data carrying a NEWER generation, stop
+    // asking, and stay stale until something unrelated moved the counter — a
+    // deploy that reported success and never reached the machine.
+    //
+    // One ordering costs a wasted request. The other loses a deploy.
+    const current = await fleetGeneration();
+    const decision = decideSync(
+      typeof body.generation === "number" ? body.generation : undefined,
+      current,
+    );
+    if (!decision.send) {
+      // Nothing has changed since this node last asked. It keeps what it has,
+      // which is the same set it would have been sent — so this is a smaller
+      // answer to the same question, not a different one.
+      return Response.json({ generation: decision.generation, unchanged: true });
+    }
+
     const apps = await desiredFor(name);
     // Where everything else lives. Without this a second node is not more
     // capacity, it is an outage for half of every app's traffic: the load
@@ -122,7 +146,7 @@ export async function POST(req: Request) {
       console.error("fleet sync: peers for", name, e instanceof Error ? e.message : String(e));
       return [];
     });
-    return Response.json({ apps, peers });
+    return Response.json({ generation: decision.generation, apps, peers });
   } catch (e) {
     // A node that gets an error here keeps running what it already has, which is
     // the correct failure: the cached desired state is still the last thing the

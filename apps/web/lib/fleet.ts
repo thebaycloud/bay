@@ -73,6 +73,59 @@ export async function heartbeatNode(n: NodeReport): Promise<void> {
   await getPool(DB).query(q.text, q.values);
 }
 
+/**
+ * Whether this node needs the desired set, or already has it.
+ *
+ * Pure, so the one rule that is easy to get wrong is testable without a
+ * database: anything that is not an exact match SENDS. An agent too old to
+ * report a generation sends nothing, and reading that silence as "up to date"
+ * would leave it holding whatever it had when it was upgraded past — the same
+ * absent-versus-empty distinction `ProcessState` already turns on, one field
+ * over. A node somehow AHEAD of us is corrected rather than left waiting.
+ */
+export function decideSync(
+  client: number | null | undefined,
+  current: number,
+): { send: boolean; generation: number } {
+  const known = typeof client === "number" && Number.isFinite(client);
+  return { send: !known || client !== current, generation: current };
+}
+
+/**
+ * The fleet's desired-state generation.
+ *
+ * On failure this returns a value that cannot match what any node holds, so the
+ * route sends the full set. That direction is deliberate: a generation we cannot
+ * read must cost a redundant payload, never a missed update. The opposite
+ * failure is a node that stops asking and is stale until something unrelated
+ * changes.
+ */
+export async function fleetGeneration(): Promise<number> {
+  try {
+    const r = await getPool(DB).query(`SELECT generation FROM fleet_generation WHERE only_row`);
+    const g = Number(r.rows[0]?.generation);
+    return Number.isFinite(g) ? g : Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+/**
+ * Move the generation, because something a node is told about has changed.
+ *
+ * Best-effort by construction: a placement that succeeded and a counter that did
+ * not move must not read as a failed deploy. The cost of a missed bump is that
+ * nodes learn on their next full refresh rather than immediately, which is the
+ * behaviour that existed before this counter did.
+ */
+export async function bumpFleetGeneration(): Promise<void> {
+  try {
+    await getPool(DB).query(`UPDATE fleet_generation SET generation = generation + 1 WHERE only_row`);
+  } catch (e) {
+    console.error("fleet: could not move the desired-state generation", e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** Everything a given node should be running right now. */
 export async function desiredFor(node: string): Promise<AppSpec[]> {
   const r = await getPool(DB).query(
@@ -102,10 +155,12 @@ export async function placeApp(slug: string, node: string, spec: AppSpec): Promi
      ON CONFLICT(slug, node) DO UPDATE SET spec = EXCLUDED.spec, placed_at = now()`,
     [slug, node, JSON.stringify(spec)]
   );
+  await bumpFleetGeneration();
 }
 
 export async function unplaceApp(slug: string): Promise<void> {
   await getPool(DB).query(`DELETE FROM fleet_placements WHERE slug = $1`, [slug]);
+  await bumpFleetGeneration();
 }
 
 /**
@@ -202,6 +257,9 @@ export async function runtimeOf(slug: string): Promise<Runtime> {
 export async function setRuntime(slug: string, runtime: Runtime): Promise<void> {
   const pool = getPool(DB);
   await pool.query(`UPDATE apps SET runtime = $2 WHERE slug = $1`, [slug, runtime]);
+  // `desiredFor` filters on apps.runtime, so flipping it changes what a node is
+  // owed even when no placement row moved.
+  await bumpFleetGeneration();
   if (runtime === "cloudrun") await unplaceApp(slug);
 }
 
@@ -683,6 +741,8 @@ export async function setPlacementEnv(
     `UPDATE fleet_placements SET spec = $3::jsonb WHERE slug = $1 AND node = $2`,
     [slug, row.node, JSON.stringify(next)],
   );
+  // The spec is what the node runs, so changing it is a change the node is owed.
+  await bumpFleetGeneration();
   return [...Object.keys(env), ...Object.keys(secrets)].sort();
 }
 
