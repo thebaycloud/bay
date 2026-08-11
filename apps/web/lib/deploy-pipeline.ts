@@ -46,7 +46,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
-import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom, RAILPACK_PLAN } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
@@ -1754,6 +1754,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * code land while production is still on the old path.
      */
     const generatedBuild = !RUNNER_ENABLED;
+    /**
+     * Whether the render stage wrote a Railpack plan THIS RUN.
+     *
+     * Not `existsSync(RAILPACK_PLAN)`, and the difference is a repository that
+     * ships one. `railpack-plan.json` is a build artifact rather than something
+     * an author writes, but a Railpack user can commit it — and then a plain
+     * Dockerfile deploy would read it as "there is a container build definition
+     * here", take the Dockerfile lane with no Dockerfile, and fail on a file the
+     * platform never wrote.
+     *
+     * Provenance, not presence. Ours counts; theirs does not.
+     */
+    let plannedWithRailpack = false;
     // Held so the file can be RE-rendered once the build's secrets are known.
     //
     // Moving this whole block to after provisioning is what Part 4 restructures
@@ -1980,6 +1993,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           const buildEnv = { ...declared, ...Object.fromEntries(address.map((a) => [a.key, a.value])) };
           await runOrExplain("railpack", railpackPrepareArgs(dir, { spec, buildEnv }), (l) => log(l));
           writeFileSync(join(dir, ".dockerignore"), dockerignore());
+          plannedWithRailpack = true;
           log(`Railpack planned this build — ${spec.language}${spec.framework ? ` (${spec.framework})` : ""}.`);
         } else {
           writeFileSync(join(dir, "Dockerfile"), generateDockerfile(renderInput));
@@ -2026,7 +2040,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // comment above this one records for services that keep their Dockerfile in
     // a subdirectory.
     const hasDockerfile = existsSync(join(dir, "Dockerfile"))
-      || existsSync(join(dir, RAILPACK_PLAN))
+      || plannedWithRailpack
       || Boolean(primaryCfgDir && existsSync(join(dir, primaryCfgDir, "Dockerfile")));
 
     // When the planner gave up, the fallback is the detector — which is the
@@ -2732,7 +2746,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // shipping its own Dockerfile — so this app was named in RAILPACK_APPS and
       // is not going to take that lane. Said out loud: a lane that changes
       // silently is a canary reporting a result it never produced.
-      const effectiveBuilder = laneForBuild(builder, existsSync(join(dir, RAILPACK_PLAN)));
+      const effectiveBuilder = laneForBuild(builder, plannedWithRailpack);
       if (effectiveBuilder !== builder) {
         log(`Railpack was selected for this app, but it ships its own build definition — building that instead.`);
       }
