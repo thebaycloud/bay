@@ -396,3 +396,125 @@ export async function promoteReady(
   if (ready.length) await bumpFleetGeneration();
   return ready.length;
 }
+
+/* -------------------------------------------------------------------------- */
+/* The loop's own state, because a loop that lies about itself is the worst     */
+/* kind.                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How long a pass may go without succeeding before that is a fault.
+ *
+ * The scheduler calls every minute, so five is five missed chances — long
+ * enough that a bad minute is not an alarm, short enough that the forty minutes
+ * this exists because of would have been caught in five.
+ */
+const STALE_AFTER_MS = 5 * 60_000;
+
+export interface PassRecord {
+  lastAttemptAt: number;
+  lastSuccessAt: number | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
+/**
+ * Is the reconciler actually reconciling?
+ *
+ * THE FAILURE THIS EXISTS FOR: it errored on every pass for forty minutes and
+ * nothing noticed, because a loop that throws and a loop with nothing to do both
+ * answer "no steps". That is the same absent-versus-empty distinction this
+ * codebase enforces on the wire — `ProcessState`, `BuildsWindow`, `who` — made
+ * wrongly by the loop about itself.
+ *
+ * Two different unhealthy states, deliberately not collapsed. A loop that is
+ * FAILING is a bug in the pass; a loop that has not been CALLED is a scheduler
+ * that stopped, a job someone disabled, a trigger a deploy removed. They look
+ * identical in a "last success" timestamp and want completely different next
+ * moves, so they are told apart here rather than left to whoever reads it.
+ *
+ * Never run at all is not a fault. That is a fresh environment, and reporting
+ * absence of history as breakage would make every new one look broken.
+ */
+export function reconcileHealth(
+  r: PassRecord | null,
+  now: number,
+): { healthy: boolean; reason?: string } {
+  if (!r) return { healthy: true, reason: "the reconciler has never run here" };
+  if (now - r.lastAttemptAt > STALE_AFTER_MS) {
+    return {
+      healthy: false,
+      reason: `the reconciler has not been called for ${Math.round((now - r.lastAttemptAt) / 1000)}s — the schedule, not the pass`,
+    };
+  }
+  if (r.lastSuccessAt === null || now - r.lastSuccessAt > STALE_AFTER_MS) {
+    return {
+      healthy: false,
+      reason: `the reconciler has not completed a pass for ${
+        r.lastSuccessAt === null ? "as long as it has been called" : `${Math.round((now - r.lastSuccessAt) / 1000)}s`
+      } — ${r.consecutiveFailures} consecutive failures, last: ${r.lastError ?? "unknown"}`,
+    };
+  }
+  return { healthy: true };
+}
+
+let passEnsured: Promise<void> | null = null;
+function ensurePassTable(): Promise<void> {
+  if (!passEnsured) {
+    passEnsured = getPool(DB)
+      .query(
+        `CREATE TABLE IF NOT EXISTS fleet_reconcile (
+           only_row             boolean PRIMARY KEY DEFAULT true,
+           last_attempt_at      timestamptz NOT NULL DEFAULT now(),
+           last_success_at      timestamptz,
+           consecutive_failures int NOT NULL DEFAULT 0,
+           last_error           text,
+           CONSTRAINT fleet_reconcile_one_row CHECK (only_row)
+         )`,
+      )
+      .then(() => undefined)
+      .catch((e) => { passEnsured = null; throw e; });
+  }
+  return passEnsured;
+}
+
+/** Record how a pass went. Never throws: the loop's diary must not stop the loop. */
+export async function recordPass(ok: boolean, error?: string): Promise<void> {
+  try {
+    await ensurePassTable();
+    await getPool(DB).query(
+      `INSERT INTO fleet_reconcile (only_row, last_attempt_at, last_success_at, consecutive_failures, last_error)
+         VALUES (true, now(), CASE WHEN $1 THEN now() END, CASE WHEN $1 THEN 0 ELSE 1 END, $2)
+       ON CONFLICT (only_row) DO UPDATE SET
+         last_attempt_at = now(),
+         last_success_at = CASE WHEN $1 THEN now() ELSE fleet_reconcile.last_success_at END,
+         consecutive_failures = CASE WHEN $1 THEN 0 ELSE fleet_reconcile.consecutive_failures + 1 END,
+         last_error = $2`,
+      [ok, error ?? null],
+    );
+  } catch (e) {
+    console.error("reconcile: could not record the pass", e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** The loop's own state, or null if it has never run here. */
+export async function passRecord(): Promise<PassRecord | null> {
+  try {
+    await ensurePassTable();
+    const r = await getPool(DB).query(
+      `SELECT extract(epoch from last_attempt_at) * 1000 AS a,
+              extract(epoch from last_success_at) * 1000 AS s,
+              consecutive_failures AS f, last_error AS e
+         FROM fleet_reconcile WHERE only_row`);
+    const row = r.rows[0];
+    if (!row) return null;
+    return {
+      lastAttemptAt: Number(row.a),
+      lastSuccessAt: row.s === null ? null : Number(row.s),
+      consecutiveFailures: Number(row.f),
+      lastError: row.e ?? null,
+    };
+  } catch {
+    return null;
+  }
+}

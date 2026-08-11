@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { reconcileOnce } from "@/lib/reconcile";
+import { reconcileOnce, recordPass, passRecord, reconcileHealth } from "@/lib/reconcile";
 
 /**
  * One reconcile pass, on demand.
@@ -37,6 +37,10 @@ export async function POST(req: Request) {
   if (!authorised(req)) return Response.json({ error: "unauthorised" }, { status: 401 });
   try {
     const result = await reconcileOnce();
+    // Recorded whether or not there was anything to do, because "nothing to do"
+    // is the answer a BROKEN pass gives too — that is the whole reason this
+    // exists. A pass that skipped for the lock is not a pass and is not recorded.
+    if (result) await recordPass(true);
     // A pass that could not take the lock is not an error: another one is
     // already doing the work, and the honest report is that this one had
     // nothing to do rather than that something failed.
@@ -48,10 +52,19 @@ export async function POST(req: Request) {
     if (result.held) {
       console.error(`reconcile: holding ${result.held} app(s) with an expired lease — no quorum over ${result.apps} apps`);
     }
-    return Response.json(result);
+    // The loop's own state travels with its answer, so a bare curl says whether
+    // it is working rather than only what it did. Absent from the skip branch
+    // above on purpose: that call did nothing and has nothing to vouch for.
+    const health = reconcileHealth(await passRecord(), Date.now());
+    if (!health.healthy) console.error(`reconcile: ${health.reason}`);
+    return Response.json({ ...result, health });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("reconcile:", msg);
+    // Written before the 500, because the 500 is what Cloud Scheduler sees and
+    // the row is what anyone asking later sees. Only one of those two survives
+    // being nobody's job to check, and it is not the HTTP status.
+    await recordPass(false, msg);
     return Response.json({ error: msg }, { status: 500 });
   }
 }

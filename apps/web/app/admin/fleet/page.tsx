@@ -5,6 +5,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { currentAdminEmail } from "@/lib/admin";
 import { formatDuration } from "@/lib/analytics/metrics";
 import { gib, readFleetStatus } from "@/lib/fleet-status";
+import { reconcileHealth, passRecord } from "@/lib/reconcile";
 import { Caveat, Empty, Panel, Section, StatTile, Table } from "@/components/AnalyticsCharts";
 
 /**
@@ -34,6 +35,11 @@ export default async function FleetPage() {
   if (!operator) notFound();
 
   const snap = await readFleetStatus();
+  // The loop's own state, on the page a person opens when they want to know
+  // what the fleet is doing. Recorded and returned by the endpoint already —
+  // but a fact only a curl can reach is a fact nobody checks, which is exactly
+  // how the reconciler failed every minute for forty of them unnoticed.
+  const health = reconcileHealth(await passRecord(), Date.now());
 
   return (
     <div className="shell">
@@ -115,6 +121,18 @@ export default async function FleetPage() {
                     hint="These would mark the app's next failed deploy as the platform's fault, keeping the repair agent away from the customer's repository."
                   />
                 </div>
+
+                <Section
+                  title="The reconciler"
+                  blurb="Whether the loop that moves apps between nodes is running — which is a different question from whether it moved anything."
+                >
+                  <Panel title={health.healthy ? "running" : "NOT RUNNING"}>
+                    <p style={{ margin: 0, opacity: health.healthy ? 0.7 : 1 }}>
+                      {health.reason ??
+                        "A pass completed within the last five minutes. Zero steps means the fleet matches what was asked for, not that nothing happened."}
+                    </p>
+                  </Panel>
+                </Section>
 
                 <Section title="Nodes" blurb="The machines, and how long ago each last said anything.">
                   <Panel title={<>{snap.nodes.length} node{snap.nodes.length === 1 ? "" : "s"}</>}>
