@@ -668,6 +668,11 @@ is worth saying plainly rather than letting it be discovered.
 
 Dependency order, not priority order. Each entry is a separate spec.
 
+**Status as of 12 Aug.** Items 1, 2, 4, 5 and 6 are done and in production; the
+reconciler runs on a Cloud Scheduler job every minute. What each of them turned
+up on the way is recorded below the list, because three of the findings changed
+the design rather than merely delaying it.
+
 1. **A deploy path for the agent.** Everything node-side is dark until this
    exists, and it has now blocked three separate things.
 2. **The edge's local snapshot.** Closes the Railway failure mode. Independent of
