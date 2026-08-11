@@ -6,7 +6,7 @@ import {
   fleetGeneration, decideSync,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
-import { renewLeases } from "@/lib/reconcile";
+import { renewLeases, promoteReady } from "@/lib/reconcile";
 
 /**
  * The only endpoint a fleet node talks to.
@@ -110,6 +110,17 @@ export async function POST(req: Request) {
       // wrongly passed one.
       await recordNodeRunning(name, body.running as ProcessState[]).catch((e) => {
         console.error("fleet sync: recording running for", name, e instanceof Error ? e.message : String(e));
+      });
+      // And the placement's own state, promoted on the sync that confirmed it
+      // rather than on the reconciler's clock. A rollout will not drain the old
+      // instance until the new one is `ready`, so waiting for the next pass
+      // would add up to a minute to every rollout for nothing — and until this
+      // existed, nothing wrote that field at all and a rollout stopped forever
+      // one instance in.
+      await promoteReady(name, (body.running as ProcessState[]).map((r) => ({
+        slug: r.slug, image: r.image, healthy: r.healthy ?? undefined,
+      }))).catch((e) => {
+        console.error("fleet sync: promoting for", name, e instanceof Error ? e.message : String(e));
       });
     }
 

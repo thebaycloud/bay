@@ -310,3 +310,89 @@ export async function setDesired(slug: string, release: number | null): Promise<
   await getPool(DB).query(`UPDATE apps SET desired_release = $2 WHERE slug = $1`, [slug, release]);
   await bumpFleetGeneration();
 }
+
+/* -------------------------------------------------------------------------- */
+/* Readiness: reported by the node, never inferred from outside.               */
+/* -------------------------------------------------------------------------- */
+
+/** A placement waiting to be told it is serving. */
+export interface Starting {
+  slug: string;
+  instance: number;
+  /** The image of the release this instance was placed with. */
+  image: string;
+}
+
+/** What a node says it is confirmed to be running, from its own sync report. */
+export interface Confirmed {
+  slug: string;
+  image: string;
+  /**
+   * Whether it is ANSWERING, not merely present — and absent when the question
+   * does not apply. A worker has no port to probe, so the node reports no health
+   * for it at all, and reading that absence as "not healthy" would leave a
+   * worker-only app unable to ever finish a rollout.
+   */
+  healthy?: boolean;
+}
+
+/**
+ * Which starting placements the node has just vouched for.
+ *
+ * The rollout turns on this: `planPlacements` will not drain the old instance
+ * until the new one is `ready`. Nothing wrote that field, so a rollout placed its
+ * new instance and stopped there — permanently. Found on q6doa, sitting at
+ * instance 0 ready on release 25 and instance 1 starting on 29, with the
+ * reconciler correctly reporting no steps because the new one was not cover yet.
+ *
+ * THE IMAGE IS THE PREDICATE, not the slug. A node still running the version
+ * being replaced reports the same slug, and promoting on that would mark the new
+ * instance ready on the strength of the OLD one answering — the same false
+ * positive `placeOnFleet` already guards its probe against, arriving one layer
+ * down.
+ */
+export function readyInstances(
+  starting: Starting[],
+  confirmed: Confirmed[],
+): { slug: string; instance: number }[] {
+  return starting
+    .filter((s) =>
+      confirmed.some((c) =>
+        c.slug === s.slug && c.image === s.image && c.healthy !== false))
+    .map((s) => ({ slug: s.slug, instance: s.instance }));
+}
+
+/**
+ * Promote everything this node has just confirmed, on the sync that confirmed it.
+ *
+ * Here rather than in the reconcile pass because this is the node speaking about
+ * itself, and the pass runs on a clock that has nothing to do with when a process
+ * came up. Waiting for the next tick would add up to a minute to every rollout
+ * for no reason.
+ */
+export async function promoteReady(
+  node: string,
+  confirmed: Confirmed[],
+): Promise<number> {
+  if (!confirmed.length) return 0;
+  const pool = getPool(DB);
+  const rows = (await pool.query(
+    `SELECT p.slug, p.instance, r.code_image AS image
+       FROM fleet_placements p JOIN releases r ON r.id = p.release_id
+      WHERE p.node = $1 AND p.state = 'starting'`,
+    [node],
+  )).rows.map((r) => ({ slug: r.slug as string, instance: Number(r.instance), image: r.image as string }));
+  if (!rows.length) return 0;
+
+  const ready = readyInstances(rows, confirmed);
+  for (const r of ready) {
+    await pool.query(
+      `UPDATE fleet_placements SET state = 'ready' WHERE slug = $1 AND instance = $2 AND state = 'starting'`,
+      [r.slug, r.instance],
+    );
+  }
+  // A promotion changes what the reconciler will do next pass, and the edge
+  // routes on ready placements — so both need to know without waiting.
+  if (ready.length) await bumpFleetGeneration();
+  return ready.length;
+}
