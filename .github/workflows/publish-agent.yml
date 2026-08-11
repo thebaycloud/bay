@@ -1,0 +1,105 @@
+# Push to main → the fleet agent is built and published for the nodes to collect.
+#
+# The agent is the last component with no deploy path. It has been updated by
+# copying .go files to each node and building there, which means "merged" and
+# "running" have been different questions for as long as it has existed —
+# ADR 0002 routed the room around that gap a year ago, and the fleet-pull and
+# fleet-boot stages shipped, wrote zero rows, and looked like broken
+# instrumentation because of it.
+#
+# This publishes. Collection is the node's job (image/update-agent.sh), on the
+# same pull-not-push principle as desired state: nothing reaches into a node.
+name: Publish fleet agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/fleet/agent/**"
+      - ".github/workflows/publish-agent.yml"
+  workflow_dispatch:
+
+# Never two publishes at once. The pointer is a single object and the last
+# writer wins; two concurrent runs could leave it naming the older build.
+concurrency:
+  group: publish-agent
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required to mint the OIDC token; without it auth fails
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: services/fleet/agent/go.sum
+
+      # The agent's own tests gate the release. They are fast and they cover the
+      # reconcile loop, adoption and the backoff trackers — the three things a
+      # bad agent breaks quietly rather than loudly.
+      - name: Test
+        working-directory: services/fleet/agent
+        run: go test ./...
+
+      # CGO off and a static binary, because the node it lands on is not this
+      # runner and must not need a matching libc.
+      - name: Build
+        working-directory: services/fleet/agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_SHA::7}" -o supersonicd .
+          ./supersonicd -version || { echo "the binary does not run"; exit 1; }
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/540236122367/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # Content-addressed, then the pointer. In that order and never the reverse:
+      # a pointer naming an object that is not there yet is a node that downloads
+      # a 404 and, if the updater were less careful, installs it.
+      - name: Publish
+        working-directory: services/fleet/agent
+        run: |
+          set -euo pipefail
+          DIGEST="$(sha256sum supersonicd | cut -d' ' -f1)"
+          echo "sha256 $DIGEST"
+
+          gcloud storage cp supersonicd \
+            "gs://supersonic-static-assets/agent/$DIGEST/supersonicd" \
+            --project supersonic-deploy-prod
+
+          printf '%s\n%s\n' "$DIGEST" "$GITHUB_SHA" > current
+          gcloud storage cp current \
+            "gs://supersonic-static-assets/agent/current" \
+            --cache-control="no-cache" \
+            --project supersonic-deploy-prod
+
+      # Read back what was published rather than trusting that the upload
+      # returned zero. The same reasoning as assertReleaseUploaded on the static
+      # lane: an exit code says the step ran, not that it published.
+      - name: Check the published binary matches what was built
+        working-directory: services/fleet/agent
+        run: |
+          set -euo pipefail
+          DIGEST="$(sha256sum supersonicd | cut -d' ' -f1)"
+          gcloud storage cat "gs://supersonic-static-assets/agent/current" > published
+          head -1 published | grep -qx "$DIGEST" || {
+            echo "the pointer does not name the binary just built"; cat published; exit 1; }
+
+          gcloud storage cp "gs://supersonic-static-assets/agent/$DIGEST/supersonicd" \
+            downloaded --project supersonic-deploy-prod
+          echo "$DIGEST  downloaded" | sha256sum -c -
