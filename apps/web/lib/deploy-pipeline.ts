@@ -46,7 +46,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
-import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom, RAILPACK_PLAN } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
@@ -61,6 +61,7 @@ import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
 import { sidecarFor, sidecarEnv, dependencyRefusal } from "@/lib/dependencies";
 import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
 import { publicUrlBuildArgs } from "@/lib/public-url-args";
+import { railpackConfig, railpackPrepareArgs } from "@/lib/railpack";
 import { detectRelease, RELEASE_FILES } from "@/lib/release-detect";
 import { readProcfile } from "@/lib/procfile";
 import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
@@ -1753,7 +1754,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * code land while production is still on the old path.
      */
     const generatedBuild = !RUNNER_ENABLED;
-    let generatedDockerfile = false;
     // Held so the file can be RE-rendered once the build's secrets are known.
     //
     // Moving this whole block to after provisioning is what Part 4 restructures
@@ -1916,9 +1916,35 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           renderInput = { ...renderInput, image: `${tagged.split(":")[0]}@${digest}` };
           log(`Base pinned to ${tagged} @ ${digest.slice(0, 19)}… so a rebuild is the same build.`);
         }
-        writeFileSync(join(dir, "Dockerfile"), generateDockerfile(renderInput));
-        writeFileSync(join(dir, ".dockerignore"), dockerignore());
-        generatedDockerfile = true;
+        // Railpack plans the build instead of us emitting a Dockerfile for it.
+        // Same context, same .dockerignore, same buildx step — a different file
+        // handed to `-f`, which `cachedBuildConfig` points at the frontend.
+        if (selectedBuilder(process.env, slug) === "railpack") {
+          const declared = (appConfig ? primaryService(appConfig) : undefined)?.buildEnv ?? {};
+
+          // The app's own railpack.json wins, exactly as its own Dockerfile
+          // does: it is the author saying how to build this, and it is newer
+          // information than anything we inferred. Ours is written only into the
+          // silence.
+          if (existsSync(join(dir, "railpack.json"))) {
+            log("Using the repository's own railpack.json.");
+          } else {
+            writeFileSync(join(dir, "railpack.json"),
+              JSON.stringify(railpackConfig({ spec, buildEnv: declared }), null, 2));
+          }
+
+          // `--env`, not `--build-arg`: on this lane the values are baked in
+          // when the PLAN is generated. An app that declared build env in
+          // supersonic.json and lost it here would build without it and say
+          // nothing, which is the same silent drop the lane's other two
+          // fall-throughs were.
+          await runOrExplain("railpack", railpackPrepareArgs(dir, { spec, buildEnv: declared }), (l) => log(l));
+          writeFileSync(join(dir, ".dockerignore"), dockerignore());
+          log(`Railpack planned this build — ${spec.language}${spec.framework ? ` (${spec.framework})` : ""}.`);
+        } else {
+          writeFileSync(join(dir, "Dockerfile"), generateDockerfile(renderInput));
+          writeFileSync(join(dir, ".dockerignore"), dockerignore());
+        }
         // Says where the version came from, not just what it is. `versionFrom` is
         // ".python-version", or "pyproject.toml requires-python >=3.11,<3.13 →
         // 3.12", or "platform default" — and the last one is the case an owner
@@ -1948,7 +1974,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const cfg = appConfig ? primaryService(appConfig) : undefined;
       return cfg?.dir && cfg.dir !== "." ? cfg.dir.replace(/^\.\//, "").replace(/\/+$/, "") : "";
     })();
+    // A Railpack plan counts. This flag has never meant "the author wrote a
+    // Dockerfile" — the block above WRITES one and this line then finds it — it
+    // means "there is a definition that builds a container here", which is the
+    // question `laneFor` below is asking. A plan answers it the same way.
+    //
+    // Getting this wrong is not cosmetic: without it a railpack build takes the
+    // buildpack lane, which has no image name at decision time, so
+    // `fleetEligibility` refuses it with "this deploy produced no image to
+    // place" and the app silently lands on Cloud Run — the exact failure the
+    // comment above this one records for services that keep their Dockerfile in
+    // a subdirectory.
     const hasDockerfile = existsSync(join(dir, "Dockerfile"))
+      || existsSync(join(dir, RAILPACK_PLAN))
       || Boolean(primaryCfgDir && existsSync(join(dir, primaryCfgDir, "Dockerfile")));
 
     // When the planner gave up, the fallback is the detector — which is the

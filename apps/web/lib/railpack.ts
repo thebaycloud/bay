@@ -1,4 +1,5 @@
 import type { BuildSpec } from "@/lib/detect";
+import { RAILPACK_PLAN } from "@/lib/build-config";
 
 /**
  * Our `BuildSpec` expressed as a `railpack.json`.
@@ -141,4 +142,17 @@ export function railpackConfig(i: RailpackInput): RailpackConfig {
  */
 export function railpackArgs(i: RailpackInput): string[] {
   return Object.entries(i.buildEnv ?? {}).flatMap(([k, v]) => ["--env", `${k}=${v}`]);
+}
+
+/**
+ * The full argv for `railpack prepare`, which turns a directory into the plan
+ * that the BuildKit frontend executes.
+ *
+ * `--plan-out` is explicit rather than defaulted. The default is relative to the
+ * caller's working directory, and the deploy job's working directory is not the
+ * app — while `-f` on the buildx side is resolved against the build CONTEXT,
+ * which is the app directory. Naming the path is what makes those two agree.
+ */
+export function railpackPrepareArgs(dir: string, i: RailpackInput): string[] {
+  return ["prepare", dir, "--plan-out", `${dir}/${RAILPACK_PLAN}`, ...railpackArgs(i)];
 }

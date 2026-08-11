@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { railpackConfig, railpackArgs } from "@/lib/railpack";
+import { railpackConfig, railpackArgs, railpackPrepareArgs } from "@/lib/railpack";
 import type { BuildSpec } from "@/lib/detect";
 
 const spec = (over: Partial<BuildSpec> = {}): BuildSpec => ({
@@ -135,4 +135,22 @@ test("a version from the repo is passed; a version we invented is not", () => {
     }),
   });
   assert.equal(ourDefault.packages, undefined, "Railpack's default is better kept than ours");
+});
+
+// The plan has to land where buildx will look for it: `-f` is resolved against
+// the build context, and the context is the app directory. `--plan-out` is
+// passed explicitly rather than relying on the default, because the default is
+// relative to the working directory of whoever ran the command, and the deploy
+// job's working directory is not the app.
+test("the plan is written into the build context, beside the source", () => {
+  const args = railpackPrepareArgs("/w/src", { spec: spec() });
+  assert.deepEqual(args, ["prepare", "/w/src", "--plan-out", "/w/src/railpack-plan.json"]);
+});
+
+test("build env reaches prepare, because the plan is where it gets baked in", () => {
+  const args = railpackPrepareArgs("/w/src", {
+    spec: spec(),
+    buildEnv: { NEXT_PUBLIC_BASE_PATH: "/app", VITE_BASE: "/app" },
+  });
+  assert.deepEqual(args.slice(4), ["--env", "NEXT_PUBLIC_BASE_PATH=/app", "--env", "VITE_BASE=/app"]);
 });

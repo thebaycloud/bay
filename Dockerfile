@@ -60,6 +60,22 @@ RUN curl -fsSL https://opencode.ai/install | bash \
 RUN npm install -g @openai/codex@0.146.0 \
   && codex --version
 
+# Railpack turns an app directory into a build plan; the plan is then executed by
+# the matching BuildKit frontend inside the buildx step (lib/build-config.ts).
+#
+# PINNED, and the pin is load-bearing in a way the others here are not: the CLI
+# writes the plan and the frontend reads it, so they are a pair. `RAILPACK_FRONTEND`
+# is deliberately unversioned — pinning the reader without the writer would be
+# pinning half of a protocol — which makes THIS the version that decides both.
+#
+# The musl build is statically linked — verified, `file` reports no interpreter —
+# so it runs on this glibc image with nothing installed alongside it. 8.4 MB to
+# fetch, 24 MB on disk, against a job image we have just spent effort slimming.
+ARG RAILPACK_VERSION=0.36.3
+RUN curl -fsSL "https://github.com/railwayapp/railpack/releases/download/v${RAILPACK_VERSION}/railpack-v${RAILPACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+    | tar -xz -C /usr/local/bin railpack \
+  && railpack --version
+
 WORKDIR /app
 COPY --from=webbuild /app/apps/web ./apps/web
 COPY --from=agentdeps /app/services/deploy-agent ./services/deploy-agent
