@@ -77,6 +77,84 @@ export function isPublicUrlArg(name: string): boolean {
 }
 
 /**
+ * The `.env` filenames worth reading, in the order a bundler itself would.
+ *
+ * `.env.example` earns its place by being the one that is usually COMMITTED —
+ * `.env` and `.env.local` are gitignored in most templates, so on a git-cloned
+ * deploy the example file is often the only evidence left of which names the app
+ * wants. It is also the safest to read: it exists to be read.
+ *
+ * `.env.production` is included because a bundler prefers it in a production
+ * build, so a name declared only there is still a name this app asks for.
+ */
+export const ENV_FILENAMES = [".env", ".env.example", ".env.production", ".env.local"];
+
+/**
+ * Every name an app's own `.env` declares, in order, deduplicated.
+ *
+ * WHY A SECOND SOURCE. `declaredArgs` reads a Dockerfile, and the Railpack lane
+ * has none — a build plan declares no `ARG`, so on that lane the Dockerfile
+ * route silently finds nothing and a frontend ships pointing at localhost.
+ *
+ * The `.env` is not a fallback so much as the better source that was there all
+ * along: the case in this module's header is the FastAPI template shipping
+ * `frontend/.env` with `VITE_API_URL=http://localhost:8000`. The name was
+ * visible in two places and we were reading the other one.
+ *
+ * Parsing is deliberately shallow — names only, values ignored. This never needs
+ * to know what a value IS, only that the app asked for the name, and a real
+ * dotenv parser brings interpolation, multi-line quoting and `${VAR}` expansion
+ * for no gain here.
+ */
+export function declaredEnvNames(envFile: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of envFile.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    // `NAME=`, `export NAME=` — both ordinary. A line with no `=` declares
+    // nothing, whatever else it may be.
+    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+    if (!m || seen.has(m[1])) continue;
+    seen.add(m[1]);
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/**
+ * The same answer as `publicUrlBuildArgs`, learned from `.env` files instead.
+ *
+ * THE VALUE IN THE FILE IS REPLACED, and that is the whole point rather than an
+ * oversight. A committed `.env` holds a DEVELOPMENT default — it says localhost
+ * because localhost is where the author was — and shipping it unchanged is
+ * precisely the failure this module exists to prevent.
+ *
+ * `already` still wins, exactly as on the Dockerfile route, and the distinction
+ * is worth stating: a `.env` is where someone developed; `supersonic.json`
+ * `buildEnv` is what they said about DEPLOYING. Someone pointing their frontend
+ * at a different API in the second one meant it.
+ */
+export function publicUrlEnvArgs(
+  envFiles: string[],
+  url: string,
+  already: { key: string; value: string }[] = [],
+): { key: string; value: string }[] {
+  if (!url) return [];
+  const declaredAlready = new Set(already.map((a) => a.key));
+  const seen = new Set<string>();
+  const out: { key: string; value: string }[] = [];
+  for (const file of envFiles) {
+    for (const name of declaredEnvNames(file)) {
+      if (!isPublicUrlArg(name) || declaredAlready.has(name) || seen.has(name)) continue;
+      seen.add(name);
+      out.push({ key: name, value: url });
+    }
+  }
+  return out;
+}
+
+/**
  * The build args to pass so a frontend is built knowing where it will live.
  *
  * `url` is the app's own public address. For a repo whose API is a sibling

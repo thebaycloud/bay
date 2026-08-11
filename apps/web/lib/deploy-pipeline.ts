@@ -60,7 +60,7 @@ import { deploymentEnv } from "@/lib/framework-env";
 import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
 import { sidecarFor, sidecarEnv, dependencyRefusal } from "@/lib/dependencies";
 import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
-import { publicUrlBuildArgs } from "@/lib/public-url-args";
+import { publicUrlBuildArgs, publicUrlEnvArgs, ENV_FILENAMES } from "@/lib/public-url-args";
 import { railpackConfig, railpackPrepareArgs } from "@/lib/railpack";
 import { detectRelease, RELEASE_FILES } from "@/lib/release-detect";
 import { readProcfile } from "@/lib/procfile";
@@ -1933,12 +1933,42 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
               JSON.stringify(railpackConfig({ spec, buildEnv: declared }), null, 2));
           }
 
+          // Where this app will live, told to the build — the only moment a
+          // browser bundle can still hear it.
+          //
+          // Learned from the app's own `.env` files rather than from `ARG`
+          // declarations, because a plan has none. Computed HERE, unlike the
+          // Dockerfile route which does it much later beside cloudbuild.yaml:
+          // on this lane the values are baked in when the PLAN is generated, and
+          // the plan is generated on the next line.
+          //
+          // Shallow on purpose — the repo root and one level down. A monorepo
+          // keeps its frontend in `frontend/`, which is exactly where the
+          // FastAPI template's `.env` sits, and an unbounded walk of a stranger's
+          // repository is a cost with no matching gain.
+          const envFiles: string[] = [];
+          const roots = [dir, ...readdirSync(dir, { withFileTypes: true })
+            .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules")
+            .map((e) => join(dir, e.name))];
+          for (const root of roots) {
+            for (const name of ENV_FILENAMES) {
+              const p = join(root, name);
+              if (existsSync(p)) { try { envFiles.push(readFileSync(p, "utf8")); } catch { /* unreadable is silent */ } }
+            }
+          }
+          const address = publicUrlEnvArgs(envFiles, `https://${slug}.supersonic.cv`,
+            Object.entries(declared).map(([key, value]) => ({ key, value: String(value) })));
+          if (address.length) {
+            log(`Telling the build where this app will live: ${address.map((a) => a.key).join(", ")}`);
+          }
+
           // `--env`, not `--build-arg`: on this lane the values are baked in
           // when the PLAN is generated. An app that declared build env in
           // supersonic.json and lost it here would build without it and say
           // nothing, which is the same silent drop the lane's other two
           // fall-throughs were.
-          await runOrExplain("railpack", railpackPrepareArgs(dir, { spec, buildEnv: declared }), (l) => log(l));
+          const buildEnv = { ...declared, ...Object.fromEntries(address.map((a) => [a.key, a.value])) };
+          await runOrExplain("railpack", railpackPrepareArgs(dir, { spec, buildEnv }), (l) => log(l));
           writeFileSync(join(dir, ".dockerignore"), dockerignore());
           log(`Railpack planned this build — ${spec.language}${spec.framework ? ` (${spec.framework})` : ""}.`);
         } else {
@@ -2681,22 +2711,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           log(`Telling the build where this app will live: ${told.map((a) => a.key).join(", ")}`);
           buildArgs.push(...told);
         }
-      } else if (builder === "railpack") {
-        // A KNOWN GAP, said out loud rather than left to be discovered.
-        //
-        // This reads `ARG` declarations to learn which address variables a build
-        // is willing to hear. A Railpack plan declares no ARGs, so there is
-        // nothing to read and an app that needs `VITE_API_URL` gets silence —
-        // which is precisely the failure recorded above: backend answering 200
-        // while the signup form posts to http://localhost:8000.
-        //
-        // `buildEnv` in supersonic.json is the working substitute today, and it
-        // reaches the plan via `--env`. Closing this properly means learning the
-        // names from the source rather than from a Dockerfile, which is a port of
-        // `publicUrlBuildArgs`, not a line here.
-        log("! this lane cannot yet tell the build its public address — "
-          + "set it in supersonic.json `buildEnv` if the bundle needs one.");
       }
+      // The railpack lane has no `else` here on purpose: it answers this question
+      // in the render stage, where its plan is generated, because that is when
+      // the value has to already be in hand. See `publicUrlEnvArgs` there.
       if (buildArgs.length) log(`Build args: ${buildArgs.map((a) => a.key).join(", ")}`);
       // Context stays the repository root — which is what an author who put the
       // Dockerfile one level down and wrote `COPY ./frontend` is expecting.
