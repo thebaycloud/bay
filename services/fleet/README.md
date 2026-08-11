@@ -50,21 +50,43 @@ away. Everything else serves that loop.
 
 ## Running one
 
+Two things that cost time on 11 Aug and are not guessable:
+
+`--project supersonic-deploy-prod` on every one of these. The nodes live in the
+deploy project, and a working `gcloud` default is usually `supersonic-prod-489712`
+— which fails with `The resource 'projects/supersonic-prod-489712' was not found`,
+a message that reads like a missing VM rather than a wrong project.
+
+**Do not stage scripts in `/tmp`.** `/tmp` on a node is shared and sticky, and
+another operator's `provision.sh` from a previous session is still sitting there
+owned by them; `scp` then fails with `dest open: Permission denied`. Use a
+directory you own. `provision.sh` installs the updater from `$(dirname "$0")`, so
+`update-agent.sh` has to land beside it, not somewhere else.
+
 ```bash
-# provision a node (idempotent)
-gcloud compute scp services/fleet/image/provision.sh <node>:/tmp/ --zone us-central1-a
-gcloud compute ssh <node> --zone us-central1-a --command 'sudo bash /tmp/provision.sh'
+# provision a node (idempotent, safe on a live node)
+gcloud compute scp services/fleet/image/provision.sh services/fleet/image/update-agent.sh \
+  <node>:deploy/ --zone us-central1-a --tunnel-through-iap --project supersonic-deploy-prod
+gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap --project supersonic-deploy-prod \
+  --command 'sudo install -m 0755 ~/deploy/update-agent.sh /usr/local/bin/supersonic-update-agent \
+             && sudo bash ~/deploy/provision.sh'
 
 # ship an agent change: merge to main and the nodes collect it within ~2 minutes
 #   CI:   .github/workflows/publish-agent.yml
 #   node: /usr/local/bin/supersonic-update-agent, on a systemd timer
 # check what a node is running:
-gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap \
+gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap --project supersonic-deploy-prod \
   --command '/opt/agent/supersonicd -version; cat /opt/agent/installed.sha256'
 
 # force a collection now rather than waiting for the timer
-gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap \
+gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap --project supersonic-deploy-prod \
   --command 'sudo systemctl start supersonic-update-agent'
+
+# count sandboxes — SUDO, always. Without it runsc reads nothing and prints only
+# the header, so a node holding 22 sandboxes reports as holding none. That false
+# zero was mistaken for a valid before-measurement once already.
+gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap --project supersonic-deploy-prod \
+  --command 'sudo runsc --root=/run/supersonic/runsc list | tail -n +2 | wc -l'
 
 # move an app onto the fleet, and back
 bash services/fleet/fleetctl.sh place <slug>
