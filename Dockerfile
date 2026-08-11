@@ -8,6 +8,17 @@ COPY apps/web/package*.json ./
 RUN npm ci
 COPY apps/web ./
 RUN npm run build
+# Drop what only the build needed. This is worth ~70 MB of an image that is
+# pulled on the critical path of EVERY deploy — `job-launch` is 116s p50, and it
+# is Cloud Run scheduling plus this pull.
+#
+# `tsx` is deliberately a production dependency and not a build-time one, which
+# is what makes this line safe. `scripts/deploy-job.ts` runs as
+# `node --import tsx scripts/deploy-job.ts`, so pruning it away would break every
+# deploy — the obvious optimisation, applied to a package.json that called tsx a
+# devDependency, is an outage. It is in `dependencies` now because that is what
+# it is.
+RUN npm prune --omit=dev
 
 # --- install the deploy-agent deps (tsx) ---
 FROM node:22-slim AS agentdeps
@@ -24,7 +35,14 @@ RUN apt-get update \
 RUN curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/usr/local >/dev/null
 ENV PATH="/usr/local/google-cloud-sdk/bin:${PATH}"
 # `beta` is needed for `run domain-mappings` (pretty *.supersonic.cv domains) and `builds log`.
-RUN gcloud components install beta --quiet >/dev/null
+RUN gcloud components install beta --quiet >/dev/null \
+  # The installer keeps a rollback copy of every component and ships two large
+  # tools this image never invokes. Both are pure weight on a layer that is
+  # pulled before a deploy can start.
+  && rm -rf /usr/local/google-cloud-sdk/.install/.backup \
+  && rm -rf /usr/local/google-cloud-sdk/bin/bq /usr/local/google-cloud-sdk/platform/bq \
+  && rm -rf /usr/local/google-cloud-sdk/platform/gsutil \
+  && find /usr/local/google-cloud-sdk -name '*.pyc' -delete
 
 # The repair engines. DEPLOY_AGENT picks which one drives — codex by default,
 # opencode one variable away — so BOTH have to be present in the image or the

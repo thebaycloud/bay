@@ -105,3 +105,22 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' https://app.supersonic.cv/login)
           echo "app.supersonic.cv/login → $code"
           [ "$code" = "200" ]
+
+      # The service and the JOB are the same image with different commands, and
+      # only the service was ever checked. So an image that serves pages fine and
+      # cannot start the deploy job — a pruned runtime dependency, a missing
+      # binary — shipped green and broke the next customer deploy instead of this
+      # build.
+      #
+      # A run id that is not on file is the cheapest possible exercise of the
+      # whole path: claimRun finds nothing, deploy-job logs "nothing to do" and
+      # exits 0, and getting that far means Node booted, tsx resolved and the
+      # entire import tree of the pipeline loaded. Nothing is deployed.
+      - name: Check the deploy job's image can start
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute supersonic-deploy-job \
+            --region us-central1 --project supersonic-deploy-prod \
+            --args=--import,tsx,scripts/deploy-job.ts,ci-smoke-not-a-real-run \
+            --wait --quiet
+          echo "the deploy job's image starts and reaches its own entry point"
