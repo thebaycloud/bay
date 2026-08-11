@@ -2,7 +2,7 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -1220,4 +1220,67 @@ test("a Cloud Run deploy still gets its domain mapping", NEEDS_MOCKS, async () =
   const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
 
   assert.ok(mappedADomain(rec), `a Cloud Run deploy must still map its domain: ${JSON.stringify(rec.argv.map((a) => a.slice(0, 4)))}`);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Dangling symlinks, on every way in                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A git repo that commits a symlink pointing into a directory it does not ship.
+ *
+ * Not a contrivance: this is `fastapi/full-stack-fastapi-template`, whose
+ * `.agents/skills/fastapi` and `.agents/skills/sqlmodel` are committed symlinks
+ * into `.venv`. `.venv` is not in the repository, so a plain `git clone` lands
+ * them dangling on any machine in the world.
+ */
+function repoWithDanglingSymlink(): string {
+  const dir = mkdtempSync(join(tmpdir(), "pipeline-repo-"));
+  writeFileSync(join(dir, "package.json"), '{"scripts":{"start":"node index.js"}}');
+  writeFileSync(join(dir, "index.js"), "console.log(1)");
+  mkdirSync(join(dir, ".agents", "skills"), { recursive: true });
+  symlinkSync("../../.venv/lib/python3.12/site-packages/fastapi", join(dir, ".agents", "skills", "fastapi"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+  git("init", "-q");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "T");
+  git("add", "-A");
+  git("commit", "-qm", "commit a symlink into a directory that is not here");
+  return dir;
+}
+
+test("a cloned repo's dangling symlinks are pruned, not carried into the build", NEEDS_MOCKS, async () => {
+  // `gcloud builds submit` does not fail on a dangling symlink, it CRASHES:
+  // `gcloud crashed (FileNotFoundError)` while packing the source, naming no file
+  // and never mentioning a symlink. `pruneBrokenSymlinks` was written for exactly
+  // that — and for a year it was called only on the upload path, because the
+  // reasoning that produced it was about the CLI excluding `.venv` from an
+  // upload. A `git clone` stranding the same links was never considered, so
+  // deploying that repo from a URL crashed on 10 Aug with the very error the fix
+  // exists to prevent, while the fix sat three branches away.
+  const rec = await run(
+    {},
+    { isUpload: false, archive: null, repoUrl: repoWithDanglingSymlink() },
+    detect(),
+  );
+
+  const pruned = rec.events.some((e) => JSON.stringify(e).includes("broken symlink"));
+  assert.ok(pruned, `the clone path must prune dangling symlinks; events were: ${JSON.stringify(rec.events).slice(0, 800)}`);
+});
+
+test("an uploaded project's dangling symlinks are still pruned", NEEDS_MOCKS, async () => {
+  // The other half. Moving the call out of the upload branch to the place all
+  // three source paths meet must not cost the path that already had it.
+  const dir = mkdtempSync(join(tmpdir(), "pipeline-up-"));
+  writeFileSync(join(dir, "package.json"), '{"scripts":{"start":"node index.js"}}');
+  writeFileSync(join(dir, "index.js"), "console.log(1)");
+  mkdirSync(join(dir, ".agents", "skills"), { recursive: true });
+  symlinkSync("../../.venv/lib/fastapi", join(dir, ".agents", "skills", "fastapi"));
+  const tgz = join(mkdtempSync(join(tmpdir(), "pipeline-uptar-")), "src.tgz");
+  execFileSync("tar", ["-czf", tgz, "-C", dir, "."]);
+
+  const rec = await run({}, { archive: readFileSync(tgz) }, detect());
+
+  const pruned = rec.events.some((e) => JSON.stringify(e).includes("broken symlink"));
+  assert.ok(pruned, `the upload path must still prune dangling symlinks; events were: ${JSON.stringify(rec.events).slice(0, 800)}`);
 });

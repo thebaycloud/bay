@@ -9,6 +9,7 @@ import { deleteDeploy, deployOwner } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { unplaceApp } from "@/lib/fleet";
+import { supersedeRunsFor } from "@/lib/deploy-runs";
 
 export async function POST(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -33,6 +34,31 @@ export async function POST(_req: Request, { params }: { params: { slug: string }
   if (!owns) return Response.json({ error: "forbidden" }, { status: 403 });
 
   try {
+    // Stop the deploy that is running right now, before anything is torn down.
+    //
+    // Deleting an app never touched `deploy_runs`, so a delete during a build
+    // left the build running against an app that no longer existed. Three
+    // consequences, all of them observed on 10 Aug while benchmarking:
+    //
+    //  - the job keeps going and can recreate the very resources this call is
+    //    deleting, seconds after it deletes them. `bench/cleanup.ts` documents
+    //    orphans nobody could explain — services and databases with no row to
+    //    account for them — and a deploy that outlived its own delete is one way
+    //    to manufacture exactly that.
+    //  - the row counts against the owner's concurrent-deploy cap until it ages
+    //    out an hour later, so "you already have N deploys building" names
+    //    deploys of apps that have been deleted.
+    //  - the row holds the app's secrets. `finishRun` exists to bound how long
+    //    those sit in the database; a killed or abandoned run bounds them at
+    //    `pruneRuns`'s six hours instead, and deleting the app did not shorten
+    //    that by a second.
+    //
+    // `supersedeRunsFor` is the function that already does this correctly —
+    // deletes the rows first so nothing can find the run again, then cancels the
+    // execution on the Job and on the warm worker. It was simply never called
+    // from here. Best-effort like everything else below: a deploy that cannot be
+    // cancelled must not turn "delete my app" into a 500.
+    await supersedeRunsFor(slug).catch(() => {});
     await deleteApp(slug);
     // Remove the row so the app is fully gone (grants + requests cascade). Static
     // apps are tracked only here, so without this they'd linger forever.

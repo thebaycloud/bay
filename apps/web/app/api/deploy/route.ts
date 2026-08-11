@@ -10,7 +10,7 @@ import { entitlement, countOwnerApps, type Limits } from "@/lib/entitlements";
 import { countIfUnder } from "@/lib/usage";
 import { appLimitMessage, buildLimitMessage, noAccountMessage } from "@/lib/plan-copy";
 import { runDeploy } from "@/lib/deploy-pipeline";
-import { createRun, startDeployJob, finishRun, pruneRuns, isOwnSourceObject, readUploadedSource, type UploadedSource } from "@/lib/deploy-runs";
+import { createRun, startDeployRun, finishRun, pruneRuns, isOwnSourceObject, readUploadedSource, type UploadedSource } from "@/lib/deploy-runs";
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
 import { getDeploy } from "@/lib/deploys";
 import { startBuild, finishBuild } from "@/lib/builds";
@@ -55,6 +55,15 @@ function tailDeployRun(runId: string, slug: string): ReadableStream {
         try { controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`)); return true; }
         catch { return false; }        // client gone — stop reading, the job carries on
       };
+      // Before anything the job says: which run this is.
+      //
+      // The id is minted server-side and, until now, never left the server, so
+      // the only way a caller could find its own rows in deploy_stages,
+      // deploy_events or deploy_failures was slug plus a time window — the exact
+      // reconstruction db/018 exists to end, and the one that reported a 1m 34s
+      // deploy as 23m 57s. Sent first, and from here rather than from the
+      // pipeline, so it arrives even for a run whose job never starts.
+      send({ type: "run", runId, slug });
       let after = 0;
       let silentFor = 0;
       try {
@@ -276,7 +285,11 @@ export async function POST(req: Request) {
       await handoff.end(recording, "ok");
 
       const dispatch = handoff.start("job-dispatch");
-      await startDeployJob(runId, REGION, DEPLOY_JOB_NAME);
+      // The warm worker first, the Job when it will not take it. Which one ran
+      // is not recorded as a different stage on purpose: `job-launch` already
+      // measures the difference, and it is the number this change exists to
+      // move.
+      await startDeployRun(runId, REGION, DEPLOY_JOB_NAME);
       await handoff.end(dispatch, "ok");
     } catch (e) {
       // The record holds the app's secrets and exists only so a job can pick it
@@ -306,12 +319,19 @@ export async function POST(req: Request) {
         try { controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`)); }
         catch { /* client gone — keep building, just stop narrating */ }
       };
+      // This path used to record its stages with no run id at all, because only
+      // the job branch minted one — so an inline deploy's rows could be grouped
+      // only by the time window, and a local control-plane could not be measured
+      // against a production one on the same footing. The id costs nothing and
+      // makes the two paths differ in what they do, not in what they record.
+      const inlineRunId = randomUUID();
+      send({ type: "run", runId: inlineRunId, slug });
       try {
         // The job path fetches its own source; this one has to, when the client
         // uploaded rather than sent bytes. Without it an inline deploy would run
         // with no source and fail somewhere much further down.
         const source = uploaded ? await readUploadedSource(uploaded) : archive;
-        await runDeploy({ ...input, archive: source }, send);
+        await runDeploy({ ...input, runId: inlineRunId, archive: source }, send);
       } finally {
         controller.close();
       }

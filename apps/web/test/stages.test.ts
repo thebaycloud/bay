@@ -35,7 +35,15 @@ function clock(startMs: number, stepMs: number) {
  * is a STRING agreeing across four files — and every way of getting it wrong
  * produces a well-formed query returning zero rather than an error.
  */
-const EMITTERS = ["lib/deploy-pipeline.ts", "app/api/deploy/route.ts", "scripts/deploy-job.ts", "lib/fleet.ts"];
+const EMITTERS = [
+  "lib/deploy-pipeline.ts", "app/api/deploy/route.ts", "scripts/deploy-job.ts",
+  // The handoff rows moved out of scripts/deploy-job.ts into here, and the list
+  // did not follow them — so `job-cold-start` read as a stage nothing writes,
+  // which is precisely the failure this test was added to catch. It was right;
+  // it was just looking at the wrong files.
+  "lib/deploy-execute.ts",
+  "lib/fleet.ts",
+];
 
 function emittedStages(): Set<string> {
   const found = new Set<string>();

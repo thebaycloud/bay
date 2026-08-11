@@ -11,7 +11,12 @@
     "timing": "node --import tsx scripts/deploy-timing.ts",
     "blame": "node --import tsx scripts/failure-blame.ts",
     "test": "node --experimental-test-module-mocks --import tsx --test 'test/**/*.test.ts'",
-    "test:collapse": "RUNNER=0 node --experimental-test-module-mocks --import tsx --test test/deploy-pipeline.test.ts"
+    "test:collapse": "RUNNER=0 node --experimental-test-module-mocks --import tsx --test test/deploy-pipeline.test.ts",
+    "bench": "node --import tsx bench/run.ts",
+    "bench:timing": "node --import tsx bench/run.ts --concurrency 1 --modes cold,warm --reps 3",
+    "bench:report": "node --import tsx bench/report.ts",
+    "bench:watch": "node --import tsx bench/watch.ts",
+    "bench:cleanup": "node --import tsx bench/cleanup.ts"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",

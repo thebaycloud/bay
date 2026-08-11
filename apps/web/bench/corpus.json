@@ -1,0 +1,179 @@
+{
+  "$comment": [
+    "The projects the harness deploys, and what each one is here to prove.",
+    "",
+    "Every repo is a FORK we own, whose default branch `bench` is frozen at the sha",
+    "below. That is not belt-and-braces: lib/deploy-pipeline.ts clones with",
+    "`git clone --depth 1 <url>` and no ref, so it always takes the default branch's",
+    "HEAD. Against an upstream repo the corpus would silently change the first time",
+    "anybody merged anything, and every number taken before that would become",
+    "uncomparable with every number after — without a single line of this file",
+    "changing. Freezing the branch is what makes the sha mean something.",
+    "",
+    "`expect.outcome` is deliberately \"unknown\" for most of them. Nobody has run",
+    "these through the platform yet, and writing down a guess would turn the first",
+    "batch from a measurement into a self-graded exam. The first batch ESTABLISHES",
+    "the baseline; `bench/calibrate.ts` writes what actually happened back into this",
+    "file, a human looks at it, and only then does a later batch get to call a",
+    "difference a regression."
+  ],
+  "projects": [
+    {
+      "key": "2048",
+      "repo": "https://github.com/onlytenders/2048-in-react",
+      "upstream": "mateuszsokola/2048-in-react",
+      "sha": "4c27093929b4293c2c873b3ed75b18671b5be6cb",
+      "why": "Next.js output:'export' that fails on next/image. The one case already known end to end: the static lane needs out/index.html, and a repair agent that removes output:'export' can never pass. Lane-awareness regressions show up here first.",
+      "expectLane": "static",
+      "expect": {
+        "outcome": "live",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 600
+    },
+    {
+      "key": "excalidraw",
+      "repo": "https://github.com/onlytenders/excalidraw",
+      "upstream": "excalidraw/excalidraw",
+      "sha": "cf212b2f3354c09bd6f960b53a9cfb0a3ecbfa58",
+      "why": "A large real Vite SPA. Exercises the static lane's SPA fallback in verify-app.ts and a build heavy enough that build-cache behaviour is visible.",
+      "expectLane": "static",
+      "expect": {
+        "outcome": "unknown",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 900
+    },
+    {
+      "key": "next-enterprise",
+      "repo": "https://github.com/onlytenders/next-enterprise",
+      "upstream": "Blazity/next-enterprise",
+      "sha": "97c4f3ed6be0a5b255d0e71606c7b355138281a9",
+      "why": "Server-rendered Next.js as people actually write it. The most common shape the product sees.",
+      "expectLane": "runner",
+      "expect": {
+        "outcome": "unknown",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 600
+    },
+    {
+      "key": "indie-stack",
+      "repo": "https://github.com/onlytenders/indie-stack",
+      "upstream": "remix-run/indie-stack",
+      "sha": "56abb93bf81f635b574d9ca23eed05602699458a",
+      "why": "Remix with Prisma and a migration step — a real app whose build is not the whole story, because something has to run before traffic.",
+      "expectLane": "runner",
+      "expect": {
+        "outcome": "unknown",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 600
+    },
+    {
+      "key": "epic-stack",
+      "repo": "https://github.com/onlytenders/epic-stack",
+      "upstream": "epicweb-dev/epic-stack",
+      "sha": "f64d690722d8260a055bb63b042de877ab3f6a18",
+      "why": "The heavy end of the same shape: Postgres, migrations, a release command. This is where release-job.ts and pg-role.ts are actually exercised.",
+      "expectLane": "container",
+      "expect": {
+        "outcome": "unknown",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 900
+    },
+    {
+      "key": "fastapi",
+      "repo": "https://github.com/onlytenders/full-stack-fastapi-template",
+      "upstream": "fastapi/full-stack-fastapi-template",
+      "sha": "75c388ba1cd60f39b43dd63a73978bae8c69cb87",
+      "why": "Python, and a repo with a backend and a frontend side by side. Two questions at once: can we run uvicorn at all, and does a two-app repo get planned or refused. Python is also the language whose run command cannot be guessed.",
+      "expectLane": "container",
+      "expect": {
+        "outcome": "unknown",
+        "path": "/docs",
+        "status": 200
+      },
+      "budgetS": 600
+    },
+    {
+      "key": "go-rest",
+      "repo": "https://github.com/onlytenders/go-rest-api",
+      "upstream": "benc-uk/go-rest-api",
+      "sha": "094fa3864d140244909281dc903a9ace4c788d30",
+      "why": "A Go HTTP service with no Dockerfile at the repo root — so this measures the Go detector and the buildpack path, not our ability to run someone else's Dockerfile.",
+      "expectLane": "buildpack",
+      "expect": {
+        "outcome": "unknown",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 600
+    },
+    {
+      "key": "outline",
+      "repo": "https://github.com/onlytenders/outline",
+      "upstream": "outline/outline",
+      "sha": "2cc0d60ed876193b423dd5a103ee4f765c979968",
+      "why": "The only project here with a real Procfile: `web:` and `worker:`. It is the one case that reaches the worker-pool half of lib/processes.ts and awaitRunning() rather than fleetProbe() — a branch of the code no other project in this corpus touches. It also wants Redis, so it doubles as the dependency-refusal case.",
+      "expectLane": "container",
+      "expect": {
+        "outcome": "unknown",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 1200
+    },
+    {
+      "key": "realworld",
+      "repo": "https://github.com/onlytenders/realworld",
+      "upstream": "gothinkster/realworld",
+      "sha": "fcb98824ab60abee9c67aeba6a86feb4a39fab35",
+      "why": "Dozens of independent implementations in one tree. It is in the corpus BECAUSE it should be refused: repo-facts.ts/refusalReason exists for exactly this, and a benchmark where everything passes cannot notice the day the refusal path breaks and starts deploying something arbitrary instead.",
+      "expectLane": null,
+      "expect": {
+        "outcome": "refused"
+      },
+      "$budgetNote": "600, not the 120 this was written with (see $budgets). 120 encoded the assumption that a refusal is instant — no clone, no build, just repo-facts.ts saying no. On 10 Aug the harness gave up here at 120s and the server said `building`: the refusal had not happened, and a budget below the ~231s a real deploy takes cannot tell `never` from `not yet`. That made it a measurement of our own patience. The EXPECTATION is deliberately untouched — this repo should still be refused, and that it was not is the finding, not the budget.",
+      "budgetS": 600
+    },
+    {
+      "key": "broken",
+      "repo": null,
+      "folder": "examples/broken",
+      "upstream": "ours",
+      "sha": "in-tree",
+      "why": "Ours, and deliberately broken. The repair agent's own case: does it fix it, in how many redeploys, for how many tokens. Deployed from a folder rather than a URL, which is also the only project here that exercises the upload door.",
+      "expectLane": "runner",
+      "expect": {
+        "outcome": "live",
+        "path": "/",
+        "status": 200
+      },
+      "budgetS": 600
+    }
+  ],
+  "$budgets": [
+    "Raised on 10 Aug from guesses to measurements. Every original number was",
+    "written before a single deploy had been timed, and five of the ten were below",
+    "the deploy they were timing: excalidraw, outline, next-enterprise and",
+    "indie-stack were all still building when the harness gave up, and",
+    "next-enterprise had already built its image and was deploying it.",
+    "",
+    "The floor is now 600s because a cold deploy of a real application on this",
+    "platform costs 4-10 minutes — broken went live in 239s, and it is one of the",
+    "smallest things here. The ceiling is 1200s to match BUILD_TIMEOUT: past that",
+    "the server has given up too, so waiting longer measures nothing.",
+    "",
+    "A budget that expires early is not a neutral loss. The harness abandons the",
+    "CLI but the deploy keeps running, holds its row, and counts against the",
+    "owner's concurrent-deploy cap for an hour — which is what refused `2048` a",
+    "slot in this very batch."
+  ]
+}

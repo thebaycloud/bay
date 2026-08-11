@@ -1413,7 +1413,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         const tgz = `${dir}.tgz`;
         writeFileSync(tgz, archive);
         await run("tar", ["-xzf", tgz, "-C", dir], () => {});
-        pruneBrokenSymlinks(dir, log);
       });
     } else if (reused) {
       log(`Using the copy of ${url} we already fetched`);
@@ -1426,6 +1425,22 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         await run("git", ["clone", "--depth", "1", url, dir], () => {});
       });
     }
+
+    // Here, where the three ways of getting the source meet — not inside the
+    // upload branch, which is where this used to live.
+    //
+    // The reasoning written down for `pruneBrokenSymlinks` is about the CLI
+    // excluding `.venv` from an upload and thereby stranding the links that point
+    // into it. True, and it made the fix look like a property of uploads. It is
+    // not: a `git clone` of a repo that COMMITTED those symlinks produces exactly
+    // the same dangling links, because `.venv` is not in the repository either.
+    // `fastapi/full-stack-fastapi-template` — the very repo that prompted the
+    // original fix — commits `.agents/skills/fastapi` and `.agents/skills/sqlmodel`
+    // as symlinks into `.venv`, so deploying it from a URL crashed
+    // `gcloud builds submit` on 10 Aug with the same unattributable
+    // `gcloud crashed (FileNotFoundError)` the fix was written to prevent, twice,
+    // while the fix sat three branches away.
+    pruneBrokenSymlinks(dir, log);
 
     const raw = await stages.around("detect", async () => {
       log("Detecting stack…");
@@ -1594,7 +1609,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             log("Plan unchanged since the last deploy of these files — skipping the planner");
           } else {
             log("Planning the deploy — the agent reads the repo…");
-            plan = await planDeploy({ dir, log });
+            plan = await planDeploy({ dir, log, slug, runId: input.runId });
             worthCaching = true;
           }
         }
@@ -4101,6 +4116,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       const fixed = useAgent
         ? await agentRepair({
             dir, slug, initialError: result.error ?? "unknown", plan: activePlan, redeploy, log,
+            runId: input.runId,
             // Named, not inferred: the agent is told which runtime its
             // `redeploy` reaches, so its prompt cannot describe one while the
             // closure runs the other.

@@ -79,6 +79,43 @@ steps:
           --image=$_IMAGE:$_TAG --update-env-vars=$_LANE_ENV \
           --region=us-central1 --project=$PROJECT_ID --quiet
 
+  # The warm deploy worker is the same image again, with a third command, and it
+  # moves here for the same reason the job does: a worker left on the previous
+  # commit runs the previous commit's pipeline for every deploy that reaches it.
+  #
+  # Its drift guard is cheaper than the job's, and this step is what feeds it.
+  # `assertJobImageMatches` asks the Cloud Run API for two images on every
+  # dispatch; the worker instead compares IMAGE_TAG against the tag the
+  # dispatcher sends, which costs nothing on a path this whole worker exists to
+  # shorten. Both sides get the tag from here — the service below sets its own
+  # in the same way — so "same commit" is a fact written once by the build
+  # rather than asserted twice at runtime.
+  #
+  # Before `deploy` for the same ordering reason the job step gives: a worker
+  # briefly ahead of the service is harmless, a worker behind it means every
+  # dispatch is refused with 409 and silently falls back to the Job. That is a
+  # slow deploy rather than an outage — the worker's refusal is always safe,
+  # which is why this step may run without the elaborate
+  # existence-versus-failure dance above and simply skip a worker that is not
+  # there yet.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy-worker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if ! gcloud run services describe supersonic-deploy-worker \
+          --region=us-central1 --project=$PROJECT_ID --quiet >/dev/null 2>&1; then
+          echo "no supersonic-deploy-worker yet — skipping (see scripts/setup-deploy-worker.sh)"
+          exit 0
+        fi
+        gcloud run deploy supersonic-deploy-worker \
+          --image=$_IMAGE:$_TAG \
+          --region=us-central1 --project=$PROJECT_ID \
+          --update-env-vars=$_LANE_ENV \
+          --update-env-vars=IMAGE_TAG=$_TAG \
+          --quiet
+
   # Never env vars: the live service carries AUTH_SECRET, PG_PASSWORD, the Stripe
   # keys and the lane flags, and a pipeline that passed --set-env-vars would wipe
   # them. Never --tag or --no-traffic either: a deploy from main is meant to serve,
@@ -158,6 +195,12 @@ steps:
       # Roll back with --update-env-vars=BUILDER=kaniko. The mirror and the
       # daemon image are safe to leave either way.
       - --update-env-vars=$_LANE_ENV
+      # The commit this revision is, so the dispatcher can tell the warm worker
+      # which pipeline it is asking for. Absent on either side means "cannot
+      # compare" and the worker accepts the deploy — the same fail-open rule
+      # assertJobImageMatches states, for the same reason: this check exists to
+      # catch a stale worker, not to become a fresh way for a deploy to fail.
+      - --update-env-vars=IMAGE_TAG=$_TAG
       - --quiet
 
 substitutions:
