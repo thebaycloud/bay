@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  cachedBuildConfig, kanikoBuildConfig, buildkitBuildConfig, selectedBuilder, RAILPACK_PLAN, mountsBuildSecrets,
+  cachedBuildConfig, kanikoBuildConfig, buildkitBuildConfig, selectedBuilder, RAILPACK_PLAN, mountsBuildSecrets, laneForBuild,
   buildkitImage, buildLogLine, CACHE_MISS_NOISE, cloudBuildIdFrom, appBuildTag,
   runnerPrepareConfig,
 } from "../lib/build-config";
@@ -402,4 +402,26 @@ test("the question is what a lane can mount, not what it is called", () => {
   assert.equal(mountsBuildSecrets("buildkit"), true);
   assert.equal(mountsBuildSecrets("railpack"), true, "railpack is buildx with a frontend");
   assert.equal(mountsBuildSecrets("kaniko"), false, "no --mount=type=secret, and --build-arg is not a substitute");
+});
+
+// THE LANE MUST FOLLOW WHAT EXISTS, NOT WHAT WAS ASKED FOR.
+//
+// The render stage only writes a plan when it runs, and it does not run for an
+// app that ships its own Dockerfile — `primaryOwnDockerfile` and the root
+// `existsSync` both gate it, because the author was explicit and we honour that.
+// An app named in RAILPACK_APPS that also has a Dockerfile therefore reaches
+// cloudbuild.yaml generation with no plan on disk, and `-f railpack-plan.json`
+// then fails on a file nothing wrote.
+//
+// Deciding from the plan's existence rather than re-deriving the render stage's
+// four conditions is deliberate: a second copy of that gate would drift from the
+// first, and this one cannot — it asks the filesystem what actually happened.
+test("a railpack build with no plan is a buildkit build, not a broken one", () => {
+  assert.equal(laneForBuild("railpack", true), "railpack");
+  assert.equal(laneForBuild("railpack", false), "buildkit",
+    "no plan means the app has its own Dockerfile — build it");
+  assert.equal(laneForBuild("buildkit", false), "buildkit");
+  assert.equal(laneForBuild("kaniko", false), "kaniko");
+  // A plan on disk cannot promote a lane nobody selected.
+  assert.equal(laneForBuild("kaniko", true), "kaniko");
 });

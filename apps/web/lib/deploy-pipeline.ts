@@ -46,7 +46,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
-import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom, RAILPACK_PLAN } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom, RAILPACK_PLAN } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
 import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
@@ -2726,9 +2726,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // in the render stage, where its plan is generated, because that is when
       // the value has to already be in hand. See `publicUrlEnvArgs` there.
       if (buildArgs.length) log(`Build args: ${buildArgs.map((a) => a.key).join(", ")}`);
+
+      // What was asked for, narrowed to what is possible. The railpack lane
+      // needs a plan, and the render stage that writes one is skipped for an app
+      // shipping its own Dockerfile — so this app was named in RAILPACK_APPS and
+      // is not going to take that lane. Said out loud: a lane that changes
+      // silently is a canary reporting a result it never produced.
+      const effectiveBuilder = laneForBuild(builder, existsSync(join(dir, RAILPACK_PLAN)));
+      if (effectiveBuilder !== builder) {
+        log(`Railpack was selected for this app, but it ships its own build definition — building that instead.`);
+      }
       // Context stays the repository root — which is what an author who put the
       // Dockerfile one level down and wrote `COPY ./frontend` is expecting.
-      writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, builder, slug, {
+      writeFileSync(join(dir, "cloudbuild.yaml"), cachedBuildConfig(IMAGE, effectiveBuilder, slug, {
         secretEnv: mountable, buildArgs,
         ...(primaryOwnDockerfile ? { dockerfile: primaryOwnDockerfile } : {}),
       }));

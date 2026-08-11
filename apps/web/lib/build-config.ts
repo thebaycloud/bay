@@ -286,6 +286,28 @@ export function kanikoBuildConfig(image: string, slug?: string, inputs: BuildInp
 const SAFE_IMAGE_REF = /^[A-Za-z0-9._:/@-]+$/;
 
 /**
+ * The lane this build actually takes, given what is on disk.
+ *
+ * `selectedBuilder` answers what was ASKED FOR — an env var and a canary list.
+ * This answers what is POSSIBLE, and only one thing separates them: the railpack
+ * lane needs a plan, and the render stage that writes one does not run for an
+ * app shipping its own Dockerfile. `primaryOwnDockerfile` and a root `existsSync`
+ * both gate it, deliberately, because the author was explicit.
+ *
+ * So an app named in RAILPACK_APPS that also has a Dockerfile used to reach
+ * cloudbuild.yaml with `-f railpack-plan.json` and no such file — a build that
+ * fails on something nobody wrote, for a reason naming neither Railpack nor the
+ * canary list.
+ *
+ * Decided from the plan's EXISTENCE rather than by re-deriving the render
+ * stage's four conditions, because a second copy of that gate would drift from
+ * the first while this cannot: it asks what actually happened.
+ */
+export function laneForBuild(selected: Builder, planExists: boolean): Builder {
+  return selected === "railpack" && !planExists ? "buildkit" : selected;
+}
+
+/**
  * Whether a lane can mount a build secret without baking it into the image.
  *
  * A predicate rather than an equality because the question outlives the answer.
