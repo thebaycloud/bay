@@ -37,11 +37,16 @@ function clock(startMs: number, stepMs: number) {
  */
 const EMITTERS = [
   "lib/deploy-pipeline.ts", "app/api/deploy/route.ts", "scripts/deploy-job.ts",
-  // The handoff rows moved out of scripts/deploy-job.ts into here, and the list
-  // did not follow them — so `job-cold-start` read as a stage nothing writes,
-  // which is precisely the failure this test was added to catch. It was right;
-  // it was just looking at the wrong files.
-  "lib/deploy-execute.ts",
+  // `lib/deploy-execute.ts` belongs in this list and is not in it, because the
+  // file does not exist: it was referenced here and never committed, and the
+  // three tests below failed on ENOENT while `main`'s build was already failing
+  // on a second missing file in the same push. Reconstructing an extraction out
+  // of a four-thousand-line pipeline from a test's file list would be guessing
+  // at its shape, and a wrong guess is worse than an absent file.
+  //
+  // Whoever lands that extraction adds the line back, and this test tells them
+  // to: the stages it carries will read as written by nothing the moment they
+  // leave deploy-pipeline.ts, which is exactly the failure this list exists for.
   "lib/fleet.ts",
 ];
 
