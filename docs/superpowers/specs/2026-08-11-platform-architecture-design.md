@@ -682,7 +682,8 @@ the design rather than merely delaying it.
    The one expensive schema change; everything in §5, §9 and §10 waits on it.
 5. **The reconciler**, with quorum and singleton locks.
 6. **Long-poll sync** with per-node generations.
-7. **Workers and crons off Cloud Run** onto the node.
+7. **Workers and crons off Cloud Run** onto the node. *Written on both sides;
+   never proven end to end. See below.*
 8. **The build plane** — Railpack, our own BuildKit, local cache. *Railpack is
    in, behind `RAILPACK_APPS`; the BuildKit half is not. See below.*
 9. **The secret broker.** *Both halves are written and deployed; the IAM grant
@@ -735,6 +736,25 @@ local cache is what collects that, and it is infrastructure that costs money, so
 it is a decision rather than a commit. Railpack landing first is still the right
 order — it is the part that makes the warm builder worth having.
 
+### Item 7, written but never witnessed
+
+An audit on 12 Aug found both sides present, which is not the same as working:
+
+- the control plane builds `processes` into the placement spec (`buildAppSpec`),
+  and `FLEET_OWNS_PROCESSES` is a named empty list so a fleet app declares
+  nothing to Cloud Run while the orphan pass removes the worker-pools and jobs
+  it used to have;
+- the agent has `web`/`worker`/`cron`/`release`, a cron runner with schedules,
+  timezones and a consecutive-failure tracker.
+
+**Nothing here proves it runs.** Reading code establishes that somebody wrote
+it. The proof this item is waiting for is one deploy of `examples/shapes/crm`
+onto the fleet — web, a `release` that migrates, and a `nightly` on `*/10` in
+`Asia/Almaty`, which is every kind at once and is why that fixture exists. Until
+that has been watched, this item stays open no matter how complete the code
+looks, because the last four findings in this document were all in code that
+looked complete.
+
 ### Item 9, and the one step that actually removes the risk
 
 Both halves are in production and **nothing is safer yet**, which is worth
@@ -754,6 +774,18 @@ old path remains open and an escape still reads everything.
 
 Doing 3 before 2 takes every app that restarts with it. Doing 1 and 2 and never
 doing 3 is where this work quietly amounts to nothing.
+
+**Verified in production on 12 Aug**, against a real placement and without
+fetching a single secret value — asking for a key that does not exist separates
+"was I authorised" from "does the secret exist", and the two answers differ:
+
+| asked | answer |
+|---|---|
+| `q6doa` on `fleet-lab-1`, absent key | Secret Manager's own 404 — *placement and lease passed* |
+| `q6doa` on `fleet-lab-2` | `q6doa is not placed on fleet-lab-2` |
+| `q6doa` asking for `app-anatf-DATABASE_URL` | `not q6doa's to read` |
+| `q6doa` asking for `fleet-edge-secret` | `not q6doa's to read` |
+| `q6doa` asking for `app-q6doaX-DATABASE_URL` | `not q6doa's to read` — the prefix attack |
 
 **Two checks, not one.** Placement answers "may this node act for `shop`" and
 says nothing about which ids the request lists. Without the second, a node
