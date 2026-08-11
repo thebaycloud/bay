@@ -724,7 +724,7 @@ func (r *Runtime) Start(app App, proc Process, index int) (*SandboxNet, StartTim
 	// cheaply and leaves nothing to clean up. An app whose DATABASE_URL cannot be
 	// read must not start: it would come up, fail every request, and still pass a
 	// health check on "/".
-	resolved, err := resolveAll(gcpProject, app.Secrets)
+	resolved, err := resolveAll(gcpProject, app.Slug, app.Secrets)
 	if err != nil {
 		return nil, StartTiming{}, fmt.Errorf("%s: %w", id, err)
 	}

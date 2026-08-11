@@ -678,6 +678,24 @@ func main() {
 		src.Identity = id
 		log.Printf("node %s in %s (%s), %d cpus, %.0f GiB",
 			id.Name, id.Zone, id.InternalIP, id.CPUs, float64(id.MemoryBytes)/(1<<30))
+
+		// Secrets now come from the control plane rather than from this node's
+		// own service account. Configured here because it needs the identity,
+		// and refused loudly rather than silently falling back: a node that
+		// cannot derive a broker address would otherwise keep reading Secret
+		// Manager directly, and the grant this exists to remove would stay
+		// necessary without anyone noticing.
+		brokerToken, brokerNode = src.Token, id.Name
+		if brokerEndpoint = brokerURL(src.Endpoint); brokerEndpoint == "" {
+			// Loud, and NOT fatal. This unit is Restart=always, so refusing to
+			// start would be a crash loop that leaves every sandbox on this node
+			// running with nothing supervising it — a worse outcome than
+			// resolving secrets the old way for one more deploy.
+			log.Printf("! no secret broker could be derived from FLEET_ENDPOINT %q — "+
+				"secrets will be read directly, which is the access this node is meant to lose", src.Endpoint)
+		} else {
+			log.Printf("secrets resolve through %s", brokerEndpoint)
+		}
 	} else {
 		log.Printf("no FLEET_ENDPOINT set; reading desired state from %s", statePath)
 	}
