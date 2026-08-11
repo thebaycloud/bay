@@ -685,7 +685,8 @@ the design rather than merely delaying it.
 7. **Workers and crons off Cloud Run** onto the node.
 8. **The build plane** — Railpack, our own BuildKit, local cache. *Railpack is
    in, behind `RAILPACK_APPS`; the BuildKit half is not. See below.*
-9. **The secret broker.**
+9. **The secret broker.** *Both halves are written and deployed; the IAM grant
+   is untouched, so nothing has changed yet. See below for the one step left.*
 10. **Node three**, then the provider decision. Node two already exists —
     `fleet-lab-2` was running 8 sandboxes on 11 Aug, arrived outside this order,
     and is not represented in the placement model. Three is not a round number
@@ -733,6 +734,43 @@ already called "not a cache; a slow registry". The long-lived BuildKit with a
 local cache is what collects that, and it is infrastructure that costs money, so
 it is a decision rather than a commit. Railpack landing first is still the right
 order — it is the part that makes the warm builder worth having.
+
+### Item 9, and the one step that actually removes the risk
+
+Both halves are in production and **nothing is safer yet**, which is worth
+stating plainly rather than letting the commits imply otherwise. The broker
+answers, the agent asks it, and the node's service account still holds
+`secretmanager.secretAccessor` project-wide. Until that binding is removed the
+old path remains open and an escape still reads everything.
+
+**The remaining step, in order, because the order is the whole risk:**
+
+1. Roll the agent carrying `broker.go` onto both nodes.
+2. Watch a real start resolve through the broker — the agent logs
+   `secrets resolve through …` once at boot, and a failure is loud because there
+   is no fallback.
+3. **Then** remove `roles/secretmanager.secretAccessor` from the node service
+   account.
+
+Doing 3 before 2 takes every app that restarts with it. Doing 1 and 2 and never
+doing 3 is where this work quietly amounts to nothing.
+
+**Two checks, not one.** Placement answers "may this node act for `shop`" and
+says nothing about which ids the request lists. Without the second, a node
+holding `shop` asks for `app-blog-DATABASE_URL` and the broker fetches it with
+the *control plane's* credentials — broader than the node's have ever been. A
+smaller blast radius was the goal; that would have been a larger one with an
+audit trail.
+
+**What it is worth today, exactly.** `FLEET_TOKEN` is shared across the fleet,
+so it proves *a* node and not *which* node: a compromised node can still claim
+to be another and read the apps placed there. The gain is nonetheless real and
+this specific — the node's SA loses secret access entirely, so a stolen metadata
+token gets nothing; and `fleet-edge-secret`, the control plane's own database
+password and every other platform secret leave the reachable set, since none is
+named `app-<slug>-<KEY>`. The per-node claim becomes true when the GCE instance
+identity token replaces the shared string, which the sync route's header already
+describes.
 
 ## What this does not decide
 
