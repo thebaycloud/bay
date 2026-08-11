@@ -258,3 +258,55 @@ export async function renewLeases(node: string, now: number = Date.now()): Promi
     [node, now + LEASE_MS],
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/* Releases: what shipped, recorded once.                                      */
+/* -------------------------------------------------------------------------- */
+
+import type { AppSpec } from "./fleet-spec";
+
+/**
+ * Record one successful build as an immutable release, and return it.
+ *
+ * Immutable by rule rather than by permission: nothing updates this table. A
+ * release is the record of what shipped, and the thing that ships the next one
+ * must not be able to edit it.
+ *
+ * The version is taken inside the INSERT rather than read and then written,
+ * because two deploys of one app can be in flight — `supersedeRunsFor` cancels
+ * the older run but not instantly — and read-then-write would give both the same
+ * number. The unique constraint would then refuse one of them, which is a deploy
+ * failing on a race it did not cause.
+ */
+export async function recordRelease(
+  slug: string,
+  image: string,
+  spec: AppSpec,
+): Promise<{ id: number; version: number }> {
+  const r = await getPool(DB).query(
+    `INSERT INTO releases (slug, version, base_image, code_image, spec)
+       SELECT $1, COALESCE(max(version), 0) + 1, $2, $2, $3::jsonb
+         FROM releases WHERE slug = $1
+     RETURNING id, version`,
+    [slug, image, JSON.stringify(spec)],
+  );
+  return { id: Number(r.rows[0].id), version: Number(r.rows[0].version) };
+}
+
+/** Which release an app is currently asked to run, or null if it has none. */
+export async function desiredRelease(slug: string): Promise<number | null> {
+  const r = await getPool(DB).query(`SELECT desired_release FROM apps WHERE slug = $1`, [slug]);
+  const v = r.rows[0]?.desired_release;
+  return v === null || v === undefined ? null : Number(v);
+}
+
+/**
+ * Ask for a release. This is the whole of what a deploy does to change what runs.
+ *
+ * And the whole of a rollback, in the other direction — which is why `rollback`
+ * stops being a 501 on this runtime: it is this call with an older id.
+ */
+export async function setDesired(slug: string, release: number | null): Promise<void> {
+  await getPool(DB).query(`UPDATE apps SET desired_release = $2 WHERE slug = $1`, [slug, release]);
+  await bumpFleetGeneration();
+}

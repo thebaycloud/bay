@@ -217,6 +217,18 @@ async function install() {
   };
   mock.module("@/lib/apps", { namedExports: { createAppRecord: asyncNoop, markAppLive, markAppFailed: asyncNoop, isFirstDeploy: async () => true } });
   mock.module("@/lib/deploys", { namedExports: { setDeploy: noop } });
+  // The release ports reach Postgres, and placeOnFleet calls them before it
+  // places anything — so without this every fleet test fails at the point the
+  // deploy tries to record what it shipped, which looks like a placement bug
+  // and is a missing mock.
+  mock.module("@/lib/reconcile", {
+    namedExports: {
+      desiredRelease: async () => null,
+      recordRelease: async () => ({ id: 1, version: 1 }),
+      setDesired: asyncNoop,
+      renewLeases: asyncNoop,
+    },
+  });
   mock.module("@/lib/plan-cache", { namedExports: { planKey: () => null, getCachedPlan: async () => null, putCachedPlan: asyncNoop } });
   mock.module("@/lib/pg-role", { namedExports: { ensureAppRole: asyncNoop, DB_PASSWORD_SECRET: "pw" } });
 
