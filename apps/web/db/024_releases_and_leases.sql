@@ -90,26 +90,24 @@ DO $$ BEGIN
     CHECK (state IN ('starting', 'ready', 'draining'));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- The key moves from (slug, node) to (slug, instance), and that is the change
--- that makes an instance a thing rather than a side effect of which machine it
--- landed on. Keyed on the node, "move instance 1 from A to B" is a delete and an
--- insert with a window in between where the app has no placement at all; keyed
--- on the instance it is one UPDATE.
+-- An instance is a thing, not a side effect of which machine it landed on — and
+-- it is added as a SECOND unique key rather than by moving the primary one.
 --
--- Guarded on the constraint's own name so re-running this file is a no-op, which
--- is the rule every migration here follows and the reason none of them has ever
--- had to be run by hand in the right order.
-DO $$ BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint
-     WHERE conname = 'fleet_placements_pkey'
-       AND conrelid = 'fleet_placements'::regclass
-       AND pg_get_constraintdef(oid) LIKE 'PRIMARY KEY (slug, node)%'
-  ) THEN
-    ALTER TABLE fleet_placements DROP CONSTRAINT fleet_placements_pkey;
-    ALTER TABLE fleet_placements ADD CONSTRAINT fleet_placements_pkey PRIMARY KEY (slug, instance);
-  END IF;
-END $$;
+-- Moving it would have been correct and would have broken production for the
+-- length of a deploy. Migrations run BEFORE the build in deploy.yml, so for the
+-- few minutes between the schema moving and the new code landing, the old
+-- `placeApp` is still issuing `ON CONFLICT (slug, node)` — which, with that
+-- constraint gone, is not a slower path or a warning. It is an error, and every
+-- fleet deploy landing in that window fails on a migration that was supposed to
+-- be additive.
+--
+-- Keeping both is not a compromise here, because both express something true:
+-- one instance is on one node, and one app has at most one instance per node.
+-- The planner already spreads for exactly that reason — two instances of one app
+-- on one machine is one machine away from none — so the constraint records a
+-- rule we already keep rather than inventing one to make a migration convenient.
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS fleet_placements_instance
+  ON fleet_placements (slug, instance);
 
 -- The reconciler's own query: which placements are past their lease, so the
 -- control plane may take them back. Without this it is a scan of the whole

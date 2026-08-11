@@ -66,6 +66,12 @@ function ports(over: Partial<PlacementPorts> = {}) {
     probe: async () => { calls.push("probe"); return { code: 200 }; },
     runningOnNode: async () => { calls.push("running"); return { ok: true }; },
     nodeFaultFor: async () => { calls.push("nodeFault"); return null; },
+    // The release ports, defaulted so every test keeps its shape — and REQUIRED
+    // on the interface, which is what stops a future call site placing an app
+    // and recording nothing about what it placed.
+    readDesired: async () => null,
+    recordRelease: async () => 1,
+    setDesired: async () => {},
     log: () => {},
   };
   return { calls, p: { ...base, ...over } };
@@ -1132,4 +1138,53 @@ test("every other marker is still the router speaking for an app that did not", 
   const v = fleetVerdict({ code: 403, router: "forwarded, unsigned" });
   assert.equal(v.ok, false);
   assert.match(v.reason ?? "", /unsigned/);
+});
+
+/* -------------------------------------------------------------------------- */
+/* The release, recorded where the placement it describes is made.             */
+/* -------------------------------------------------------------------------- */
+
+// A deploy is a write: a row saying what shipped, and a column saying which row
+// should be running. Recorded HERE rather than in the pipeline because the
+// failure path — putting `desired` back — has to sit next to the placement
+// restore it mirrors, or the two can disagree about which release an app is
+// meant to be running and the reconciler loops between them.
+test("a successful placement records a release and asks for it", async () => {
+  const said: string[] = [];
+  const p = await placeOnFleet("lilna", spec, "10.0.0.1", ports({
+    readDesired: async () => 4,
+    recordRelease: async () => { said.push("record"); return 5; },
+    setDesired: async (_s, r) => { said.push(`desired=${r}`); },
+  }).p);
+  assert.equal(p.placed, true);
+  assert.deepEqual(said, ["record", "desired=5"]);
+});
+
+// The same write, reversed. placeOnFleet already restores the previous
+// placement on a failed verify; without this, `desired` would stay on the
+// release that just failed and the reconciler would roll straight back into it.
+test("a failed placement puts the desired release back where it was", async () => {
+  const said: string[] = [];
+  const p = await placeOnFleet("lilna", spec, "10.0.0.1", ports({
+    probe: async () => ({ code: 503 }),
+    readDesired: async () => 4,
+    recordRelease: async () => 5,
+    setDesired: async (_s, r) => { said.push(`desired=${r}`); },
+  }).p);
+  assert.equal(p.placed, false);
+  assert.deepEqual(said, ["desired=5", "desired=4"], "it must go back to 4, not be left on the release that failed");
+});
+
+// A first deploy has no previous release, and null is the honest value: this app
+// has never had one. Inventing a zero would point desired at a release that does
+// not exist.
+test("a first deploy that fails leaves no desired release rather than inventing one", async () => {
+  const said: (number | null)[] = [];
+  await placeOnFleet("lilna", spec, "10.0.0.1", ports({
+    probe: async () => ({ code: 503 }),
+    readDesired: async () => null,
+    recordRelease: async () => 1,
+    setDesired: async (_s, r) => { said.push(r); },
+  }).p);
+  assert.deepEqual(said, [1, null]);
 });

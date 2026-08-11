@@ -25,6 +25,7 @@ import { deployTargetFor } from "@/lib/deploy-target";
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec, type AgentProcess } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetPlacementWanted, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
+import { recordRelease, setDesired, desiredRelease } from "@/lib/reconcile";
 import { rollback, deleteRunService, getLogs } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -3769,6 +3770,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         FLEET_LB,
         {
           chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
+          // The deploy as a write: a row saying what shipped, and a column
+          // saying which row should be running. The reconciler converges on the
+          // difference, which is what makes rollback one call with an older id
+          // rather than a 501.
+          readDesired: desiredRelease,
+          recordRelease: async (s, sp) => (await recordRelease(s, sp.image, sp)).id,
+          setDesired,
           probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
           runningOnNode: (s, n, sp) => awaitRunning(s, n, sp, runningOnNode),
           nodeFaultFor,

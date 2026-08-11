@@ -43,6 +43,15 @@ export interface PlacementPorts {
   readPlacement: (slug: string) => Promise<{ node: string; spec: AppSpec } | null>;
   /** Which runtime the app is on right now, before this deploy changes it. */
   readRuntime: (slug: string) => Promise<Runtime>;
+  /**
+   * The release this app is currently asked to run, read BEFORE this deploy
+   * changes it — so a failed one can put it back. Null when it has never had one.
+   */
+  readDesired: (slug: string) => Promise<number | null>;
+  /** Record what this deploy shipped, immutably, and return its id. */
+  recordRelease: (slug: string, spec: AppSpec) => Promise<number>;
+  /** Ask for a release. The whole of what a deploy does to change what runs. */
+  setDesired: (slug: string, release: number | null) => Promise<void>;
   setRuntime: (slug: string, runtime: Runtime) => Promise<void>;
   /** One request at the fleet, addressed the way the edge proxy will address it. */
   probe: (slug: string) => Promise<{ code: number; router?: string }>;
@@ -508,6 +517,17 @@ export async function placeOnFleet(
   // that was working and the runtime it was on are only knowable from here.
   const previous = await p.readPlacement(slug);
   const previousRuntime = await p.readRuntime(slug);
+  // Read before anything is recorded, for the same reason the placement is: the
+  // failure path below is this write in the other direction, and after the write
+  // the old value is only knowable from here.
+  const previousDesired = await p.readDesired(slug);
+
+  // Recorded before it is placed. A release is the record of what shipped, and
+  // recording it after a successful placement would mean a placement that
+  // succeeded and a timeline that lost it — the same shape as a build whose
+  // outcome was never written.
+  const release = await p.recordRelease(slug, spec);
+  await p.setDesired(slug, release);
 
   // 1. place. Nothing routes here yet; run_url still points at wherever it did.
   await p.placeApp(slug, node, spec);
@@ -648,6 +668,11 @@ export async function placeOnFleet(
     // say 'fleet', which is what would have silently pointed a node's next
     // reconcile at a placement that no longer exists.
     await p.setRuntime(slug, previousRuntime);
+    // The same write, reversed, and next to the placement restore it mirrors.
+    // Left on the failed release, `desired` and the restored placement would
+    // disagree about what this app is meant to be running, and the reconciler
+    // would roll forward into the failure again on its next pass.
+    await p.setDesired(slug, previousDesired);
     return { placed: false, reason };
   }
 

@@ -6,6 +6,7 @@ import {
   fleetGeneration, decideSync,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
+import { renewLeases } from "@/lib/reconcile";
 
 /**
  * The only endpoint a fleet node talks to.
@@ -111,6 +112,18 @@ export async function POST(req: Request) {
         console.error("fleet sync: recording running for", name, e instanceof Error ? e.message : String(e));
       });
     }
+
+    // This node just spoke, so everything it holds keeps its lease. This is what
+    // makes the lease mean anything: a node that is talking keeps its
+    // placements, and one that stops loses them to the control plane's
+    // arithmetic — never to any instruction of its own, which is why the node
+    // goes on serving through an outage of this endpoint.
+    await renewLeases(name).catch((e) => {
+      // Never fail the sync over it. A lease that could not be renewed costs at
+      // most one reconcile pass deciding to move an app that is fine; a sync
+      // that fails costs the node its desired state.
+      console.error("fleet sync: renewing leases for", name, e instanceof Error ? e.message : String(e));
+    });
 
     // The generation is read BEFORE the desired state, and the order is the
     // whole correctness argument.
