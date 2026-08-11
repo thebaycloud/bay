@@ -55,9 +55,16 @@ away. Everything else serves that loop.
 gcloud compute scp services/fleet/image/provision.sh <node>:/tmp/ --zone us-central1-a
 gcloud compute ssh <node> --zone us-central1-a --command 'sudo bash /tmp/provision.sh'
 
-# build + restart the agent after an edit
-gcloud compute scp services/fleet/agent/*.go <node>:/opt/agent/ --zone us-central1-a
-gcloud compute ssh <node> --zone us-central1-a --command 'sudo bash /tmp/restart-agent.sh'
+# ship an agent change: merge to main and the nodes collect it within ~2 minutes
+#   CI:   .github/workflows/publish-agent.yml
+#   node: /usr/local/bin/supersonic-update-agent, on a systemd timer
+# check what a node is running:
+gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap \
+  --command '/opt/agent/supersonicd -version; cat /opt/agent/installed.sha256'
+
+# force a collection now rather than waiting for the timer
+gcloud compute ssh <node> --zone us-central1-a --tunnel-through-iap \
+  --command 'sudo systemctl start supersonic-update-agent'
 
 # move an app onto the fleet, and back
 bash services/fleet/fleetctl.sh place <slug>
@@ -232,11 +239,10 @@ is why it wants someone watching rather than a quiet commit.
 - **HTTPS.** The wildcard certificate needs a DNS authorization TXT record, and
   `supersonic.cv` is at Namecheap, not Cloud DNS. The load balancer serves HTTP
   today.
-- **Fleet-wide routing.** A node serves the apps placed on it and returns a
-  plain "not on this node" for anything else. Forwarding to the node that holds
-  an app is the next piece.
-- **The deploy pipeline does not know about any of this.** A deploy still goes to
-  Cloud Run; `fleetctl` places an already-built image by hand.
+- ~~Fleet-wide routing~~ — built on both sides: `peersFor` (apps/web/lib/fleet.ts)
+  hands each node the other nodes' apps, and the router forwards with a
+  single-hop rule so two nodes that disagree cannot pass a request back and
+  forth. Untested with more than one node, because there is only one.
 - **Worker, cron and release processes.** Only `web` runs. This is the section of
   the plan that pays for the move and it is not built yet.
 - **Volumes and Litestream.** `/data` is bind-mounted from local SSD and nothing

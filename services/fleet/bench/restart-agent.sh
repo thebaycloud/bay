@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# Rebuild and restart the agent, clearing any sandbox it left behind.
+# RECOVERY TOOL. This causes an outage of every app on the node. Not a deploy.
+#
+# It rebuilds the agent from source ON the node and then deliberately tears down
+# everything: every runsc container killed, every bundle unmounted, routes.json
+# and every ss-* namespace deleted. That is the right thing when a node is in a
+# state nothing else clears, and it is the wrong thing for shipping a change.
+#
+# For shipping a change there is now image/update-agent.sh, which collects the
+# binary CI published and restarts the unit — and because the unit carries
+# KillMode=process and the agent adopts sandboxes that outlive it, that restart
+# is not an outage. Using this script instead would automate the outage.
 #
 # This lives in a file rather than inline over ssh for a reason that cost three
 # dropped sessions: `pkill -f supersonicd` issued as part of an ssh command

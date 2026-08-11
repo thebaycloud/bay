@@ -492,6 +492,58 @@ systemctl enable cloud-sql-proxy >/dev/null 2>&1 || true
 systemctl enable supersonicd >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
+# 7c. Collecting the agent
+#
+# The agent was the last component with no deploy path: it was updated by
+# copying .go files to a node and building there, so "merged" and "running" were
+# different questions. It cost the fleet-pull and fleet-boot stages, which
+# shipped, wrote zero rows, and looked like broken instrumentation.
+#
+# The updater PULLS, like everything else here. A node unreachable during a
+# release collects it on the next tick rather than missing it, and CI needs no
+# route to any machine.
+#
+# Two minutes, with a randomised delay: without the jitter every node in a site
+# would fetch the same object at the same second, which is a self-inflicted
+# thundering herd for no gain — nothing here is urgent to the second.
+# ---------------------------------------------------------------------------
+
+log "installing the agent updater"
+install -m 0755 "$(dirname "$0")/update-agent.sh" /usr/local/bin/supersonic-update-agent 2>/dev/null \
+  || log "update-agent.sh not beside provision.sh; copy it to /usr/local/bin/supersonic-update-agent by hand"
+
+cat > /etc/systemd/system/supersonic-update-agent.service <<'EOF'
+[Unit]
+Description=Collect the current Supersonic fleet agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/supersonic-update-agent
+StandardOutput=append:/var/log/supersonicd.log
+StandardError=append:/var/log/supersonicd.log
+EOF
+
+cat > /etc/systemd/system/supersonic-update-agent.timer <<'EOF'
+[Unit]
+Description=Collect the current Supersonic fleet agent, periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now supersonic-update-agent.timer >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
 # 8. Kernel and cgroup posture
 # ---------------------------------------------------------------------------
 
