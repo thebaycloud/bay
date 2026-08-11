@@ -1910,16 +1910,26 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // Only for registries we authenticate to, and never fatal: an
         // unresolvable digest leaves the tag in place, which is what shipped
         // before this line existed.
-        const tagged = baseImage(renderInput);
-        const digest = await resolveImageDigest(tagged);
-        if (digest) {
-          renderInput = { ...renderInput, image: `${tagged.split(":")[0]}@${digest}` };
-          log(`Base pinned to ${tagged} @ ${digest.slice(0, 19)}… so a rebuild is the same build.`);
+        //
+        // Skipped entirely on the railpack lane, and that is not an optimisation.
+        // `renderInput.image` is the FROM of a Dockerfile we are not going to
+        // write; Railpack picks its own base. Leaving this in place cost nothing
+        // in behaviour and printed `Base pinned to node:22-slim @ sha256:…` on a
+        // build whose base was chosen by something else — a log line asserting a
+        // guarantee the build does not have.
+        const railpackLane = selectedBuilder(process.env, slug) === "railpack";
+        if (!railpackLane) {
+          const tagged = baseImage(renderInput);
+          const digest = await resolveImageDigest(tagged);
+          if (digest) {
+            renderInput = { ...renderInput, image: `${tagged.split(":")[0]}@${digest}` };
+            log(`Base pinned to ${tagged} @ ${digest.slice(0, 19)}… so a rebuild is the same build.`);
+          }
         }
         // Railpack plans the build instead of us emitting a Dockerfile for it.
         // Same context, same .dockerignore, same buildx step — a different file
         // handed to `-f`, which `cachedBuildConfig` points at the frontend.
-        if (selectedBuilder(process.env, slug) === "railpack") {
+        if (railpackLane) {
           const declared = (appConfig ? primaryService(appConfig) : undefined)?.buildEnv ?? {};
 
           // The app's own railpack.json wins, exactly as its own Dockerfile

@@ -45,8 +45,19 @@ function authorised(req: Request): boolean {
   return diff === 0;
 }
 
-/** How many secrets one request may name. An app has a handful; a scraper wants all of them. */
-const MAX_NAMES = 32;
+/**
+ * How many secrets one request may name.
+ *
+ * A bound on the array, not a security control, and the difference decides the
+ * number. The caller already holds FLEET_TOKEN, so an attacker who has it can
+ * ask for every app in turn regardless — a low cap buys nothing against them
+ * and costs a legitimate app its start, since `env set` puts no limit on how
+ * many secrets an app may have. This is high enough that no real app reaches it
+ * and low enough that the array and its concurrent fetches stay bounded.
+ *
+ * It was 32 first, which is inside the range a real app can reach.
+ */
+const MAX_NAMES = 100;
 
 export async function POST(req: Request) {
   if (!authorised(req)) return Response.json({ error: "unauthorised" }, { status: 401 });
@@ -60,7 +71,14 @@ export async function POST(req: Request) {
 
   const node = typeof body.node === "string" ? body.node : "";
   const slug = typeof body.slug === "string" ? body.slug : "";
-  const names = Array.isArray(body.names) ? body.names.filter((n): n is string => typeof n === "string") : [];
+  // Filtering non-strings out would turn `names: [123]` into an empty list and
+  // then into a cheerful `{values:{}}`, which the agent reads as "this app has
+  // no secrets" and starts the process without them. Refused instead.
+  const raw = Array.isArray(body.names) ? body.names : [];
+  if (raw.some((n) => typeof n !== "string")) {
+    return Response.json({ error: "names must be strings" }, { status: 400 });
+  }
+  const names = raw as string[];
   if (!node || !slug) return Response.json({ error: "node and slug are required" }, { status: 400 });
   if (!names.length) return Response.json({ values: {} });
   if (names.length > MAX_NAMES) {
