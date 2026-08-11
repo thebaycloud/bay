@@ -683,12 +683,56 @@ the design rather than merely delaying it.
 5. **The reconciler**, with quorum and singleton locks.
 6. **Long-poll sync** with per-node generations.
 7. **Workers and crons off Cloud Run** onto the node.
-8. **The build plane** — Railpack, our own BuildKit, local cache.
+8. **The build plane** — Railpack, our own BuildKit, local cache. *Railpack is
+   in, behind `RAILPACK_APPS`; the BuildKit half is not. See below.*
 9. **The secret broker.**
 10. **Node three**, then the provider decision. Node two already exists —
     `fleet-lab-2` was running 8 sandboxes on 11 Aug, arrived outside this order,
     and is not represented in the placement model. Three is not a round number
     here: it is the count at which the quorum rule in §5 can evict at all.
+
+### Item 8, half done, and the half that matters is the other one
+
+**§3 said "emit BuildKit LLB instead of a Dockerfile". We do not have to.**
+Railpack ships as a BuildKit *frontend*, so the plan is executed by any BuildKit
+— including the one our existing buildx lane already starts per build. The whole
+integration is one flag and one filename:
+
+```
+docker buildx build --build-arg BUILDKIT_SYNTAX=ghcr.io/railwayapp/railpack-frontend \
+  -f railpack-plan.json .
+```
+
+`buildkitBuildConfig` already threaded both `-f` and `--build-arg`, so the Cloud
+Build config needed no change at all. Writing LLB ourselves would have been work
+done to reach a place we could already stand in.
+
+**The split that fell out of it.** Railpack's schema has no `release`, no
+`framework`, no `database`, no confidence. Those are not gaps — they are the
+platform layer, which Railway also keeps above Railpack. So `detect()` stays and
+`lib/railpack.ts` is the seam. Railpack owns *how to build*; we keep *what this
+app is*. That is a smaller change than "replace lib/dockerfile.ts" and a more
+defensible one.
+
+**Where we may overrule it:** only on `confidence: "certain"` — the repo or the
+user said so in as many words. Overruling from our own framework-signal guess
+would keep us owning the answer we are adopting Railpack to stop owning.
+
+**What is NOT ported, stated plainly.** `build-hints` maps cleanly onto
+`buildAptPackages` and is carried. `publicUrlBuildArgs` is not: it learns which
+address variables a build will hear by reading `ARG` declarations, and a plan
+declares none. An app whose bundle needs `VITE_API_URL` gets silence on this
+lane — the "signup form posts to localhost:8000" failure. `buildEnv` in
+supersonic.json is the working substitute and the deploy log says so. Closing it
+means learning those names from the source instead, which is a port, not a line.
+
+**And the speed is still in the other half.** Build is 54 s of the measured
+238 s, and Railpack alone does not remove it: the cache is still
+`--cache-from type=registry` pulled onto a clean Cloud Build worker, which §3
+already called "not a cache; a slow registry". The long-lived BuildKit with a
+local cache is what collects that, and it is infrastructure that costs money, so
+it is a decision rather than a commit. Railpack landing first is still the right
+order — it is the part that makes the warm builder worth having.
 
 ## What this does not decide
 

@@ -2681,6 +2681,21 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           log(`Telling the build where this app will live: ${told.map((a) => a.key).join(", ")}`);
           buildArgs.push(...told);
         }
+      } else if (builder === "railpack") {
+        // A KNOWN GAP, said out loud rather than left to be discovered.
+        //
+        // This reads `ARG` declarations to learn which address variables a build
+        // is willing to hear. A Railpack plan declares no ARGs, so there is
+        // nothing to read and an app that needs `VITE_API_URL` gets silence —
+        // which is precisely the failure recorded above: backend answering 200
+        // while the signup form posts to http://localhost:8000.
+        //
+        // `buildEnv` in supersonic.json is the working substitute today, and it
+        // reaches the plan via `--env`. Closing this properly means learning the
+        // names from the source rather than from a Dockerfile, which is a port of
+        // `publicUrlBuildArgs`, not a line here.
+        log("! this lane cannot yet tell the build its public address — "
+          + "set it in supersonic.json `buildEnv` if the bundle needs one.");
       }
       if (buildArgs.length) log(`Build args: ${buildArgs.map((a) => a.key).join(", ")}`);
       // Context stays the repository root — which is what an author who put the
