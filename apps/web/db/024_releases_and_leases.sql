@@ -21,6 +21,13 @@
 -- guarded on the constraint it replaces, and existing rows are given the values
 -- that describe what they already are — instance 0, ready, and the release they
 -- are running once one is recorded for them.
+--
+-- migrate: no-transaction
+--
+-- CREATE INDEX CONCURRENTLY cannot run inside a transaction block, and a whole
+-- migration file sent as one query IS an implicit one. The directive makes the
+-- runner send each statement separately, which is what 010 and 018 already do
+-- for the same reason.
 
 -- ---------------------------------------------------------------------------
 -- Releases: the timeline.
@@ -107,4 +114,7 @@ END $$;
 -- The reconciler's own query: which placements are past their lease, so the
 -- control plane may take them back. Without this it is a scan of the whole
 -- table on every pass, and the pass runs on a clock.
-CREATE INDEX IF NOT EXISTS fleet_placements_lease ON fleet_placements (lease_until);
+-- CONCURRENTLY, because fleet_placements already exists and every deploy and
+-- every reconcile pass writes to it: a plain build would block those writes for
+-- its whole duration, and a placement write that blocks is a deploy that stalls.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS fleet_placements_lease ON fleet_placements (lease_until);
