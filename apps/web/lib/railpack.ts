@@ -69,6 +69,18 @@ export interface RailpackInput {
    * injected when the process starts and that is the only place it can be right.
    */
   buildEnv?: Record<string, string>;
+  /**
+   * The build command as the REPOSITORY WROTE IT, from `supersonic.json`.
+   *
+   * Preferred over `toolchains[0].build`, which is a derived view and is not
+   * always the same string: `detect()` truncates a chained command at `&&`, so
+   * a declared
+   *   go build -o /app/server ./cmd/server && go build -o /app/migrate ./cmd/migrate
+   * arrives as its first half. Passing that built the server and not the
+   * migration, and the release then failed with `/app/migrate: not found` on an
+   * image that had been built successfully.
+   */
+  declaredBuild?: string;
 }
 
 /**
@@ -169,7 +181,9 @@ export function railpackPrepareArgs(dir: string, i: RailpackInput): string[] {
   // command is our guess, and inferring build commands is most of what Railpack
   // is here to do better. Absent rather than empty — `--build-cmd ""` asks for
   // NO build, which is a different statement from having no opinion.
-  const build = i.spec.confidence === "certain" ? i.spec.toolchains[0]?.build : undefined;
+  const build = i.spec.confidence === "certain"
+    ? (i.declaredBuild || i.spec.toolchains[0]?.build)
+    : undefined;
   return [
     "prepare", dir,
     "--plan-out", `${dir}/${RAILPACK_PLAN}`,

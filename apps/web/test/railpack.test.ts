@@ -197,3 +197,38 @@ test("no declared build means no flag at all", () => {
   const args = railpackPrepareArgs("/w", { spec: spec({ confidence: "certain" }) });
   assert.equal(args.includes("--build-cmd"), false);
 });
+
+// THE DECLARED COMMAND, NOT A DERIVED VIEW OF IT.
+//
+// `examples/goapi` declares
+//   "build": "go build -o /app/server ./cmd/server && go build -o /app/migrate ./cmd/migrate"
+// and `detect()` puts only the FIRST half in `toolchains[0].build` — verified,
+// it truncates at `&&`. Passing that to `--build-cmd` builds the server and not
+// the migration, so the image has no `/app/migrate`, the release process fails
+// with `/bin/sh: 1: /app/migrate: not found`, and the app never gets traffic.
+// It happened in production twice before the cause was found.
+//
+// So the config's own string wins where there is one. `toolchains[0].build`
+// remains the fallback for a build we INFERRED, where there is no declaration to
+// prefer.
+test("a declared build command is passed whole, not as detect's view of it", () => {
+  const full = "go build -o /app/server ./cmd/server && go build -o /app/migrate ./cmd/migrate";
+  const args = railpackPrepareArgs("/w", {
+    spec: spec({
+      confidence: "certain",
+      toolchains: [{ language: "go", packageManager: "go", dir: ".", build: "go build -o /app/server ./cmd/server" }],
+    }),
+    declaredBuild: full,
+  });
+  assert.equal(args[args.indexOf("--build-cmd") + 1], full);
+});
+
+test("without a declaration the toolchain's build is still used", () => {
+  const args = railpackPrepareArgs("/w", {
+    spec: spec({
+      confidence: "certain",
+      toolchains: [{ language: "go", packageManager: "go", dir: ".", build: "go build ./..." }],
+    }),
+  });
+  assert.equal(args[args.indexOf("--build-cmd") + 1], "go build ./...");
+});

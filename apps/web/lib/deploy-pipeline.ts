@@ -2001,7 +2001,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // nothing, which is the same silent drop the lane's other two
           // fall-throughs were.
           const buildEnv = { ...declared, ...Object.fromEntries(address.map((a) => [a.key, a.value])) };
-          await runOrExplain("railpack", railpackPrepareArgs(dir, { spec, buildEnv }), (l) => log(l));
+          // The config's own build string, not `toolchains[0].build` — see
+          // `declaredBuild`. detect() truncates a chained command at `&&`, and
+          // half a build is an image missing the binary the release runs.
+          await runOrExplain("railpack", railpackPrepareArgs(dir, {
+            spec, buildEnv,
+            declaredBuild: (appConfig ? primaryService(appConfig) : undefined)?.build,
+          }), (l) => log(l));
           writeFileSync(join(dir, ".dockerignore"), dockerignore());
           plannedWithRailpack = true;
           log(`Railpack planned this build — ${spec.language}${spec.framework ? ` (${spec.framework})` : ""}.`);
