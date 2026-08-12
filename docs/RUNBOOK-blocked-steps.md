@@ -31,12 +31,34 @@ gcloud projects add-iam-policy-binding supersonic-deploy-prod \
   --role=roles/secretmanager.secretAccessor
 ```
 
-**Still worth doing, and out of scope for §9:** that service account is the
-DEFAULT compute one — the identity of every fleet node — and it also holds
-`run.admin`, `storage.admin`, `cloudbuild.builds.builder` and
+### The rest of the node's privileges — narrowed
+
+§9 removed one of five; the other four are gone now. That service account is the
+DEFAULT compute one, so it is the identity of every fleet node AND of the build
+host, and it held `run.admin`, `storage.admin`, `cloudbuild.builds.builder` and
 `iam.serviceAccountUser`. `run.admin` on a box whose job is running other
 people's code means an escape can delete every Cloud Run service in the project.
-§9 removed one of five.
+
+**What it actually needs, established by reading rather than by guessing:** the
+agent's only direct cloud call was Secret Manager and that is now the broker;
+`update-agent.sh` READS the agent binary from GCS; images are pulled by
+containerd; the SQL proxy needs `cloudsql.client`; the ops agent needs
+`logging.logWriter`. Nothing on the node writes to GCS or pushes an image, and
+BuildKit pushes with a token the deploy job sends rather than an identity of its
+own.
+
+| before | after |
+|---|---|
+| artifactregistry.**writer** | artifactregistry.**reader** |
+| storage.**admin** | storage.**objectViewer** |
+| run.admin, cloudbuild.builds.builder, iam.serviceAccountUser | *removed* |
+| cloudsql.client, logging.logWriter | unchanged |
+
+Granted narrow BEFORE revoking broad, so there was never a gap. Verified after:
+both agents and both SQL proxies active, `supersonic-update-agent` ran clean on
+two nodes, and a full deploy pulled its image and reached `listening on 8080`.
+
+**Undo:** re-add any role with `gcloud projects add-iam-policy-binding`.
 
 ### Railpack — the default builder
 
