@@ -234,3 +234,30 @@ export function imageBelongsTo(slug: string, image: string): boolean {
 export function servedByStatic(runUrl: string | null | undefined): boolean {
   return !!runUrl && runUrl.includes("supersonic-static");
 }
+
+/**
+ * Is this app's connection string locked inside a secret?
+ *
+ * THE REFUSAL THAT STOPS THE MIGRATION WHERE IT STANDS, and it was learned the
+ * expensive way: `dp7ul`, `kngsu` and `m4vtu` were placed, started, and answered
+ * 500 to everything. Their DSN is not an env value — it is a Secret Manager
+ * entry, and the stored value reads `…@127.0.0.1:5432/<db>`, which is Cloud
+ * Run's sidecar and is nothing at all on a node.
+ *
+ * `repointed` cannot help: the spec carries a REFERENCE, which is invariant 3
+ * and not negotiable. Neither can rewriting the secret, because the Cloud Run
+ * copy is still serving from it — the two runtimes would need different values
+ * of one secret at the same moment, which is the definition of a cutover that
+ * cannot be atomic.
+ *
+ * What it needs is a second secret written at the fleet address and referenced
+ * only by the fleet spec, so both runtimes are correct at once and the old one
+ * is deleted after. That is a design decision about how many copies of a
+ * password may exist, and it should be made deliberately rather than by an
+ * adoption tool at three in the morning.
+ */
+export function dsnIsSealed(
+  env: { name: string; value?: string; valueFrom?: unknown }[],
+): boolean {
+  return env.some((e) => /URL$/.test(e.name) && e.valueFrom && e.value === undefined);
+}

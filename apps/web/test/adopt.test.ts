@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { adoptionInput, imageBelongsTo, servedByStatic, type RunService } from "@/lib/adopt";
+import { adoptionInput, imageBelongsTo, servedByStatic, dsnIsSealed, type RunService } from "@/lib/adopt";
 
 const service = (over: Partial<RunService["spec"]["template"]["spec"]["containers"][0]> = {}): RunService => ({
   spec: {
@@ -142,4 +142,29 @@ test("a static app is refused, because there is no container to move", () => {
   assert.equal(servedByStatic("https://supersonic-static-uyuwsbguuq-uc.a.run.app"), true);
   assert.equal(servedByStatic("https://o6b54-uyuwsbguuq-uc.a.run.app"), false);
   assert.equal(servedByStatic(null), false);
+});
+
+// THE THIRD REFUSAL, and the one that stops the migration where it stands.
+//
+// dp7ul, kngsu and m4vtu were placed, started, and answered 500. Their DSN is not
+// an env value at all — it is a SECRET, and the stored secret reads
+// `…@127.0.0.1:5432/<db>`: Cloud Run's sidecar address. The spec carries a
+// REFERENCE (invariant 3), so there is nothing for this module to rewrite, and
+// rewriting the secret itself would break the Cloud Run copy that is still
+// serving — the two runtimes would need different values of one secret at the
+// same moment.
+//
+// Detected from the reference alone: a secret named for a connection string,
+// with no plain value beside it carrying the fleet address.
+test("an app whose DSN lives in a secret is refused, not placed and hoped for", () => {
+  const dsnInSecret = [
+    { name: "DATABASE_URL", valueFrom: { secretKeyRef: { name: "app-shop-DATABASE_URL", key: "latest" } } },
+    { name: "PGHOST", value: "127.0.0.1" },
+  ];
+  assert.equal(dsnIsSealed(dsnInSecret), true);
+
+  // A plain DSN is fine — `repointed` moves it.
+  assert.equal(dsnIsSealed([{ name: "DATABASE_URL", value: "postgresql://u:p@127.0.0.1:5432/shop" }]), false);
+  // And an app with no database at all has nothing sealed.
+  assert.equal(dsnIsSealed([{ name: "TOKEN", value: "x" }]), false);
 });

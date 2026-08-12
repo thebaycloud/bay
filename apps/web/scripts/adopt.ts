@@ -36,7 +36,7 @@
  * 200 on every node, then cut over.
  */
 import { execFileSync } from "node:child_process";
-import { adoptionInput, imageBelongsTo, servedByStatic, type RunService } from "@/lib/adopt";
+import { adoptionInput, imageBelongsTo, servedByStatic, dsnIsSealed, type RunService } from "@/lib/adopt";
 import { buildAppSpec } from "@/lib/fleet-spec";
 import { recordRelease, setDesired } from "@/lib/reconcile";
 import { resolveImageDigest } from "@/lib/gcp-rest";
@@ -89,6 +89,14 @@ async function place(dryRun: boolean): Promise<void> {
   const { rows } = await getPool(DB).query(`SELECT run_url FROM apps WHERE slug=$1`, [slug]);
   if (servedByStatic(rows[0]?.run_url)) {
     throw new Error(`${slug} is served by supersonic-static — there is no container to move`);
+  }
+  const container = (await describe()).spec.template.spec.containers[0];
+  if (dsnIsSealed(container.env ?? [])) {
+    throw new Error(
+      `${slug} keeps its connection string in a secret that reads 127.0.0.1 — the sidecar ` +
+      `address. The spec carries a reference, so there is nothing to rewrite, and rewriting ` +
+      `the secret would break the Cloud Run copy still serving from it. Needs a second secret ` +
+      `at the fleet address, referenced only by the fleet spec.`);
   }
   if (!imageBelongsTo(slug, i.image)) {
     throw new Error(
