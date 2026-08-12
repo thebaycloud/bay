@@ -28,6 +28,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write # required to mint the OIDC token; without it auth fails
+  actions: read # `gh run list` reads the control-plane run this publish waits on
 
 jobs:
   publish:
@@ -60,6 +61,56 @@ jobs:
           set -euo pipefail
           go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_SHA::7}" -o supersonicd .
           ./supersonicd -version || { echo "the binary does not run"; exit 1; }
+
+      # The control plane goes first. ALWAYS.
+      #
+      # WHY, from a real incident on 2026-08-11 22:44. The secret broker landed
+      # as two commits' worth of one change: a route on the control plane and an
+      # agent that calls it. Both workflows trigger on `push: main`
+      # independently, the agent's build is much faster than a Next.js deploy,
+      # and every node collects a new agent within two minutes
+      # (supersonic-update-agent.timer). So the agent arrived first, called a
+      # route that did not exist yet, and three apps failed their release with
+      # `secret broker refused ...: 404 <!DOCTYPE html>` — the Next.js shell,
+      # served because the path was not a route yet. They recovered on retry.
+      #
+      # This is not specific to the broker. Any agent change that depends on a
+      # new control-plane behaviour has the same window, and the node's two
+      # minute timer means the window is always open.
+      #
+      # The dependency is one-directional and stays that way: an OLD agent must
+      # keep working against a NEW control plane, which is what the absent-vs-
+      # empty discipline on the wire is for. It is only the other order that
+      # needs a gate.
+      #
+      # A failed control-plane deploy blocks the agent publish, including for an
+      # unrelated agent fix. That is the safe direction of the trade: the cost is
+      # a delayed agent, and the alternative cost is an agent talking to a
+      # control plane that was never there.
+      - name: Wait for the control plane at this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            # Filtered by COMMIT, not by "the latest run". Taking the most recent
+            # run right after a push returns the PREVIOUS one, which reads as a
+            # green light from a build that knows nothing about this commit.
+            CONCLUSION="$(gh run list --commit "$GITHUB_SHA" --workflow "Deploy control plane" \
+              --limit 1 --json conclusion --jq '.[0].conclusion // empty' || true)"
+            case "$CONCLUSION" in
+              success)
+                echo "the control plane at ${GITHUB_SHA::7} is live; publishing the agent"
+                exit 0 ;;
+              failure|cancelled|timed_out)
+                echo "the control plane at ${GITHUB_SHA::7} ended in '$CONCLUSION' —"
+                echo "refusing to publish an agent that may need it."
+                exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "the control plane at ${GITHUB_SHA::7} did not finish within 20 minutes"
+          exit 1
 
       - uses: google-github-actions/auth@v2
         with:
