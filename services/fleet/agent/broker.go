@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -98,6 +99,24 @@ func resolveViaBroker(endpoint, token, node, slug string, refs map[string]string
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+
+	// WHICH node is asking, signed by Google rather than asserted by us.
+	//
+	// The shared token above proves membership and nothing else, so the broker's
+	// per-node placement check is currently written against a name this process
+	// supplies about itself. This header is the same claim with a signature on
+	// it, and the control plane compares the two.
+	//
+	// Best-effort on purpose: the shared token still authenticates this call, so
+	// a metadata server that will not answer costs the extra proof and not the
+	// deploy. The control plane decides what an absent header means — today it
+	// audits, and when every node is sending one it can refuse.
+	if id, err := nodeIdentityToken(); err == nil {
+		req.Header.Set("X-Supersonic-Node-Identity", id)
+	} else {
+		log.Printf("! could not mint an instance identity token (%v) — "+
+			"the request still carries the fleet token", err)
+	}
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {

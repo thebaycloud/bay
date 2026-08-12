@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { maySeeSecrets, ownedBy, placementsOf, readSecret } from "@/lib/secret-broker";
+import { verifyNodeIdentity, identityVerdict, identityMode } from "@/lib/node-identity";
 
 /**
  * The secret broker: the node asks, the placement table answers.
@@ -30,10 +31,17 @@ import { maySeeSecrets, ownedBy, placementsOf, readSecret } from "@/lib/secret-b
  *     platform secret leave the reachable set altogether, since none of them is
  *     named `app-<slug>-<KEY>`.
  *
- * The per-node claim becomes true when node identity does: the GCE instance
- * identity token described in the sync route's header binds a node to an actual
- * VM instead of to a string copyable off any node. This route needs no other
- * change when that lands — only `claimedNode` stops being taken from the body.
+ * THE PER-NODE CLAIM IS NOW TRUE, as of 12 Aug, and the paragraph above is kept
+ * because it describes what this endpoint is worth WITHOUT it. Every request
+ * also carries `X-Supersonic-Node-Identity`: a GCE instance identity token,
+ * minted by the metadata server for one virtual machine and signed by Google, so
+ * the node's name is inside the signature rather than in the body. The check is
+ * below, beside the placement test it strengthens.
+ *
+ * `NODE_IDENTITY=enforce` refuses a request that carries no such token at all.
+ * Until every node is sending one it audits instead — but a token that
+ * CONTRADICTS the body is refused in either mode, because that is not a rollout
+ * gap, it is the thing the mechanism was built to catch.
  */
 function authorised(req: Request): boolean {
   const expected = process.env.FLEET_TOKEN;
@@ -95,6 +103,31 @@ export async function POST(req: Request) {
       { error: `not ${slug}'s to read: ${foreign.join(", ")}` },
       { status: 403 },
     );
+  }
+
+  // WHICH node is asking, checked against what it says it is.
+  //
+  // `FLEET_TOKEN` proves membership and nothing else — the header at the top of
+  // this file says so — so `node` above is a claim the caller makes about
+  // itself. `X-Supersonic-Node-Identity` is that same claim signed by Google for
+  // one virtual machine, and this is where the two are compared.
+  //
+  // A MISMATCH IS REFUSED EVEN WHILE AUDITING. Auditing is about a header that
+  // is ABSENT, because nodes collect a new agent on their own two-minute timer
+  // and a fleet mid-rollout has both kinds. It is never about a header that
+  // contradicts the request, which is the one thing this mechanism exists to
+  // catch.
+  const identity = await verifyNodeIdentity(req.headers.get("x-supersonic-node-identity") ?? "");
+  const check = identityVerdict(node, identity, identityMode(process.env));
+  if (!check.ok) {
+    console.error(`secret-broker: refused ${slug} — ${check.reason}`);
+    return Response.json({ error: check.reason ?? "identity refused" }, { status: 403 });
+  }
+  if (check.audited) {
+    // Logged rather than silent: a fleet where every request is audited looks
+    // exactly like a fleet where the feature works, and the difference decides
+    // when NODE_IDENTITY can be turned to `enforce`.
+    console.error(`secret-broker: ${node} sent no verifiable identity (auditing)`);
   }
 
   let verdict;
