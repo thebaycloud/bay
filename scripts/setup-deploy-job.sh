@@ -78,6 +78,24 @@ echo "  cloud sql: ${CLOUDSQL:-<none>}"
 # The --args here must match DEPLOY_JOB_ARGS in apps/web/lib/deploy-runs.ts. Each
 # execution passes that list plus the run id, because `--args` on an execution
 # REPLACES the job's arguments rather than appending to them.
+#
+# AND IT REPLACES MORE THAN THAT. `--set-secrets` and `--env-vars-file` are both
+# whole-set operations, so everything the JOB carries that the SERVICE does not
+# is destroyed by running this. That list is not empty and grows:
+#
+#   FLEET_EDGE_SECRET   a secret the job needs and the service does not
+#   BUILDER, BUILDKIT_HOST, RAILPACK_APPS, FLEET_APPS, FLEET_PLACEMENT
+#   /buildkit/{ca,cert,key}   mTLS material for the build plane, mounted as files
+#   --network / --subnet / --vpc-egress   how the job reaches that build plane
+#
+# This script is a BOOTSTRAP — "make a job that matches the service" — and not a
+# reconciler. Re-running it on a live job silently removes the above.
+#
+# On 12 Aug a hand-run `--set-secrets` for the build-plane certificates wiped all
+# twelve of the job's secrets, including PG_PASSWORD, and every deploy failed
+# with `Postgres config missing` until they were put back. cloudbuild.yaml
+# already carries a paragraph saying `--update-env-vars, never --set-env-vars`
+# for precisely this reason; the same is true of secrets and was learned twice.
 gcloud run jobs deploy "$JOB" \
   --image "$IMAGE" \
   --region "$REGION" --project "$PROJECT" \
