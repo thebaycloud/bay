@@ -76,6 +76,18 @@ RUN curl -fsSL "https://github.com/railwayapp/railpack/releases/download/v${RAIL
     | tar -xz -C /usr/local/bin railpack \
   && railpack --version
 
+# buildctl talks to the long-lived BuildKit on the build host. It is the client
+# half of services/build/provision-buildkit.sh: the daemon keeps a warm local
+# cache on SSD, and this is what reaches it over mTLS.
+#
+# Only `bin/buildctl` is taken. The archive also carries buildkitd, runc shims,
+# CNI plugins and qemu emulators for six architectures — none of which this
+# image runs, and all of which it would otherwise carry into every deploy.
+ARG BUILDKIT_VERSION=v0.32.2
+RUN curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-amd64.tar.gz" \
+    | tar -xz -C /usr/local bin/buildctl \
+  && buildctl --version
+
 WORKDIR /app
 COPY --from=webbuild /app/apps/web ./apps/web
 COPY --from=agentdeps /app/services/deploy-agent ./services/deploy-agent
