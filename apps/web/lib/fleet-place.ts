@@ -134,23 +134,19 @@ export function fleetEligibility(a: {
   // half of why it exists — it was a limitation of the CHECK, and the node now
   // reports what it is confirmed to be running. What remains are the two cases
   // where that report still cannot answer.
-  if (a.serviceless && !(a.workers > 0)) {
-    // Nothing here runs continuously, so there is nothing for a node to confirm.
-    // A cron sandbox is never in `a.live` at all (the agent's `units` excludes
-    // it — the scheduler owns those), so the node would report no rows and every
-    // deploy would roll back for a correctly-configured app.
-    //
-    // `!(x > 0)` rather than `=== 0`, and that is the whole guard rather than a
-    // stylistic choice: nothing typechecks this repo's tests and four call sites
-    // in test/fleet-place.test.ts pass a full literal, so `a.workers` really can
-    // arrive as undefined. `undefined === 0` is false and would make a cron-only
-    // app ELIGIBLE — the mechanism defeating the rule it implements. This form
-    // refuses undefined, NaN and a negative too.
-    return {
-      ok: false,
-      reason: "this app declares no long-running process — a cron only runs on its schedule, so there is nothing for a node to report as running",
-    };
-  }
+  // A CRON-ONLY APP IS ELIGIBLE, and the refusal that stood here is gone.
+  //
+  // It was never about capability. The node runs crons — `rtmsw--nightly` and
+  // `izuvx--nightly` have fired every ten minutes on fleet-lab-2 since 11 Aug.
+  // It was about the CHECK: `runVerdict` demanded a running process, a cron is
+  // never running (the agent's `units` excludes it, because the scheduler owns
+  // it), so every deploy of a correctly-configured app rolled back. `runVerdict`
+  // now answers that case explicitly, so this no longer has to refuse it.
+  //
+  // Removed rather than relaxed, because the Cloud Run container lane it used to
+  // route to no longer exists. A refusal whose destination is gone is not a
+  // routing decision; it is a failed deploy wearing one.
+
   if (a.serviceless && !a.hasDockerfile) {
     // A serviceless app with no Dockerfile is built by `builds submit --pack`,
     // and that image must not be handed to a node.
@@ -388,6 +384,16 @@ function sameArgv(a: string[] | undefined, b: string[] | undefined): boolean {
  */
 export function runVerdict(spec: AppSpec, rows: ProcessState[]): Eligibility {
   const required = requiredProcesses(spec);
+
+  // Scheduled work is confirmed by the PLACEMENT, not by a running process.
+  // Stated as its own case rather than falling through the empty-list guard
+  // below: that guard exists because "everything I required is running" is
+  // vacuously true of nothing, and an app whose only work is a cron must not
+  // pass by accident just because it happens to require nothing.
+  if (!required.length && spec.processes?.some((p) => p.kind === "cron")) {
+    return { ok: true, reason: "this app declares only scheduled work, so the placement is the confirmation" };
+  }
+
   if (!required.length) {
     // Not reachable from `buildAppSpec` — `fleetEligibility` refuses an app with
     // no long-running process before it is ever placed — but a verdict with

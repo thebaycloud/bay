@@ -98,10 +98,10 @@ test("what the fleet cannot serve is named, and goes to Cloud Run", () => {
     [{ lane: "runner" }, /runner/i],
     [{ lane: "buildpack" }, /buildpack/i],
     [{ image: "" }, /image/i],
-    // Serviceless with no worker is a CRON-ONLY app, and it is refused for a
-    // reason that survived the change: a cron sandbox is never in the agent's
-    // live set, so no node could report it running.
-    [{ serviceless: true }, /long-running|schedule/i],
+    // A cron-only app used to sit here and no longer does. The reason it was
+    // refused — a cron sandbox is never in the agent's live set — was a fact
+    // about the CHECK rather than about the fleet, and `runVerdict` now states
+    // the scheduled case instead of failing to see it.
   ];
   for (const [over, why] of cases) {
     const r = chooseRuntime({ ...eligible, ...over });
@@ -125,27 +125,35 @@ test("a worker-only app can be placed on the fleet now that the node reports wha
   assert.equal(chooseRuntime(eligibleWorker).runtime, "fleet");
 });
 
-test("a cron-only app is still refused, because nothing about it is ever running", () => {
-  // The distinction the whole verdict rests on. A cron process is never in the
+test("a cron-only app is placed, and the check that used to refuse it answers instead", () => {
+  // THIS REVERSES AN EARLIER DECISION, and the earlier reasoning was right about
+  // the mechanism and wrong about the conclusion. A cron process is never in the
   // agent's live set — `units` in reconcileOnce excludes it, because the
-  // scheduler owns it — so the node would report no rows and every deploy of a
-  // correctly-configured app would roll back.
+  // scheduler owns it — so a verdict demanding a running process would roll back
+  // every deploy of a correctly-configured app.
+  //
+  // That is a defect in the CHECK, not a limit of the fleet: the node has been
+  // firing `rtmsw--nightly` and `izuvx--nightly` every ten minutes since 11 Aug.
+  // `runVerdict` now states the scheduled case explicitly, so the routing does
+  // not have to refuse it — and there is nowhere left to refuse it TO, since the
+  // Cloud Run container lane is gone.
   const r = fleetEligibility({ ...eligibleWorker, workers: 0 });
-  assert.equal(r.ok, false);
-  assert.match(r.reason!, /long-running|schedule/i);
+  assert.equal(r.ok, true);
 });
 
-test("a serviceless app whose `workers` never arrived is refused, not placed", () => {
-  // Not hypothetical, and not a type error either: nothing in this repo
-  // typechecks the tests — the test command is `node --import tsx --test` and
-  // there is no typecheck script — so a caller that forgets this field ships.
-  // `workers === 0` would be FALSE for undefined and place a cron-only app on a
-  // node that can never confirm it. Asked the way a caller who forgot would ask.
+test("a missing `workers` count no longer decides anything, because nothing turns on it", () => {
+  // This test used to defend a guard written `!(x > 0)` rather than `=== 0`,
+  // because nothing in this repo typechecks the tests and an undefined `workers`
+  // would have made a cron-only app eligible — the mechanism defeating the rule
+  // it implemented.
+  //
+  // The rule is gone: a cron-only app IS eligible now, so undefined and zero
+  // reach the same answer and neither is a trap. Kept rather than deleted,
+  // pointed at what it now guards — that the field's absence cannot make an app
+  // UNPLACEABLE either.
   const missing = { ...eligibleWorker } as Partial<typeof eligibleWorker>;
   delete missing.workers;
-  const r = fleetEligibility(missing as typeof eligibleWorker);
-  assert.equal(r.ok, false, "an app with no `workers` count at all was declared placeable");
-  assert.match(r.reason!, /long-running|schedule/i);
+  assert.equal(fleetEligibility(missing as typeof eligibleWorker).ok, true);
 });
 
 test("a worker-only app with no Dockerfile is refused, because `--pack` built its image", () => {
@@ -243,15 +251,15 @@ test("a buildpack-lane app with no Dockerfile is still refused, and says why", (
 
 test("a Dockerfile does not rescue the lanes refused for other reasons", () => {
   // Each of these is refused for something a Dockerfile does not change: a
-  // static app has no image of its own, the runner's image is shared and the
-  // app's code is not in it, and a cron-only app has nothing a node could ever
-  // report as running. The serviceless case used to sit here for a fourth reason
+  // static app has no image of its own, and the runner's image is shared with
+  // the app's code not in it. A cron-only app used to be a third entry and is
+  // now placeable — its refusal was a limit of the check, not of the fleet. The
+  // serviceless case used to sit here for a fourth reason
   // — no route to probe — and a Dockerfile did not change that one either. It is
   // gone because the reason is gone, not because the rule weakened.
   for (const c of [
     { lane: "static" as const, staticServe: true, serviceless: false, workers: 0 },
     { lane: "runner" as const, staticServe: false, serviceless: false, workers: 0 },
-    { lane: "container" as const, staticServe: false, serviceless: true, workers: 0 },
   ]) {
     const got = fleetEligibility({
       lane: c.lane,
@@ -705,17 +713,24 @@ test("the node running the PREVIOUS command at the same image is not it either",
   assert.match(v.reason!, /different command/i);
 });
 
-test("a placement with nothing long-running to confirm is not vacuously true", () => {
+test("scheduled work passes by being named, not by requiring nothing", () => {
   // "Everything I required is running" is trivially true of nothing, which is
   // the shape a check quietly becomes when the thing it checks is refactored out
-  // from under it. Unreachable through `fleetEligibility` today, and that is
-  // exactly why it is worth pinning.
+  // from under it. That hazard is why the cron case is an EXPLICIT branch rather
+  // than a relaxed guard: it passes because it says "the placement is the
+  // confirmation", not because the loop it would have entered is empty.
   const cronOnly = buildAppSpec({
     slug: "myapp", image: "img", env: [], secrets: [],
     processes: [resolveProcess("nightly", { command: "python export.py", schedule: "0 3 * * *" })],
   });
   assert.deepEqual(requiredProcesses(cronOnly), []);
-  assert.equal(runVerdict(cronOnly, []).ok, false);
+  const v = runVerdict(cronOnly, []);
+  assert.equal(v.ok, true);
+  assert.match(v.reason ?? "", /scheduled/i);
+
+  // And a spec that declares NOTHING is still refused — that is the vacuous case
+  // the guard was written for, and it survives untouched.
+  assert.equal(runVerdict({ ...cronOnly, processes: [] }, []).ok, false);
 });
 
 test("the first question is asked after a reconcile interval, not before one", async () => {
@@ -1222,4 +1237,39 @@ test("a restore names no release, so the placement keeps the one its spec belong
   assert.equal(placed.length, 2, "one place, then one restore");
   assert.equal(placed[0][3], 42);
   assert.equal(placed[1][3], undefined, "the restore must not claim the failed release");
+});
+
+// A CRON-ONLY APP BELONGS ON THE FLEET, and the refusal that used to stand here
+// was never about capability. The node runs crons — `rtmsw--nightly` and
+// `izuvx--nightly` have been firing every ten minutes on fleet-lab-2 all day. It
+// was about the CHECK: `runVerdict` demands a running process, a cron is never
+// running (the agent's `units` excludes it, because the scheduler owns it), so
+// every deploy of such an app would roll back.
+//
+// The check now has an explicit answer for it rather than a vacuous one. The
+// distinction matters: "everything I required is running" is TRUE of nothing,
+// and that is the shape a check becomes when the thing it checks is refactored
+// away. This is a stated case, not an empty loop.
+test("an app whose only work is scheduled is placed, and its placement is the confirmation", () => {
+  const spec = {
+    slug: "digest", image: "img", port: 8080, memoryBytes: 1, cpuShares: 1,
+    processes: [{ name: "nightly", kind: "cron" as const, schedule: "*/10 * * * *" }],
+  };
+  assert.equal(fleetEligibility({
+    lane: "container", image: "img", staticServe: false,
+    serviceless: true, hasDockerfile: true, workers: 0,
+  }).ok, true, "the fleet runs crons; it always could");
+
+  const v = runVerdict(spec, []);
+  assert.equal(v.ok, true);
+  assert.match(v.reason ?? "", /scheduled/i);
+});
+
+// And the vacuous case stays refused. An app with NO processes at all — not a
+// cron, not a worker, nothing — is still a placement that confirms nothing, and
+// the comment this guard carries is about exactly that.
+test("a placement declaring nothing at all is still refused", () => {
+  const spec = { slug: "empty", image: "img", port: 8080, memoryBytes: 1, cpuShares: 1 };
+  const v = runVerdict({ ...spec, processes: [] }, []);
+  assert.equal(v.ok, false);
 });
