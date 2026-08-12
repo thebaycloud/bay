@@ -780,6 +780,33 @@ That is §9's work, not §3's: once a deploy is "build → write a release → s
 desired", there is no per-deploy container to cold-start. The build plane
 removed the block it was aimed at and made the next one impossible to miss.
 
+### The whole path, measured end to end on 12 Aug
+
+79 seconds from `supersonic ship` to the app answering:
+
+```
+04:09:26  ship
+04:10:20  release runs on the node, before the app starts
+04:10:36  migrated
+04:10:45  listening on 8080
+```
+
+Against the 238 s p50 this document opens with. What that one deploy exercised,
+in order: dispatch to the warm worker instead of a Cloud Run Job execution;
+Railpack planning the build; the build running on `buildkit-1` against a warm
+local cache (`#5 CACHED`); a push by digest; placement through the release and
+lease model; the release migration running in a sandbox on a node; and every
+secret in it resolved through the broker by a node whose service account cannot
+read Secret Manager at all.
+
+Six of the eleven decisions in this document, in one command, on a fleet that
+also now spans two zones.
+
+**The honest limits.** One app, one sample, on a Go service small enough that
+its own compile is not the story. The number to watch is not 79 — it is that
+`job-cold-start`, 118 s of the original 238, no longer appears at all, because
+there is no per-deploy container to start.
+
 ### The night of 11–12 Aug, and four things it found
 
 Items 7, 8, 9 and 10 closed in one session. What is worth keeping is not that
