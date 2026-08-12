@@ -19,6 +19,7 @@
     "bench:cleanup": "node --import tsx bench/cleanup.ts"
   },
   "dependencies": {
+    "@paper-design/shaders-react": "^0.0.80",
     "@types/pg": "^8.20.0",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.0",

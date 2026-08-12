@@ -40,6 +40,11 @@ export const authConfig = {
       const isPublic =
         p.startsWith("/login") || p.startsWith("/signup") ||
         p.startsWith("/api/auth") || p.startsWith("/api/signup") ||
+        // The design-block gallery. It renders no user data, but it is a
+        // working surface rather than a product one, so it is reachable only
+        // off production — in prod it stays behind the cookie gate like
+        // everything else.
+        (!PROD && (p.startsWith("/design") || p.startsWith("/landing"))) ||
         // Stripe calls this server-to-server with no cookie; it verifies its own
         // signature. The rest of /api/billing stays behind the cookie gate.
         p.startsWith("/api/billing/webhook");
