@@ -2330,7 +2330,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // were written, so an app can have gained one since. The lane label was
     // fixed even earlier and does not update either way — this is the checkout
     // telling the truth about how the app will actually be built.
-    const hasDockerfileNow = existsSync(join(dir, "Dockerfile")) || Boolean(primaryOwnDockerfile);
+    // THE SAME QUESTION AS `hasDockerfile` 280 LINES UP, asked a second time in a
+    // second variable — and that duplication is not decoration, it is the defect.
+    // `plannedWithRailpack` was added to the other one and not to this one, so a
+    // railpack build reached `buildImage` with `useDockerBuild` false and refused
+    // itself: "this lane has no image of its own to build before the deploy". The
+    // app had already built, correctly, seconds earlier.
+    //
+    // Both are now correct. Neither should exist twice; whoever unifies them will
+    // find the two expressions differ in a third way as well — this one consults
+    // `primaryOwnDockerfile`, the other `primaryCfgDir` — and that difference is
+    // undocumented, which is why this is a fix and not a merge.
+    const hasDockerfileNow = existsSync(join(dir, "Dockerfile"))
+      || plannedWithRailpack
+      || Boolean(primaryOwnDockerfile);
     // `workers` is what makes "worker-only" placeable and "cron-only" not. The
     // node confirms a process it is RUNNING, and a cron is never running — the
     // agent's reconcile excludes it, because the scheduler owns it — so an app
