@@ -682,12 +682,13 @@ the design rather than merely delaying it.
    The one expensive schema change; everything in §5, §9 and §10 waits on it.
 5. **The reconciler**, with quorum and singleton locks.
 6. **Long-poll sync** with per-node generations.
-7. **Workers and crons off Cloud Run** onto the node. *Written on both sides;
-   never proven end to end. See below.*
+7. **Workers and crons off Cloud Run** onto the node. *Done. Witnessed in
+   production: `rtmsw--nightly` and `izuvx--nightly` fire and finish every ten
+   minutes on `fleet-lab-2`.*
 8. **The build plane** — Railpack, our own BuildKit, local cache. *Railpack is
    in, behind `RAILPACK_APPS`; the BuildKit half is not. See below.*
-9. **The secret broker.** *Both halves are written and deployed; the IAM grant
-   is untouched, so nothing has changed yet. See below for the one step left.*
+9. **The secret broker.** *Done. The grant was removed on 12 Aug 00:31 UTC and
+   the next cron firing at 00:40:02 resolved its secrets through the broker.*
 10. **Node three**, then the provider decision. Node two already exists —
     `fleet-lab-2` was running 8 sandboxes on 11 Aug, arrived outside this order,
     and is not represented in the placement model. Three is not a round number
