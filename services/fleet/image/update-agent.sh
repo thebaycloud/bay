@@ -38,7 +38,9 @@ if ! $FETCH "$BASE/current" "$TMP/current" >/dev/null 2>&1; then
 fi
 WANT="$(head -1 "$TMP/current" | tr -d '[:space:]')"
 COMMIT="$(sed -n 2p "$TMP/current" | tr -d '[:space:]')"
-if ! printf '%s' "$WANT" | grep -Eqx '[0-9a-f]{64}'; then
+# No pipe: under `pipefail`, `grep -q` closing the pipe early makes the producer
+# exit 141 and inverts the answer. provision.sh lost a node to that exact shape.
+if [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]]; then
   log "the pointer does not name a sha256 ($WANT) — refusing"
   exit 1
 fi
@@ -72,7 +74,8 @@ fi
 #    only check between a bad build and a node with no agent, and it is cheap:
 #    -version touches no state, no bridge and no containerd.
 chmod +x "$TMP/supersonicd"
-if ! "$TMP/supersonicd" -version 2>/dev/null | grep -q '^supersonicd '; then
+VERSION_SAYS="$("$TMP/supersonicd" -version 2>/dev/null || true)"
+if [[ "$VERSION_SAYS" != supersonicd\ * ]]; then
   log "the downloaded binary does not answer -version — refusing"
   exit 1
 fi

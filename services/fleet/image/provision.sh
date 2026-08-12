@@ -391,7 +391,28 @@ fi
 # is the one dependency this section does not create for itself.
 # ---------------------------------------------------------------------------
 
-if ! systemctl list-unit-files 2>/dev/null | grep -q '^google-cloud-ops-agent'; then
+# A NOTE ON `| grep -q` IN THIS FILE, because it cost a node.
+#
+# This script runs under `set -euo pipefail`. `grep -q` exits the moment it
+# matches, which sends SIGPIPE to whatever is still writing into the pipe; that
+# producer then exits 141, and `pipefail` makes the whole pipeline 141. So
+#
+#     if systemctl list-unit-files | grep -q '^cloud-sql-proxy'; then
+#
+# is FALSE precisely when the unit EXISTS — the answer is inverted by success.
+# Verified on fleet-lab-3: the same test is true with `pipefail` off and false
+# with it on.
+#
+# It cost exactly what the comment further down predicted: a node that could not
+# start any app with a database, reporting `this node's database path
+# (10.200.0.1:5432) is not answering`. It also made the ops-agent check below
+# reinstall a 119 MB package on every run, since there the inverted answer is
+# harmless and merely wasteful.
+#
+# Existence is therefore asked of systemd directly — `systemctl cat` — with no
+# pipe to break.
+
+if ! systemctl cat google-cloud-ops-agent.service >/dev/null 2>&1; then
   log "installing google-cloud-ops-agent"
   curl -fsSL -o /tmp/add-google-cloud-ops-agent-repo.sh \
     https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
@@ -582,7 +603,7 @@ log "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.controllers)"
 #
 # which is the right answer and still a node nobody could deploy a database app
 # to. Enabled, then started only if its config is present.
-if systemctl list-unit-files 2>/dev/null | grep -q '^cloud-sql-proxy'; then
+if systemctl cat cloud-sql-proxy.service >/dev/null 2>&1; then
   systemctl enable cloud-sql-proxy >/dev/null 2>&1 || true
   if [ -s /etc/supersonic/fleet.env ] && grep -q '^PG_INSTANCE=..*' /etc/supersonic/fleet.env; then
     log "starting cloud-sql-proxy"
