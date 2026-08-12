@@ -180,6 +180,20 @@ steps:
       # warned it would be "total failure of the lane, not a degraded cache",
       # which is why it was worth one throwaway build to find out.
       #
+      # BUILDER=railpack AND BUILDKIT_HOST, added 12 Aug, and the pair is the
+      # point: Railpack writes the plan, and the plan is executed on the
+      # long-lived BuildKit at that address rather than on a Cloud Build worker
+      # that starts cold and downloads its cache in full. Either alone does
+      # nothing useful — the plan needs somewhere warm to run, and the daemon
+      # needs a plan to run.
+      #
+      # THIS FILE IS WHY THEY ARE HERE AND NOT SET BY HAND. `_LANE_ENV` is
+      # reapplied to the job, the worker and the service on every control-plane
+      # deploy, so anything set with `gcloud run jobs update` survives exactly
+      # until the next one. A Railpack canary was set that way on 12 Aug, worked,
+      # and was silently reverted by the next deploy — the build went back to
+      # Cloud Build and the log said so to nobody. Intent belongs in the commit.
+      #
       # BUILDER is not optional any more, which is the part that changed. Kaniko
       # has no `--mount=type=secret`; its only channel for a build-time value is
       # `--build-arg`, whose values are readable in the history of an image that
@@ -315,7 +329,7 @@ substitutions:
   #
   # Ours, throwaway, and its downtime belongs to nobody, which is the same reason
   # the entries it replaces were chosen.
-  _LANE_ENV: ^~~^FLEET_APPS=q6doa~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=buildkit~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
+  _LANE_ENV: ^~~^FLEET_APPS=q6doa~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~BUILDER=railpack~~BUILDKIT_HOST=tcp://10.128.0.5:1234~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
   # passes whatever it likes. The default keeps a hand-run build from failing on an
