@@ -756,6 +756,30 @@ that has been watched, this item stays open no matter how complete the code
 looks, because the last four findings in this document were all in code that
 looked complete.
 
+### What the build plane measures, on 12 Aug
+
+The first build on `buildkit-1` was cold: it pulled the Railpack frontend, the
+Go toolchain through mise and the base images, and took the daemon's cache from
+120 KB to 2.0 GB. The second deploy of the same app took **101 s end to end** —
+from the CLI command to the app answering — and left the cache at 2.0 GB, which
+is the whole claim in one number: it downloaded nothing.
+
+Against the 238 s p50 this document opens with. The comparison is honest about
+its own limits: a different app, one sample, and the job cold start varies. What
+it is not is ambiguous about where the remaining time goes.
+
+**The build has stopped being the interesting part.** In the deploy before it,
+`Building on the fleet's own BuildKit` is logged at 03:04:07 and the app prints
+`listening on 8080` at 03:04:26 — nineteen seconds for build, push, placement
+and start together, on a Go app with a migration. The execution had begun at
+03:02:00. So roughly two of every two-and-a-bit minutes is still Cloud Run
+scheduling a container to run the pipeline in, exactly as the table at the top
+of this document said in a week when the build looked like the problem.
+
+That is §9's work, not §3's: once a deploy is "build → write a release → set
+desired", there is no per-deploy container to cold-start. The build plane
+removed the block it was aimed at and made the next one impossible to miss.
+
 ### The night of 11–12 Aug, and four things it found
 
 Items 7, 8, 9 and 10 closed in one session. What is worth keeping is not that
