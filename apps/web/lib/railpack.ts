@@ -154,5 +154,26 @@ export function railpackArgs(i: RailpackInput): string[] {
  * which is the app directory. Naming the path is what makes those two agree.
  */
 export function railpackPrepareArgs(dir: string, i: RailpackInput): string[] {
-  return ["prepare", dir, "--plan-out", `${dir}/${RAILPACK_PLAN}`, ...railpackArgs(i)];
+  // A DECLARED build command, on the same terms as the provider and the version.
+  //
+  // `examples/goapi` declares
+  //   "build": "go build -o /app/server ./cmd/server && go build -o /app/migrate ./cmd/migrate"
+  //   "start": "/app/server"
+  // and passing only the start command left Railpack to infer a build of its
+  // own: `go build -ldflags="-w -s" -o out ./cmd/migrate`, which compiles the
+  // MIGRATION and names it `out`. The image had no `/app/server` in it and the
+  // start command pointed at nothing. The build succeeded; the app could not
+  // exist. Found on the first real deploy, not by a test.
+  //
+  // Gated on `certain` for the reason the whole module is: an inferred build
+  // command is our guess, and inferring build commands is most of what Railpack
+  // is here to do better. Absent rather than empty — `--build-cmd ""` asks for
+  // NO build, which is a different statement from having no opinion.
+  const build = i.spec.confidence === "certain" ? i.spec.toolchains[0]?.build : undefined;
+  return [
+    "prepare", dir,
+    "--plan-out", `${dir}/${RAILPACK_PLAN}`,
+    ...(build ? ["--build-cmd", build] : []),
+    ...railpackArgs(i),
+  ];
 }

@@ -154,3 +154,46 @@ test("build env reaches prepare, because the plan is where it gets baked in", ()
   });
   assert.deepEqual(args.slice(4), ["--env", "NEXT_PUBLIC_BASE_PATH=/app", "--env", "VITE_BASE=/app"]);
 });
+
+// A DECLARED BUILD COMMAND MUST REACH RAILPACK, and the first real deploy is why.
+//
+// `examples/goapi` declares in supersonic.json:
+//
+//   "build": "go build -o /app/server ./cmd/server && go build -o /app/migrate ./cmd/migrate"
+//   "start": "/app/server"
+//
+// Only the start command was being passed, so Railpack inferred a build of its
+// own — `go build -ldflags="-w -s" -o out ./cmd/migrate`, which compiles the
+// MIGRATION and names it `out`. The image then had no `/app/server` at all and
+// the start command pointed at nothing. The build succeeded; the app could not
+// exist.
+//
+// Same precedence rule as the provider and the version: a declared fact wins,
+// an inference of ours stands aside — Railpack infers build commands better than
+// we do, and that is most of why it is here.
+test("a build command the repository declared is the build command Railpack runs", () => {
+  const declared = railpackPrepareArgs("/w", {
+    spec: spec({
+      confidence: "certain",
+      toolchains: [{ language: "go", packageManager: "go", dir: ".", build: "go build -o /app/server ./cmd/server" }],
+    }),
+  });
+  assert.equal(declared.includes("--build-cmd"), true);
+  assert.equal(declared[declared.indexOf("--build-cmd") + 1], "go build -o /app/server ./cmd/server");
+
+  const inferred = railpackPrepareArgs("/w", {
+    spec: spec({
+      confidence: "inferred",
+      toolchains: [{ language: "node", packageManager: "npm", dir: ".", build: "npm run build" }],
+    }),
+  });
+  assert.equal(inferred.includes("--build-cmd"), false, "our guess must not overrule Railpack's");
+});
+
+// A toolchain with nothing to build says nothing, rather than passing an empty
+// string — `--build-cmd ""` is a request to run no build, which is not the same
+// as declining to have an opinion.
+test("no declared build means no flag at all", () => {
+  const args = railpackPrepareArgs("/w", { spec: spec({ confidence: "certain" }) });
+  assert.equal(args.includes("--build-cmd"), false);
+});
