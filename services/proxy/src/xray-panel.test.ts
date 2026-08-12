@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { XRAY_JS } from "./xray-panel";
 import { assembleReading } from "./reading";
+import type { XrayPath } from "./xray";
 
 /**
  * Runs the real, shipped panel source — not a copy of it — against a fake
@@ -101,8 +102,8 @@ test("drawXray runs against a Reading with paths, including a failing one", asyn
       since: 1000,
       here: { count: 0, names: [] },
       paths: [
-        { path: "/api/widgets", p50: 300, p95: 1200, hits: 40, errors: 3, ago: 12 },
-        { path: "/", p50: 20, p95: 80, hits: 900, errors: 0, ago: 2 },
+        { path: "/api/widgets", p50: 300, p95: 1200, hits: 40, broke: 3, missing: 0, ago: 12, brokeAgo: 12, brokenFor: 90 },
+        { path: "/", p50: 20, p95: 80, hits: 900, broke: 0, missing: 0, ago: 2, brokeAgo: null, brokenFor: null },
       ],
       dropped: 4,
     }),
@@ -110,6 +111,50 @@ test("drawXray runs against a Reading with paths, including a failing one", asyn
     door: async () => ({ door: "lilna.supersonic.cv", open: true }),
   });
   assert.doesNotThrow(() => runDrawXray(reading));
+});
+
+/** A path row, with the healthy defaults filled in so a test states only what it is about. */
+function path(over: Partial<XrayPath> & { path: string }): XrayPath {
+  return { p50: 20, p95: 40, hits: 10, broke: 0, missing: 0, ago: 3, brokeAgo: null, brokenFor: null, ...over };
+}
+
+test("a page that is not there is not drawn as the app breaking", async () => {
+  // The section every faviconless app used to be led by. `missing` must not
+  // reach Breaks at all — not sorted lower, not present.
+  const reading = await assembleReading("lilna", {
+    xray: () => ({
+      since: 1000,
+      here: { count: 0, names: [] },
+      paths: [path({ path: "/favicon.ico", missing: 5, hits: 5 })],
+      dropped: 0,
+    }),
+    listBuilds: async () => [],
+    door: async () => ({ door: "lilna.supersonic.cv", open: true }),
+  });
+  const text = textOf(runDrawXray(reading));
+  assert.match(text, /Nothing has failed/);
+  assert.doesNotMatch(text, /favicon\.ico[\s\S]*of 5/);
+});
+
+test("breaking now and broke once do not read the same", async () => {
+  const reading = await assembleReading("lilna", {
+    xray: () => ({
+      since: 1000,
+      here: { count: 0, names: [] },
+      paths: [
+        path({ path: "/pay", hits: 20, broke: 8, brokeAgo: 4, brokenFor: 840, p95: 900 }),
+        path({ path: "/old", hits: 60, broke: 2, brokeAgo: 21_600, brokenFor: null, p95: 100 }),
+      ],
+      dropped: 0,
+    }),
+    listBuilds: async () => [],
+    door: async () => ({ door: "lilna.supersonic.cv", open: true }),
+  });
+  const cells = cellsOf(runDrawXray(reading));
+  // Failing right now, with how long it has been going.
+  assert.ok(cells.includes("broken 14m"), "an ongoing break says how long");
+  // Failed, recovered, and still worth seeing — but not as an emergency.
+  assert.ok(cells.includes("last broke 6h ago"), "a healed break says when");
 });
 
 test("the panel's own placeholder draw matches the shape drawXray expects", () => {

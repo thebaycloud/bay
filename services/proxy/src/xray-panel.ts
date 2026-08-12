@@ -93,7 +93,7 @@ function drawXray(d){
       var td1=h('td','p',p.path);
       var td2=h('td','n'+(p.p95>=1000?' slow':''),p.p95+'ms');
       var td3=h('td','n',p.hits+'×');
-      var td4=h('td','n'+(p.errors?' bad':''),p.errors?p.errors+' failed':ago(p.ago));
+      var td4=h('td','n'+(p.broke?' bad':''),p.broke?p.broke+' broke':ago(p.ago));
       tr.appendChild(td1);tr.appendChild(td2);tr.appendChild(td3);tr.appendChild(td4);
       t.appendChild(tr);
     });
@@ -103,7 +103,10 @@ function drawXray(d){
   xr.appendChild(s2);
 
   // breaks
-  var bad=live.paths.filter(function(p){return p.errors>0});
+  // Only what the app itself failed. A request for a page that was never there
+  // is somebody else's mistake, and while it shared a counter with this it was
+  // every faviconless app's headline problem.
+  var bad=live.paths.filter(function(p){return p.broke>0});
   var s3=sec('Breaks');
   if(!bad.length) s3.appendChild(h('div','none','Nothing has failed.'));
   else {
@@ -111,8 +114,13 @@ function drawXray(d){
     bad.slice(0,8).forEach(function(p){
       var tr=document.createElement('tr');
       tr.appendChild(h('td','p',p.path));
-      tr.appendChild(h('td','n bad',p.errors+' of '+p.hits));
-      tr.appendChild(h('td','n',ago(p.ago)));
+      tr.appendChild(h('td','n bad',p.broke+' of '+p.hits));
+      // Broken now, or broken once. Until the count carried a time these read
+      // identically, and this morning's fixed outage outranked tonight's real
+      // one for as long as the process lived.
+      tr.appendChild(p.brokenFor!==null
+        ? h('td','n bad','broken '+dur(p.brokenFor))
+        : h('td','n','last broke '+ago(p.brokeAgo)));
       t2.appendChild(tr);
     });
     s3.appendChild(t2);
