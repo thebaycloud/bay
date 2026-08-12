@@ -92,10 +92,13 @@ test("an app with a database goes to the fleet now that a node has a proxy", () 
   assert.equal(chooseRuntime(eligible).runtime, "fleet");
 });
 
-test("what the fleet cannot serve is named, and goes to Cloud Run", () => {
+test("what the fleet cannot serve is named, and the deploy fails saying which", () => {
+  // The title used to end "and goes to Cloud Run". Each of these is now a FAILED
+  // DEPLOY carrying the same reason — there is no second runtime to be turned
+  // away to — which is why naming the reason matters more than it used to and
+  // not less. The `runner` row went with the lane itself.
   const cases: Array<[Partial<typeof eligible>, RegExp]> = [
     [{ staticServe: true }, /static/i],
-    [{ lane: "runner" }, /runner/i],
     [{ lane: "buildpack" }, /buildpack/i],
     [{ image: "" }, /image/i],
     // A cron-only app used to sit here and no longer does. The reason it was
@@ -185,16 +188,6 @@ test("a static app is not placeable, and the reason says why", () => {
   assert.match(r.reason!, /static/i);
 });
 
-test("a runner-lane app is not placeable — its image is not its own", () => {
-  // The runner lane runs a shared prebuilt image and delivers the customer's
-  // code as an encrypted bundle. A node given that image would start the runner,
-  // not the app. This is one of the 19 that stayed behind, and it is not a bug
-  // to fix here: it is the lane that is being deleted.
-  const r = fleetEligibility({ ...eligible, lane: "runner" });
-  assert.equal(r.ok, false);
-  assert.match(r.reason!, /runner/i);
-});
-
 test("an app whose build produced no image is not placeable", () => {
   const r = fleetEligibility({ ...eligible, image: "" });
   assert.equal(r.ok, false);
@@ -259,7 +252,6 @@ test("a Dockerfile does not rescue the lanes refused for other reasons", () => {
   // gone because the reason is gone, not because the rule weakened.
   for (const c of [
     { lane: "static" as const, staticServe: true, serviceless: false, workers: 0 },
-    { lane: "runner" as const, staticServe: false, serviceless: false, workers: 0 },
   ]) {
     const got = fleetEligibility({
       lane: c.lane,

@@ -247,88 +247,26 @@ substitutions:
   # why this ever appeared to work — but that script is run by hand, and CI is
   # not.
   #
-  # FLEET_APPS is the canary list, and this is the first entry it has ever had.
+  # FLEET_APPS, FLEET_PLACEMENT AND RUNNER ARE GONE, and the deletion of the
+  # Cloud Run container lane is what removed them. A canary list decides which
+  # apps take a different runtime from the rest; with one runtime there is no
+  # "the rest", and `fleetPlacementWanted` — the only reader — went with the lane.
   #
-  # Everything built across three sessions to make the fleet a deploy target has
-  # been unreachable by any deploy, because `fleetPlacementWanted` reads this
-  # variable and it was unset: `placeOnFleet` has never run in production. The
-  # twenty apps on fleet-lab-1 were put there by hand with
-  # services/fleet/migrate.sh, which exercises none of the place-verify-flip
-  # sequence the pipeline would use.
+  # It is worth keeping the record of what this list cost, because the shape
+  # recurs. It named `i6xce,gzz9j` until 6 Aug while both apps had been deleted in
+  # the 5 Aug cleanup, so no deploy could reach the fleet through it at all — and
+  # a canary list naming deleted apps is indistinguishable from one that works
+  # until somebody checks. Worse, it was set in two places that disagreed: the
+  # control plane had FLEET_APPS and no FLEET_PLACEMENT while the deploy worker
+  # had both, so the same app landed on a DIFFERENT RUNTIME depending on which
+  # service happened to run its deploy.
   #
-  # `i6xce` is a throwaway app of ours, deployed for this purpose, and that is
-  # deliberate for a FIRST canary: the sequence has never run, and the app that
-  # proves it should be one whose downtime belongs to nobody. It ran, and the
-  # node is serving it.
+  # RUNNER=0 selected the generated-image path over the prebuilt runner. The
+  # runner lane is deleted; every app builds an image of its own now.
   #
-  # `p6mx8` — the `goapi` example — is the second, and it is chosen for what it
-  # carries rather than for being safe. The 5 Aug handoff names this exact gap:
-  # "the placement spec has just grown env and secrets, and no app has ever been
-  # placed carrying either — the 19 that moved went with the hardcoded six
-  # fields migrate.sh wrote". Their placement rows still show no processes and
-  # no secrets, because a hand migration never wrote any. This app declares a
-  # database and a release process, so redeploying it through the pipeline is
-  # the first time a spec with secrets and a release reaches a node by the path
-  # a deploy actually takes.
-  #
-  # It is already ON the fleet, which is the other half of the choice: a failed
-  # verdict then has a real previous placement to restore, so the rollback is
-  # exercised against something rather than falling through the first-deploy
-  # branch. And it belongs to us.
-  #
-  # WITHDRAWN on 5 Aug, and the reason is a hard blocker for every app with a
-  # database, not something about this app. The node could not read the app's
-  # secrets:
-  #
-  #   p6mx8--release.: secret app-p6mx8-DATABASE_URL: 403
-  #   Permission 'secretmanager.versions.access' denied on resource
-  #
-  # fleet-lab-1 runs as 540236122367-compute@developer.gserviceaccount.com,
-  # which at the time held artifactregistry.writer, cloudsql.client, run.admin,
-  # storage.admin and logging.logWriter — and NO Secret Manager role at all. (As
-  # of 12 Aug it holds four narrow roles and no Secret Manager access by design:
-  # secrets come from the broker, and the grant this paragraph goes on to ask for
-  # was removed once that landed. The story is kept because the FAILURE it
-  # describes is still the one to recognise.) The
-  # gap was invisible because the twenty apps already on the node were migrated
-  # by hand with a spec carrying no secrets, so the node had never once been
-  # asked to resolve one. This was the first time.
-  #
-  # Until the node's service account can read app-<slug>-* secrets — granted per
-  # secret when the deploy creates it, rather than project-wide to a machine
-  # running tenant code — no app with a database can live on the fleet. i6xce
-  # stays because it has none.
-  #
-  # The rest of the machinery behaved exactly as designed while this happened:
-  # the release failed, the agent counted 4/5 and backed off instead of
-  # retrying forever, and classifyStartError reads a 403 on a secret as the
-  # NODE's fault, which is what keeps a repair agent away from a repository that
-  # has nothing wrong with it.
-  #
-  # `gzz9j` — `ss-canary-db`, ours, built from examples/pgapp — is armed as of
-  # 5 Aug, and it takes p6mx8's place as the app that carries a database and a
-  # release. Both blockers above it are now fixed and proven on the node: the
-  # node can read app secrets (0d0072c, project-wide — see services/fleet/README
-  # for what that costs), and a release sandbox can actually start. The latter
-  # was two bugs stacked. The snapshot had no lease, so containerd's collector
-  # deleted the overlay's upperdir out from under a live mount (a558e17); behind
-  # that, the spec bind-mounted /srv/apps/<slug>/data and only the LONG-RUNNING
-  # start path had ever created it, so the first app on a node to declare a
-  # release mounted a directory nothing had made and the gofer died before the
-  # sandbox could signal ready.
-  #
-  # What this proves that i6xce cannot: a spec carrying env, secrets and a
-  # release reaching a node by the path a deploy actually takes. Success is one
-  # line in the app's log — `release ok — visits table present` — because
-  # migrate.js can only print it from inside the sandbox, with a resolved
-  # DATABASE_URL.
-  #
-  # Reverting is the same one word. Remove the entry and redeploy the app: the
-  # deploy takes the Cloud Run branch again and `setRuntime` puts apps.runtime
-  # back. Nothing here moves an app by itself — this only decides where the NEXT
-  # deploy of a listed app goes.
   # `^~~^` is gcloud's own escape for "this list is separated by ~~, not by
-  # commas", and it is here because FLEET_APPS is a comma-separated list ITSELF.
+  # commas". It was needed because FLEET_APPS was a comma-separated list ITSELF,
+  # and it stays because it costs nothing and the next such value will need it.
   # Written the obvious way, `FLEET_APPS=i6xce,p6mx8` ends the value at the
   # comma and `p6mx8` becomes a malformed variable name — the second canary
   # would silently not exist, and every flag after it would shift. The same
@@ -348,7 +286,7 @@ substitutions:
   #
   # Ours, throwaway, and its downtime belongs to nobody, which is the same reason
   # the entries it replaces were chosen.
-  _LANE_ENV: ^~~^FLEET_APPS=q6doa~~RUNNER=0~~PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~NODE_IDENTITY=enforce~~BUILDER=railpack~~BUILDKIT_HOST=tcp://10.128.0.5:1234~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
+  _LANE_ENV: ^~~^PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~NODE_IDENTITY=enforce~~BUILDER=railpack~~BUILDKIT_HOST=tcp://10.128.0.5:1234~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
   # passes whatever it likes. The default keeps a hand-run build from failing on an

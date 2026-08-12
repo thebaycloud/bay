@@ -169,13 +169,9 @@ export function fleetEligibility(a: {
     // at step 4; until then it stays where it is.
     return { ok: false, reason: "a static app has no image of its own to run" };
   }
-  if (a.lane === "runner") {
-    // The runner lane's image is one shared prebuilt runtime and the customer's
-    // code arrives as an encrypted bundle at start. A node handed that image
-    // would start the runner and never the app. Not worth teaching the fleet:
-    // this lane is what §8b deletes.
-    return { ok: false, reason: "the runner lane's image is shared, and its code is not in it" };
-  }
+  // WAS: the runner lane — one shared prebuilt runtime whose customer code
+  // arrived as an encrypted bundle at start, so a node handed that image would
+  // start the runner and never the app. It is deleted, and this refusal with it.
   if (a.lane === "buildpack" && !a.hasDockerfile) {
     // A buildpack image is made BY the deploy: `gcloud run deploy --source`
     // runs the builder and Cloud Run names what comes out, so at decision time

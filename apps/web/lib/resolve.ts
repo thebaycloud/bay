@@ -229,7 +229,6 @@ const LANE_CONSUMES: Record<Lane, ReadonlyArray<keyof ResolvedService>> = {
   // the precise defect assert-consumed exists to catch, committed inside
   // assert-consumed's own table. An app that pins a version is routed to the
   // buildpack lane, which does implement it.
-  runner: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
   // No `start`: the Dockerfile's own CMD is the start command, and a second one
   // in the config would be read by nobody.
   container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],

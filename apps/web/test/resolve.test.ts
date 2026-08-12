@@ -93,7 +93,7 @@ test("a static service that declares secrets is refused — there is nowhere to 
 
 test("a field the lane does implement passes", () => {
   const s = {
-    name: "api", dir: ".", path: "/", lane: "runner" as const,
+    name: "api", dir: ".", path: "/", lane: "buildpack" as const,
     release: "python manage.py migrate", start: "gunicorn app:app",
     spaFallback: false,
   processes: [], uses: [], env: {}, buildEnv: {}, secrets: ["K"], envNeeded: [],

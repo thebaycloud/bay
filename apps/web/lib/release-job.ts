@@ -262,16 +262,16 @@ export function releaseJobArgs(j: ReleaseJob): string[] {
   // whose CMD is the server; there the command has to be overridden, and the
   // proxy wait goes in front of it because that image does not run our
   // entrypoint.
-  const runner = j.lane === "runner";
-  const env = runner ? withEnv(j.env, "SUPERSONIC_RUN", j.release) : j.env;
-  const command = runner
-    ? []
-    // `--args` is a comma-separated list, so a release command containing a
-    // comma — `python manage.py migrate --noinput,` is unusual but
-    // `psql -c "SELECT a,b"` is not — would be split into two arguments. The
-    // `^~~^` prefix picks a different delimiter for this value only, the same
-    // escape the env flags already use.
-    : ["--command=/bin/sh", `--args=^~~^-c~~${j.cloudsql ? proxyWait() : ""}${j.release}`];
+  // The runner lane read its command out of `SUPERSONIC_RUN` because its shared
+  // image could not contain one. Every remaining lane runs the app's OWN image,
+  // whose CMD is the server — so the command is always overridden here, and the
+  // proxy wait always goes in front of it.
+  const env = j.env;
+  // `--args` is a comma-separated list, so a release command containing a comma
+  // — `python manage.py migrate --noinput,` is unusual but `psql -c "SELECT a,b"`
+  // is not — would be split into two arguments. The `^~~^` prefix picks a
+  // different delimiter for this value only, the same escape the env flags use.
+  const command = ["--command=/bin/sh", `--args=^~~^-c~~${j.cloudsql ? proxyWait() : ""}${j.release}`];
 
   return [
     ...head,

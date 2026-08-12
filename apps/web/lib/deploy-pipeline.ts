@@ -26,7 +26,7 @@ import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec, type AgentProcess } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
 import { recordRelease, setDesired, desiredRelease } from "@/lib/reconcile";
-import { rollback, deleteRunService, getLogs } from "@/lib/gcloud";
+import { getLogs } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv, restateDatabaseAt } from "@/lib/env-merge";
@@ -48,7 +48,7 @@ import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
 import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
-import { deployArgs, databaseEnv, databaseEnvNames, needsServiceRecreate, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
+import { databaseEnv, databaseEnvNames, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -366,21 +366,13 @@ async function liveEnvNames(slug: string): Promise<string[]> {
   );
 }
 
-/**
- * Whether the live service's containers are NAMED, or null when it does not exist.
- *
- * `deployArgs` needs this because the flat and scoped argv shapes are not
- * interchangeable on an existing service, and which one a service has is a fact
- * about the service rather than about the lane deploying to it. A repo that gains
- * a `supersonic.json` can move lane — buildpack to runner is one config line —
- * and the lane's own default then disagrees with what is already deployed.
+/*
+ * WAS: `liveContainerShape` — whether a live Cloud Run service's container was
+ * NAMED. It existed because Cloud Run cannot rename the container of a live
+ * service while a Cloud SQL sidecar requires named ones, so an app that gained a
+ * database was undeployable until its service was recreated. A node has no such
+ * constraint, and there is no service to read.
  */
-async function liveContainerShape(service: string): Promise<boolean | null> {
-  const s = await describeServiceRest(service).catch(() => null);
-  const containers = s?.spec?.template?.spec?.containers;
-  if (!Array.isArray(containers) || containers.length === 0) return null;
-  return containers.some((c: { name?: string }) => Boolean(c.name));
-}
 
 /**
  * Whether this app has no live Cloud Run service yet — a first deploy.
@@ -2799,129 +2791,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * app rather than the platform. Swallowed whole on failure — a log we cannot
      * read is not a reason to lose the error we already have.
      */
-    const withAppLog = async (service: string, error: string): Promise<string> => {
-      try {
-        const lines = (await getLogs(service, { limit: 20, freshness: "10m" })).map((l) => l.message);
-        if (!lines.length) return error;
-        log(`· what ${service} said before it stopped:`);
-        for (const l of lines) log(`    ${l}`);
-        return `${error}\n\nWhat ${service} said before it stopped:\n${lines.map((l) => `  ${l}`).join("\n")}`;
-      } catch {
-        return error;
-      }
-    };
-
-    const attempt = async (args: string[]): Promise<{ ok: boolean; url?: string; error?: string }> => {
-      // A worker-only app builds exactly as any other app and then deploys no
-      // service. Skipping HERE rather than branching per lane is deliberate: every
-      // lane reaches its `gcloud run deploy` through this one function, so one
-      // guard covers all of them and no lane can be added that forgets it. The
-      // prepare/build/release steps above are untouched — they are what produces
-      // the artifact the workers run.
-      if (serviceless) return { ok: true };
-      lastArgv = args;
-      const hb = setInterval(() => log("deploying…"), 6000);
-      builds.reset();
-      try {
-        const o = await gcloudDeploy(args, log, (l) => builds.note(l));
-        clearInterval(hb);
-        const svc = JSON.parse(o.slice(o.indexOf("{")));
-        // Read back from the response that already exists rather than by
-        // describing the service again: an extra round trip could disagree with
-        // the revision this deploy just made, and then the check would be
-        // reporting on something else.
-        try {
-          const containers = svc?.spec?.template?.spec?.containers ?? [];
-          const appContainer = containers.find((c: { name?: string }) => c.name === "app") ?? containers[0];
-          revisionEnv = (appContainer?.env ?? []).map((e: { name: string; valueFrom?: unknown }) => ({
-            name: e.name,
-            fromSecret: Boolean(e.valueFrom),
-          }));
-          hasRevision = true;
-        } catch { /* an unreadable spec leaves the environment unverifiable, not failed */ }
-        const liveUrl = svc?.status?.url ?? "";
-        if (liveUrl) {
-          // Grant before probing: a sealed app 403s the control plane's own
-          // probe until the binding exists.
-          if (SEAL_APPS && wants("invoker")) await grantInvokers(slug, log);
-          log("verifying the app responds…");
-          const probe = await probeApp(liveUrl, log, SEAL_APPS, primaryHealth);
-          if (!probe.ok) return { ok: false, error: await withAppLog(slug, probe.reason ?? "the app did not answer") };
-        }
-        return { ok: true, url: liveUrl };
-      } catch (e) {
-        clearInterval(hb);
-        let err = e instanceof Error ? e.message : String(e);
-        if (/build failed/i.test(err)) {
-          log("fetching the real build log for the agent…");
-          const buildLog = await builds.error();
-          if (buildLog) err = `Cloud Build failed. Actual build output:\n${buildLog}`;
-        } else {
-          // Only when the BUILD was not the problem. A build that never produced
-          // an image left no container to have said anything, and asking would
-          // attach the previous revision's log to a failure it had no part in.
-          err = await withAppLog(slug, err);
-        }
-        return { ok: false, error: err };
-      }
-    };
-    /**
-     * Run the one-shot release, ONCE, before anything moves.
+    /*
+     * WAS: `withAppLog`, `attempt` and `runRelease` — the Cloud Run delivery.
      *
-     * Not in Cloud Build: app-secrets.ts gets DATABASE_URL into the build, but
-     * the Cloud SQL proxy is a Cloud Run SIDECAR, and Cloud Build has nothing
-     * listening on 127.0.0.1:5432. The build holds a connection string pointing
-     * at a closed port. Prisma passes only because `prisma generate` never
-     * connects; `manage.py migrate` hangs to the 1200s timeout.
-     *
-     * A failure returns here and the caller never reaches `gcloud run deploy` —
-     * no revision, no traffic move, and the previous revision keeps serving the
-     * schema it was written for.
-     */
-    const runRelease = async (spec: {
-      lane: "runner" | "container" | "buildpack";
-      service: string; image?: string; source?: string; env: string[]; release: string;
-    }): Promise<{ ok: boolean; error?: string }> => {
-      if (!spec.release.trim()) return { ok: true };
-      const job = {
-        lane: spec.lane, service: spec.service, region: REGION, project: PROJECT,
-        serviceAccount: APP_RUNTIME_SA || null,
-        labels: [`supersonic-name=${friendlyName}`],
-        image: spec.image, source: spec.source,
-        release: spec.release, env: spec.env,
-        secrets: secretRefs.length ? setSecretsFlag(secretRefs) : null,
-        scale, cloudsql,
-      };
-      try {
-        await stages.around("release", async () => {
-          log(`Release: ${spec.release}`);
-          try {
-            await capture("gcloud", releaseJobArgs(job));
-          } catch (e) {
-            // Configuring the job is ours to get right — a role, a flag, a
-            // region. There is nothing in the repository for an agent to fix,
-            // so it short-circuits on the rule IAM_FAILURE already carries.
-            throw new Error(`${IAM_FAILURE}: could not configure the release job — ${e instanceof Error ? e.message : String(e)}`);
-          }
-          await run("gcloud", releaseExecuteArgs(job), log);
-        });
-        return { ok: true };
-      } catch (e) {
-        const why = e instanceof Error ? e.message : String(e);
-        if (why.includes(IAM_FAILURE)) return { ok: false, error: why };
-        // `--wait` reports THAT it failed and not one line of why. The traceback
-        // is in the job's own logs — the same gap fetchContainerError closed for
-        // a crash-looping revision.
-        const detail = await capture("gcloud", releaseLogsArgs(job)).catch(() => "");
-        return { ok: false, error: `Release failed — the previous revision is still serving.\n${why}${detail ? `\n--- release log ---\n${detail}` : ""}` };
-      }
-    };
-
-    /**
-     * Static lane: build the assets, copy them to GCS, then move the pointer.
-     * No image is assembled, nothing is pushed to Artifact Registry, no Cloud
-     * Run service is created and no revision has to roll out — which is the
-     * entire reason this lane exists.
+     * `attempt` was the one function every lane's `gcloud run deploy` went
+     * through, `runRelease` ran a release as a Cloud Run Job beside it, and
+     * `withAppLog` attached the service's own last words to whatever the tooling
+     * concluded. A release is now a process inside the AppSpec the node places,
+     * run before web and worker start, and the app's last words are attached by
+     * `placeOnFleet` — see the note there about attaching them to the RETURNED
+     * reason rather than only printing them.
      */
     const runStatic = async (out: { outputDir: string }): Promise<{ ok: boolean; url?: string; error?: string }> => {
       const release = releaseId();
@@ -3949,18 +3828,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           log(`No previous version of ${slug} exists on the fleet to roll back to — this looks like its first deploy. Fix the error above and redeploy.`);
           return "Nothing to roll back to on the fleet: this app has no previous placement. Fix the error and redeploy.";
         }
-        try {
-          const to = await rollback(slug);
-          const note = `Rolled back to ${to} — the previous version is serving again while you fix this.`;
-          log(note);
-          return note;
-        } catch (e) {
-          // A first deploy has nothing to go back to, which is the common case
-          // here and not worth alarming anybody about.
-          const why = e instanceof Error ? e.message : String(e);
-          if (!/no previous revision|never started/i.test(why)) log(`! could not roll back (${why})`);
-          return null;
-        }
+        // WAS: `rollback(slug)` — `gcloud run revisions list` and a traffic
+        // split back to the last Ready one. The fleet keeps one spec per app
+        // rather than a history, so the branch above is the whole of what an
+        // automatic rollback can do, and the Cloud Run half is unreachable now
+        // that `deployTarget` is always the fleet.
+        return null;
       };
 
       // Where it died, attached once, before the failure fans out.

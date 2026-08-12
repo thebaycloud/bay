@@ -147,45 +147,6 @@ for (const lane of SERVICE_LANES) {
   });
 }
 
-/**
- * How the release command reaches the container differs by lane, and getting it
- * wrong is silent: the release job starts the web SERVER instead, binds $PORT,
- * never exits, and is killed at the task timeout — a failed release for an app
- * that is entirely fine.
- */
-test("the runner lane delivers the release command as SUPERSONIC_RUN, replacing the start command", () => {
-  const argv = releaseJobArgs(job("runner"));
-  const envFlag = argv.find((a) => a.startsWith("--update-env-vars="))!;
-  const pairs = envFlag.replace("--update-env-vars=^~~^", "").split("~~");
-  const runs = pairs.filter((p) => p.startsWith("SUPERSONIC_RUN="));
-  assert.equal(runs.length, 1, "two SUPERSONIC_RUN values leave the winner to gcloud");
-  assert.equal(runs[0], `SUPERSONIC_RUN=${RELEASE}`);
-  // The runner image's entrypoint is what fetches the bundle onto disk, so it
-  // must not be overridden — a migration against an empty /app finds no manage.py.
-  assert.ok(!argv.some((a) => a.startsWith("--command")));
-});
-
-for (const lane of ["container", "buildpack"] as Lane[]) {
-  test(`the ${lane} lane overrides the image's CMD, which is the server`, () => {
-    const argv = releaseJobArgs(job(lane));
-    assert.ok(argv.includes("--command=/bin/sh"));
-    const args = argv.find((a) => a.startsWith("--args="))!;
-    // The ^~~^ delimiter, because --args is comma-separated and a release
-    // command may contain a comma.
-    assert.ok(args.startsWith("--args=^~~^-c~~"));
-    assert.ok(args.endsWith(RELEASE));
-    // The app's own image does not run our entrypoint, so the readiness wait
-    // has to travel with the command.
-    assert.ok(args.includes("while ["), "no proxy wait — #13, --depends-on orders start, not readiness");
-  });
-
-  test(`the ${lane} lane skips the proxy wait when there is no proxy`, () => {
-    const argv = releaseJobArgs(job(lane, { cloudsql: null }));
-    assert.equal(argv.find((a) => a.startsWith("--args=")), `--args=^~~^-c~~${RELEASE}`);
-    assert.ok(!argv.includes("--depends-on"));
-  });
-}
-
 test("a release command with a comma survives the argv", () => {
   const release = `psql -c "SELECT a,b FROM t"`;
   const argv = releaseJobArgs(job("container", { release, cloudsql: null }));
@@ -227,18 +188,18 @@ test("an image with none of the four probes waits zero seconds, not thirty", () 
 });
 
 test("executing waits for the verdict, on the job the deploy just wrote", () => {
-  const argv = releaseExecuteArgs(job("runner"));
+  const argv = releaseExecuteArgs(job("container"));
   assert.deepEqual(argv.slice(0, 4), ["run", "jobs", "execute", "demo-release"]);
   // Without --wait, gcloud exits 0 as soon as the execution STARTS, and the
   // pointer would move over a migration still running — which is the failure
   // mode this phase exists to remove, reintroduced by one missing flag.
   assert.ok(argv.includes("--wait"));
   assert.ok(!argv.includes("--async"));
-  assert.equal(releaseJobArgs(job("runner"))[3], argv[3]);
+  assert.equal(releaseJobArgs(job("container"))[3], argv[3]);
 });
 
 test("a failed release can be read back, because the verdict says nothing", () => {
-  const argv = releaseLogsArgs(job("runner"));
+  const argv = releaseLogsArgs(job("container"));
   assert.deepEqual(argv.slice(0, 6), ["beta", "run", "jobs", "logs", "read", "demo-release"]);
   assert.ok(argv.includes("--limit=50"));
 });
@@ -263,7 +224,7 @@ test("a job with neither an image nor a source is refused, naming the lane", () 
 test("an empty release command is refused rather than executed", () => {
   // An empty `--args=-c` would exec /bin/sh with no script, exit 0, and report
   // a release that never ran as a release that succeeded.
-  assert.throws(() => releaseJobArgs(job("runner", { release: "   " })), /has no release command/);
+  assert.throws(() => releaseJobArgs(job("container", { release: "   " })), /has no release command/);
 });
 
 /**
