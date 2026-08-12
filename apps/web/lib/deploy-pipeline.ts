@@ -1,8 +1,8 @@
 // Everything below moved here from app/api/deploy/route.ts unchanged; see runDeploy.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync, unlinkSync, mkdirSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { repairDeploy } from "@/lib/agent";
 // The agent backend is chosen by DEPLOY_AGENT (codex by default, opencode one
@@ -37,7 +37,7 @@ import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
 import { notifyDeployFinished } from "@/lib/deploy-notify";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
-import { listObjectNames, readObjectText, writeObject, describeServiceRest, resolveImageDigest, imageExposedPort } from "@/lib/gcp-rest";
+import { listObjectNames, readObjectText, writeObject, describeServiceRest, resolveImageDigest, imageExposedPort, accessToken } from "@/lib/gcp-rest";
 import { take as takeClone } from "@/lib/clone-cache";
 import { staticBuildConfig } from "@/lib/static-build";
 import { verifyRelease } from "@/lib/verify-release";
@@ -61,6 +61,7 @@ import { resolveFrom, laneFor, type DeploymentFacts } from "@/lib/resolve";
 import { sidecarFor, sidecarEnv, dependencyRefusal } from "@/lib/dependencies";
 import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
 import { publicUrlBuildArgs, publicUrlEnvArgs, ENV_FILENAMES } from "@/lib/public-url-args";
+import { buildctlArgs, dockerAuthConfig, buildPlaneHost } from "@/lib/buildplane";
 import { railpackConfig, railpackPrepareArgs } from "@/lib/railpack";
 import { detectRelease, RELEASE_FILES } from "@/lib/release-detect";
 import { readProcfile } from "@/lib/procfile";
@@ -3529,7 +3530,42 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           const hb = setInterval(() => log("building…"), 8000);
           builds.reset();
           try {
-            await run("gcloud", args, onBuild);
+            // OUR OWN BUILDKIT, when there is one and there is a plan for it.
+            //
+            // Both conditions, not either: `buildctl` executes a Railpack plan
+            // through the frontend, so a Dockerfile app has nothing for it to
+            // run. Those apps keep Cloud Build until the plan covers them.
+            //
+            // This is the path that removes a scheduler rather than speeding one
+            // up — the source is already here, and Cloud Build was a second
+            // machine we shipped it to so it could do what this one was holding.
+            const planeAddr = plannedWithRailpack ? buildPlaneHost(process.env) : null;
+            if (planeAddr) {
+              // Registry credentials travel from HERE to the daemon, which is
+              // what keeps the build host free of standing push credentials.
+              // Written before the build and removed after: a token on disk for
+              // the length of one build is a smaller window than one in an
+              // image, and this file is the daemon's only way in.
+              const tok = await accessToken();
+              if (!tok) throw new Error("no credentials to push the built image with");
+              const dockerDir = join(homedir(), ".docker");
+              mkdirSync(dockerDir, { recursive: true });
+              writeFileSync(join(dockerDir, "config.json"),
+                dockerAuthConfig(IMAGE.split("/")[0], tok), { mode: 0o600 });
+              log(`Building on the fleet's own BuildKit — its cache is local and stays warm…`);
+              try {
+                // No build args here, and not because they are unavailable in
+                // this closure. On this lane they were already baked into the
+                // PLAN by `railpack prepare --env` — declared `buildEnv` and the
+                // app's public address both. Passing them a second time as
+                // `--opt build-arg:` would be a second source for one fact.
+                await run("buildctl", buildctlArgs({ dir, image: IMAGE, addr: planeAddr }), onBuild);
+              } finally {
+                try { unlinkSync(join(dockerDir, "config.json")); } catch { /* gone is fine */ }
+              }
+            } else {
+              await run("gcloud", args, onBuild);
+            }
           } finally { clearInterval(hb); }
         });
       } catch (e) {
