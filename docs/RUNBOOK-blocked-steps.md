@@ -109,18 +109,35 @@ commit, unreachable, absent — dispatches to the Job exactly as before.
 
 ## Not done
 
-### Split the platform database off the shared instance
+### Split the platform database off the shared instance — done
 
-`supersonic-shared-pg` is a single `db-f1-micro` holding every tenant's database
-AND the platform's own — placements, leases, releases, the reconciler's record.
-The control plane cannot survive an incident on an instance any tenant can
-saturate, and at that tier saturating it is not hard.
+`supersonic_platform` is on `supersonic-platform-pg`, its own instance
+(1 vCPU / 3.75 GB, SSD, nightly backups kept 7 days). The shared `db-f1-micro`
+keeps the tenant databases and no longer holds the control plane's state.
 
-Spec §10. No code; the platform's connection string is configuration.
+**The numbers that made the case.** The platform database is 14 MB. The tenant
+database beside it, `kngsu`, is 188 MB — thirteen times larger, on shared-core
+hardware, under a tenant's control. Placements, leases, releases and the
+reconciler's own record were sharing an instance any tenant could saturate.
 
-**Left undone deliberately.** It is a live migration of the control plane's own
-state, and the safe version rehearses on a copy first. That is a bad thing to
-begin unattended, not a hard thing.
+**How, in about seven minutes.** Pause the reconciler → export → import →
+attach BOTH instances to each service and flip `PG_CONN` → verify → resume. The
+export is 1.3 MB and takes twenty seconds, which is the whole window in which a
+write could be lost, and the reconciler — the only thing writing on its own
+clock — is paused across it.
+
+Attaching both instances before the flip is what removes the moment with no
+database. Four things move: the control plane, the EDGE PROXY (it reads the app
+registry, so it is data-plane and not just control-plane), the deploy worker and
+the deploy job.
+
+`cloudbuild.yaml` sets neither `PG_CONN` nor `cloudsql-instances`, so this
+survives a deploy — checked, because the same file silently reverted a Railpack
+canary earlier the same night.
+
+**Undo:** set `PG_CONN` back to `…:supersonic-shared-pg` on all four. Both
+instances stay attached until the new one has soaked, so the rollback needs no
+other change.
 
 ### Delete the Cloud Run app path
 

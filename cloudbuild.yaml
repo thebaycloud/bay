@@ -269,8 +269,12 @@ substitutions:
   #   Permission 'secretmanager.versions.access' denied on resource
   #
   # fleet-lab-1 runs as 540236122367-compute@developer.gserviceaccount.com,
-  # which holds artifactregistry.writer, cloudsql.client, run.admin,
-  # storage.admin and logging.logWriter — and NO Secret Manager role at all. The
+  # which at the time held artifactregistry.writer, cloudsql.client, run.admin,
+  # storage.admin and logging.logWriter — and NO Secret Manager role at all. (As
+  # of 12 Aug it holds four narrow roles and no Secret Manager access by design:
+  # secrets come from the broker, and the grant this paragraph goes on to ask for
+  # was removed once that landed. The story is kept because the FAILURE it
+  # describes is still the one to recognise.) The
   # gap was invisible because the twenty apps already on the node were migrated
   # by hand with a spec carrying no secrets, so the node had never once been
   # asked to resolve one. This was the first time.
