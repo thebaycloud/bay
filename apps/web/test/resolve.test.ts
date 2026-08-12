@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SCALE } from "../lib/lanes";
 import { resolve, resolveFrom, validate, deriveLane, laneFor, assertConsumed, missingSecrets, ResolveError, type ResolvedService } from "../lib/resolve";
-import { parseAppConfig, ConfigError, platformOwned, usesDatabase, planFromConfig } from "../lib/app-config";
+import { parseAppConfig, ConfigError, platformOwned, usesDatabase, planFromConfig, type ServiceConfig } from "../lib/app-config";
 
 /** A repo on disk. The resolver checks the filesystem, so the tests need one. */
 function repo(files: Record<string, string>): string {
@@ -22,22 +22,25 @@ const config = (o: unknown) => JSON.stringify(o);
 
 /* ── the lane is derived, never authored ─────────────────────────────────── */
 
-test("the lane follows from what the service is", () => {
+test("the lane follows from whether the repository builds its own image", () => {
   assert.equal(deriveLane({ language: "static" }), "static");
-  assert.equal(deriveLane({ language: "node" }), "runner");
-  assert.equal(deriveLane({ language: "python" }), "runner");
-  // The version the runner actually HAS takes the fast path.
-  assert.equal(deriveLane({ runtime: "python3.14" }), "runner");
-  assert.equal(deriveLane({ runtime: "node24" }), "runner");
-  // Any other pinned version does not, and this expectation is the fix: it used
-  // to be "runner", which is how an app asking for 3.12 got 3.14 and died at
-  // start inside its own code. Buildpacks read the version file themselves.
-  assert.equal(deriveLane({ runtime: "python3.12" }), "buildpack");
-  assert.equal(deriveLane({ runtime: "node22" }), "buildpack");
-  // Tier 2: compiled, or simply without a prebuilt runner image here.
-  assert.equal(deriveLane({ runtime: "java21" }), "buildpack");
-  assert.equal(deriveLane({ runtime: "go1.23" }), "buildpack");
-  assert.equal(deriveLane({ language: "other" }), "buildpack");
+
+  // EVERY VERSION IS THE SAME ANSWER NOW, and the rows this test used to have
+  // are the reason that matters. `node` and `python` went to the runner — one
+  // shared prebuilt image per language — while `python3.12` went to buildpacks,
+  // because the runner HAD 3.14 and an app asking for 3.12 got 3.14 and died at
+  // start inside its own code. A pinned version was a demotion away from the
+  // runner; there is no runner left to be demoted from, and an image built for
+  // the version the app asked for is what every one of these gets.
+  const services: ServiceConfig[] = [
+    { language: "node" }, { language: "python" }, { language: "other" },
+    { runtime: "python3.14" }, { runtime: "python3.12" },
+    { runtime: "node24" }, { runtime: "node22" },
+    { runtime: "java21" }, { runtime: "go1.23" },
+  ];
+  for (const service of services) {
+    assert.equal(deriveLane(service), "buildpack", `${JSON.stringify(service)} builds its own image`);
+  }
 });
 
 test("a committed Dockerfile outranks anything inferred about the language", () => {
@@ -123,7 +126,7 @@ test("a server with no start command is refused before anything is built", () =>
     "supersonic.json": config({ version: 1, services: [{ language: "python" }] }),
   });
   return resolve(dir).then((app) => {
-    assert.throws(() => validate(app, dir), /runner lane runs a server and this service has no `start` command/);
+    assert.throws(() => validate(app, dir), /lane runs a server and this service has no `start` command/);
   });
 });
 
@@ -578,54 +581,49 @@ test("a service wanting no database still says so", () => {
 });
 
 test("the deploy and the CLI answer the lane through one function", () => {
-  // The defect: `deriveLane` was called by the CLI and by `resolveService`, and
-  // by nothing in the deploy — `deploy-pipeline.ts` derived its own lane inline
-  // from a string match on the detector's runtime, with its own rules. So
-  // `assertConsumed` validated a service against a lane the deploy might not
-  // take, and a config could resolve to `runner` in `supersonic check` and deploy
-  // on `buildpack` with nobody informed.
+  // The defect this guards: `deriveLane` was called by the CLI and by
+  // `resolveService`, and by nothing in the deploy — `deploy-pipeline.ts` derived
+  // its own lane inline from a string match on the detector's runtime, with its
+  // own rules. So `assertConsumed` validated a service against a lane the deploy
+  // might not take, and a config could resolve to one lane in `supersonic check`
+  // and deploy on another with nobody informed. One function is the fix, and it
+  // outlives the lanes it was arbitrating between.
   //
-  // This is the pipeline's full truth table, asserted against the shared
-  // function. Each row is [runtime, hasDockerfile, RUNNER=1, agent gave --run].
-  const cases: Array<[string, boolean, boolean, boolean, string]> = [
-    // The runner lane, when it is enabled and nothing outranks it. The versions
-    // here are the ones the runner HAS — a pinned version it cannot serve is its
-    // own axis, tested separately.
-    ["python3.14", false, true,  false, "runner"],
-    ["node24",     false, true,  false, "runner"],
-    // Shipped dark: RUNNER=0 sends the same app down the industry-standard path.
-    // Invisible to the old `deriveLane`, which is half of why they disagreed.
-    ["python3.14", false, false, false, "buildpack"],
-    ["python3.14", true,  false, false, "container"],
-    // A committed Dockerfile outranks the language: the author was explicit.
-    ["python3.14", true,  true,  false, "container"],
-    // Unless the deploying agent supplied the run command, which outranks a
-    // Dockerfile that may not be self-contained. The other half of the divergence.
-    ["python3.14", true,  true,  true,  "runner"],
-    // An overridden Dockerfile still cannot reach the runner without a language
-    // the runner has an image for.
-    ["go1.23",     true,  true,  true,  "container"],
-    ["go1.23",     false, true,  false, "buildpack"],
-    ["",           true,  true,  true,  "container"],
-    ["",           false, true,  false, "buildpack"],
+  // The truth table used to have four axes. Two are gone with the runner: RUNNER
+  // itself, and whether the deploying agent supplied a `--run` that outranked a
+  // committed Dockerfile — an override that only made sense while there was a
+  // runner to fall back to. What is left is the question that decides anything:
+  // does the repository build its own image.
+  const cases: Array<[string, boolean, string]> = [
+    ["python3.14", false, "buildpack"],
+    ["python3.14", true,  "container"],
+    ["node24",     false, "buildpack"],
+    ["go1.23",     true,  "container"],
+    ["go1.23",     false, "buildpack"],
+    ["",           true,  "container"],
+    ["",           false, "buildpack"],
   ];
 
-  for (const [runtime, dockerfile, runnerEnabled, runCommandSupplied, expected] of cases) {
+  for (const [runtime, dockerfile, expected] of cases) {
     assert.equal(
-      laneFor({ runtime, dockerfile: dockerfile ? "Dockerfile" : undefined, runnerEnabled, runCommandSupplied }),
+      laneFor({ runtime, dockerfile: dockerfile ? "Dockerfile" : undefined }),
       expected,
-      `runtime=${JSON.stringify(runtime)} dockerfile=${dockerfile} RUNNER=${runnerEnabled} run=${runCommandSupplied}`,
+      `runtime=${JSON.stringify(runtime)} dockerfile=${dockerfile}`,
     );
   }
 });
 
 test("a written config answers for the lane it describes, with no deploy overrides", () => {
-  // `deriveLane` is now a thin wrapper, so the CLI cannot drift from the deploy —
-  // but it still answers the question the CLI is asking: what does this FILE say?
-  // The RUNNER flag is a property of the control plane, not of the config, so it
-  // defaults to enabled rather than leaking a server env var into `supersonic check`.
+  // `deriveLane` is a thin wrapper, so the CLI cannot drift from the deploy — but
+  // it still answers the question the CLI is asking: what does this FILE say?
+  //
+  // It used to have a second job. `runnerEnabled` was a property of the CONTROL
+  // PLANE rather than of the config, so this defaulted it to enabled rather than
+  // leaking a server env var into `supersonic check`. With the runner gone there
+  // is no control-plane state in the answer at all, which is a stronger version
+  // of the same guarantee.
   assert.equal(deriveLane({ language: "node" }), laneFor({ language: "node" }));
-  assert.equal(deriveLane({ runtime: "python3.14" }), "runner");
+  assert.equal(deriveLane({ runtime: "python3.14" }), "buildpack");
   assert.equal(deriveLane({ runtime: "python3.14", dockerfile: "Dockerfile" }), "container");
 });
 
@@ -655,55 +653,54 @@ test("a static site cannot run a worker, and is told so", () => {
   assert.throws(() => validate(resolveFrom(s, "config"), process.cwd()), /static lane does not implement: processes/);
 });
 
-test("a pinned runtime the runner cannot serve routes off the runner lane", () => {
-  // The hardcode at its most explicit. The platform holds one Python and one
-  // Node, and when a repo asked for something else it REFUSED THE DEPLOY: "widen
-  // requires-python in pyproject.toml, or wait for the runner to move. Nothing in
-  // the code can fix this one." That is a platform telling a business to change
-  // its software to fit the platform's single opinion.
+test("a pinned runtime gets the version it asked for", () => {
+  // The hardcode at its most explicit, and now at its most gone. The platform
+  // held one Python and one Node, and when a repo asked for anything else it
+  // REFUSED THE DEPLOY: "widen requires-python in pyproject.toml, or wait for the
+  // runner to move. Nothing in the code can fix this one." That was a platform
+  // telling a business to change its software to fit the platform's one opinion.
   //
-  // Now it routes. Buildpacks read the repo's own version files, so the app gets
-  // what it asked for and the platform never picks a version.
-  const pinned = { runtime: "python3.12", runnerEnabled: true };
-  assert.equal(laneFor(pinned), "buildpack");
-
-  // The same app with no pin still takes the fast path — this is a demotion of
-  // the runner to a cache used where it is equivalent, not a deletion of it.
-  assert.equal(laneFor({ ...pinned, runtime: "python3.14" }), "runner");
-
+  // Then it routed around it — a pin demoted the app off the runner to a lane
+  // that reads the repo's own version files. Now there is no runner to demote
+  // from and no version the platform holds, so a pin is simply a version, and
+  // every app builds an image for the one it named.
+  assert.equal(laneFor({ runtime: "python3.12" }), "buildpack");
+  assert.equal(laneFor({ runtime: "python3.14" }), "buildpack");
   // A committed Dockerfile still outranks everything: the author was explicit.
-  assert.equal(laneFor({ ...pinned, dockerfile: "Dockerfile" }), "container");
+  assert.equal(laneFor({ runtime: "python3.12", dockerfile: "Dockerfile" }), "container");
 });
 
-test("the runner lane no longer claims to implement `runtime`", () => {
-  // `LANE_CONSUMES.runner` listed `runtime` while the runner had exactly one
-  // version per language, so `runtime: "python3.12"` was parsed, validated,
-  // printed back by `supersonic check` and silently ignored — the precise defect
-  // assert-consumed exists to catch, committed inside assert-consumed's own table.
-  assert.throws(
-    () => assertConsumed({ ...service(), lane: "runner", declared: ["runtime"] }),
-    /the runner lane does not implement: runtime/,
-  );
-
-  // The buildpack lane does implement it, because the builder reads the file.
+test("the buildpack lane implements `runtime`, because the builder reads the file", () => {
+  // This used to assert the other half too: `LANE_CONSUMES.runner` listed
+  // `runtime` while the runner had exactly one version per language, so
+  // `runtime: "python3.12"` was parsed, validated, printed back by `supersonic
+  // check` and silently ignored — the precise defect assert-consumed exists to
+  // catch, committed inside assert-consumed's own table. The lane that made that
+  // possible is gone; the half that outlives it is that a lane which DOES honour
+  // a field must say so.
   assert.doesNotThrow(() => assertConsumed({ ...service(), lane: "buildpack", declared: ["runtime"] }));
 });
 
 function service(): ResolvedService {
   return {
-    name: "app", dir: ".", path: "/", lane: "runner", spaFallback: false,
+    name: "app", dir: ".", path: "/", lane: "buildpack", spaFallback: false,
     uses: [], processes: [], env: {}, buildEnv: {}, secrets: [], envNeeded: [],
     health: { path: "/", expect: 200 }, scale: DEFAULT_SCALE, declared: [],
   } as ResolvedService;
 }
 
 test("a repo file and a config field are independent signals, and either one pins", () => {
-  // A `??` here instead of `||` meant that `resolveService` passing its default
-  // `runtimePinned: false` silently overrode the config's own `runtime` field, and
-  // a service declaring `python3.12` went straight back to the runner that only
-  // has 3.14. Caught by the CLI suite rather than by this one, which is the whole
-  // reason the CLI runs the control plane's compiled resolver.
+  // WAS a lane question: a `??` instead of `||` meant `resolveService` passing its
+  // default `runtimePinned: false` silently overrode the config's own `runtime`
+  // field, and a service declaring `python3.12` went straight back to the runner
+  // that only has 3.14. Caught by the CLI suite rather than by this one, which is
+  // the whole reason the CLI runs the control plane's compiled resolver.
+  //
+  // A pin no longer changes the lane, so the bug's route into `laneFor` is closed
+  // by construction rather than by the operator. What is asserted here is exactly
+  // that: neither signal, in either combination, can move an app off the lane its
+  // own image puts it on.
   assert.equal(laneFor({ runtime: "python3.12", runtimePinned: false }), "buildpack");
   assert.equal(laneFor({ language: "python", runtimePinned: true }), "buildpack");
-  assert.equal(laneFor({ runtime: "python3.14", runtimePinned: false }), "runner");
+  assert.equal(laneFor({ runtime: "python3.14", runtimePinned: false }), "buildpack");
 });

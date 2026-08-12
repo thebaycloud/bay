@@ -185,32 +185,26 @@ export function laneFor(i: LaneInputs): Lane {
   // Defaults to true so a plain `ServiceConfig` keeps meaning what it meant: the
   // CLI has no RUNNER flag and answers for the lane a config describes, while the
   // pipeline passes the flag it actually runs under.
-  const runnerAllowed = i.runnerEnabled ?? true;
-  // A `runtime` in the config is a pin exactly as `.python-version` is, so it has
-  // to reach the same answer the deploy reaches from the repo's files. Derived
-  // here rather than only passed in, because `deriveLane` answers for a FILE and
-  // has no repo to read — and a `check` that refused what the deploy runs would be
-  // worse than no check.
-  const declaredPin = declaredRuntime(i.runtime);
-  // `||`, not `??`. The two are INDEPENDENT signals — the repo's own version files
-  // and the config's `runtime` field — and either one pinning means pinned. With
-  // `??`, a caller passing `runtimePinned: false` (which `resolveService` does, as
-  // its default) silently overrode the config field, and a service declaring
-  // `runtime: "python3.12"` went back to the runner. The same `??`/`||` distinction
-  // this file already carries a comment about, in the other direction.
-  const pinned = Boolean(i.runtimePinned) || (declaredPin ? !runnerServes(declaredPin) : false);
-  if (i.dockerfile && !i.runCommandSupplied) return "container";
-  const runtime = i.runtime ?? "";
-  // A pinned runtime the runner cannot serve takes the app off the runner, whatever
-  // else is true of it. This is the runner demoting from "the default for the two
-  // biggest languages" to a cache used only where it is genuinely equivalent.
-  const wantsRunner = !pinned && (
-    RUNNER_RUNTIMES.some((re) => re.test(runtime))
-    || (!runtime && (i.language === "node" || i.language === "python"))
-  );
-  if (wantsRunner) return runnerAllowed ? "runner" : (i.dockerfile ? "container" : "buildpack");
-  if (i.dockerfile) return "container";
-  return "buildpack";
+  // A DOCKERFILE MEANS CONTAINER; ANYTHING ELSE MEANS BUILDPACK.
+  //
+  // What used to sit here was the runner: a shared prebuilt runtime that Node and
+  // Python apps defaulted to, with the customer's code arriving as an encrypted
+  // bundle at start. It was refused by `fleetEligibility` for exactly that reason
+  // — a node handed that image runs the runner and never the app — so Cloud Run
+  // was the only place it could go, and it went with Cloud Run.
+  //
+  // The pins went with it. `runtimePinned`, `declaredRuntime` and `runnerServes`
+  // existed to answer one question — whether the runner could serve a declared
+  // version — and every app now builds an image for the version it asked for, so
+  // there is nothing left for a pin to demote.
+  //
+  // `runCommandSupplied` is gone from the decision for the same reason. An
+  // agent's `--run` used to override a repository Dockerfile, because a repo
+  // Dockerfile may not be self-contained and the runner could take the app
+  // anyway. With no runner to fall back to, overriding it would route the app to
+  // the buildpack lane — which builds no image of its own, and therefore now has
+  // nowhere to run.
+  return i.dockerfile ? "container" : "buildpack";
 }
 
 /** The lane a written config describes, with no deploy-time overrides applied. */

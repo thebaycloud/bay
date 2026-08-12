@@ -154,7 +154,6 @@ let placementTable = new Map<string, { node: string; spec: unknown }>();
 let storedSecrets: { key: string; name: string }[] = [];
 
 /** Which build implementation this process is exercising. See `generatedBuild`. */
-const COLLAPSED = process.env.RUNNER === "0";
 
 let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [] };
 let activeReplies: Replies = () => ({});
@@ -555,32 +554,30 @@ test("a pinned runtime the runner cannot serve already builds a generated image"
   assert.ok(builtAnImage(rec));
 });
 
-test("an ordinary Node app: buildpacks under RUNNER=1, its own image under RUNNER=0", NEEDS_MOCKS, async () => {
-  // THE ROW THE COLLAPSE CHANGES, asserted in both directions from one file so
-  // the cutover is visible rather than inferred.
+test("an ordinary Node app builds an image of its own", NEEDS_MOCKS, async () => {
+  // THE ROW THE COLLAPSE CHANGED, and it is no longer conditional. This used to
+  // assert both directions of `RUNNER`, because the collapse was a rollout with a
+  // switch: under RUNNER=1 a plain Node app took `run deploy --source` — the
+  // buildpack lane — and under RUNNER=0 it built a generated image.
   //
-  // A plain Node app with no Dockerfile and no unservable pin takes `run deploy
-  // --source` today — the buildpack lane, which step 4 deletes. Under RUNNER=0 it
-  // builds a generated image instead, which is what makes "any language, any
-  // version" true for the apps that are not runtime-pinned.
+  // There is only one direction left. The buildpack lane handed the source to
+  // Cloud Run and let Cloud Run name what came out, so at decision time there was
+  // no reference to give a node; with Cloud Run deleted, an app that builds no
+  // image of its own has nowhere to run at all. `RUNNER` is gone with it, which
+  // also means the three tests that were skipped whenever it was unset — a static
+  // site, and two about siblings — now run in the ordinary suite.
   const rec = await run(
     { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
     {},
     detect(),
   );
 
-  if (!COLLAPSED) {
-    assert.equal(laneOf(rec), "buildpack");
-    assert.ok(!builtAnImage(rec), "the buildpack lane builds no image of its own");
-    assert.ok(deployedFromSource(rec), "it hands the source to Cloud Run");
-    return;
-  }
-  assert.equal(laneOf(rec), "container", "the collapse must route this to the container lane");
-  assert.ok(builtAnImage(rec), "the collapse must build a generated image");
-  assert.ok(!deployedFromSource(rec), "nothing should still be handed to buildpacks");
+  assert.equal(laneOf(rec), "container");
+  assert.ok(builtAnImage(rec), "every app builds a generated image now");
+  assert.ok(!deployedFromSource(rec), "nothing is handed to buildpacks any more");
 });
 
-test("the collapse does not disturb a static site", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
+test("the collapse does not disturb a static site", NEEDS_MOCKS, async () => {
   // Checked under RUNNER=0 specifically. Part 1 marks this lane "(unchanged)", and
   // the failure it is guarding against is silent: a site whose build produces
   // files and nothing to run, containerised around an entrypoint the build never
@@ -590,7 +587,7 @@ test("the collapse does not disturb a static site", { ...NEEDS_MOCKS, skip: !COL
   assert.ok(!builtAnImage(rec));
 });
 
-test("a sibling builds from its own directory into its own image", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
+test("a sibling builds from its own directory into its own image", NEEDS_MOCKS, async () => {
   // `deploySibling` refused anything that was not node or python, because a
   // sibling was always a runner bundle and the runner has two images. That was
   // never a statement about siblings. With a generated image a sibling can be Go —
@@ -663,26 +660,33 @@ test("a fleet app's real crash reaches the repair agent, not just the symptom", 
   // repair agent with no actual cause attached. That is exactly the guess this
   // function exists to prevent (see the comment above `fetchContainerError`).
   const distinctiveCrash = "TypeError: Cannot read properties of undefined (reading 'db')";
-  const rec = await run(
-    { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
-    {},
-    (argv) => {
-      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
-      // The deploy itself fails at container startup — the one path that makes
-      // the pipeline go fetch the container's real crash log.
-      if (argv[1] === "run" && argv[2] === "deploy") {
-        return { code: 1, stderr: "Revision failed to start and listen on the port defined by the PORT=8080\n" };
-      }
-      // The fleet node's log entry for that crash — jsonPayload, not textPayload.
-      if (argv[1] === "logging" && argv[2] === "read") {
-        return { stdout: JSON.stringify([{ jsonPayload: { message: distinctiveCrash } }]) };
-      }
-      return {};
-    },
-  );
+  // Driven through a FLEET failure, because that is the only kind left. It used
+  // to fail the deploy by making `gcloud run deploy` exit 1 with "Revision failed
+  // to start and listen on the port" — Cloud Run's own words, on a path that no
+  // longer exists. The fleet says it differently and gets the app's last words by
+  // a different route (`recentAppLogs` → `getLogs`), but the parsing under test is
+  // the same and still has no other guard.
+  probeCode = 503;
+  let rec: Recorded;
+  try {
+    rec = await run(
+      { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
+      {},
+      (argv) => {
+        if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
+        // The fleet node's log entry for that crash — jsonPayload, not textPayload.
+        if (argv[1] === "logging" && argv[2] === "read") {
+          return { stdout: JSON.stringify([{ jsonPayload: { message: distinctiveCrash } }]) };
+        }
+        return {};
+      },
+    );
+  } finally {
+    probeCode = 200;
+  }
 
   const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
-  assert.ok(errors.length > 0, "a container that doesn't start on $PORT must still fail the deploy");
+  assert.ok(errors.length > 0, "an app that does not answer from the fleet must fail the deploy");
   const text = JSON.stringify(errors);
   assert.ok(
     text.includes(distinctiveCrash),
@@ -758,6 +762,29 @@ async function onFleet(
     delete process.env.FLEET_APPS;
   }
 }
+
+test("an app on nobody's canary list still lands on the fleet", NEEDS_MOCKS, async () => {
+  // `fleetPlacementWanted` used to gate this: an app absent from FLEET_APPS, on a
+  // control plane without FLEET_PLACEMENT=1, deployed to Cloud Run instead. That
+  // was a routing decision with two destinations, and one of them no longer
+  // exists — so the gate is not relaxed here, it is gone.
+  //
+  // Deliberately does NOT set FLEET_APPS. `onFleet` above exists precisely
+  // because the fleet used to need asking for; this test is the assertion that
+  // it no longer does, so borrowing that helper would test the opposite thing.
+  //
+  // The gate was also the source of a live split-brain, which is why this is
+  // worth a test of its own rather than a deletion: on 12 Aug the control plane
+  // had FLEET_APPS=q6doa and no FLEET_PLACEMENT, while the deploy worker had
+  // both — so the same app landed on a different runtime depending on which
+  // service happened to run its deploy.
+  // `detect()` rather than `run`'s own default of no replies: this test is about
+  // WHERE a deploy lands, so it has to be a deploy that otherwise works.
+  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
+  const errs = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.deepEqual(errs, [], "the deploy itself should have succeeded");
+  assert.ok(placementTable.get("demo"), "the app should have been placed on a node");
+});
 
 test("a fleet redeploy that fails after taking traffic gets the previous version back", NEEDS_MOCKS, async () => {
   // The bug docs/research/cloud-run-shape.md found and the GitHub issue named:
@@ -910,32 +937,6 @@ test("a repair of a fleet deploy redeploys to the fleet, and is told so", NEEDS_
   assert.equal(repair.named, "fleet", "the agent must be told which runtime its redeploy reaches");
 });
 
-test("a repair of a Cloud Run deploy still redeploys to Cloud Run", NEEDS_MOCKS, async () => {
-  // The other half, and not a formality: a fix that routes every repair to the
-  // fleet is the same bug pointing the other way, and it would be invisible in
-  // a suite that only ever exercised the fleet.
-  const rec = await run(
-    { "Dockerfile": "FROM alpine\n", "index.js": "" },
-    AUTO_FIX,
-    (argv) => {
-      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
-      if (argv[1] === "run" && argv[2] === "deploy") return { code: 1 };
-      return {};
-    },
-  );
-
-  assert.equal(rec.repairs.length, 1, `no repair ran; events were ${JSON.stringify(rec.events).slice(0, 300)}`);
-  assert.equal(rec.repairs[0].named, "cloudrun");
-  assert.ok(rec.repairs[0].ranCloudRunDeploy, "a Cloud Run deploy is repaired on Cloud Run");
-  assert.ok(!rec.repairs[0].placedAgain, "nothing may be placed on a node by a Cloud Run repair");
-});
-
-/** A one-service config, so `appConfig` exists and `declared` is the author's. */
-const configWith = (service: Record<string, unknown>) => JSON.stringify({
-  version: 1,
-  services: [{ name: "web", dir: ".", path: "/", ...service }],
-});
-
 test("an app that declares scale deploys to the fleet and gets the size it asked for", NEEDS_MOCKS, async () => {
   // Two defects, one line apart.
   //
@@ -1046,7 +1047,13 @@ test("a fleet placement that never comes up records its release as failed too", 
   assert.equal(release[0].outcome, "failed", `a placement that never verified must not report its release as ok, got ${JSON.stringify(release)}`);
 });
 
-test("a sibling's Dockerfile is written for the context it is built in", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
+/** A one-service config, so `appConfig` exists and `declared` is the author's. */
+const configWith = (service: Record<string, unknown>) => JSON.stringify({
+  version: 1,
+  services: [{ name: "web", dir: ".", path: "/", ...service }],
+});
+
+test("a sibling's Dockerfile is written for the context it is built in", NEEDS_MOCKS, async () => {
   // The bug that broke EVERY sibling, and it is invisible from argv alone: the
   // context was right and the file inside it was written for a different one.
   //
@@ -1105,19 +1112,6 @@ test("a sibling's Dockerfile is written for the context it is built in", { ...NE
 const madeAWorkerPool = (rec: Recorded) =>
   rec.argv.some((a) => a[0] === "gcloud" && a[1] === "beta" && a[2] === "run" && a[3] === "worker-pools" && a[4] === "deploy");
 
-test("an app on Cloud Run still gets its Cloud Run worker pool", NEEDS_MOCKS, async () => {
-  // The control for the test below. Without this the next assertion is satisfied
-  // by a pipeline that has simply stopped deploying workers altogether, which
-  // would be a far worse bug than the one being fixed.
-  const rec = await run(
-    { "Dockerfile": "FROM alpine\n", "Procfile": "web: node index.js\nbot: node bot.js\n", "index.js": "" },
-    {},
-    detect(),
-  );
-
-  assert.ok(madeAWorkerPool(rec), `no worker pool was deployed off the fleet; argv was ${JSON.stringify(rec.argv.map((a) => a.slice(0, 5)))}`);
-});
-
 test("an app on the fleet does not ALSO run its workers on Cloud Run", NEEDS_MOCKS, async () => {
   // The defect this closes, and the reason it belongs in this slice. The
   // `deployProcesses` call was gated on `result.ok && !staticServe` with no
@@ -1171,30 +1165,6 @@ test("a worker-only app deploys to the fleet, verified by the node rather than b
   assert.ok(!madeAWorkerPool(rec), "the bot runs on the node AND on Cloud Run");
 });
 
-test("a deploy that goes to Cloud Run says so, so the node stops being handed the app", async () => {
-  // The door nobody had closed. setRuntime was only ever called by placeOnFleet
-  // and by its rollback, so an app that had been placed on the fleet and then
-  // deployed to Cloud Run kept runtime='fleet' AND kept its placement row.
-  // desiredFor yields every placement whose app reads 'fleet', so the node went
-  // on running a second copy of an app Cloud Run was already serving.
-  //
-  // Seen on p6mx8 the moment it was withdrawn from the canary: Cloud Run served
-  // it while fleet-lab-1 kept failing its release every few minutes.
-  //
-  // Asserted as a VALUE, not as "setRuntime was called": a stub that wrote
-  // 'fleet' here would satisfy a membership check and reintroduce the bug.
-  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
-
-  assert.ok(
-    rec.runtimeWrites.some((w) => w.runtime === "cloudrun"),
-    `a Cloud Run deploy never wrote runtime=cloudrun: ${JSON.stringify(rec.runtimeWrites)}`,
-  );
-  assert.ok(
-    !rec.runtimeWrites.some((w) => w.runtime === "fleet"),
-    `a Cloud Run deploy claimed the fleet: ${JSON.stringify(rec.runtimeWrites)}`,
-  );
-});
-
 /** Did the pipeline ask Cloud Run's domain-mapping API to map this app's name? */
 const mappedADomain = (rec: Recorded) =>
   rec.argv.some((a) => a[0] === "gcloud" && a.includes("domain-mappings") && a.includes("create"));
@@ -1213,13 +1183,6 @@ test("a fleet deploy makes no domain-mapping call", NEEDS_MOCKS, async () => {
     !rec.events.some((e) => JSON.stringify(e).includes("custom domain skipped")),
     "the dead call's log line must be gone, and nothing may replace it",
   );
-});
-
-test("a Cloud Run deploy still gets its domain mapping", NEEDS_MOCKS, async () => {
-  // The other half — this removes a call on the fleet path, not the feature.
-  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
-
-  assert.ok(mappedADomain(rec), `a Cloud Run deploy must still map its domain: ${JSON.stringify(rec.argv.map((a) => a.slice(0, 4)))}`);
 });
 
 /* -------------------------------------------------------------------------- */

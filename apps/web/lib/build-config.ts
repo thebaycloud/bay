@@ -26,7 +26,8 @@ export type Builder = "kaniko" | "buildkit" | "railpack";
  *
  *   BUILDKIT_APPS=a,b  → those slugs take buildx, everything else is unchanged
  *   BUILDER=buildkit   → every build takes buildx
- *   anything else      → Kaniko (default)
+ *   BUILDER=kaniko     → the archived builder, kept only as a revert path
+ *   anything else      → Railpack (default)
  *
  * THE PER-APP LIST IS WHAT MAKES A CANARY POSSIBLE AT ALL.
  *
@@ -54,8 +55,20 @@ export function selectedBuilder(
   // case — preferring buildkit would make a railpack canary silently not happen.
   if (slug && list(env.RAILPACK_APPS).includes(slug)) return "railpack";
   if (slug && list(env.BUILDKIT_APPS).includes(slug)) return "buildkit";
-  if (env.BUILDER === "railpack") return "railpack";
-  return env.BUILDER === "buildkit" ? "buildkit" : "kaniko";
+  // RAILPACK IS THE DEFAULT, and that is no longer a preference.
+  //
+  // It used to default to kaniko, described here as "the behaviour that is in
+  // production today". That stopped being true twice over: production sets
+  // BUILDER=railpack, and with the Cloud Run container lane deleted, a builder
+  // that names an image the deploy itself produces leaves an app with nowhere to
+  // run — `fleetEligibility` refuses it in those words. An unset BUILDER is
+  // therefore the difference between a control plane that deploys and one that
+  // refuses every app without a Dockerfile.
+  //
+  // Both older builders stay reachable BY NAME, as revert paths. Kaniko is one
+  // only in the narrowest sense: Google archived it on 2025-06-03.
+  if (env.BUILDER === "kaniko") return "kaniko";
+  return env.BUILDER === "buildkit" ? "buildkit" : "railpack";
 }
 
 /**

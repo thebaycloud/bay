@@ -101,28 +101,35 @@ test("one app can take buildkit without every app taking it", () => {
   const env = { BUILDKIT_APPS: "demo,other" };
   assert.equal(selectedBuilder(env, "demo"), "buildkit");
   assert.equal(selectedBuilder(env, "other"), "buildkit");
-  assert.equal(selectedBuilder(env, "someone-else"), "kaniko");
-  assert.equal(selectedBuilder(env), "kaniko", "no slug means no canary, not every canary");
+  assert.equal(selectedBuilder(env, "someone-else"), "railpack");
+  assert.equal(selectedBuilder(env), "railpack", "no slug means no canary, not every canary");
 
   // Whitespace and empties, because this is set by hand on a Cloud Run job.
   assert.equal(selectedBuilder({ BUILDKIT_APPS: " demo , " }, "demo"), "buildkit");
-  assert.equal(selectedBuilder({ BUILDKIT_APPS: "" }, "demo"), "kaniko");
-  assert.equal(selectedBuilder({}, "demo"), "kaniko");
+  assert.equal(selectedBuilder({ BUILDKIT_APPS: "" }, "demo"), "railpack");
+  assert.equal(selectedBuilder({}, "demo"), "railpack");
 
   // The global switch still wins for everyone, so the canary is additive.
   assert.equal(selectedBuilder({ BUILDER: "buildkit" }, "anything"), "buildkit");
 });
 
-test("BUILDER defaults to kaniko and only 'buildkit' switches it", () => {
-  assert.equal(selectedBuilder({}), "kaniko");
-  assert.equal(selectedBuilder({ BUILDER: "" }), "kaniko");
+test("BUILDER defaults to railpack, and the older builders answer only to their exact names", () => {
+  assert.equal(selectedBuilder({}), "railpack");
+  assert.equal(selectedBuilder({ BUILDER: "" }), "railpack");
   assert.equal(selectedBuilder({ BUILDER: "kaniko" }), "kaniko");
-  assert.equal(selectedBuilder({ BUILDER: "BuildKit" }), "kaniko", "the gate is exact-match, not fuzzy");
+  // Exact-match, not fuzzy — and the direction this now fails in is the safe
+  // one. A misspelt `BUILDER` used to silently mean kaniko, which since the
+  // Cloud Run lane was deleted would refuse every app without a Dockerfile;
+  // it now lands on the working default instead.
+  assert.equal(selectedBuilder({ BUILDER: "BuildKit" }), "railpack", "the gate is exact-match, not fuzzy");
   assert.equal(selectedBuilder({ BUILDER: "buildkit" }), "buildkit");
 
-  // The default must be byte-identical to what production runs today.
-  assert.equal(cachedBuildConfig(IMAGE, selectedBuilder({})), kanikoBuildConfig(IMAGE));
+  // The default must be byte-identical to what production runs today, and what
+  // production runs today is railpack — which builds THROUGH buildkit, so the
+  // config it takes is buildkit's. `laneForBuild` is what turns a railpack
+  // selection into that lane once a plan exists.
   assert.equal(cachedBuildConfig(IMAGE, "buildkit"), buildkitBuildConfig(IMAGE));
+  assert.equal(cachedBuildConfig(IMAGE, "kaniko"), kanikoBuildConfig(IMAGE));
 });
 
 test("the kaniko config is unchanged and still substitution-safe", () => {
@@ -354,7 +361,7 @@ test("every config we generate is tagged with its app", () => {
 test("railpack is a lane of its own, and one app can take it alone", () => {
   const env = { RAILPACK_APPS: "demo" };
   assert.equal(selectedBuilder(env, "demo"), "railpack");
-  assert.equal(selectedBuilder(env, "other"), "kaniko", "a railpack canary moves one app, not the default");
+  assert.equal(selectedBuilder(env, "other"), "railpack", "the canary list is additive; the default is railpack for everyone now");
   assert.equal(selectedBuilder({ BUILDER: "railpack" }, "anything"), "railpack");
 
   // Both lists naming the same app: railpack wins, because it is the newer and
@@ -424,4 +431,21 @@ test("a railpack build with no plan is a buildkit build, not a broken one", () =
   assert.equal(laneForBuild("kaniko", false), "kaniko");
   // A plan on disk cannot promote a lane nobody selected.
   assert.equal(laneForBuild("kaniko", true), "kaniko");
+});
+
+test("the default builder is the one the platform can actually deploy", () => {
+  // Kaniko was the default because it was "the behaviour that is in production
+  // today". It stopped being that: production sets BUILDER=railpack, and with
+  // the Cloud Run lane deleted an app whose image is made BY the deploy has
+  // nowhere to run — `fleetEligibility` refuses it for exactly that reason.
+  //
+  // So the default is not a preference any more, it is the difference between a
+  // control plane that deploys and one that refuses every app without a
+  // Dockerfile. An unset BUILDER used to mean kaniko; it now has to mean the
+  // builder that produces an image a node can be handed.
+  assert.equal(selectedBuilder({}), "railpack");
+  // Both revert paths stay reachable by name, and kaniko is still ARCHIVED
+  // upstream — it is a revert path, not a recommendation.
+  assert.equal(selectedBuilder({ BUILDER: "buildkit" }), "buildkit");
+  assert.equal(selectedBuilder({ BUILDER: "kaniko" }), "kaniko");
 });

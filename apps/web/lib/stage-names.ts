@@ -89,7 +89,15 @@ export const PRE_LANE_STAGES = ["clone", "detect", "infer-services", "render"] a
  * purpose rather than looked up.
  */
 export const LANE_KNOWN_STAGES = [
-  "unpack", "prepare", "build", "upload", "release", "deploy", "verify", "processes", "repair-agent", "fleet",
+  // `prepare` was the RUNNER's build step — it encrypted the app's code into a
+  // bundle for a shared prebuilt image to fetch at start — and it is gone with
+  // that lane. Removed rather than left declared, because the test below reads a
+  // declared-but-unwritten name as "this never happened" rather than as an
+  // emitter somebody deleted, which is the quieter half of the same defect.
+  //
+  // Rows already written under it are untouched: this list governs what may be
+  // WRITTEN, and every query names its stages in SQL.
+  "unpack", "build", "upload", "release", "deploy", "verify", "processes", "repair-agent", "fleet",
   "fleet-pull", "fleet-boot",
 ] as const;
 

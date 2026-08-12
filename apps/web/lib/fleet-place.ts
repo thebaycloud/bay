@@ -656,11 +656,20 @@ export async function placeOnFleet(
     // said, then what we did about it. Errors are swallowed whole and the port
     // is optional: this is evidence, and evidence that cannot be gathered must
     // never stop the rollback that follows it.
+    // ATTACHED TO THE REASON, not only printed. Printing puts the evidence in
+    // front of the person watching; the repair agent reads the returned reason,
+    // and for a fleet app that reason was "the app answered 503 from the fleet"
+    // with the cause sitting in a log nobody handed it. That is the same defect
+    // one runtime up — the symptom reaching the agent while the cause stays
+    // behind — which `fetchContainerError` was written for on Cloud Run and which
+    // came back the moment the fleet became the only runtime.
+    let evidence = "";
     try {
       const lines = p.recentAppLogs ? await p.recentAppLogs(slug) : [];
       if (lines.length) {
         p.log(`· what ${slug} said on the node before it stopped answering:`);
         for (const line of lines) p.log(`    ${line}`);
+        evidence = `\n\nWhat ${slug} said on the node before it stopped answering:\n${lines.map((l) => `  ${l}`).join("\n")}`;
       }
     } catch { /* no evidence is not a verdict */ }
 
@@ -688,7 +697,10 @@ export async function placeOnFleet(
     // disagree about what this app is meant to be running, and the reconciler
     // would roll forward into the failure again on its next pass.
     await p.setDesired(slug, previousDesired);
-    return { placed: false, reason };
+    // The log lines ride on the RETURNED reason only. They were just printed in
+    // full a few lines up, and repeating them inside the one-line "kept the
+    // previous version — …" would say the same thing twice to the same reader.
+    return { placed: false, reason: `${reason}${evidence}` };
   }
 
   // 3. the address for the flip, which the caller performs. The edge proxy needs
