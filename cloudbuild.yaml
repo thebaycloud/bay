@@ -340,6 +340,30 @@ substitutions:
   # unset substitution — it is never what lands from main.
   _TAG: manual
 
+# THE BUILD RUNS AS THE DEPLOYER, NOT AS THE DEFAULT COMPUTE ACCOUNT.
+#
+# Added 12 Aug, after that default account was narrowed for a different reason
+# and this build broke on both halves of what it does: first `denied:
+# artifactregistry.repositories.uploadArtifacts` on the push, then
+# `PERMISSION_DENIED: run.services.get` on the deploy.
+#
+# The tension is real and worth naming rather than papering over. That account is
+# the DEFAULT COMPUTE one, which makes it two things at once: the identity of
+# every fleet node — machines whose whole job is running other people's code —
+# and, by default, the identity Cloud Build executes as. Giving it back
+# `run.admin` so this file can deploy would mean a sandbox escape can delete
+# every Cloud Run service in the project. Naming a different account here is how
+# the two stop being one.
+#
+# `supersonic-deployer@` already holds exactly what a platform deploy needs, and
+# CI already authenticates as it — so this makes the build run as the identity
+# that submitted it, rather than as whatever the project happens to default to.
+#
+# `logging: CLOUD_LOGGING_ONLY` below is a PRECONDITION, not decoration: Cloud
+# Build refuses a user-specified service account unless a logging destination is
+# set, because such a build has no default bucket to write to.
+serviceAccount: projects/supersonic-deploy-prod/serviceAccounts/supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com
+
 options:
   machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY
