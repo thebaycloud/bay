@@ -201,3 +201,36 @@ function repointed(dsn: string): string {
 
   return `${scheme}${credentials}${credentials ? "@" : ""}${FLEET_DB.host}:${FLEET_DB.port}${path}${kept}`;
 }
+
+/**
+ * Does this image belong to this app?
+ *
+ * THE CHECK THAT WAS MISSING, and it cost a batch of five. Four of them shared
+ * one image — `cloud-run-source-deploy/runner-node@sha256:82df02…` — because the
+ * runner lane pointed a single prebuilt image at a code bundle fetched at start.
+ * The app's code is not in that image. Placing it on a node places an empty
+ * runtime, and the app would have started, listened, and served the runner's
+ * idea of nothing.
+ *
+ * Written against the SLUG rather than against the name `runner-node`, which is
+ * one lane's spelling and will change. An app built by this platform is pushed
+ * to `…/cloud-run-source-deploy/<slug>`, so the last path segment is the test.
+ */
+export function imageBelongsTo(slug: string, image: string): boolean {
+  const repo = image.split("@")[0].split(":")[0];
+  return repo.slice(repo.lastIndexOf("/") + 1) === slug;
+}
+
+/**
+ * Is this app served by the static service rather than by a container?
+ *
+ * ADR 0001 keeps static apps on Cloud Run permanently, and there is no container
+ * to move even if it did not. `o6b54` was marked `fleet` in that same batch and
+ * its `run_url` pointed at `supersonic-static` — so the revert, which rebuilt
+ * the URL from the slug, sent it somewhere it had never been. Restoring it took
+ * a second statement, and the tool now records what it replaces instead of
+ * reconstructing it.
+ */
+export function servedByStatic(runUrl: string | null | undefined): boolean {
+  return !!runUrl && runUrl.includes("supersonic-static");
+}

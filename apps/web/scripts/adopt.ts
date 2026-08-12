@@ -36,7 +36,7 @@
  * 200 on every node, then cut over.
  */
 import { execFileSync } from "node:child_process";
-import { adoptionInput, type RunService } from "@/lib/adopt";
+import { adoptionInput, imageBelongsTo, servedByStatic, type RunService } from "@/lib/adopt";
 import { buildAppSpec } from "@/lib/fleet-spec";
 import { recordRelease, setDesired } from "@/lib/reconcile";
 import { resolveImageDigest } from "@/lib/gcp-rest";
@@ -55,6 +55,23 @@ if (!slug) {
   process.exit(2);
 }
 
+/**
+ * Where an app was before the cutover.
+ *
+ * Created here rather than by a numbered migration for the same reason
+ * `agent_runs` is: this is an operator tool, the schema's numbering has already
+ * been raced twice in one evening, and a table nothing in the request path reads
+ * does not need to join that queue.
+ */
+async function ensurePreviousUrl(): Promise<void> {
+  await getPool(DB).query(
+    `CREATE TABLE IF NOT EXISTS app_previous_url (
+       slug    text PRIMARY KEY,
+       run_url text NOT NULL,
+       at      timestamptz NOT NULL DEFAULT now()
+     )`);
+}
+
 function gcloud(args: string[]): string {
   return execFileSync("gcloud", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
 }
@@ -66,6 +83,19 @@ async function describe(): Promise<RunService> {
 
 async function place(dryRun: boolean): Promise<void> {
   const i = adoptionInput(slug, await describe());
+
+  // REFUSALS, both learned by not making them. See lib/adopt.ts for what each
+  // one cost.
+  const { rows } = await getPool(DB).query(`SELECT run_url FROM apps WHERE slug=$1`, [slug]);
+  if (servedByStatic(rows[0]?.run_url)) {
+    throw new Error(`${slug} is served by supersonic-static — there is no container to move`);
+  }
+  if (!imageBelongsTo(slug, i.image)) {
+    throw new Error(
+      `${slug} runs ${i.image}, which is not its own image — the runner lane points a shared ` +
+      `prebuilt at a code bundle fetched at start, so the code is not in the image and placing ` +
+      `it would place an empty runtime`);
+  }
 
   // A release recorded on `:latest` means something different tomorrow. The
   // deploy path resolves its own digests for the same reason.
@@ -106,18 +136,39 @@ async function place(dryRun: boolean): Promise<void> {
 }
 
 async function cutover(): Promise<void> {
+  // The previous address is KEPT, not reconstructed. `--revert` used to rebuild
+  // it from the slug, which is right for most apps and wrong for any app served
+  // by something else — `o6b54` pointed at `supersonic-static` and the guess
+  // sent it somewhere it had never been.
+  const { rows } = await getPool(DB).query(`SELECT run_url FROM apps WHERE slug=$1`, [slug]);
+  const previous = rows[0]?.run_url ?? null;
+  if (previous && previous !== FLEET_LB) {
+    await getPool(DB).query(
+      `INSERT INTO app_previous_url (slug, run_url) VALUES ($1, $2)
+       ON CONFLICT (slug) DO UPDATE SET run_url = EXCLUDED.run_url`, [slug, previous]);
+  }
   await getPool(DB).query(`UPDATE apps SET run_url=$2 WHERE slug=$1`, [slug, FLEET_LB]);
-  console.log(`  ${slug}: трафик переключён на флот`);
+  console.log(`  ${slug}: трафик переключён на флот (прежний адрес запомнен: ${previous})`);
 }
 
 async function revert(): Promise<void> {
+  const { rows } = await getPool(DB).query(
+    `SELECT run_url FROM app_previous_url WHERE slug=$1`, [slug]);
+  const previous = rows[0]?.run_url;
+  if (!previous) {
+    // Refused rather than guessed. A reconstructed URL is right for most apps
+    // and wrong for the ones that most need reverting.
+    throw new Error(
+      `no recorded address for ${slug} — it was never cut over by this tool, so there is ` +
+      `nothing to put back. Set apps.run_url by hand if you know what it was.`);
+  }
   await getPool(DB).query(
-    `UPDATE apps SET runtime='cloudrun', run_url=$2 WHERE slug=$1`,
-    [slug, `https://${slug}-uyuwsbguuq-uc.a.run.app`]);
-  console.log(`  ${slug}: возвращено на Cloud Run`);
+    `UPDATE apps SET runtime='cloudrun', run_url=$2 WHERE slug=$1`, [slug, previous]);
+  console.log(`  ${slug}: возвращено на ${previous}`);
 }
 
 async function main() {
+  await ensurePreviousUrl();
   if (mode === "--place") await place(false);
   else if (mode === "--cutover") await cutover();
   else if (mode === "--revert") await revert();

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { adoptionInput, type RunService } from "@/lib/adopt";
+import { adoptionInput, imageBelongsTo, servedByStatic, type RunService } from "@/lib/adopt";
 
 const service = (over: Partial<RunService["spec"]["template"]["spec"]["containers"][0]> = {}): RunService => ({
   spec: {
@@ -117,4 +117,29 @@ test("a database that is not ours is left exactly as it is", () => {
   const svc = service({ env: [{ name: "DATABASE_URL", value: dsn }] });
   const i = adoptionInput("shop", svc);
   assert.equal(i.env.find((e) => e.startsWith("DATABASE_URL="))!.slice("DATABASE_URL=".length), dsn);
+});
+
+// WHAT MUST NOT BE ADOPTED, learned by adopting it.
+//
+// Five apps were marked `fleet` in one batch and reverted before the reconciler
+// acted, because four of them shared ONE image:
+// `cloud-run-source-deploy/runner-node@sha256:82df02…`. That is the runner
+// lane's shared prebuilt: the app's code is not in it at all, it is in a bundle
+// fetched at start. Placing that on a node places an empty runtime.
+//
+// The rule is not "is it the runner image" — that name will change. It is that
+// an app's image must BELONG to the app, which is checkable against the slug.
+test("an image that is not this app's own is refused", () => {
+  const shared = "us-central1-docker.pkg.dev/p/cloud-run-source-deploy/runner-node@sha256:abc";
+  assert.equal(imageBelongsTo("nqmbk", shared), false);
+  assert.equal(imageBelongsTo("nqmbk", "us-central1-docker.pkg.dev/p/cloud-run-source-deploy/nqmbk@sha256:abc"), true);
+  assert.equal(imageBelongsTo("nqmbk", "us-central1-docker.pkg.dev/p/cloud-run-source-deploy/nqmbk:latest"), true);
+});
+
+// A static app is served by `supersonic-static`, not by a container of its own.
+// There is nothing to place, and ADR 0001 keeps static on Cloud Run on purpose.
+test("a static app is refused, because there is no container to move", () => {
+  assert.equal(servedByStatic("https://supersonic-static-uyuwsbguuq-uc.a.run.app"), true);
+  assert.equal(servedByStatic("https://o6b54-uyuwsbguuq-uc.a.run.app"), false);
+  assert.equal(servedByStatic(null), false);
 });
