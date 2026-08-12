@@ -1,54 +1,27 @@
-# Steps that need a human hand
+# The switches, and which of them are already thrown
 
-Everything here is written, tested and deployed. What remains is a switch, and
-each switch is one command. They are collected because the agent working on them
-cannot run them: the sandbox refuses infrastructure mutations — IAM policy,
-Cloud Run job env, `compute instances create`, `sql instances create` — so the
-code landed and the flip did not.
+This file collected the steps that were written but not turned on. Most are now
+on. What follows is what was done, how to see it, and how to undo it — plus the
+two that remain and why.
 
-Ordered by value. Each entry states what it changes, how to see it worked, and
-how to undo it.
+Everything here was verified on 12 Aug rather than assumed.
 
 ---
 
-## 1. Remove the node's project-wide secret access
+## Done
 
-**This is the one that actually removes risk.** Until it runs, `§9` of the
-architecture spec is written and nothing is safer: the broker is live, both
-nodes already resolve every secret through it, and the old grant sits unused but
-open. An escape from a sandbox that reaches the metadata credentials still reads
-every tenant's database password.
+### The node's project-wide secret access — removed
 
-```bash
-gcloud projects remove-iam-policy-binding supersonic-deploy-prod \
-  --member=serviceAccount:540236122367-compute@developer.gserviceaccount.com \
-  --role=roles/secretmanager.secretAccessor \
-  --condition=None
-```
+`roles/secretmanager.secretAccessor` is no longer on
+`540236122367-compute@developer.gserviceaccount.com`. §9 of the architecture
+spec is the first thing tonight that made anything actually safer rather than
+merely ready.
 
-`--condition=None` is required: the project policy contains conditional bindings
-elsewhere, so gcloud refuses an unqualified removal. The binding being removed
-is itself unconditioned — verified, there is exactly one.
-
-**Why it is safe now.** Both nodes run agent `fcddda9`, which has NO fallback to
-Secret Manager — `resolveAll` goes to the broker whenever `FLEET_ENDPOINT` is
-set, and `fleet-lab-1` logged `secrets resolve through …/api/fleet/secrets` at
-22:43:38 on 11 Aug. The grant is already dead weight; removing it changes
-nothing that works today.
-
-**How to see it worked.** A running app does not re-resolve, so watch a START.
-The cheapest one is a cron: `rtmsw--nightly` and `izuvx--nightly` fire every ten
-minutes on `fleet-lab-2` and each firing resolves secrets.
-
-```bash
-gcloud compute ssh fleet-lab-2 --zone us-central1-a \
-  --project supersonic-deploy-prod --tunnel-through-iap \
-  --command 'sudo grep -a "cron finished\|cron FAILED" /var/log/supersonicd.log | tail -4'
-```
-
-Two more `cron finished` lines after the change is the proof. A `403` naming a
-secret would be the failure — and would mean the broker is not being used after
-all, which is the assumption above rather than a consequence of the removal.
+**How it was verified.** A running app does not re-resolve its secrets, so only
+a START proves anything. `izuvx--nightly` and `rtmsw--nightly` fire every ten
+minutes on `fleet-lab-2`; both finished at 00:40:02, nine minutes after the
+binding was removed, having resolved their secrets through the broker on a node
+whose identity can no longer read Secret Manager at all.
 
 **Undo:**
 
@@ -58,82 +31,82 @@ gcloud projects add-iam-policy-binding supersonic-deploy-prod \
   --role=roles/secretmanager.secretAccessor
 ```
 
-**While you are in there:** that service account also holds `roles/run.admin`,
-`roles/storage.admin`, `roles/cloudbuild.builds.builder` and
-`roles/iam.serviceAccountUser`. It is the DEFAULT compute service account, so it
-is the identity of every fleet node — and `run.admin` on a box whose job is to
-run other people's code means an escape can delete every Cloud Run service in
-the project. Narrowing it is its own piece of work and is not part of §9, but it
-is worth knowing that §9 removes one of five things worth removing.
+**Still worth doing, and out of scope for §9:** that service account is the
+DEFAULT compute one — the identity of every fleet node — and it also holds
+`run.admin`, `storage.admin`, `cloudbuild.builds.builder` and
+`iam.serviceAccountUser`. `run.admin` on a box whose job is running other
+people's code means an escape can delete every Cloud Run service in the project.
+§9 removed one of five.
+
+### Railpack — the default builder
+
+`BUILDER=railpack` and `BUILDKIT_HOST` live in `_LANE_ENV` in `cloudbuild.yaml`,
+not in a console session. That distinction is the whole entry: a canary set with
+`gcloud run jobs update` worked and was silently reverted by the next
+control-plane deploy, because `_LANE_ENV` is reapplied every time.
+
+**Undo:** change `BUILDER` back to `buildkit` in `cloudbuild.yaml` and deploy.
+
+### The build plane — `buildkit-1`
+
+A long-lived BuildKit with its cache on local SSD, reached by the deploy job
+over mTLS through Direct VPC egress. No external address; egress via a Cloud NAT
+created for it.
+
+**Measured:** the first build took the cache from 120 KB to 2.0 GB; the next
+deploy of the same app was 101 s end to end and left the cache unchanged. In one
+of those deploys, `Building on the fleet's own BuildKit` is logged at 03:04:07
+and the app prints `listening on 8080` at 03:04:26 — nineteen seconds for build,
+push, placement and start.
+
+**Undo:** clear `BUILDKIT_HOST` from `_LANE_ENV`; builds return to Cloud Build.
+
+### Node three, and the fleet's second door
+
+`fleet-lab-3` is in `us-central1-b`, so the fleet spans two zones and quorum can
+evict for the first time.
+
+Found while doing it: `fleet-backend` had ONE backend instance group holding
+`fleet-lab-1`. `fleet-lab-2` was healthy with 26 routes and reachable only by
+forwarding from the other node — losing `fleet-lab-1` would have taken every app
+down while a good node sat behind no load balancer. All three are backends now.
+
+### The warm deploy worker
+
+`supersonic-deploy-worker` runs the same image and the same pipeline as the Job,
+already started. The Job costs ~118 s before the pipeline's first line; the
+worker is one HTTP hop.
+
+**Every refusal is safe.** Anything that is not an explicit 202 — busy, wrong
+commit, unreachable, absent — dispatches to the Job exactly as before.
+
+**Undo:** `gcloud run services update supersonic-control-plane
+--remove-env-vars DEPLOY_WORKER_URL`. Nothing else, and no code change.
 
 ---
 
-## 2. Put one app on the Railpack lane
+## Not done
 
-The lane is built, tested and deployed; `RAILPACK_APPS` is empty, so no app
-takes it and nothing has changed for anyone.
-
-```bash
-gcloud run jobs update supersonic-deploy-job \
-  --region us-central1 --project supersonic-deploy-prod \
-  --update-env-vars RAILPACK_APPS=<slug>
-```
-
-**Choosing the app.** A backend or API app, not a frontend. The address hint on
-this lane is newer code than the Dockerfile route's — it reads names out of the
-app's `.env` files rather than out of `ARG` declarations — so a bundle that
-needs `VITE_API_URL` is the case most worth proving second, not first.
-
-An app that ships its own `Dockerfile` is not a test of anything: the lane
-declines it on purpose and builds the author's file, saying so in the deploy log.
-
-**How to see it worked.** The deploy log says `Railpack planned this build — …`
-and the Cloud Build step runs `buildx … --build-arg BUILDKIT_SYNTAX=… -f
-railpack-plan.json`. A build that says `Base pinned to …` instead is the
-Dockerfile lane, meaning the canary did not take.
-
-**Undo:** `--remove-env-vars RAILPACK_APPS`, then redeploy the app.
-
----
-
-## 3. Node three
-
-Quorum is a majority of live, non-draining nodes. With two nodes a majority is
-two, so ONE silent node puts the fleet below the threshold and eviction never
-fires — in either direction, at any silence. The reconciler can place and drain
-today; it cannot take a placement back from a node that has gone quiet, and it
-will not be able to until there are three. This is not a tuning problem: lowering
-the bar makes a two-node fleet evict on a partition in whichever direction the
-control plane happens to be reachable from, which is the two-copies hazard the
-lease exists to prevent.
-
-`fleet-lab-2` is an `e2-standard-4`; a third like it is the cheapest thing that
-makes the guarantee real.
-
-Provision with `services/fleet/image/provision.sh` — it is idempotent and is the
-same script that maintains the existing nodes. The node needs
-`/etc/supersonic/agent.env` with `FLEET_ENDPOINT` and `FLEET_TOKEN`, which is
-NOT written by that script and is not in the repository; copy it from an
-existing node.
-
----
-
-## 4. Split the platform database off the shared instance
+### Split the platform database off the shared instance
 
 `supersonic-shared-pg` is a single `db-f1-micro` holding every tenant's database
 AND the platform's own — placements, leases, releases, the reconciler's record.
-The control plane cannot survive an incident on an instance that any tenant can
-saturate, and the tier means saturating it is not hard.
+The control plane cannot survive an incident on an instance any tenant can
+saturate, and at that tier saturating it is not hard.
 
-Spec §10. No code: the platform's connection string is configuration.
+Spec §10. No code; the platform's connection string is configuration.
 
----
+**Left undone deliberately.** It is a live migration of the control plane's own
+state, and the safe version rehearses on a copy first. That is a bad thing to
+begin unattended, not a hard thing.
 
-## 5. The build plane
+### Delete the Cloud Run app path
 
-Railpack landed on the EXISTING lane, which is buildx on a fresh Cloud Build
-worker with a registry cache — what §3 called "not a cache; a slow registry".
-The measured build block is 54 s of a 238 s deploy and Railpack alone does not
-remove it. A long-lived BuildKit with a local cache is what collects that.
+47 Cloud Run services exist; six are the platform, and the rest are apps —
+including apps that predate the fleet. The reconciler reports 28 placements, so
+the two sets do not line up, and which of the ~41 are dead is not answerable
+from the outside.
 
-This is the largest remaining spend and the only one that buys latency directly.
+**Left undone deliberately.** Deleting a service for an app that is not on the
+fleet takes that app down. The inventory has to come first, and it comes from
+the platform database rather than from `gcloud run services list`.
