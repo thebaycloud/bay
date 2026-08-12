@@ -124,11 +124,33 @@ begin unattended, not a hard thing.
 
 ### Delete the Cloud Run app path
 
-47 Cloud Run services exist; six are the platform, and the rest are apps —
-including apps that predate the fleet. The reconciler reports 28 placements, so
-the two sets do not line up, and which of the ~41 are dead is not answerable
-from the outside.
+**The inventory, taken from the platform database on 12 Aug.** It is the thing
+that was missing, and it says the path is not leftovers — it is half the
+platform:
 
-**Left undone deliberately.** Deleting a service for an app that is not on the
-fleet takes that app down. The inventory has to come first, and it comes from
-the platform database rather than from `gcloud run services list`.
+| | apps | placed on the fleet |
+|---|---|---|
+| `runtime = fleet` | 28 | 28 |
+| `runtime = cloudrun` | 38 | 0 |
+
+Of those 38: **20 live**, 14 `failed`, 4 stuck in `deploying`. So the work is
+moving twenty apps, not sweeping up dead services.
+
+**And the database disagrees with the world.** Cross-checking the 20 live ones
+against `gcloud run services list`: seven have NO Cloud Run service at all
+(`choqd`, `mmon4`, `oh6sn`, `q13fh`, `wmc7r`, `z0s7e`, `zzppg`) and still answer
+over HTTP. `zp6t0` has a service and answers `000`. `hdhxq` and `hl52l` answer
+404. So `runtime = 'cloudrun'` does not reliably mean "served by a Cloud Run
+service", and no bulk action should be taken on that column until it does.
+
+**Why this is not one loop over twenty slugs.** The platform does not store the
+repository a deployed app came from — `apps` has no `repo_url`, and the deploy
+run that carried it is deleted when the run finishes. So there is nothing to
+redeploy FROM. Moving an app without its source means adopting its existing
+image: read the live Cloud Run service for image, env, secret references and
+port, build an `AppSpec` from that, record a release, set desired, wait for the
+node to report ready, and only then flip `apps.runtime` and delete the service.
+
+That is a real feature and a safe one — the cutover is the `runtime` flip and it
+is reversible — but it is a feature, not an afternoon of `gcloud` commands, and
+it should be written with the data reconciled first.
