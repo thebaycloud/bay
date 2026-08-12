@@ -75,3 +75,46 @@ test("an app without a database gains no database variables", () => {
   assert.equal(i.env.some((e) => e.startsWith("PGHOST=")), false);
   assert.deepEqual(i.env, ["TOKEN=x"]);
 });
+
+// THE FAILURE THAT REVERTED THE FIRST ADOPTION, and the reason a 401 proved
+// nothing about it.
+//
+// `sh3ar` carries its DSN as a PLAIN value, in Cloud Run's unix-socket form:
+//
+//   postgresql://user:pw@/sh3ar?host=/cloudsql/<project>:<region>:<instance>
+//
+// That socket is mounted by the `cloudsql-instances` annotation and exists
+// nowhere on a node, where the database is one TCP proxy per host. The first
+// version of this module rewrote PGHOST and its siblings and left the DSN
+// alone — because a DSN is not a host variable — so the app was placed, started,
+// listened, and answered 500 to everything. The edge returned 401 either way,
+// because the sign-in gate fires before the upstream is ever called: nothing
+// observable from outside changed.
+test("a socket-form DSN is rewritten to the fleet's TCP address", () => {
+  const svc = service({
+    env: [{ name: "DATABASE_URL", value: "postgresql://app_shop:s3cr3t@/shop?host=/cloudsql/p:us-central1:pg" }],
+  });
+  const i = adoptionInput("shop", svc);
+  const dsn = i.env.find((e) => e.startsWith("DATABASE_URL="))!.slice("DATABASE_URL=".length);
+  assert.equal(dsn, "postgresql://app_shop:s3cr3t@10.200.0.1:5432/shop");
+});
+
+// A DSN already in TCP form still has to move: 127.0.0.1 is Cloud Run's sidecar.
+test("a TCP DSN pointed at the sidecar is repointed, not left alone", () => {
+  const svc = service({
+    env: [{ name: "DATABASE_URL", value: "postgresql://u:p@127.0.0.1:5432/shop?sslmode=disable" }],
+  });
+  const i = adoptionInput("shop", svc);
+  const dsn = i.env.find((e) => e.startsWith("DATABASE_URL="))!.slice("DATABASE_URL=".length);
+  assert.match(dsn, /@10\.200\.0\.1:5432\/shop/);
+  assert.match(dsn, /sslmode=disable/, "the app's own query parameters survive");
+});
+
+// An external database is the app's own business. Supabase, Neon, anywhere —
+// rewriting that host would take a working app off its data.
+test("a database that is not ours is left exactly as it is", () => {
+  const dsn = "postgresql://u:p@db.supabase.co:5432/postgres";
+  const svc = service({ env: [{ name: "DATABASE_URL", value: dsn }] });
+  const i = adoptionInput("shop", svc);
+  assert.equal(i.env.find((e) => e.startsWith("DATABASE_URL="))!.slice("DATABASE_URL=".length), dsn);
+});

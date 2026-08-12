@@ -148,5 +148,56 @@ export function adoptionInput(slug: string, service: RunService): AdoptionInput 
 function addressed(name: string, value: string): string {
   if (/^(POSTGRES_SERVER|POSTGRES_HOST|PGHOST|DB_HOST)$/.test(name)) return FLEET_DB.host;
   if (/^(POSTGRES_PORT|PGPORT|DB_PORT)$/.test(name)) return FLEET_DB.port;
+  if (/URL$/.test(name)) return repointed(value);
   return value;
+}
+
+/**
+ * A connection STRING moved to the fleet's proxy.
+ *
+ * This is the case the first version of this module missed, and it cost the
+ * first adoption. A DSN is not a host variable, so rewriting `PGHOST` and its
+ * siblings left it untouched — and Cloud Run's own form is a UNIX SOCKET:
+ *
+ *   postgresql://user:pw@/shop?host=/cloudsql/<project>:<region>:<instance>
+ *
+ * That socket is mounted by the `cloudsql-instances` annotation and exists
+ * nowhere on a node. The app was placed, started, listened, and answered 500 to
+ * everything — while the edge went on returning 401, because the sign-in gate
+ * fires before the upstream is ever called.
+ *
+ * ONLY OUR OWN DATABASE IS MOVED. An app may arrive with its own DSN pointing at
+ * Supabase or Neon, and repointing that at our proxy would take a working app
+ * off its data. Ours is recognisable two ways and no others: the `/cloudsql/`
+ * socket, and Cloud Run's sidecar address.
+ */
+function repointed(dsn: string): string {
+  if (!/^[a-z+]+:\/\//i.test(dsn)) return dsn;
+
+  // The socket form. `host=/cloudsql/…` in the query, and the path holds the
+  // database name.
+  const socket = /[?&]host=\/cloudsql\//.test(dsn);
+  const sidecar = /@127\.0\.0\.1(:\d+)?\//.test(dsn);
+  if (!socket && !sidecar) return dsn;
+
+  // Parsed by hand rather than with URL: a socket-form DSN has an empty host,
+  // which URL rejects, and that is exactly the form being fixed.
+  const scheme = dsn.slice(0, dsn.indexOf("://") + 3);
+  const rest = dsn.slice(scheme.length);
+  const at = rest.lastIndexOf("@");
+  const credentials = at >= 0 ? rest.slice(0, at) : "";
+  const after = at >= 0 ? rest.slice(at + 1) : rest;
+
+  const q = after.indexOf("?");
+  const path = (q >= 0 ? after.slice(0, q) : after).replace(/^[^/]*/, "");
+  const query = q >= 0 ? after.slice(q) : "";
+
+  // `host=/cloudsql/…` described where the database was; it is now in the
+  // address, and leaving it would send the app back to a socket.
+  const kept = query
+    .replace(/([?&])host=[^&]*/, "$1")
+    .replace(/[?&]$/, "")
+    .replace(/\?&/, "?");
+
+  return `${scheme}${credentials}${credentials ? "@" : ""}${FLEET_DB.host}:${FLEET_DB.port}${path}${kept}`;
 }
