@@ -685,14 +685,14 @@ the design rather than merely delaying it.
 7. **Workers and crons off Cloud Run** onto the node. *Done. Witnessed in
    production: `rtmsw--nightly` and `izuvx--nightly` fire and finish every ten
    minutes on `fleet-lab-2`.*
-8. **The build plane** — Railpack, our own BuildKit, local cache. *Railpack is
-   in, behind `RAILPACK_APPS`; the BuildKit half is not. See below.*
+8. **The build plane** — Railpack, our own BuildKit, local cache. *Done.
+   Railpack is the default builder; `buildkit-1` runs the daemon and the deploy
+   job builds against it directly.*
 9. **The secret broker.** *Done. The grant was removed on 12 Aug 00:31 UTC and
    the next cron firing at 00:40:02 resolved its secrets through the broker.*
-10. **Node three**, then the provider decision. Node two already exists —
-    `fleet-lab-2` was running 8 sandboxes on 11 Aug, arrived outside this order,
-    and is not represented in the placement model. Three is not a round number
-    here: it is the count at which the quorum rule in §5 can evict at all.
+10. **Node three**, then the provider decision. *Done. `fleet-lab-3` is in
+    `us-central1-b`, so the fleet also spans two failure domains for the first
+    time, and quorum can evict.*
 
 ### Item 8, half done, and the half that matters is the other one
 
@@ -755,6 +755,46 @@ onto the fleet — web, a `release` that migrates, and a `nightly` on `*/10` in
 that has been watched, this item stays open no matter how complete the code
 looks, because the last four findings in this document were all in code that
 looked complete.
+
+### The night of 11–12 Aug, and four things it found
+
+Items 7, 8, 9 and 10 closed in one session. What is worth keeping is not that
+they closed but what closing them turned up, because none of it was in the plan.
+
+**The fleet had one door.** `fleet-backend` had a single instance group holding
+`fleet-lab-1`. `fleet-lab-2` was healthy, held 26 routes, and received traffic
+only by being forwarded to from the other node — so losing `fleet-lab-1` would
+have taken every app down while a perfectly good node sat behind no load
+balancer. Both are backends now, and `fleet-lab-3` joins from `us-central1-b`,
+which is also the first time this fleet has spanned two zones.
+
+**`provision.sh` had never once started the SQL proxy.** Under `set -euo
+pipefail`,
+
+    if systemctl list-unit-files | grep -q '^cloud-sql-proxy'; then
+
+is FALSE exactly when the unit EXISTS: `grep -q` exits at the first match, the
+producer takes SIGPIPE and exits 141, and `pipefail` promotes that to the
+pipeline's status. So the block that starts the proxy was skipped on every run,
+and the new node could not run a single app with a database. The comment above
+that block already described this failure, on a node it already named. Three
+more instances of the same shape were found and removed; one of them would have
+made the fleet silently stop collecting agent updates.
+
+**The agent outran its own control plane.** Nodes collect a new agent every two
+minutes on a systemd timer; the broker's route and the agent that calls it
+landed as two independently-triggered workflows. The agent won, and three apps
+failed their releases against a 404 that was the Next.js shell. CI now blocks
+the agent publish until the control plane at the same commit is live.
+
+**The same question, asked in three variables.** `hasDockerfile`,
+`hasDockerfileNow` and `useDockerBuild` all answer "is there something here that
+builds a container". Teaching the first about Railpack plans and not the second
+produced a deploy that built an image correctly and then refused itself with
+"this lane has no image of its own to build".
+
+Every one of these was in code that looked complete, which is the note this
+document has been making about item 7 for a day.
 
 ### Item 9, and the one step that actually removes the risk
 
