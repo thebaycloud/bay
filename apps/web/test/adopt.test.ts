@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { adoptionInput, imageBelongsTo, servedByStatic, dsnIsSealed, type RunService } from "@/lib/adopt";
+import { adoptionInput, imageBelongsTo, servedByStatic, dsnIsSealed, withFleetDsn, type RunService } from "@/lib/adopt";
 
 const service = (over: Partial<RunService["spec"]["template"]["spec"]["containers"][0]> = {}): RunService => ({
   spec: {
@@ -167,4 +167,29 @@ test("an app whose DSN lives in a secret is refused, not placed and hoped for", 
   assert.equal(dsnIsSealed([{ name: "DATABASE_URL", value: "postgresql://u:p@127.0.0.1:5432/shop" }]), false);
   // And an app with no database at all has nothing sealed.
   assert.equal(dsnIsSealed([{ name: "TOKEN", value: "x" }]), false);
+});
+
+// The fleet-addressed copy of a sealed DSN.
+//
+// Only the connection STRING carries an address. `POSTGRES_PASSWORD`,
+// `PGPASSWORD`, `DB_PASSWORD` and `SUPERSONIC_DB_PASSWORD` are the same value on
+// either runtime — they describe the database, not the route to it — so exactly
+// one secret per app is duplicated and the rest are referenced as they are.
+test("only the connection string gets a fleet copy", () => {
+  const refs = [
+    { key: "DATABASE_URL", name: "app-shop-DATABASE_URL" },
+    { key: "PGPASSWORD", name: "app-shop-PGPASSWORD" },
+  ];
+  assert.deepEqual(withFleetDsn("shop", refs), [
+    { key: "DATABASE_URL", name: "app-shop-DATABASE_URL-fleet" },
+    { key: "PGPASSWORD", name: "app-shop-PGPASSWORD" },
+  ]);
+});
+
+// The name stays inside the app's own namespace, which is what the secret
+// broker authorises on: `ownedBy` requires `app-<slug>-`, so a copy named any
+// other way would be refused at the moment a node asked for it.
+test("the copy stays in the app's namespace, or the broker would refuse it", () => {
+  const [dsn] = withFleetDsn("shop", [{ key: "DATABASE_URL", name: "app-shop-DATABASE_URL" }]);
+  assert.equal(dsn.name.startsWith("app-shop-"), true);
 });

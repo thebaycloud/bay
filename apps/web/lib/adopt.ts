@@ -171,6 +171,10 @@ function addressed(name: string, value: string): string {
  * off its data. Ours is recognisable two ways and no others: the `/cloudsql/`
  * socket, and Cloud Run's sidecar address.
  */
+export function repointedForFleet(dsn: string): string {
+  return repointed(dsn);
+}
+
 function repointed(dsn: string): string {
   if (!/^[a-z+]+:\/\//i.test(dsn)) return dsn;
 
@@ -260,4 +264,37 @@ export function dsnIsSealed(
   env: { name: string; value?: string; valueFrom?: unknown }[],
 ): boolean {
   return env.some((e) => /URL$/.test(e.name) && e.valueFrom && e.value === undefined);
+}
+
+/**
+ * The suffix that marks a secret written at the fleet's database address.
+ *
+ * Inside the app's own namespace on purpose: the secret broker authorises by
+ * `ownedBy(slug, id)`, which requires `app-<slug>-`, so a copy named any other
+ * way would be refused at the exact moment a node asked for it.
+ */
+export const FLEET_SECRET_SUFFIX = "-fleet";
+
+/**
+ * The same secret references, with the connection string pointed at its fleet
+ * copy.
+ *
+ * WHY A COPY AND NOT A REWRITE. The stored DSN reads `…@127.0.0.1:5432/<db>`,
+ * which is Cloud Run's sidecar. Rewriting it in place would break the Cloud Run
+ * service still serving from it: two runtimes would need different values of one
+ * secret at the same moment. A second secret makes both correct at once, and the
+ * original is deleted once the app is off Cloud Run.
+ *
+ * ONLY THE CONNECTION STRING. `POSTGRES_PASSWORD`, `PGPASSWORD`, `DB_PASSWORD`
+ * and `SUPERSONIC_DB_PASSWORD` hold the same value on either runtime — they
+ * describe the database, not the route to it — so exactly one secret per app is
+ * duplicated and a password lives in two places for the length of a migration
+ * rather than four.
+ */
+export function withFleetDsn(
+  slug: string,
+  refs: { key: string; name: string }[],
+): { key: string; name: string }[] {
+  return refs.map((r) =>
+    /URL$/.test(r.key) ? { ...r, name: `${r.name}${FLEET_SECRET_SUFFIX}` } : r);
 }

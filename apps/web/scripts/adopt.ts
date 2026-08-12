@@ -36,7 +36,8 @@
  * 200 on every node, then cut over.
  */
 import { execFileSync } from "node:child_process";
-import { adoptionInput, imageBelongsTo, servedByStatic, dsnIsSealed, type RunService } from "@/lib/adopt";
+import { adoptionInput, imageBelongsTo, servedByStatic, dsnIsSealed, withFleetDsn, repointedForFleet, FLEET_SECRET_SUFFIX, type RunService } from "@/lib/adopt";
+
 import { buildAppSpec } from "@/lib/fleet-spec";
 import { recordRelease, setDesired } from "@/lib/reconcile";
 import { resolveImageDigest } from "@/lib/gcp-rest";
@@ -72,6 +73,37 @@ async function ensurePreviousUrl(): Promise<void> {
      )`);
 }
 
+/**
+ * Write the fleet-addressed copy of every `*-fleet` secret the spec now names.
+ *
+ * Read once, repointed, written once. The value never reaches a log or this
+ * process's stdout — the whole point of the reference model is that a password
+ * has one place to be, and a migration that prints it while duplicating it would
+ * be worse than the duplication.
+ */
+async function writeFleetDsnSecrets(refs: { key: string; name: string }[]): Promise<void> {
+  for (const r of refs) {
+    if (!r.name.endsWith(FLEET_SECRET_SUFFIX)) continue;
+    const source = r.name.slice(0, -FLEET_SECRET_SUFFIX.length);
+    const current = gcloud(["secrets", "versions", "access", "latest",
+      "--secret", source, "--project", PROJECT]).trim();
+    const moved = repointedForFleet(current);
+    if (moved === current) {
+      throw new Error(`${source} does not name an address this tool recognises — refusing to copy it blind`);
+    }
+    // `create` fails when it exists; `versions add` is the update. Both take the
+    // value on stdin so it never becomes an argv anyone can see in a process list.
+    try {
+      execFileSync("gcloud", ["secrets", "create", r.name, "--project", PROJECT,
+        "--replication-policy", "automatic", "--data-file=-"], { input: moved, stdio: ["pipe", "ignore", "ignore"] });
+    } catch {
+      execFileSync("gcloud", ["secrets", "versions", "add", r.name, "--project", PROJECT,
+        "--data-file=-"], { input: moved, stdio: ["pipe", "ignore", "ignore"] });
+    }
+    console.log(`  секрет   ${r.name} записан по адресу флота`);
+  }
+}
+
 function gcloud(args: string[]): string {
   return execFileSync("gcloud", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
 }
@@ -91,12 +123,14 @@ async function place(dryRun: boolean): Promise<void> {
     throw new Error(`${slug} is served by supersonic-static — there is no container to move`);
   }
   const container = (await describe()).spec.template.spec.containers[0];
-  if (dsnIsSealed(container.env ?? [])) {
-    throw new Error(
-      `${slug} keeps its connection string in a secret that reads 127.0.0.1 — the sidecar ` +
-      `address. The spec carries a reference, so there is nothing to rewrite, and rewriting ` +
-      `the secret would break the Cloud Run copy still serving from it. Needs a second secret ` +
-      `at the fleet address, referenced only by the fleet spec.`);
+
+  // A DSN locked in a secret gets a fleet-addressed COPY, not a rewrite: the
+  // Cloud Run service is still serving from the original, and one secret cannot
+  // hold two addresses at once. See `withFleetDsn`.
+  const sealed = dsnIsSealed(container.env ?? []);
+  if (sealed) {
+    i.secrets = withFleetDsn(slug, i.secrets);
+    if (!dryRun) await writeFleetDsnSecrets(i.secrets);
   }
   if (!imageBelongsTo(slug, i.image)) {
     throw new Error(
