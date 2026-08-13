@@ -107,6 +107,21 @@ test -d /usr/local/bin/gvisor-bin \
 # handler, and the failure surfaces much later as "runsc not found".
 # ---------------------------------------------------------------------------
 
+# THE CONTENT STORE GOES ON THE FAST DISK, and this is §4's second finding:
+# containerd's root was left at its default, so images lived on the BOOT disk —
+# which carries autoDelete=true, so replacing an instance loses every image — and
+# layer unpacking, the most I/O-heavy part of a start, ran on the slower device.
+# Meanwhile the local NVMe mounted specifically for rebuildable state held 127 MB
+# against 369 GB free, while /var/lib/containerd held 20 GB.
+#
+# Images are exactly what /srv/state is for. The comment on that mount already
+# says so — "losing /srv/state costs an image pull, not an app's data" — which is
+# the definition of rebuildable state.
+#
+# ORDERING IS LOAD-BEARING: the mount must exist before containerd starts, or it
+# will create its root on the boot disk under that path and the mount will then
+# shadow files it is holding open. `supersonic-state.service` below owns the
+# mount and containerd is ordered after it.
 log "configuring containerd for the runsc handler"
 CTRD_MAJOR="$(containerd --version | awk '{print $3}' | sed 's/^v//' | cut -d. -f1)"
 mkdir -p /etc/containerd
@@ -115,6 +130,8 @@ if [ "$CTRD_MAJOR" -ge 2 ]; then
   CRI_PLUGIN='io.containerd.cri.v1.runtime'
   cat > /etc/containerd/config.toml <<EOF
 version = 3
+
+root = '/srv/state/containerd'
 
 [plugins.'${CRI_PLUGIN}']
   [plugins.'${CRI_PLUGIN}'.containerd]
@@ -129,6 +146,8 @@ EOF
 else
   cat > /etc/containerd/config.toml <<'EOF'
 version = 2
+
+root = "/srv/state/containerd"
 
 [plugins."io.containerd.grpc.v1.cri".containerd]
   default_runtime_name = "runc"
@@ -167,7 +186,11 @@ log_level = "warning"
 EOF
 mkdir -p /var/log/runsc
 
-systemctl restart containerd
+# NOT RESTARTED HERE. The config written above puts containerd's content store
+# under /srv/state, and that mount is set up further down — restarting now would
+# create the store on the boot disk and then have the disk mounted over the top
+# of files containerd is holding open. The restart moved to just after the mount;
+# `enable` is safe at any point and stays.
 systemctl enable containerd
 
 # ---------------------------------------------------------------------------
@@ -214,11 +237,90 @@ if [ -n "$SSD_DEV" ]; then
     log "mounting local SSD at /srv/state"
     mount -o discard,defaults,nobarrier "$SSD_DEV" /srv/state
   fi
+  mkdir -p /srv/state/containerd
   # No fstab entry on purpose: a node whose local SSD is gone (post-stop) must
   # still boot. Losing /srv/state costs an image pull, not an app's data.
+  #
+  # BUT SOMETHING HAS TO REMOUNT IT, and nothing did. This script is run by hand
+  # — there is no startup-script metadata on any node — so after a reboot the
+  # disk stayed unmounted and every bundle, overlay and (now) image silently went
+  # to the boot disk instead. Found live: fleet-lab-3 had been serving from the
+  # boot disk since it was stopped and started earlier the same day, and nothing
+  # anywhere said so.
+  #
+  # The unit below does at boot exactly what this block does by hand, which is
+  # also what makes the containerd root above safe: the mount is guaranteed to
+  # exist before containerd starts, rather than happening to.
 else
   log "no local SSD; /srv/state will live on the boot disk (slower, still correct)"
 fi
+
+# --------------------------------------------------------------------------
+# The fast disk, at every boot rather than only when a human runs this script.
+# --------------------------------------------------------------------------
+#
+# A local SSD is BLANK after a stop — the data does not survive, and the device
+# comes back unformatted — so this cannot be an fstab line. It has to be able to
+# format before it mounts, which is a program, not a table.
+#
+# `nofail` is the property the fstab comment wanted and could not express: a node
+# whose SSD is missing degrades to the boot disk and still boots. Here that is
+# the `|| exit 0` — every step is best-effort, and a failure leaves the node
+# running on the slower disk exactly as it does today.
+log "installing supersonic-state.service (mounts the fast disk at boot)"
+cat > /usr/local/sbin/supersonic-mount-state <<'MOUNTEOF'
+#!/usr/bin/env bash
+# Mount the local NVMe at /srv/state, formatting it first if it is blank.
+# Idempotent, and silent about a node that has no such disk.
+set -uo pipefail
+mkdir -p /srv/state
+mountpoint -q /srv/state && { mkdir -p /srv/state/containerd; exit 0; }
+dev=""
+for cand in /dev/disk/by-id/google-local-nvme-ssd-0 /dev/nvme0n1; do
+  [ -e "$cand" ] && { dev="$(readlink -f "$cand")"; break; }
+done
+[ -n "$dev" ] || { echo "no local SSD; /srv/state stays on the boot disk"; exit 0; }
+blkid "$dev" >/dev/null 2>&1 || mkfs.ext4 -F -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard "$dev"
+mount -o discard,defaults,nobarrier "$dev" /srv/state || { echo "could not mount $dev; staying on the boot disk"; exit 0; }
+mkdir -p /srv/state/containerd
+echo "mounted $dev at /srv/state"
+MOUNTEOF
+chmod 0755 /usr/local/sbin/supersonic-mount-state
+
+cat > /etc/systemd/system/supersonic-state.service <<'UNITEOF'
+[Unit]
+Description=Mount the node's fast rebuildable-state disk
+DefaultDependencies=no
+After=local-fs.target
+Before=containerd.service
+# containerd's content store lives under this mount. Ordered, not required:
+# a node without the disk must still boot and serve from the slower one.
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/supersonic-mount-state
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+mkdir -p /etc/systemd/system/containerd.service.d
+cat > /etc/systemd/system/containerd.service.d/10-state-disk.conf <<'DROPEOF'
+# containerd writes its images under /srv/state, so it must not start before the
+# disk is there. Without this it would create the directory on the boot disk and
+# then have the mount pulled over the top of files it is holding open.
+[Unit]
+After=supersonic-state.service
+Wants=supersonic-state.service
+DROPEOF
+
+systemctl daemon-reload
+systemctl enable supersonic-state.service >/dev/null 2>&1 || true
+systemctl start supersonic-state.service || log "WARNING: could not mount the fast disk; the node stays on the boot disk"
+
+# NOW containerd may start, with its store on a disk that exists. This is the
+# restart moved down from the configuration block — see the note there.
+log "restarting containerd onto the state disk"
+systemctl restart containerd
 
 # App data on a disk that outlives the node. Named by device rather than found
 # by guessing, so a wrong disk cannot be adopted as this one.
