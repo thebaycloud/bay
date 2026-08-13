@@ -4,8 +4,11 @@ import { planPlacements, type Desired, type Placed, type NodeHealth, type Step }
 
 const NOW = 1_000_000_000_000;
 const alive: NodeHealth[] = [
-  { name: "n1", healthy: true }, { name: "n2", healthy: true }, { name: "n3", healthy: true },
+  { name: "n1", healthy: true, load: 0 }, { name: "n2", healthy: true, load: 0 }, { name: "n3", healthy: true, load: 0 },
 ];
+/** The same three nodes, carrying the loads given. */
+const loaded = (...loads: number[]): NodeHealth[] =>
+  alive.map((n, i) => ({ ...n, load: loads[i] ?? 0 }));
 const desired = (over: Partial<Desired> = {}): Desired =>
   ({ slug: "lilna", release: 7, replicas: 1, pinnedTo: null, ...over });
 const placed = (over: Partial<Placed> = {}): Placed =>
@@ -77,7 +80,7 @@ test("a new release that is still starting does not drain the old one", () => {
 test("an expired lease on a silent node is evicted when the fleet can be seen", () => {
   const steps = planPlacements(desired(),
     [placed({ leaseUntil: NOW - 1 })],
-    [{ name: "n1", healthy: false }, { name: "n2", healthy: true }, { name: "n3", healthy: true }],
+    [{ name: "n1", healthy: false, load: 0 }, { name: "n2", healthy: true, load: 0 }, { name: "n3", healthy: true, load: 0 }],
     NOW, true);
   assert.deepEqual(kinds(steps), ["evict"]);
   assert.equal(steps[0].instance, 0);
@@ -89,7 +92,7 @@ test("an expired lease on a silent node is evicted when the fleet can be seen", 
 test("an expired lease is HELD when the fleet cannot be seen", () => {
   const steps = planPlacements(desired(),
     [placed({ leaseUntil: NOW - 1 })],
-    [{ name: "n1", healthy: false }, { name: "n2", healthy: false }, { name: "n3", healthy: false }],
+    [{ name: "n1", healthy: false, load: 0 }, { name: "n2", healthy: false, load: 0 }, { name: "n3", healthy: false, load: 0 }],
     NOW, false);
   assert.deepEqual(steps, [], "no quorum means no eviction, however long the silence");
 });
@@ -99,7 +102,7 @@ test("an expired lease is HELD when the fleet cannot be seen", () => {
 test("an app pinned by a volume is never moved, even with an expired lease", () => {
   const steps = planPlacements(desired({ pinnedTo: "n1" }),
     [placed({ leaseUntil: NOW - 1 })],
-    [{ name: "n1", healthy: false }, { name: "n2", healthy: true }, { name: "n3", healthy: true }],
+    [{ name: "n1", healthy: false, load: 0 }, { name: "n2", healthy: true, load: 0 }, { name: "n3", healthy: true, load: 0 }],
     NOW, true);
   assert.deepEqual(steps, [], "moving it would separate the app from its data");
 });
@@ -111,7 +114,7 @@ test("an app that should not run anywhere has its placements removed", () => {
 
 // Nowhere to put it is a fact to report, not a placement on a node named null.
 test("no live node means no step, rather than a placement nowhere", () => {
-  const steps = planPlacements(desired(), [], [{ name: "n1", healthy: false }], NOW, true);
+  const steps = planPlacements(desired(), [], [{ name: "n1", healthy: false, load: 0 }], NOW, true);
   assert.deepEqual(steps, []);
 });
 
@@ -150,4 +153,88 @@ test("surplus is counted among what is running, not among what is already leavin
 test("asking for no instances at all removes them without asking for a release change", () => {
   const steps = planPlacements(desired({ replicas: 0 }), [placed()], alive, NOW, true);
   assert.deepEqual(kinds(steps), ["remove"]);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Rebalancing                                                                 */
+/* -------------------------------------------------------------------------- */
+
+test("a lopsided fleet moves one app towards the emptier node", () => {
+  // The fleet only levelled out as new apps arrived. After a node failure and
+  // its recovery, fleet-lab-1 sat empty while fleet-lab-3 carried nineteen —
+  // and nothing would ever have moved one back.
+  //
+  // BESIDE FIRST, never instead: this emits a place on the emptier node while
+  // the app keeps serving from where it is. The trim on the next pass is what
+  // removes the old one, and only once this one exists.
+  const steps = planPlacements(
+    desired(),
+    [placed({ node: "n3" })],
+    // n3 is carrying nine more than n1.
+    [{ name: "n1", healthy: true, load: 1 }, { name: "n2", healthy: true, load: 5 }, { name: "n3", healthy: true, load: 10 }],
+    NOW,
+    true,
+  );
+  const p = place(steps);
+  assert.equal(p.node, "n1", "the emptiest healthy node");
+  assert.equal(p.instance, 1, "beside the one already there, not over it");
+});
+
+test("a fleet that is close enough is left alone", () => {
+  // The threshold is what stops this thrashing. One placement of difference is
+  // not an imbalance worth moving an app for — and moving one would create the
+  // mirror image of the same difference, which is how a rebalancer oscillates
+  // forever.
+  const steps = planPlacements(desired(), [placed({ node: "n2" })], loaded(2, 3, 2), NOW, true);
+  assert.deepEqual(steps, []);
+});
+
+test("an app pinned to its data is never rebalanced", () => {
+  // The pin exists because /srv/apps/<slug>/data is on one machine and nothing
+  // replicates it. Rebalancing is the one caller that would move an app for no
+  // reason other than tidiness, which makes it the worst possible reason to
+  // leave data behind.
+  const steps = planPlacements(
+    desired({ pinnedTo: "n3" }),
+    [placed({ node: "n3" })],
+    loaded(0, 5, 10),
+    NOW,
+    true,
+  );
+  assert.deepEqual(steps, []);
+});
+
+test("nothing is rebalanced without quorum", () => {
+  // Same rule as eviction, and for a stronger reason: a control plane that
+  // cannot see the fleet cannot know what the loads ARE, so every number it
+  // would be balancing against is stale.
+  const steps = planPlacements(desired(), [placed({ node: "n3" })], loaded(0, 5, 10), NOW, false);
+  assert.deepEqual(steps, []);
+});
+
+test("a placement that is not ready yet is not rebalanced", () => {
+  // Mid-deploy or mid-recovery, the loads are still moving. Moving an app that
+  // has not finished arriving would abandon a pull that is already half done.
+  const steps = planPlacements(
+    desired(),
+    [placed({ node: "n3", state: "starting" })],
+    loaded(0, 5, 10),
+    NOW,
+    true,
+  );
+  assert.deepEqual(steps, []);
+});
+
+test("the extra instance is trimmed from the fuller node, which completes the move", () => {
+  // The other half. Without this the trim keeps the lowest instance number —
+  // the ORIGINAL — and the rebalance undoes itself every pass, moving an app
+  // back and forth forever.
+  const steps = planPlacements(
+    desired(),
+    [placed({ instance: 0, node: "n3" }), placed({ instance: 1, node: "n1" })],
+    loaded(1, 5, 10),
+    NOW,
+    true,
+  );
+  assert.deepEqual(steps, [{ kind: "remove", slug: "lilna", instance: 0 }]);
 });

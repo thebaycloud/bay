@@ -212,7 +212,13 @@ export async function pass(client: Client, now: number, only?: string): Promise<
     });
   }
 
-  const ordered = [...health].sort((a, b) => (load.get(a.name) ?? 0) - (load.get(b.name) ?? 0));
+  // Least loaded first, and the load TRAVELS with each node now. The order alone
+  // was enough while the planner only ever needed "which is emptiest"; rebalancing
+  // needs the size of the gap, because moving an app to correct a difference of
+  // one just creates the same difference the other way round.
+  const ordered = [...health]
+    .map((n) => ({ ...n, load: load.get(n.name) ?? 0 }))
+    .sort((a, b) => a.load - b.load);
 
   const steps: Step[] = [];
   let held = 0;
