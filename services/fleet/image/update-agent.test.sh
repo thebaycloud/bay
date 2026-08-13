@@ -64,5 +64,50 @@ out="$(bash "$HERE/update-agent.sh" 2>&1)"; rc=$?
 check "refuses a binary that will not run" "$rc" "1"
 check "still leaves the running binary alone" "$(sh "$ROOT/opt/supersonicd")" "old"
 
-echo "passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ]
+
+# --------------------------------------------------------------------------
+# A staged rollout. The pointer's third line is the percentage of nodes that
+# should be running this build; a node decides for itself whether it is one of
+# them, from a hash of its own name and the digest it is being offered.
+#
+# The gap this closes: FLEET_APPS was deleted with the Cloud Run lane and nothing
+# replaced it, so every change reached every node at once. Twice in one day that
+# cost something — a schema-dependent write broke all deploys, and an agent
+# rollout to all three nodes contaminated the measurement being taken at the time.
+# --------------------------------------------------------------------------
+
+# 8. A node outside the percentage does not take the new build.
+setup v3
+OLD_D="$(sha256sum "$ROOT/new" | cut -d" " -f1)"   # placeholder; overwritten below
+printf '#!/bin/sh\n[ "$1" = "-version" ] && echo "supersonicd old"\n' > "$ROOT/opt/supersonicd"
+chmod +x "$ROOT/opt/supersonicd"
+echo "deadbeef" > "$ROOT/opt/installed.sha256"
+printf '%s\ncommitsha\n0\n' "$D" > "$ROOT/bucket/current"
+out="$(bash "$HERE/update-agent.sh" 2>&1)"
+check "0% leaves every node alone" "$(cat "$ROOT/opt/installed.sha256")" "deadbeef"
+check "and says why" "$(echo "$out" | grep -c 'not in this rollout')" "1"
+
+# 9. At 100 the rollout is everyone, which is what an unstaged publish means.
+printf '%s\ncommitsha\n100\n' "$D" > "$ROOT/bucket/current"
+out="$(bash "$HERE/update-agent.sh" 2>&1)"
+check "100% installs" "$(cat "$ROOT/opt/installed.sha256")" "$D"
+
+# 10. A pointer with no percentage behaves exactly as it did before this existed.
+setup v4
+echo "deadbeef" > "$ROOT/opt/installed.sha256"
+printf '%s\ncommitsha\n' "$D" > "$ROOT/bucket/current"
+out="$(bash "$HERE/update-agent.sh" 2>&1)"
+check "no percentage means everyone" "$(cat "$ROOT/opt/installed.sha256")" "$D"
+
+# 11. Nonsense is not a rollout instruction. A percentage nobody can parse must
+#     not silently mean 0 — that would freeze the fleet on an old agent and look
+#     like nothing was wrong.
+setup v5
+echo "deadbeef" > "$ROOT/opt/installed.sha256"
+printf '%s\ncommitsha\nhalf\n' "$D" > "$ROOT/bucket/current"
+out="$(bash "$HERE/update-agent.sh" 2>&1)"
+check "an unparseable percentage means everyone" "$(cat "$ROOT/opt/installed.sha256")" "$D"
+
+echo "passed $PASS, failed $FAIL"
+[ "$FAIL" -eq 0 ] || exit 1

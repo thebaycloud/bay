@@ -133,11 +133,83 @@ jobs:
             "gs://supersonic-static-assets/agent/$DIGEST/supersonicd" \
             --project supersonic-deploy-prod
 
-          printf '%s\n%s\n' "$DIGEST" "$GITHUB_SHA" > current
+          # STAGED, and the third line is what stages it: the percentage of the
+          # fleet that should be running this build. `update-agent.sh` has each
+          # node decide for itself from a hash of its own name and this digest,
+          # so there is no list to keep in step with reality and a node reaches
+          # the same answer on every tick.
+          #
+          # 34 is one node of three. That is the smallest blast radius this fleet
+          # can express, and it is the number that would have caught both of the
+          # things this replaces: a change that reached every node inside two
+          # minutes, twice in one day, with nothing in between to notice.
+          #
+          # Promoted to 100 by the step below, once a node has actually reported
+          # running it. An agent that is never confirmed stays on one node.
+          printf '%s\n%s\n34\n' "$DIGEST" "$GITHUB_SHA" > current
           gcloud storage cp current \
             "gs://supersonic-static-assets/agent/current" \
             --cache-control="no-cache" \
             --project supersonic-deploy-prod
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+
+      # Promote to the whole fleet, but only once a node has actually run it.
+      #
+      # WITHOUT THIS THE STAGING IS WORSE THAN NOTHING: 34% would leave two nodes
+      # of three on the previous build indefinitely, which is a split fleet
+      # nobody asked for. The promotion is what makes a staged publish a rollout
+      # rather than a fork.
+      #
+      # The signal is the node's own word. `main.Version` is the short commit sha
+      # and the agent sends it on every sync, so a row in `fleet_nodes` carrying
+      # this build is proof that a real machine downloaded it, started it, and
+      # got far enough to talk back. Nothing here checks that the apps on it are
+      # healthy — that is what the ten minutes of soak are for, and what a human
+      # watching a canary would look at.
+      #
+      # If no node picks it up, this FAILS rather than promoting anyway. A fleet
+      # left at 34% is visible and recoverable; a bad agent on every node is the
+      # thing this whole mechanism exists to prevent.
+      - name: Promote the rollout once a node is running it
+        run: |
+          set -euo pipefail
+          SHORT="${GITHUB_SHA::7}"
+
+          curl -sSL -o cloud-sql-proxy \
+            https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.0/cloud-sql-proxy.linux.amd64
+          chmod +x cloud-sql-proxy
+          ./cloud-sql-proxy --port 5433 supersonic-deploy-prod:us-central1:supersonic-platform-pg &
+          for i in $(seq 1 30); do
+            (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null && break
+            sleep 1
+          done
+
+          PGPASSWORD="$(gcloud secrets versions access latest \
+            --secret supersonic-pg-password --project supersonic-deploy-prod)"
+          export PGPASSWORD
+
+          # Nodes collect on their own two-minute timer, so this waits long
+          # enough for two attempts and no longer.
+          ok=0
+          for i in $(seq 1 15); do
+            n="$(psql -h 127.0.0.1 -p 5433 -U postgres -d supersonic_platform -tAc \
+              "select count(*) from fleet_nodes where agent_version = '$SHORT' and last_seen > now() - interval '3 minutes'")"
+            echo "nodes running $SHORT: ${n:-0}"
+            if [ "${n:-0}" -ge 1 ]; then ok=1; break; fi
+            sleep 20
+          done
+
+          if [ "$ok" != "1" ]; then
+            echo "::error::no node reported running $SHORT — leaving the rollout at 34%"
+            exit 1
+          fi
+
+          printf '%s\n%s\n100\n' "$DIGEST" "$GITHUB_SHA" > current
+          gcloud storage cp current \
+            "gs://supersonic-static-assets/agent/current" \
+            --cache-control="no-cache" \
+            --project supersonic-deploy-prod
+          echo "promoted $SHORT to the whole fleet"
 
       # Read back what was published rather than trusting that the upload
       # returned zero. The same reasoning as assertReleaseUploaded on the static

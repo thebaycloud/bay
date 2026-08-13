@@ -928,4 +928,19 @@ describes.
 The hosting provider (§2, deliberately). Whether to move the shared Cloud SQL
 instance (§8). Static apps, which ADR 0001 keeps on Cloud Run permanently and
 which nothing here disturbs. Lazy image loading (§4), left open rather than
-chosen. The rollout percentage policy that should replace the `FLEET_APPS` list.
+chosen.
+
+**Decided on 13 Aug: the rollout policy.** 34% of the fleet — one node of three,
+the smallest blast radius this fleet can express — then promotion to 100% once a
+node has REPORTED running the new build, and a failed workflow if none does. The
+node decides for itself whether it is in the rollout, from a hash of its own name
+and the digest it is offered, so there is no list to keep in step with reality
+and the same node reaches the same answer on every tick. Hashed with the digest
+rather than the name alone, so the canary moves between builds: a permanently
+first node is the node a bad build always breaks, and if it is holding apps that
+cannot move — see the volume pin — that is the worst case every time.
+
+Prompted by the two things `FLEET_APPS`'s deletion cost in one day: a
+schema-dependent write that broke every deploy at once, and an agent rollout that
+reached all three nodes inside two minutes and contaminated the measurement being
+taken at the time.

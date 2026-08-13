@@ -48,6 +48,41 @@ fi
 # 2. What is running. A missing record counts as nothing installed, which is
 #    correct on a fresh node and harmless on one that lost the file: the digest
 #    check below makes a redundant download idempotent rather than wrong.
+# 1b. Is this node in the rollout yet?
+#
+# The pointer's third line is the percentage of the fleet that should be running
+# this build. Absent or unparseable means 100 — everyone — which is what every
+# publish meant before this existed and is the safe reading: a percentage nobody
+# can parse must not silently freeze the fleet on an old agent while looking
+# like nothing is wrong.
+#
+# THE NODE DECIDES FOR ITSELF, from a hash of its own name and the digest it is
+# being offered. No coordinator, no list to keep in step with reality — the same
+# node reaches the same answer on every run, so it does not flip in and out of a
+# rollout between two ticks of the timer.
+#
+# Hashed with the DIGEST and not the name alone, so the canary moves between
+# builds. A permanently-first node is the node a bad build always breaks, and if
+# it happens to be the one holding apps that cannot move — see the volume pin —
+# that is the worst case every single time.
+#
+# This is what replaces FLEET_APPS, deleted with the Cloud Run lane. Twice in one
+# day its absence cost something: a schema-dependent write broke every deploy at
+# once, and an agent rollout reached all three nodes inside two minutes and
+# contaminated the measurement being taken at the time.
+PERCENT="$(sed -n 3p "$TMP/current" | tr -d '[:space:]')"
+if [[ ! "$PERCENT" =~ ^[0-9]+$ ]] || [ "$PERCENT" -gt 100 ]; then PERCENT=100; fi
+if [ "$PERCENT" -lt 100 ]; then
+  # Four hex digits of sha256 over "<node>:<digest>" — the first 16 bits are as
+  # uniform as the whole hash and fit in a shell integer without arithmetic games.
+  BUCKET=$(( 0x$(printf '%s' "$(hostname):$WANT" | sha256sum | cut -c1-4) % 100 ))
+  if [ "$BUCKET" -ge "$PERCENT" ]; then
+    log "not in this rollout yet (bucket $BUCKET, rolling to $PERCENT%) — staying on ${HAVE:-none}"
+    exit 0
+  fi
+  log "in this rollout (bucket $BUCKET < $PERCENT%)"
+fi
+
 HAVE="$(cat "$DIR/installed.sha256" 2>/dev/null | tr -d '[:space:]' || true)"
 if [ "$WANT" = "$HAVE" ] && [ -x "$DIR/supersonicd" ]; then
   log "already current ($WANT, commit ${COMMIT:-unknown})"
