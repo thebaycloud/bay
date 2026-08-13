@@ -11,13 +11,16 @@ test("deleting without saying yes is refused, and the refusal is the command to 
   assert.match(out, /supersonic delete myapp --yes/);
 });
 
-test("the refusal says what survives, because that is the part people get wrong", () => {
-  // Delete tears down the app record, its deploy history and its placement. It
-  // does NOT drop the database or the bucket. Someone deleting an app to free
-  // its data would be misled by silence here, and someone deleting an app they
-  // want the data from would be terrified by it.
+test("the refusal says the data goes too, because that is the part people get wrong", () => {
+  // `deleteApp` drops the database (`dropAppDatabase`) and removes the bucket
+  // (`storage rm -r gs://supersonicdeploy-<slug>`) along with images, static
+  // releases and the build cache. This message said the opposite for a day —
+  // "its database and its storage bucket are KEPT" — which is the most dangerous
+  // direction for it to be wrong in: it invites someone to delete an app they
+  // still want the data from.
   const out = deletionRefusal("myapp", {});
-  assert.match(out, /database and its storage bucket are KEPT/);
+  assert.match(out, /so would its DATA/);
+  assert.match(out, /database, the storage/);
 });
 
 test("`--yes` proceeds", () => {

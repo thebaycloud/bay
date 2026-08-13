@@ -416,7 +416,7 @@ async function del(args) {
   if (refusal) die(refusal);
   const d = await api(`/api/apps/${app}/delete`, { method: "POST" });
   if (args.json) return json(d);
-  print(green("✓ ") + `${app} deleted — its database and storage bucket were kept`);
+  print(green("✓ ") + `${app} deleted — its database, bucket and images went with it`);
 }
 
 async function exec(args) {

@@ -35,8 +35,8 @@ function deletionRefusal(app, args) {
   }
 
   return [
-    `${app} would be deleted: it stops serving, and its deploy history and`,
-    "placement go with it. Its database and its storage bucket are KEPT.",
+    `${app} would be deleted, and so would its DATA: the database, the storage`,
+    "bucket, the images and the deploy history all go with it.",
     "",
     "This cannot be undone, and there is no prompt to say yes to — run",
     `  supersonic delete ${app} --yes`,
