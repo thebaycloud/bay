@@ -421,6 +421,14 @@ func (a *Agent) reportFaults() []ProcessFault {
 // back, which is the safe direction. Deliberately shorter than the 90 seconds
 // nodeFaultFor allows a fault row, because this steers a deploy to PASS and a
 // fault only ever steers one to fail.
+// How long to leave a withdrawn route unrouted before killing what it pointed at.
+//
+// The router reloads by polling the routes file's mtime every 500ms (see
+// router.go's `watch`, which explains why it polls rather than uses inotify), so
+// this has to outlast one poll. A second is two polls and costs a deploy nothing
+// — it is paid once per reconcile that removes something, not per app.
+const routeWithdrawGrace = 1 * time.Second
+
 const confirmWindow = 30 * time.Second
 
 // confirmRunning records that this process was just seen running.
@@ -876,17 +884,48 @@ func (a *Agent) reconcileOnce() error {
 	// Remove what is no longer wanted, before starting anything new: on a node
 	// near its memory ceiling, starting first would be the difference between a
 	// clean swap and an OOM.
+	//
+	// THE ROUTE COMES OUT BEFORE THE PROCESS DOES, and that ordering is a drain.
+	// `a.rt.Stop(id)` used to run first, and the routing table is derived from
+	// `a.live` — so between the sandbox dying and the next `writeRoutes` the
+	// table still pointed at it, and a request arriving in that window reached a
+	// route with nothing behind it. Measured on the first rolling deploys, once
+	// the routing side had been fixed: 1 request in 64 answered 502 with
+	// `x-supersonic-router: upstream-error`, at the instant of the swap.
+	//
+	// Withdrawn for every id first, published once, and only then stopped. The
+	// pause is because the router reloads by polling the file's mtime every
+	// 500ms — republishing without waiting for it to be read would move the race
+	// rather than close it.
+	// id -> the slug it belonged to, "" when it was not live. Carried out of this
+	// pass because the clean-up below needs what was deleted here, and reading
+	// `a.live` after the delete would find nothing.
+	withdrawn := make(map[string]string, len(have))
+	for _, id := range have {
+		if _, ok := units[id]; !ok {
+			a.mu.Lock()
+			slug := ""
+			if l, wasLive := a.live[id]; wasLive {
+				delete(a.slots, l.index)
+				slug = l.app.Slug
+			}
+			delete(a.live, id)
+			a.mu.Unlock()
+			withdrawn[id] = slug
+		}
+	}
+	if len(withdrawn) > 0 {
+		if err := a.writeRoutes(); err != nil {
+			log.Printf("! could not withdraw routes before stopping (%v) — stopping anyway", err)
+		} else {
+			time.Sleep(routeWithdrawGrace)
+		}
+	}
+
 	for _, id := range have {
 		if _, ok := units[id]; !ok {
 			log.Printf("%s: removing (no longer desired)", id)
 			a.rt.Stop(id)
-			a.mu.Lock()
-			l, wasLive := a.live[id]
-			if wasLive {
-				delete(a.slots, l.index)
-			}
-			delete(a.live, id)
-			a.mu.Unlock()
 			// A start recorded but never reported — this id undeployed inside
 			// the one poll interval between them — must not survive to be handed
 			// to whatever the next process at this same sandbox id turns out to
@@ -905,8 +944,8 @@ func (a *Agent) reconcileOnce() error {
 			// `id` here could never match a cron record — remove by the app's
 			// slug prefix instead, matching sandboxID's `slug + "--" + name + "."`
 			// shape.
-			if wasLive && !survivingSlugs[l.app.Slug] {
-				a.relFail.forgetPrefix(l.app.Slug + "@")
+			if slug := withdrawn[id]; slug != "" && !survivingSlugs[slug] {
+				a.relFail.forgetPrefix(slug + "@")
 			}
 		}
 	}
