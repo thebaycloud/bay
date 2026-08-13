@@ -524,6 +524,51 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# What the agent needs to be able to speak at all.
+#
+# A NODE BUILT FROM THIS REPOSITORY USED TO COME UP MUTE. `agent.env` carries the
+# sync endpoint and the fleet token, and it was — in this file's own words
+# elsewhere — "added to the live unit by hand", present on no node this script
+# had ever built. Recreating fleet-lab-2 on 13 Aug proved it: the agent started,
+# logged "edge gate: OFF (no FLEET_EDGE_SECRET)", found nowhere to sync to, and
+# the node sat there while its thirteen apps were rehomed elsewhere.
+#
+# The values are fetched rather than baked. Both are secrets and the node's
+# service account can already read them — that is what the broker was built on —
+# so the only thing that was ever missing was this step.
+#
+# Written only when absent, like fleet.env above: a hand-edited value on a live
+# node is not overwritten by a re-run.
+if [ ! -s /etc/supersonic/agent.env ]; then
+  log "writing agent.env (endpoint and fleet token)"
+  TOKEN="$(gcloud secrets versions access latest --secret fleet-token \
+    --project supersonic-deploy-prod 2>/dev/null || true)"
+  if [ -n "$TOKEN" ]; then
+    cat > /etc/supersonic/agent.env <<EOF
+FLEET_ENDPOINT=https://supersonic-control-plane-540236122367.us-central1.run.app/api/fleet/sync
+FLEET_TOKEN=${TOKEN}
+EOF
+    chmod 0600 /etc/supersonic/agent.env
+  else
+    log "WARNING: could not read the fleet token — this node cannot register"
+  fi
+fi
+
+# The edge secret lives in fleet.env, and without it the node's router accepts a
+# slug from anyone who can reach the port. The agent says so at startup — "edge
+# gate: OFF" — which is how its absence was found.
+if ! grep -q '^FLEET_EDGE_SECRET=..*' /etc/supersonic/fleet.env 2>/dev/null; then
+  EDGE="$(gcloud secrets versions access latest --secret supersonic-fleet-edge-secret \
+    --project supersonic-deploy-prod 2>/dev/null || true)"
+  if [ -n "$EDGE" ]; then
+    log "adding FLEET_EDGE_SECRET to fleet.env"
+    printf 'FLEET_EDGE_SECRET=%s\n' "$EDGE" >> /etc/supersonic/fleet.env
+  else
+    log "WARNING: no edge secret — this node's router will accept any slug from anyone reaching it"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 7a. Log shipping
 #
 # App stdout and stderr land in /srv/apps/<slug>/<process>.log, written by the
