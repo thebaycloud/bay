@@ -106,6 +106,13 @@ export interface OwnedApp {
   status: "deploying" | "live" | "failed";
   visibility: Visibility;
   createdAt: string;
+  /**
+   * The repository this app was deployed from, or null when the platform does
+   * not know — which is NOT the same as "it has none". Null covers an app
+   * uploaded as a folder, and every app deployed before the column existed,
+   * because the value was never written down and cannot be backfilled.
+   */
+  repoUrl: string | null;
   /** Why the last deploy failed, when it did. From the deploy record. */
   error?: string;
 }
@@ -159,6 +166,11 @@ const OWNED_APPS = (order: string) =>
           a.status,
           a.visibility,
           a.created_at,
+          -- Where this app came from, when the platform kept it. Null for every
+          -- app that predates the column and for every app uploaded as a folder,
+          -- and the reader has to say "unknown" rather than "none" — see
+          -- lib/repo-source.ts for why those are different facts.
+          a.repo_url,
           d.error
      FROM apps a
      LEFT JOIN deploys d ON d.slug = a.slug
@@ -211,6 +223,7 @@ export async function listOwnedApps(ownerId: string, sort: AppSort = "deployed")
     status: row.status,
     visibility: row.visibility,
     createdAt: row.created_at?.toISOString?.() ?? String(row.created_at ?? ""),
+    repoUrl: row.repo_url ?? null,
     error: row.status === "failed" ? (row.error ?? undefined) : undefined,
   }));
 }
