@@ -104,13 +104,29 @@ export interface DeployTarget {
 }
 
 const CAPABILITIES: Record<Runtime, ReadonlySet<DeployCapability>> = {
-  cloudrun: new Set<DeployCapability>(["exec", "rollback", "domainMapping", "autoRollbackOnFailure"]),
-  // Empty, not partially filled: nothing on this list works for a fleet app
-  // today. Two call sites disagreed with that operationally until they were
-  // guarded (see `domainMapping`/`autoRollbackOnFailure` above) — this set
-  // was already right while they were wrong, which is the whole reason a
-  // stated fact is worth more than an inline re-derivation.
-  fleet: new Set<DeployCapability>(),
+  // `rollback` is GONE from this one, and that is the same change as adding it
+  // below. Cloud Run's rollback was `gcloud run revisions list` and a traffic
+  // split back to the last Ready one; the container lane it belonged to is
+  // deleted, and the only apps still on this target are static — files in a
+  // bucket, which have no revisions to walk. What is left here guards static.
+  cloudrun: new Set<DeployCapability>(["exec", "domainMapping", "autoRollbackOnFailure"]),
+  // `rollback` is here now, and it is the first entry this set has ever had.
+  //
+  // It was empty with the note "nothing on this list works for a fleet app
+  // today", and that stayed true only as long as a placement kept one spec and
+  // no history. `releases` records every version with the spec that shipped,
+  // `fleet_placements` copies that spec byte-for-byte, and `planPlacements`
+  // converges on whatever `desired_release` names without caring whether it is
+  // newer or older than what is running. So rolling back is one write and the
+  // reconciler performs it — through the same function a deploy uses.
+  //
+  // The rest stay off, and each is still a fact rather than a TODO: `exec` has
+  // no per-app isolated execution on a node, `domainMapping` points at a Cloud
+  // Run service, and `autoRollbackOnFailure` is Cloud Run's traffic-split undo,
+  // which is a different mechanism from this one — a failed fleet deploy is
+  // handled by `placeOnFleet` restoring the previous placement, not by walking a
+  // revision history.
+  fleet: new Set<DeployCapability>(["rollback"]),
 };
 
 /** cloudrun: unchanged from before this module existed. */

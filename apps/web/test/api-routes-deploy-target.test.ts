@@ -182,24 +182,37 @@ test("exec runs on the cloudrun target", async () => {
   assert.deepEqual(gcloudCalls, ["execCommand:app1"]);
 });
 
-test("rollback is refused on the fleet target, by supports(\"rollback\")", async () => {
+test("rollback is allowed on the fleet target, and calls no gcloud", async () => {
+  // The reverse of what this asserted before, and the reason is the whole point:
+  // a placement used to be the only record of a version, so there was nothing to
+  // go back TO and the route answered 501. `releases` now holds every version
+  // with the spec that shipped.
+  //
+  // `gcloudCalls` staying empty is the other half. A rollback is one write to
+  // `apps.desired_release`; the reconciler places the older release beside what
+  // is running, waits for the node to report ready, and drains the newer one.
+  // Nothing here shells out, and nothing here waits.
   reset();
   storedRuntime = "fleet";
   const { FLEET_TARGET } = await loadedTarget;
-  assert.equal(FLEET_TARGET.supports("rollback"), false, "sanity: this is the fact the route must agree with");
+  assert.equal(FLEET_TARGET.supports("rollback"), true, "sanity: this is the fact the route must agree with");
   const { POST } = await loadedRollback;
   const res = await POST(new Request("http://x"), { params: { slug: "app1" } });
-  assert.equal(res.status, 501);
+  assert.notEqual(res.status, 501);
   assert.deepEqual(gcloudCalls, []);
 });
 
-test("rollback runs on the cloudrun target", async () => {
+test("rollback is refused for a static app, which has no versions", async () => {
+  // The cloudrun target is what a static app resolves to — it is served from a
+  // bucket by the shared static server — and `rollback` left that capability set
+  // with the lane it belonged to. So this is still a 501, for a reason that is
+  // now about the app rather than about the mechanism being unbuilt.
   reset();
   storedRuntime = "cloudrun";
   const { POST } = await loadedRollback;
   const res = await POST(new Request("http://x"), { params: { slug: "app1" } });
-  assert.equal(res.status, 200);
-  assert.deepEqual(gcloudCalls, ["rollback:app1"]);
+  assert.equal(res.status, 501);
+  assert.deepEqual(gcloudCalls, []);
 });
 
 test("every route's decision traces back to the one deployTargetFor mapping — the property that stops a route and the (future-migrated) pipeline from disagreeing", async () => {
