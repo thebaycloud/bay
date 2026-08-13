@@ -368,7 +368,15 @@ systemctl restart containerd
 # expired after two minutes, and the reconciler moved all nineteen of its apps to
 # another node. That is the failover behaving exactly as designed, triggered by a
 # maintenance script that did not put back what it took away.
-systemctl start supersonicd || log "WARNING: the agent did not start — this node will lose its placements"
+# On a FRESH node there is no agent binary yet — the updater collects it a moment
+# later — so a failure here is normal and the warning was a false alarm on every
+# first provision. A warning that fires when nothing is wrong teaches people to
+# skip warnings, which is worse than not printing one.
+if [ -x /opt/agent/supersonicd ]; then
+  systemctl start supersonicd || log "WARNING: the agent did not start — this node will lose its placements"
+else
+  log "no agent binary yet; the updater will collect one and start it"
+fi
 
 # App data on a disk that outlives the node. Named by device rather than found
 # by guessing, so a wrong disk cannot be adopted as this one.

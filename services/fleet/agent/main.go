@@ -185,6 +185,9 @@ type Agent struct {
 	src  *Source
 	mu   sync.Mutex
 	live map[string]*live
+	// lastWithData is the pinned set as it was last logged, so a change is
+	// reported once rather than on every sync.
+	lastWithData string
 	// writeMu serialises publishing the routing table. Starts run concurrently
 	// and each publishes on completion, so without this two goroutines share one
 	// temp path and the rename can land a half-written file — a node briefly
@@ -519,6 +522,27 @@ func (a *Agent) reportWithData() []string {
 		}
 	}
 	sort.Strings(out)
+
+	// Said once, when it changes. The pin is visible in the control plane's
+	// placement table and was invisible from here — the machine that actually
+	// holds the disk — so "why will this app not move" had no answer on the node
+	// itself. Logging it every ten seconds would bury the rest of the log; logging
+	// the change is the fact worth having.
+	// Under the lock, like every other field on the agent. Only the sync loop
+	// calls this today, and a field guarded by nothing on a struct guarded by a
+	// mutex is a race waiting for its second caller.
+	joined := strings.Join(out, " ")
+	a.mu.Lock()
+	changed := joined != a.lastWithData
+	a.lastWithData = joined
+	a.mu.Unlock()
+	if changed {
+		if joined == "" {
+			log.Printf("no app on this node has data; nothing is pinned here")
+		} else {
+			log.Printf("pinned by data: %s", joined)
+		}
+	}
 	return out
 }
 
