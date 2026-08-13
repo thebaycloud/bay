@@ -12,6 +12,15 @@ export interface AppRecord {
   run_url: string | null;
   visibility: Visibility;
   status: "deploying" | "live" | "failed";
+  /**
+   * The repository this app was deployed from, or null when the platform does
+   * not know — which is not the same as "it has none". See lib/repo-source.ts.
+   *
+   * `getAppBySlug` selects `*`, so this arrived with the column and the type was
+   * simply not told. A field the row has and the type denies is one an editor
+   * refuses to complete and a reviewer cannot find.
+   */
+  repo_url: string | null;
 }
 
 /** Insert (or reclaim) the row for a slug. Called BEFORE the deploy runs. */

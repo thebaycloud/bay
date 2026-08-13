@@ -33,8 +33,9 @@ mock.module("@/lib/session", {
 mock.module("@/lib/ownership", {
   namedExports: { ownsApp: async () => true },
 });
+let appRow: Record<string, unknown> = { status: "live" };
 mock.module("@/lib/apps", {
-  namedExports: { getAppBySlug: async () => ({ status: "live" }) },
+  namedExports: { getAppBySlug: async () => appRow },
 });
 mock.module("@/lib/deploys", {
   namedExports: { getDeploy: async () => null },
@@ -95,6 +96,7 @@ function reset() {
   gcloudCalls.length = 0;
   fleetWriteCalls.length = 0;
   envKeys = ["EXISTING"];
+  appRow = { status: "live" };
 }
 
 test("status route answers from the fleet only when deployTargetForApp says fleet", async () => {
@@ -238,4 +240,38 @@ test("every route's decision traces back to the one deployTargetFor mapping — 
       `rollback route vs supports("rollback") for ${kind}`,
     );
   }
+});
+
+test("the status route reports the repository the app was deployed from", async () => {
+  // `supersonic redeploy` reads exactly this field and dies without it — "was
+  // deployed from a computer — run `supersonic deploy` in its folder". That
+  // message was right for an upload and wrong for everything else: `repo` came
+  // from a `SUPERSONIC_REPO` env var on the Cloud Run SERVICE, so once an app ran
+  // on a node there was no service to read it from and redeploy refused every
+  // app on the fleet.
+  //
+  // It now comes from `apps.repo_url`, which is the row rather than the runtime —
+  // the same answer whichever branch of this route serves it.
+  reset();
+  storedRuntime = "fleet";
+  placement = { node: "n1", spec: { image: "img" } };
+  appRow = { status: "live", repo_url: "https://github.com/acme/api" };
+  const { GET } = await loadedStatus;
+  const res = await GET(new Request("http://x"), { params: { slug: "app1" } });
+  const body = await res.json();
+  assert.equal(body.repo, "https://github.com/acme/api");
+});
+
+test("an app with no recorded repository reports an empty one, not a missing field", async () => {
+  // The CLI checks `if (!d.repo)`, so undefined and "" behave the same for it —
+  // but the field being ABSENT and being EMPTY read differently to anything else
+  // consuming this route, and an app uploaded as a folder genuinely has none.
+  reset();
+  storedRuntime = "fleet";
+  placement = { node: "n1", spec: { image: "img" } };
+  appRow = { status: "live", repo_url: null };
+  const { GET } = await loadedStatus;
+  const res = await GET(new Request("http://x"), { params: { slug: "app1" } });
+  const body = await res.json();
+  assert.equal(body.repo, "");
 });
