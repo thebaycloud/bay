@@ -868,10 +868,22 @@ func main() {
 
 	log.Printf("supersonicd up; reconciling every %s", *interval)
 	for {
+		// SLEEP THE REMAINDER, not the interval. The control plane now holds a
+		// sync open until it has something to send, so a pass that waited ten
+		// seconds for an answer has already spent the interval — sleeping another
+		// one on top would halve the heartbeat rate and double the time this node
+		// takes to notice anything the hold did not cover.
+		//
+		// A pass that returns immediately — because there WAS something to do —
+		// still sleeps almost the whole interval, which is what keeps a busy node
+		// from spinning.
+		started := time.Now()
 		if err := a.reconcileOnce(); err != nil {
 			log.Printf("reconcile: %v", err)
 		}
-		time.Sleep(*interval)
+		if rest := *interval - time.Since(started); rest > 0 {
+			time.Sleep(rest)
+		}
 	}
 }
 
@@ -1423,7 +1435,22 @@ func (a *Agent) reconcileOnce() error {
 	}
 
 	a.syncCron(d)
-	a.probeAll()
+	// A JUST-STARTED APP IS NOT LISTENING YET, and one probe at this instant
+	// almost always finds nothing. The steady-state health loop then leaves it
+	// unhealthy for up to five more seconds — which the deploy waits out, because
+	// readiness is reported only once the node's own probe has passed.
+	//
+	// So the first probe after a start is retried, briefly and only while
+	// something is still unhealthy. Bounded at three seconds: past that it is not
+	// a slow bind, it is an app that does not come up, and the health loop is the
+	// right thing to be watching it.
+	for i := 0; i < 6; i++ {
+		a.probeAll()
+		if a.allHealthy() {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	if err := a.writeRoutes(); err != nil {
 		return err
 	}
@@ -1561,6 +1588,25 @@ func (a *Agent) startMany(items []work) {
 		}(it)
 	}
 	wg.Wait()
+}
+
+// allHealthy reports whether every routable process on this node is answering.
+//
+// Used to stop the post-start probe loop as soon as there is nothing left to
+// wait for. A node with nothing routable is trivially healthy, which is the
+// right answer: there is nothing to retry.
+func (a *Agent) allHealthy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, l := range a.live {
+		if l.proc.Kind != KindWeb || l.proc.Visibility == "internal" {
+			continue
+		}
+		if !l.ok {
+			return false
+		}
+	}
+	return true
 }
 
 // probeAll health-checks every running app.

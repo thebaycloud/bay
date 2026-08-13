@@ -869,3 +869,43 @@ export async function peersFor(node: string, routerPort = 8080): Promise<PeerRou
     .filter((row) => row.internal_ip)
     .map((row) => ({ slug: row.slug as string, addr: `${row.internal_ip}:${routerPort}` }));
 }
+
+/**
+ * Hold until the fleet generation moves, or until the budget runs out.
+ *
+ * THIS IS THE LATENCY HALF OF §6, and only the other half was built. Generations
+ * made the ANSWER small — a node that is up to date gets `unchanged: true`
+ * instead of the whole desired set — and left the question on a ten-second timer.
+ * So a placement written by a deploy waited an average of five seconds for a node
+ * to ask about it, and that wait was pure clock.
+ *
+ * Held server-side rather than polled faster by the node, because the node
+ * asking twice as often costs twice as many requests to learn nothing. Here the
+ * node is already waiting when the change happens, and hears within one step.
+ *
+ * The step is 400ms and the read is one row by primary key. Three nodes at 2.5
+ * reads a second is not a load; the alternative — LISTEN/NOTIFY — needs a
+ * connection held outside the pool, which is a different kind of complexity for
+ * a fleet this size.
+ *
+ * Returns the new generation, or null if the budget expired. Aborts with the
+ * request: a node that hangs up should not leave us counting.
+ */
+export async function waitForGenerationChange(
+  from: number,
+  budgetMs: number,
+  signal?: AbortSignal,
+  stepMs = 400,
+): Promise<number | null> {
+  const until = Date.now() + budgetMs;
+  while (Date.now() < until) {
+    if (signal?.aborted) return null;
+    await new Promise((r) => setTimeout(r, stepMs));
+    if (signal?.aborted) return null;
+    // Swallowed: a database blip during the hold is not worth failing a sync
+    // over. The node re-asks in a moment and the generation is still there.
+    const now = await fleetGeneration().catch(() => from);
+    if (now !== from) return now;
+  }
+  return null;
+}

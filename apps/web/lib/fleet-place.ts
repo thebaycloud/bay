@@ -537,13 +537,14 @@ export interface Placement {
 /**
  * How long a deploy waits for the node to report the new release running.
  *
- * The same budget the probe already used — 24 attempts, five seconds apart —
- * because it is the same question with the same answer: a cold start that pulls
- * an image is slow, and a slow start mistaken for a failure trades a false pass
- * for a false rollback, which is the worse of the two.
+ * The same TOTAL as the probe's — two minutes — but asked every second rather
+ * than every five. The budget is about a cold start being slow and a slow start
+ * mistaken for a failure trading a false pass for a false rollback; the STEP was
+ * only ever copied from the probe, and it put an average of two and a half
+ * seconds of pure clock on the end of every successful deploy.
  */
-const READY_ATTEMPTS = 24;
-const READY_INTERVAL_MS = 5_000;
+const READY_ATTEMPTS = 120;
+const READY_INTERVAL_MS = 1_000;
 
 /**
  * Put things back after a deploy that did not prove itself.

@@ -1,8 +1,17 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * How long a sync may be held open waiting for something to send.
+ *
+ * Ten seconds: the same cadence the node used to sleep for, so heartbeats arrive
+ * exactly as often as they always did, and comfortably inside the agent's own
+ * 20-second client timeout.
+ */
+const SYNC_HOLD_MS = 10_000;
+
 import {
-  heartbeatNode, desiredFor, drainingOn, recordNodeFaults, recordNodeRunning, peersFor,
+  heartbeatNode, desiredFor, drainingOn, recordNodeFaults, recordNodeRunning, peersFor, waitForGenerationChange,
   fleetGeneration, decideSync,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
@@ -157,11 +166,30 @@ export async function POST(req: Request) {
     // deploy that reported success and never reached the machine.
     //
     // One ordering costs a wasted request. The other loses a deploy.
-    const current = await fleetGeneration();
-    const decision = decideSync(
+    let current = await fleetGeneration();
+    let decision = decideSync(
       typeof body.generation === "number" ? body.generation : undefined,
       current,
     );
+    // NOTHING TO SEND YET — so wait for something, rather than telling the node
+    // to come back in ten seconds. Every write this request carries is already
+    // done above: the heartbeat, the running report, the data report and the
+    // lease renewal all happen before this line, so holding the ANSWER delays
+    // none of them.
+    //
+    // Held for less than the agent's own 20s client timeout, and for about the
+    // interval it would otherwise have slept, so the heartbeat cadence is what it
+    // always was while the reaction time stops being a coin toss against a clock.
+    if (!decision.send) {
+      const moved = await waitForGenerationChange(current, SYNC_HOLD_MS, req.signal);
+      if (moved !== null) {
+        current = moved;
+        decision = decideSync(
+          typeof body.generation === "number" ? body.generation : undefined,
+          current,
+        );
+      }
+    }
     if (!decision.send) {
       // Nothing has changed since this node last asked. It keeps what it has,
       // which is the same set it would have been sent — so this is a smaller
