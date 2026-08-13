@@ -139,10 +139,16 @@ jobs:
           # so there is no list to keep in step with reality and a node reaches
           # the same answer on every tick.
           #
-          # 34 is one node of three. That is the smallest blast radius this fleet
-          # can express, and it is the number that would have caught both of the
-          # things this replaces: a change that reached every node inside two
-          # minutes, twice in one day, with nothing in between to notice.
+          # 34 is ABOUT one node of three — an expectation, not a count. The node
+          # decides by hashing its own name with this digest, so the hash is free
+          # to put none or two of them under the threshold, and it put two on the
+          # second live rollout. That is the bargain: no coordination, in exchange
+          # for a number that is only exact in the aggregate.
+          #
+          # It is still the smallest blast radius this fleet can express, and it
+          # is what would have caught both of the things it replaces — a change
+          # reaching every node inside two minutes, twice in one day, with nothing
+          # in between to notice.
           #
           # Promoted to 100 by the step below, once a node has actually reported
           # running it. An agent that is never confirmed stays on one node.

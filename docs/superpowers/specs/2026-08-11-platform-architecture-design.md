@@ -930,9 +930,12 @@ instance (§8). Static apps, which ADR 0001 keeps on Cloud Run permanently and
 which nothing here disturbs. Lazy image loading (§4), left open rather than
 chosen.
 
-**Decided on 13 Aug: the rollout policy.** 34% of the fleet — one node of three,
-the smallest blast radius this fleet can express — then promotion to 100% once a
-node has REPORTED running the new build, and a failed workflow if none does. The
+**Decided on 13 Aug: the rollout policy.** 34% of the fleet — about one node of
+three, the smallest blast radius this fleet can express — then promotion to 100%
+once a node has REPORTED running the new build, and a failed workflow if none
+does. About, not exactly: each node decides by hashing its own name with the
+digest, so the count is an expectation and the second live rollout put two nodes
+in the first wave. The
 node decides for itself whether it is in the rollout, from a hash of its own name
 and the digest it is offered, so there is no list to keep in step with reality
 and the same node reaches the same answer on every tick. Hashed with the digest

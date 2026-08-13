@@ -48,6 +48,13 @@ fi
 # 2. What is running. A missing record counts as nothing installed, which is
 #    correct on a fresh node and harmless on one that lost the file: the digest
 #    check below makes a redundant download idempotent rather than wrong.
+#
+#    READ BEFORE THE ROLLOUT CHECK, because that check reports what this node is
+#    staying on. It used to be read afterwards, so a node that declined an update
+#    always said "staying on none" — including three that were running perfectly
+#    well at the time.
+HAVE="$(cat "$DIR/installed.sha256" 2>/dev/null | tr -d '[:space:]' || true)"
+
 # 1b. Is this node in the rollout yet?
 #
 # The pointer's third line is the percentage of the fleet that should be running
@@ -60,6 +67,12 @@ fi
 # being offered. No coordinator, no list to keep in step with reality — the same
 # node reaches the same answer on every run, so it does not flip in and out of a
 # rollout between two ticks of the timer.
+#
+# A PERCENTAGE IS AN EXPECTATION, NOT A COUNT. 34% of three nodes is about one,
+# and the hash is free to put none or two of them under the threshold — it put
+# TWO on the second live rollout. That is the bargain a hash-based rollout makes:
+# no coordination, in exchange for a number that is only exact in the aggregate.
+# If an exact count ever matters, this is the wrong mechanism to get it from.
 #
 # Hashed with the DIGEST and not the name alone, so the canary moves between
 # builds. A permanently-first node is the node a bad build always breaks, and if
@@ -83,7 +96,6 @@ if [ "$PERCENT" -lt 100 ]; then
   log "in this rollout (bucket $BUCKET < $PERCENT%)"
 fi
 
-HAVE="$(cat "$DIR/installed.sha256" 2>/dev/null | tr -d '[:space:]' || true)"
 if [ "$WANT" = "$HAVE" ] && [ -x "$DIR/supersonicd" ]; then
   log "already current ($WANT, commit ${COMMIT:-unknown})"
   exit 0

@@ -87,6 +87,10 @@ printf '%s\ncommitsha\n0\n' "$D" > "$ROOT/bucket/current"
 out="$(bash "$HERE/update-agent.sh" 2>&1)"
 check "0% leaves every node alone" "$(cat "$ROOT/opt/installed.sha256")" "deadbeef"
 check "and says why" "$(echo "$out" | grep -c 'not in this rollout')" "1"
+# …and says what it is staying ON. `HAVE` used to be read after this check, so a
+# node that declined an update always reported "staying on none" — including
+# three that were running perfectly well at the time.
+check "and names what it stays on" "$(echo "$out" | grep -c 'staying on deadbeef')" "1"
 
 # 9. At 100 the rollout is everyone, which is what an unstaged publish means.
 printf '%s\ncommitsha\n100\n' "$D" > "$ROOT/bucket/current"
