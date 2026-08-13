@@ -62,6 +62,7 @@ import { sidecarFor, sidecarEnv, dependencyRefusal } from "@/lib/dependencies";
 import { wantsRepoRootContext, buildOwner } from "@/lib/dockerfile-context";
 import { publicUrlBuildArgs, publicUrlEnvArgs, ENV_FILENAMES } from "@/lib/public-url-args";
 import { buildctlArgs, dockerAuthConfig, buildPlaneHost } from "@/lib/buildplane";
+import { redeployableRepo } from "@/lib/repo-source";
 import { railpackConfig, railpackPrepareArgs } from "@/lib/railpack";
 import { detectRelease, RELEASE_FILES } from "@/lib/release-detect";
 import { readProcfile } from "@/lib/procfile";
@@ -1357,7 +1358,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // The proxy resolves every request against this table, so the row must
     // exist before the deploy can possibly succeed.
     if (ownerId && ownerWorkspace) {
-      await createAppRecord({ slug, workspaceId: ownerWorkspace, ownerId });
+      // The repository rides along, when there is one worth keeping. This is the
+      // only place it is ever written, and `redeployableRepo` is the only thing
+      // that decides — an upload's `url` points at a tarball the deploy is about
+      // to consume, and a column full of those reads as knowledge the platform
+      // does not have.
+      await createAppRecord({
+        slug, workspaceId: ownerWorkspace, ownerId,
+        repoUrl: redeployableRepo({ url, isUpload }),
+      });
     }
     // /api/detect already cloned this repo moments ago. Reuse that clone when
     // it is still around. A miss — a different control-plane instance, an

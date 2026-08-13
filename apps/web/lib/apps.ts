@@ -17,13 +17,26 @@ export interface AppRecord {
 /** Insert (or reclaim) the row for a slug. Called BEFORE the deploy runs. */
 export async function createAppRecord(o: {
   slug: string; workspaceId: string; ownerId: string;
+  /**
+   * The repository this deploy came from, or null when there is not one worth
+   * keeping — see `redeployableRepo`, which is the only thing that should ever
+   * produce this value.
+   *
+   * COALESCE, not assignment. Null means LEAVE WHAT IS THERE: an app deployed
+   * from GitHub and then redeployed from a local folder must not lose the
+   * repository it came from, because the point of the column is to be able to
+   * build the app again without its owner present.
+   */
+  repoUrl?: string | null;
 }): Promise<string> {
   const r = await getPool(DB).query(
-    `INSERT INTO apps(slug, workspace_id, owner_id, status)
-     VALUES($1, $2, $3, 'deploying')
-     ON CONFLICT(slug) DO UPDATE SET status = 'deploying'
+    `INSERT INTO apps(slug, workspace_id, owner_id, status, repo_url)
+     VALUES($1, $2, $3, 'deploying', $4)
+     ON CONFLICT(slug) DO UPDATE SET
+       status = 'deploying',
+       repo_url = COALESCE($4, apps.repo_url)
      RETURNING id`,
-    [o.slug, o.workspaceId, o.ownerId]
+    [o.slug, o.workspaceId, o.ownerId, o.repoUrl ?? null]
   );
   return r.rows[0].id;
 }
