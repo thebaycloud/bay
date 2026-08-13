@@ -222,11 +222,23 @@ export async function pass(client: Client, now: number, only?: string): Promise<
 
   const steps: Step[] = [];
   let held = 0;
+  // At most one app is moved for balance per pass. See the note at the call.
+  let rebalanced = false;
   for (const [appSlug, e] of byApp) {
     // Counted above, planned for only when asked. See the note on `only`.
     if (only !== undefined && appSlug !== only) continue;
     const desired = { ...e.desired, pinnedTo: e.pinnedTo };
-    const planned = planPlacements(desired, e.placed, ordered, now, quorum);
+    // One rebalance per pass, and the budget is here because the loop is here.
+    // Every app sees the same load snapshot — taken once, above — so without this
+    // every app on the fullest node moves at once and the snapshot they all acted
+    // on is wrong before the pass finishes.
+    const before = e.placed.length;
+    const planned = planPlacements(desired, e.placed, ordered, now, quorum, !rebalanced);
+    // A `place` for an app that was already at its desired count is a rebalance;
+    // anything else is the fleet catching up with what it was asked for.
+    if (!rebalanced && planned.some((s) => s.kind === "place") && before >= desired.replicas) {
+      rebalanced = true;
+    }
     // An app with an expired lease that produced no step because the fleet
     // cannot be seen. Counted so a quiet pass and a holding pass do not read the
     // same from outside.

@@ -181,3 +181,40 @@ test("an app without data is still evicted from a node that cannot be heard", as
   const result = await pass(c, NOW);
   assert.deepEqual(result.steps, [{ kind: "evict", slug: "nodata", instance: 0 }]);
 });
+
+test("a pass moves at most one app for balance, however lopsided the fleet", async () => {
+  // THE DEFECT THIS EXISTS FOR, watched in production. A rebuilt node registered
+  // empty beside one carrying nineteen, and every one of those nineteen apps
+  // decided to move in the same pass — because each is planned separately and
+  // they all see the same load snapshot, taken once at the top of the pass.
+  //
+  // The fleet went 13/19/0 to 13/19/32 and then swung back. A rebalancer acting
+  // on a snapshot it is invalidating is not converging, it is ringing.
+  const rows = [
+    joined({ slug: "a", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW + 60_000 }),
+    joined({ slug: "b", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW + 60_000 }),
+    joined({ slug: "c", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW + 60_000 }),
+    joined({ slug: "d", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW + 60_000 }),
+  ];
+  const c = fakeClient(rows, [{ name: "n1", lastSeen: FRESH }, { name: "n2", lastSeen: FRESH }]);
+
+  const result = await pass(c, NOW);
+
+  const moves = result.steps.filter((s) => s.kind === "place");
+  assert.equal(moves.length, 1, `one move per pass, got ${JSON.stringify(result.steps)}`);
+});
+
+test("the one-per-pass budget does not hold up work that is not a rebalance", async () => {
+  // The budget must not become a general throttle. An app that is short an
+  // instance is the fleet not being what it was asked for, and every one of those
+  // is planned on the same pass as always.
+  const rows = [
+    joined({ slug: "a" }),
+    joined({ slug: "b" }),
+    joined({ slug: "c" }),
+  ];
+  const c = fakeClient(rows, [{ name: "n1", lastSeen: FRESH }, { name: "n2", lastSeen: FRESH }, { name: "n3", lastSeen: FRESH }]);
+
+  const result = await pass(c, NOW);
+  assert.equal(result.steps.length, 3, "three apps with nothing placed should all be placed");
+});

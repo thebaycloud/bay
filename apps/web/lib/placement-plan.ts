@@ -86,6 +86,22 @@ export function planPlacements(
   nodes: NodeHealth[],
   now: number,
   quorum: boolean,
+  /**
+   * Whether this app may be rebalanced on this pass.
+   *
+   * ONE APP PER PASS, and the budget has to live in the CALLER because that is
+   * where the loop is. This function returning a single step was never enough:
+   * `pass` calls it once per app, every app sees the same load snapshot taken at
+   * the start of the pass, and so every app on the fullest node decides to move
+   * at once.
+   *
+   * Watched happen in production the moment a rebuilt node registered: nineteen
+   * apps placed a second instance on it in one pass, the loads swung from 13/19/0
+   * to 13/19/32, and the next pass did it again in the other direction. A
+   * rebalancer that acts on a snapshot it is invalidating is not converging, it
+   * is ringing.
+   */
+  mayRebalance = true,
 ): Step[] {
   const { slug } = desired;
 
@@ -197,7 +213,7 @@ export function planPlacements(
   // BESIDE, never instead: this emits a `place` on the emptier node while the app
   // goes on serving where it is, and the trim above completes the move on a later
   // pass — after the new instance exists.
-  if (quorum && desired.pinnedTo === null && wanted.length === desired.replicas && ready === desired.replicas) {
+  if (mayRebalance && quorum && desired.pinnedTo === null && wanted.length === desired.replicas && ready === desired.replicas) {
     const healthyNodes = nodes.filter((n) => n.healthy);
     const taken = new Set(placements.map((p) => p.node));
     const emptiest = healthyNodes.filter((n) => !taken.has(n.name)).sort((a, b) => a.load - b.load)[0];
