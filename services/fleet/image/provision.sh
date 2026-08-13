@@ -122,6 +122,25 @@ test -d /usr/local/bin/gvisor-bin \
 # will create its root on the boot disk under that path and the mount will then
 # shadow files it is holding open. `supersonic-state.service` below owns the
 # mount and containerd is ordered after it.
+# IS THERE A FAST DISK? The content store only moves if there is somewhere
+# better to put it. On a node without a local SSD, /srv/state is the boot disk —
+# the same device the default root is already on — so pointing containerd at it
+# would move 26 GB of cached images from one directory to another for no gain and
+# throw the cache away in the process. Measured on fleet-lab-2, which has no SSD.
+STATE_ON_SSD=""
+for cand in /dev/disk/by-id/google-local-nvme-ssd-0 /dev/nvme0n1; do
+  [ -e "$cand" ] && { STATE_ON_SSD="yes"; break; }
+done
+if [ -n "$STATE_ON_SSD" ]; then
+  CTRD_ROOT="root = '/srv/state/containerd'"
+  CTRD_ROOT_V2='root = "/srv/state/containerd"'
+  log "content store will live on the local SSD"
+else
+  CTRD_ROOT=""
+  CTRD_ROOT_V2=""
+  log "no local SSD: leaving the content store where it is (boot disk)"
+fi
+
 log "configuring containerd for the runsc handler"
 CTRD_MAJOR="$(containerd --version | awk '{print $3}' | sed 's/^v//' | cut -d. -f1)"
 mkdir -p /etc/containerd
@@ -131,7 +150,7 @@ if [ "$CTRD_MAJOR" -ge 2 ]; then
   cat > /etc/containerd/config.toml <<EOF
 version = 3
 
-root = '/srv/state/containerd'
+${CTRD_ROOT}
 
 [plugins.'${CRI_PLUGIN}']
   [plugins.'${CRI_PLUGIN}'.containerd]
@@ -144,10 +163,10 @@ root = '/srv/state/containerd'
       runtime_type = 'io.containerd.runsc.v1'
 EOF
 else
-  cat > /etc/containerd/config.toml <<'EOF'
+  cat > /etc/containerd/config.toml <<EOF
 version = 2
 
-root = "/srv/state/containerd"
+${CTRD_ROOT_V2}
 
 [plugins."io.containerd.grpc.v1.cri".containerd]
   default_runtime_name = "runc"
@@ -319,6 +338,27 @@ systemctl start supersonic-state.service || log "WARNING: could not mount the fa
 
 # NOW containerd may start, with its store on a disk that exists. This is the
 # restart moved down from the configuration block — see the note there.
+#
+# THE EXISTING CACHE MOVES WITH IT rather than being abandoned. A node that has
+# been serving has tens of gigabytes of images already unpacked — 20 GB on
+# fleet-lab-1 — and starting containerd on an empty root would make every app on
+# it re-pull. Moved only when the destination is empty, so a re-run never
+# disturbs a store that is already in the right place.
+if [ -n "$STATE_ON_SSD" ] && [ -d /var/lib/containerd ] && [ ! -d /srv/state/containerd/io.containerd.content.v1.content ]; then
+  log "moving the existing content store onto the state disk (this can take a minute)"
+  systemctl stop containerd || true
+  mkdir -p /srv/state/containerd
+  # `cp -a` then remove, rather than `mv`: these are different filesystems, and a
+  # move that fails halfway would leave neither root usable. The old one stays
+  # until the copy is complete.
+  if cp -a /var/lib/containerd/. /srv/state/containerd/; then
+    rm -rf /var/lib/containerd.migrated && mv /var/lib/containerd /var/lib/containerd.migrated
+    log "content store moved; the previous one is kept at /var/lib/containerd.migrated"
+  else
+    log "WARNING: could not copy the content store; leaving it where it is"
+  fi
+fi
+
 log "restarting containerd onto the state disk"
 systemctl restart containerd
 
