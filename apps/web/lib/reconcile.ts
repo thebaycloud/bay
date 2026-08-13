@@ -114,14 +114,14 @@ export interface PassResult {
  */
 const LOCK_KEY = 0x5501_1EE7; // "supersonic fleet", arbitrary and fixed
 
-export async function reconcileOnce(now: number = Date.now()): Promise<PassResult | null> {
+export async function reconcileOnce(now: number = Date.now(), only?: string): Promise<PassResult | null> {
   const pool = getPool(DB);
   const client = await pool.connect();
   try {
     const got = await client.query(`SELECT pg_try_advisory_lock($1) AS ok`, [LOCK_KEY]);
     if (!got.rows[0]?.ok) return null;
     try {
-      return await pass(client, now);
+      return await pass(client, now, only);
     } finally {
       await client.query(`SELECT pg_advisory_unlock($1)`, [LOCK_KEY]);
     }
@@ -132,7 +132,22 @@ export async function reconcileOnce(now: number = Date.now()): Promise<PassResul
 
 type Client = { query: (text: string, values?: unknown[]) => Promise<{ rows: any[] }> };
 
-async function pass(client: Client, now: number): Promise<PassResult> {
+/**
+ * One convergence, over the whole fleet or over a single app.
+ *
+ * Exported for the tests and for `convergeApp`, which is how a DEPLOY reaches
+ * this: the spec's step 3 is "the placement function creates placements for V —
+ * the same function the reconciler calls", and the cheapest way to mean that
+ * literally is one function with an argument rather than two that must be kept
+ * in step.
+ *
+ * `only` NARROWS THE PLANNING LOOP AND NOT THE QUERY, which is the whole subtlety
+ * of the parameter. "Which node is least loaded" is a fact about every placement
+ * on the fleet; reading one app's rows would show every other node as empty and
+ * send the new instance to whichever node happened to be first. So every app is
+ * read and counted, and only the planning is restricted.
+ */
+export async function pass(client: Client, now: number, only?: string): Promise<PassResult> {
   const nodes = (await client.query(
     `SELECT name, drain, extract(epoch from last_seen) * 1000 AS last_seen FROM fleet_nodes`,
   )).rows.map((r) => ({ name: r.name as string, drain: Boolean(r.drain), lastSeen: Number(r.last_seen) }));
@@ -195,7 +210,9 @@ async function pass(client: Client, now: number): Promise<PassResult> {
 
   const steps: Step[] = [];
   let held = 0;
-  for (const [, e] of byApp) {
+  for (const [appSlug, e] of byApp) {
+    // Counted above, planned for only when asked. See the note on `only`.
+    if (only !== undefined && appSlug !== only) continue;
     const desired = { ...e.desired, pinnedTo: e.pinnedTo };
     const planned = planPlacements(desired, e.placed, ordered, now, quorum);
     // An app with an expired lease that produced no step because the fleet
@@ -208,7 +225,7 @@ async function pass(client: Client, now: number): Promise<PassResult> {
   for (const s of steps) await apply(client, s, now);
   if (steps.length) await bumpFleetGeneration();
 
-  return { quorum, apps: byApp.size, steps, held };
+  return { quorum, apps: only === undefined ? byApp.size : (byApp.has(only) ? 1 : 0), steps, held };
 }
 
 async function apply(client: Client, s: Step, now: number): Promise<void> {
@@ -517,4 +534,20 @@ export async function passRecord(): Promise<PassRecord | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Converge ONE app now, instead of waiting for the next scheduled pass.
+ *
+ * A deploy writes `apps.desired_release` and then wants the placement to happen
+ * immediately — waiting up to a minute for the tick would put the whole
+ * reconcile interval on the front of every deploy. It takes the same advisory
+ * lock, so a deploy and the scheduled pass cannot act on the fleet at once.
+ *
+ * Null means another pass holds the lock. That is not an error and not a
+ * failure to converge: the pass already running will see this app's new desired
+ * release, because it reads the row rather than a snapshot taken before.
+ */
+export function convergeApp(slug: string, now: number = Date.now()): Promise<PassResult | null> {
+  return reconcileOnce(now, slug);
 }
