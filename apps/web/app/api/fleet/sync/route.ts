@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import {
-  heartbeatNode, desiredFor, recordNodeFaults, recordNodeRunning, peersFor,
+  heartbeatNode, desiredFor, drainingOn, recordNodeFaults, recordNodeRunning, peersFor,
   fleetGeneration, decideSync,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
@@ -170,7 +170,18 @@ export async function POST(req: Request) {
       console.error("fleet sync: peers for", name, e instanceof Error ? e.message : String(e));
       return [];
     });
-    return Response.json({ generation: decision.generation, apps, peers });
+    // Which of this node's apps are being drained. The node keeps RUNNING them —
+    // they are still in `apps` — and stops offering them a local route, so the
+    // load balancer reaching this machine is sent on to the version that
+    // replaced them instead of being served the one on its way out.
+    //
+    // Best-effort like `peers`: a list that cannot be read costs the promptness
+    // of a drain, not the node's ability to serve.
+    const draining = await drainingOn(name).catch((e) => {
+      console.error("fleet sync: draining for", name, e instanceof Error ? e.message : String(e));
+      return [] as string[];
+    });
+    return Response.json({ generation: decision.generation, apps, peers, draining });
   } catch (e) {
     // A node that gets an error here keeps running what it already has, which is
     // the correct failure: the cached desired state is still the last thing the

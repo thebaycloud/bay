@@ -141,6 +141,35 @@ export async function desiredFor(node: string): Promise<AppSpec[]> {
 }
 
 /**
+ * The apps on this node whose placement is DRAINING.
+ *
+ * A drained placement keeps running — `desiredFor` still returns it, and that is
+ * deliberate: a process killed the moment it is drained cannot finish the
+ * requests already in it. What has to stop is new traffic ARRIVING at it, and
+ * the node is the only thing that can stop that, because it owns the local route
+ * that the load balancer reaches directly.
+ *
+ * Without this the old version went on answering from its own node until the
+ * next scheduled pass removed the placement — up to a minute, and about ten
+ * seconds in the measurement that prompted this. A deploy said "live" while the
+ * version it replaced was still serving anyone the load balancer happened to
+ * send to that machine.
+ */
+export async function drainingOn(node: string): Promise<string[]> {
+  const r = await getPool(DB).query(
+    `SELECT DISTINCT p.slug
+       FROM fleet_placements p
+       JOIN apps a ON a.slug = p.slug
+      WHERE p.node = $1
+        AND a.runtime = 'fleet'
+        AND p.state = 'draining'
+      ORDER BY p.slug`,
+    [node],
+  );
+  return r.rows.map((row) => row.slug as string);
+}
+
+/**
  * Place an app on a node.
  *
  * The spec is stored denormalised. Resolving it per pull would put the deploy

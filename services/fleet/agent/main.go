@@ -92,6 +92,19 @@ type Desired struct {
 	// address that reaches it. Absent from an older control plane, in which case
 	// the node forwards nothing and behaves exactly as it did.
 	Peers []PeerRoute `json:"peers,omitempty"`
+	// Draining is the slugs on THIS node whose placement is on its way out: the
+	// replacement is already ready somewhere else, and these should stop
+	// receiving new requests while the ones already inside them finish.
+	//
+	// They stay in Apps, and that is deliberate — a process killed the moment it
+	// is drained cannot finish anything. What stops is the ROUTE, which is why
+	// this is a separate list rather than a flag inside the spec: the spec is the
+	// record of what shipped and does not change because the placement is
+	// retiring.
+	//
+	// Absent from an older control plane, in which case nothing drains and the
+	// node behaves exactly as it did.
+	Draining []string `json:"draining,omitempty"`
 	// Generation is the control plane's counter at the moment it answered. The
 	// node echoes it back on the next poll; an unchanged counter means it may
 	// keep what it has. Zero from a control plane too old to send one, which
@@ -1525,6 +1538,65 @@ func (a *Agent) probeAll() {
 // Written atomically. The router reads this file on every change, and a partial
 // read during a rewrite would be a node briefly serving 502s for every app it
 // holds.
+
+// mergeRoutes decides what this node advertises, given what it runs and what the
+// fleet holds elsewhere.
+//
+// Pulled out of `writeRoutes` so it can be tested: every rule below was learned
+// from a request that failed in production, and none of them was checkable while
+// this lived inside a method that needs a live agent to call.
+//
+// The order it produces is the preference, and the caller sorts stably to keep
+// it: healthy local, then peer, then draining or unhealthy local.
+func mergeRoutes(local []Route, peers []PeerRoute, draining []string) []Route {
+	isDraining := make(map[string]bool, len(draining))
+	for _, slug := range draining {
+		isDraining[slug] = true
+	}
+
+	// A slug is "held here" only if this node can actually serve it. Local-first
+	// is still the rule — the placement this node is reading may be one sync
+	// older than the app it started — but a route that cannot serve does not
+	// hold anything.
+	//
+	// DRAINING counts as cannot-serve even though the process is healthy and
+	// running. That is the whole point of a drain: the version is on its way out,
+	// something else is already ready, and new requests belong to the new one.
+	// The process keeps running so the requests already inside it can finish.
+	held := make(map[string]bool, len(local))
+	first := local[:0:0]
+	last := make([]Route, 0, 2)
+	for _, r := range local {
+		if r.Healthy && !isDraining[r.Slug] {
+			held[r.Slug] = true
+			first = append(first, r)
+		} else {
+			last = append(last, r)
+		}
+	}
+
+	out := first
+	for _, p := range peers {
+		if held[p.Slug] || p.Slug == "" || p.Addr == "" {
+			continue
+		}
+		out = append(out, Route{
+			Slug: p.Slug, Addr: p.Addr,
+			// Healthy because the node that holds it decides that, and this node
+			// has no way to ask. Forwarding and letting the far end answer 503 is
+			// the truthful failure; refusing here would report an app down on the
+			// word of a machine that is not running it.
+			Healthy: true,
+			Peer:    true,
+		})
+	}
+	// Kept rather than dropped: with nowhere else to send the request, "this app
+	// is not healthy" is a true answer and "not on this node" would be a false
+	// one from the machine that is holding it. A draining route serves for the
+	// same reason — better the outgoing version than nothing.
+	return append(out, last...)
+}
+
 func (a *Agent) writeRoutes() error {
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
@@ -1546,56 +1618,14 @@ func (a *Agent) writeRoutes() error {
 			Prefix:  l.proc.Prefix,
 		})
 	}
-	// Everything the fleet holds that this node does not. Local first: a slug
-	// this node runs is never routed off it, whatever the control plane said —
-	// the placement it is reading may be one sync older than the app it started.
-	//
-	// ONLY A HEALTHY LOCAL ROUTE SHADOWS A PEER, and that qualifier is the fix.
-	// This map was filled from every local route regardless of health, so a
-	// process that had STARTED but not yet passed its first probe hid the copy
-	// still serving on another node, and the router answered 503 "This app is not
-	// healthy" instead of forwarding to the one that was. Measured on a live
-	// rollback: 400 requests, one 503, carrying `x-supersonic-router: unhealthy`
-	// at the exact instant the previous version came back.
-	//
-	// An unhealthy local route is still KEPT — it is appended after the peers
-	// below — so an app that is down everywhere still answers 503 with the real
-	// reason rather than "not on this node". What changes is only which of the
-	// two is offered first.
-	local := make(map[string]bool, len(routes))
-	unhealthy := make([]Route, 0, 2)
-	healthy := routes[:0:0]
-	for _, r := range routes {
-		if r.Healthy {
-			local[r.Slug] = true
-			healthy = append(healthy, r)
-		} else {
-			unhealthy = append(unhealthy, r)
-		}
-	}
-	routes = healthy
-	for _, p := range a.desired.Peers {
-		if local[p.Slug] || p.Slug == "" || p.Addr == "" {
-			continue
-		}
-		routes = append(routes, Route{
-			Slug: p.Slug, Addr: p.Addr,
-			// Healthy because the node that holds it decides that, and this node
-			// has no way to ask. Forwarding and letting the far end answer 503 is
-			// the truthful failure; refusing here would report an app down on the
-			// word of a machine that is not running it.
-			Healthy: true,
-			Peer:    true,
-		})
-	}
+	routes = mergeRoutes(routes, a.desired.Peers, a.desired.Draining)
+	// The lock covers `a.live` and `a.desired`, which is everything read above.
+	// `mergeRoutes` is pure and the marshalling below touches no shared state, so
+	// this is as early as it can be released — and it MUST be released: the block
+	// this replaced ended with this line, and dropping it deadlocked every later
+	// reader of a.mu. Caught by the agent's own suite going from 7 seconds to a
+	// timeout.
 	a.mu.Unlock()
-	// The unhealthy local routes go last, behind any peer that can actually serve
-	// the slug — see the note above.
-	routes = append(routes, unhealthy...)
-	// STABLE, because the order within one slug is now meaningful: healthy local,
-	// then peer, then unhealthy local. `sort.Slice` is not stable and would have
-	// shuffled exactly the preference this builds.
-	sort.SliceStable(routes, func(i, j int) bool { return routes[i].Slug < routes[j].Slug })
 
 	b, err := json.MarshalIndent(routes, "", "  ")
 	if err != nil {

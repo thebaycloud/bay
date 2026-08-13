@@ -306,3 +306,46 @@ func TestAnUnhealthyLocalRouteStillAnswersWhenItIsTheOnlyOne(t *testing.T) {
 		t.Errorf("the reason should be the app's health, not a routing miss: got %q", got)
 	}
 }
+
+func TestADrainingAppStopsTakingNewRequestsButKeepsRunning(t *testing.T) {
+	// The window this closes, measured: a deploy reported "live" and the version
+	// it replaced went on answering for about ten seconds — anyone the load
+	// balancer happened to send to the old version's node got the old version,
+	// because that node still held a healthy local route for it and local wins.
+	//
+	// Draining is now "cannot serve" for routing purposes even though the process
+	// is healthy and still running. The process keeps running so the requests
+	// already inside it can finish; what stops is new ones arriving.
+	local := []Route{{Slug: "app", Addr: "127.0.0.1:9", Healthy: true}}
+	peers := []PeerRoute{{Slug: "app", Addr: "10.0.0.2:8080"}}
+
+	// Not draining: the local route wins and no peer is offered at all.
+	got := mergeRoutes(local, peers, nil)
+	if len(got) != 1 || got[0].Peer {
+		t.Fatalf("a healthy local route must hold the slug: %+v", got)
+	}
+
+	// Draining: the peer is offered first, and the outgoing version is kept
+	// behind it rather than dropped.
+	got = mergeRoutes(local, peers, []string{"app"})
+	if len(got) != 2 {
+		t.Fatalf("expected the peer and the draining local route: %+v", got)
+	}
+	if !got[0].Peer {
+		t.Errorf("new requests must go to the version that replaced it: %+v", got[0])
+	}
+	if got[1].Peer || got[1].Slug != "app" {
+		t.Errorf("the draining route must be kept as the fallback: %+v", got[1])
+	}
+}
+
+func TestADrainingAppWithNoReplacementStillServes(t *testing.T) {
+	// Draining without anywhere to send the traffic must not black-hole the app.
+	// The planner only drains once a replacement is ready, so this should not
+	// happen — and "should not happen" is exactly the condition worth pinning,
+	// because the cost of being wrong is an app that answers nothing at all.
+	got := mergeRoutes([]Route{{Slug: "app", Addr: "127.0.0.1:9", Healthy: true}}, nil, []string{"app"})
+	if len(got) != 1 || got[0].Peer {
+		t.Fatalf("the draining route is the only one there is, and must still serve: %+v", got)
+	}
+}
