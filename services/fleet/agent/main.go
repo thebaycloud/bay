@@ -1549,10 +1549,31 @@ func (a *Agent) writeRoutes() error {
 	// Everything the fleet holds that this node does not. Local first: a slug
 	// this node runs is never routed off it, whatever the control plane said —
 	// the placement it is reading may be one sync older than the app it started.
+	//
+	// ONLY A HEALTHY LOCAL ROUTE SHADOWS A PEER, and that qualifier is the fix.
+	// This map was filled from every local route regardless of health, so a
+	// process that had STARTED but not yet passed its first probe hid the copy
+	// still serving on another node, and the router answered 503 "This app is not
+	// healthy" instead of forwarding to the one that was. Measured on a live
+	// rollback: 400 requests, one 503, carrying `x-supersonic-router: unhealthy`
+	// at the exact instant the previous version came back.
+	//
+	// An unhealthy local route is still KEPT — it is appended after the peers
+	// below — so an app that is down everywhere still answers 503 with the real
+	// reason rather than "not on this node". What changes is only which of the
+	// two is offered first.
 	local := make(map[string]bool, len(routes))
+	unhealthy := make([]Route, 0, 2)
+	healthy := routes[:0:0]
 	for _, r := range routes {
-		local[r.Slug] = true
+		if r.Healthy {
+			local[r.Slug] = true
+			healthy = append(healthy, r)
+		} else {
+			unhealthy = append(unhealthy, r)
+		}
 	}
+	routes = healthy
 	for _, p := range a.desired.Peers {
 		if local[p.Slug] || p.Slug == "" || p.Addr == "" {
 			continue
@@ -1568,7 +1589,13 @@ func (a *Agent) writeRoutes() error {
 		})
 	}
 	a.mu.Unlock()
-	sort.Slice(routes, func(i, j int) bool { return routes[i].Slug < routes[j].Slug })
+	// The unhealthy local routes go last, behind any peer that can actually serve
+	// the slug — see the note above.
+	routes = append(routes, unhealthy...)
+	// STABLE, because the order within one slug is now meaningful: healthy local,
+	// then peer, then unhealthy local. `sort.Slice` is not stable and would have
+	// shuffled exactly the preference this builds.
+	sort.SliceStable(routes, func(i, j int) bool { return routes[i].Slug < routes[j].Slug })
 
 	b, err := json.MarshalIndent(routes, "", "  ")
 	if err != nil {

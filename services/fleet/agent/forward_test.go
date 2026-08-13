@@ -251,3 +251,58 @@ func TestALocalHopStillLosesTheSecret(t *testing.T) {
 		t.Errorf("the app was handed the platform's secret: %q", seen)
 	}
 }
+
+// A process that has started but not yet passed its first probe must not hide
+// the copy still serving elsewhere.
+//
+// This is the ordering `writeRoutes` builds — healthy local, then peer, then
+// unhealthy local — asserted at the router, which is where it has to hold. The
+// table used to be "local first, whatever its health", so during a rollout or a
+// rollback the node that had just started the incoming version answered 503
+// "This app is not healthy" while the outgoing version was still up on another
+// machine. Measured on a live rollback: 400 requests, exactly one 503, carrying
+// `x-supersonic-router: unhealthy` at the instant the previous version returned.
+func TestAHealthyPeerBeatsAnUnhealthyLocalRoute(t *testing.T) {
+	far := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("the version that is actually up"))
+	}))
+	defer far.Close()
+
+	// The order `writeRoutes` produces for this situation.
+	rt, _ := routerOver(t, []Route{
+		{Slug: "app", Addr: far.Listener.Addr().String(), Healthy: true, Peer: true},
+		{Slug: "app", Addr: "127.0.0.1:1", Healthy: false},
+	})
+
+	req := httptest.NewRequest("GET", "http://app.supersonic.cv/", nil)
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("a starting local process shadowed a serving peer: got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Supersonic-Router"); got != "forwarded" {
+		t.Errorf("the request should have been forwarded to the node that can serve it: got %q", got)
+	}
+}
+
+// …and with nowhere else to send it, the unhealthy local route still answers.
+//
+// The point of keeping it rather than dropping it: "this app is not healthy" is
+// a true and useful answer, and "not on this node" would be a false one from the
+// machine that is holding the app.
+func TestAnUnhealthyLocalRouteStillAnswersWhenItIsTheOnlyOne(t *testing.T) {
+	rt, _ := routerOver(t, []Route{{Slug: "app", Addr: "127.0.0.1:1", Healthy: false}})
+
+	req := httptest.NewRequest("GET", "http://app.supersonic.cv/", nil)
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 503 {
+		t.Fatalf("an app that is down everywhere should say so: got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Supersonic-Router"); got != "unhealthy" {
+		t.Errorf("the reason should be the app's health, not a routing miss: got %q", got)
+	}
+}
