@@ -361,6 +361,14 @@ fi
 
 log "restarting containerd onto the state disk"
 systemctl restart containerd
+# AND THE AGENT, because stopping containerd stopped it too. `supersonicd`
+# declares `Requires=containerd.service`, and Requires propagates a STOP without
+# propagating the start back — so the migration above took the agent down with
+# containerd and left it down. The node then stopped heartbeating, its lease
+# expired after two minutes, and the reconciler moved all nineteen of its apps to
+# another node. That is the failover behaving exactly as designed, triggered by a
+# maintenance script that did not put back what it took away.
+systemctl start supersonicd || log "WARNING: the agent did not start — this node will lose its placements"
 
 # App data on a disk that outlives the node. Named by device rather than found
 # by guessing, so a wrong disk cannot be adopted as this one.
