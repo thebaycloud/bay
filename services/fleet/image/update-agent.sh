@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # Collect the current fleet agent, if it is not the one already installed.
 #
+# THIS SCRIPT ITSELF HAS NO DELIVERY PATH, which is worth knowing before you edit
+# it. `provision.sh` installs it, and provision.sh is run by hand — so a change
+# here reaches a node only when somebody puts it there. The agent BINARY updates
+# itself through this file every two minutes; the file does not.
+#
+# It bit twice on 13 Aug. A message fixed here still read the old way on every
+# node until the script was copied out by hand, and the same shape had already
+# cost a rebuilt node its `agent.env` that morning. Deliberately not made
+# self-updating: an updater that replaces itself cannot be trusted to recover
+# from replacing itself badly.
+#
 # PULL, NOT PUSH, and for the same reason the agent pulls its desired state:
 # nothing reaches into a node. A node that was unreachable during a release
 # collects it on its next tick instead of missing it, and CI needs no route to
