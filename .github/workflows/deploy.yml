@@ -73,7 +73,25 @@ jobs:
           # one command's environment and never written to a file or a log.
           curl -sSL -o cloud-sql-proxy             https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.0/cloud-sql-proxy.linux.amd64
           chmod +x cloud-sql-proxy
-          ./cloud-sql-proxy --port 5433 supersonic-deploy-prod:us-central1:supersonic-shared-pg &
+          # THE PLATFORM INSTANCE, not the shared one. `db/*.sql` are the
+          # platform's own tables — apps, deploys, deploy_stages, placements —
+          # and `db/migrate.ts` opens `supersonic_platform` on whatever this
+          # proxy points at, while the control plane and the deploy worker both
+          # run with PG_CONN=…:supersonic-platform-pg.
+          #
+          # It said `supersonic-shared-pg` and had since this step was written, so
+          # every migration it applied landed on an instance the platform does not
+          # read. It reported success each time — the SQL is valid and a
+          # `supersonic_platform` database exists over there too — which is why
+          # nothing noticed: the older migrations had already been applied BY HAND
+          # to the real instance, so the automated step was a no-op that looked
+          # like a working one.
+          #
+          # Found by the first migration to arrive through this path alone with
+          # code depending on it: `028_apps_repo_url.sql` reported applied, and
+          # every deploy then failed with `column "repo_url" of relation "apps"
+          # does not exist`.
+          ./cloud-sql-proxy --port 5433 supersonic-deploy-prod:us-central1:supersonic-platform-pg &
 
           # Wait for the listener rather than sleeping a guessed number of
           # seconds: a fixed sleep is either too short on a slow runner (the
