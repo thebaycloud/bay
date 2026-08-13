@@ -31,14 +31,12 @@ import type { Runtime, ProcessState } from "./fleet";
  */
 
 export interface PlacementPorts {
-  chooseNode: () => Promise<string | null>;
-  /**
-   * `release` is the id this placement runs, and it is absent on a RESTORE:
-   * putting the previous spec back keeps the release that spec belongs to
-   * rather than claiming the one that just failed.
-   */
-  placeApp: (slug: string, node: string, spec: AppSpec, release?: number) => Promise<void>;
-  unplaceApp: (slug: string) => Promise<void>;
+  // `chooseNode`, `placeApp` and `unplaceApp` USED TO BE HERE, and their absence
+  // is the change. A deploy no longer picks a node or writes a placement: it
+  // records a release, asks for it, and converges — so the only way an app can
+  // be placed is the planner, and a second placement policy cannot drift into
+  // existence beside it.
+
   /**
    * What is placed for this app right now, and where — before this deploy
    * overwrites it. The node travels with the spec because a restore must land
@@ -57,6 +55,47 @@ export interface PlacementPorts {
   recordRelease: (slug: string, spec: AppSpec) => Promise<number>;
   /** Ask for a release. The whole of what a deploy does to change what runs. */
   setDesired: (slug: string, release: number | null) => Promise<void>;
+  /**
+   * Converge this app NOW, through the reconciler's own planner.
+   *
+   * The spec's step 3 is "the placement function creates placements for V — the
+   * same function the reconciler calls", and this is that call. The deploy no
+   * longer picks a node or writes a placement: it records the release, asks for
+   * it, and lets the planner put it BESIDE what is running. That is what makes
+   * the rollout rolling, and it is the same policy that absorbs a node failure —
+   * `planPlacements` refuses to bin-pack precisely so there is room to place a
+   * new instance without evicting the old one first.
+   *
+   * Returns how many steps it took, so "nowhere to put it" is still an answer
+   * this function can report rather than a timeout it has to wait out.
+   */
+  converge: (slug: string) => Promise<number>;
+  /**
+   * Sleep. A port so a test can make the readiness wait instant — without it
+   * every rollout test would pay the real budget, and a suite nobody runs is
+   * worse than one that is slightly less faithful.
+   */
+  wait: (ms: number) => Promise<void>;
+  /**
+   * The node holding a READY placement of this release, or null.
+   *
+   * Ready is the NODE's word, not a probe's: `promoteReady` sets it when the
+   * node's own sync confirms a process whose image matches the release. That is
+   * what makes "which version answered" unambiguous during a roll, when two
+   * releases are placed at once and the load balancer may reach either.
+   */
+  readyAt: (slug: string, release: number) => Promise<string | null>;
+  /**
+   * Drop this release's placements, leaving any other release's alone.
+   *
+   * The failure path needs exactly this and not `unplaceApp`. Reverting `desired`
+   * alone would leave the broken version placed while the old one comes up
+   * beside it — the planner only drains a stale placement once the wanted one is
+   * ready — so the version that just failed its verify would keep taking traffic
+   * for as long as the recovery takes. The spec says the failed release's
+   * placements are removed, and this is that removal.
+   */
+  removeRelease: (slug: string, release: number) => Promise<void>;
   setRuntime: (slug: string, runtime: Runtime) => Promise<void>;
   /** One request at the fleet, addressed the way the edge proxy will address it. */
   probe: (slug: string) => Promise<{ code: number; router?: string }>;
@@ -495,57 +534,114 @@ export interface Placement {
   runUrl?: string;
 }
 
+/**
+ * How long a deploy waits for the node to report the new release running.
+ *
+ * The same budget the probe already used — 24 attempts, five seconds apart —
+ * because it is the same question with the same answer: a cold start that pulls
+ * an image is slow, and a slow start mistaken for a failure trades a false pass
+ * for a false rollback, which is the worse of the two.
+ */
+const READY_ATTEMPTS = 24;
+const READY_INTERVAL_MS = 5_000;
+
+/**
+ * Put things back after a deploy that did not prove itself.
+ *
+ * ONE function for both failure paths — the version that never came up and the
+ * version that came up and failed its verify — because they must not be able to
+ * drift. The old code had the restore written once and reached from one place;
+ * the rolling sequence has two ways to fail, and two copies of a restore is how
+ * one of them quietly stops restoring.
+ *
+ * THE FAILED RELEASE'S PLACEMENTS GO FIRST, and that ordering is the point.
+ * Reverting `desired` alone would leave the broken version placed while the old
+ * one comes up beside it — the planner drains a stale placement only once the
+ * wanted one is ready — so the version that just failed would keep taking
+ * traffic for the whole length of the recovery.
+ */
+async function revert(
+  slug: string,
+  release: number,
+  previousRuntime: Runtime,
+  previousDesired: number | null,
+  reason: string,
+  p: PlacementPorts,
+): Promise<Placement> {
+  await p.removeRelease(slug, release);
+  await p.setDesired(slug, previousDesired);
+  // Converged while the runtime flag still says 'fleet': the planner selects on
+  // it, so restoring the flag first would leave the previous release asked for
+  // and never placed.
+  await p.converge(slug);
+  await p.setRuntime(slug, previousRuntime);
+  p.log(previousDesired === null ? `· nothing placed — ${reason}` : `· kept the previous version — ${reason}`);
+  return { placed: false, reason };
+}
+
 export async function placeOnFleet(
   slug: string,
   spec: AppSpec,
   loadBalancer: string,
   p: PlacementPorts,
 ): Promise<Placement> {
-  const node = await p.chooseNode();
-  if (!node) {
-    // The edge case §8b names as unhandled. There is one node today, so "full"
-    // means one reboot — and an app deployed during it must not end up placed
-    // nowhere, or placed on a node named null.
-    //
-    // Under the fork this is a FAILED DEPLOY, and nothing about it is free.
-    // Before the fork the app was already live on Cloud Run and `placed: false`
-    // meant "it stays where it is"; there is no Cloud Run branch behind this one
-    // any more, so what actually happens is that this deploy does not ship. The
-    // version that was already on a node keeps serving, because nothing here
-    // touched it — that is the good half, and it is not the same thing as the
-    // deploy having succeeded.
-    const reason = "no node has room (or none reported in the last 90s)";
-    p.log(`✕ nowhere to place it — ${reason}. The version already running keeps serving; this deploy has not shipped.`);
-    return { placed: false, reason };
-  }
-
-  // Read BEFORE placing: placing overwrites the row, and setRuntime("fleet")
-  // below overwrites the runtime flag, so after those writes both the version
-  // that was working and the runtime it was on are only knowable from here.
+  // Read BEFORE anything is asked for: the writes below overwrite the runtime
+  // flag and the desired release, so after them both the version that was
+  // working and the runtime it was on are only knowable from here.
   const previous = await p.readPlacement(slug);
   const previousRuntime = await p.readRuntime(slug);
-  // Read before anything is recorded, for the same reason the placement is: the
-  // failure path below is this write in the other direction, and after the write
-  // the old value is only knowable from here.
   const previousDesired = await p.readDesired(slug);
 
-  // Recorded before it is placed. A release is the record of what shipped, and
-  // recording it after a successful placement would mean a placement that
+  // Recorded before it is asked for. A release is the record of what shipped,
+  // and recording it after a successful placement would mean a placement that
   // succeeded and a timeline that lost it — the same shape as a build whose
   // outcome was never written.
   const release = await p.recordRelease(slug, spec);
-  await p.setDesired(slug, release);
 
-  // 1. place. Nothing routes here yet; run_url still points at wherever it did.
-  // With the release, or `desired` and the placement diverge permanently: the
-  // deploy records N, asks for N, and places a row still claiming N-1. The
-  // reconciler then rolls a second instance forward on every pass, for a deploy
-  // that had already placed the right thing.
-  await p.placeApp(slug, node, spec, release);
-  // desiredFor only hands a node placements for apps whose runtime is 'fleet',
-  // so this has to happen before the probe even though it is not yet proven —
-  // there is nothing for step 2 to verify otherwise.
+  // 1. ASK, and let the planner place. This function used to choose a node and
+  //    write the placement itself, which is why a deploy was stop-then-start: it
+  //    overwrote the row the old version was running from. Now it records the
+  //    release, asks for it, and calls the same convergence the reconciler runs
+  //    — which places the new release BESIDE the old one and drains the old only
+  //    once the new is ready. The headroom that makes this possible is the same
+  //    policy that lets a node absorb another node's apps: `planPlacements`
+  //    refuses to bin-pack.
+  //
+  //    Runtime first, because `desiredFor` only hands a node placements for apps
+  //    whose runtime is 'fleet' — the planner would place a row no node would
+  //    ever be told about.
   await p.setRuntime(slug, "fleet");
+  await p.setDesired(slug, release);
+  const steps = await p.converge(slug);
+
+  // 2. WAIT for the node to say it is running this release.
+  //
+  //    Ready is the node's word rather than a probe's, and during a roll that
+  //    distinction is the whole point: two releases are placed at once and the
+  //    load balancer may reach either, so "something answered" cannot tell them
+  //    apart. `promoteReady` sets this state only when the node's own sync
+  //    confirms a process whose image matches the release.
+  // NOWHERE TO PUT IT IS ANSWERED IMMEDIATELY, not waited out. The planner takes
+  // a step for every deploy — the release is new every time, so there is always
+  // something it has never placed — and zero steps therefore means it found no
+  // healthy node with room. Waiting the full readiness budget to then blame the
+  // app would send someone to debug a repository that is fine.
+  if (steps === 0) {
+    const reason = "no node has room (or none reported recently)";
+    p.log(`✕ nowhere to place it — ${reason}. The version already running keeps serving; this deploy has not shipped.`);
+    return await revert(slug, release, previousRuntime, previousDesired, reason, p);
+  }
+
+  let node: string | null = null;
+  for (let i = 0; i < READY_ATTEMPTS && node === null; i++) {
+    node = await p.readyAt(slug, release);
+    if (node === null) await p.wait(READY_INTERVAL_MS);
+  }
+
+  if (node === null) {
+    return await revert(slug, release, previousRuntime, previousDesired,
+      "the node never reported this version running", p);
+  }
 
   // 2. verify — by the only means the app actually offers.
   //
@@ -633,9 +729,12 @@ export async function placeOnFleet(
     } catch {
       nf = null;
     }
+    // `?? ` rather than a cast: `Eligibility.reason` is optional, and a verdict
+    // that failed without saying why still has to carry SOMETHING to the repair
+    // agent — an empty reason reads as "no problem found".
     const reason = nf
       ? `FLEET_NODE_FAULT: ${nf.node} reports this app cannot start on it${nf.detail ? ` — ${nf.detail}` : ""}`
-      : verdict.reason;
+      : verdict.reason ?? "the app did not prove itself, and gave no reason";
 
     // What the app itself said before it stopped answering.
     //
@@ -669,37 +768,34 @@ export async function placeOnFleet(
       }
     } catch { /* no evidence is not a verdict */ }
 
-    // There is no Cloud Run to fall back to any more, so the fallback is the
-    // last version that answered, on the node it was already running on — not
-    // this deploy's node, which `placeApp`'s upsert would otherwise treat as a
-    // second placement rather than overwriting the first. With none — a first
-    // deploy — the placement is dropped rather than left pointing at something
-    // that does not serve.
-    if (previous) {
-      await p.placeApp(slug, previous.node, previous.spec);
-      p.log(`· kept the previous version — ${reason}`);
-    } else {
-      await p.unplaceApp(slug);
-      p.log(`· nothing placed — ${reason}`);
-    }
-    // The runtime flag flipped to 'fleet' above so the probe had something to
-    // check. Restoring it — rather than leaving it — matters most on the
-    // first-deploy branch: unplacing drops the row but the flag would still
-    // say 'fleet', which is what would have silently pointed a node's next
-    // reconcile at a placement that no longer exists.
-    await p.setRuntime(slug, previousRuntime);
-    // The same write, reversed, and next to the placement restore it mirrors.
-    // Left on the failed release, `desired` and the restored placement would
-    // disagree about what this app is meant to be running, and the reconciler
-    // would roll forward into the failure again on its next pass.
-    await p.setDesired(slug, previousDesired);
+    // The restore is `revert`, shared with the path where the node never
+    // reported the release running at all. The previous version comes back
+    // through the PLANNER — desired goes back, the failed release's placements
+    // are removed, and the convergence re-places what was asked for — rather
+    // than through an in-memory copy of a spec read at the top of this function.
+    // That removes the whole class of "what if the process died between reading
+    // and writing", which the spec names as the reason to do it this way.
+    //
     // The log lines ride on the RETURNED reason only. They were just printed in
     // full a few lines up, and repeating them inside the one-line "kept the
     // previous version — …" would say the same thing twice to the same reader.
-    return { placed: false, reason: `${reason}${evidence}` };
+    const done = await revert(slug, release, previousRuntime, previousDesired, reason, p);
+    return { ...done, reason: `${done.reason ?? reason}${evidence}` };
   }
 
-  // 3. the address for the flip, which the caller performs. The edge proxy needs
+  // 3. DRAIN THE VERSION THIS ONE REPLACES, now that the new one is proven.
+  //
+  //    The planner holds a stale placement until the wanted release is ready —
+  //    that is what makes the rollout rolling — so this convergence is the one
+  //    that ends the overlap. Without it the old version keeps taking traffic
+  //    until the next scheduled pass, up to a minute of a deploy reporting the
+  //    new version live while the old one still answers for it.
+  //
+  //    After the verify and not before: draining on the strength of a placement
+  //    that had not proven itself is stop-then-start with extra steps.
+  await p.converge(slug);
+
+  // 4. the address for the flip, which the caller performs. The edge proxy needs
   //    no change: it already forwards x-supersonic-slug, and the fleet router
   //    reads the same header.
   p.log(`Running on ${node}`);

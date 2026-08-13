@@ -57,9 +57,6 @@ function reportFor(s: AppSpec): ProcessState[] {
 function ports(over: Partial<PlacementPorts> = {}) {
   const calls: string[] = [];
   const base: PlacementPorts = {
-    chooseNode: async () => { calls.push("chooseNode"); return "fleet-lab-1"; },
-    placeApp: async (slug, node, s) => { calls.push(`place:${slug}@${node}:${s.image}`); },
-    unplaceApp: async (slug) => { calls.push(`unplace:${slug}`); },
     readPlacement: async () => { calls.push("read"); return null; },
     readRuntime: async () => { calls.push("readRuntime"); return "fleet"; },
     setRuntime: async (slug, rt) => { calls.push(`runtime:${slug}=${rt}`); },
@@ -72,6 +69,15 @@ function ports(over: Partial<PlacementPorts> = {}) {
     readDesired: async () => null,
     recordRelease: async () => 1,
     setDesired: async () => {},
+    // The rolling ports. `converge` reports one step and `readyAt` answers
+    // immediately, so the DEFAULT is a deploy that rolls out cleanly — every
+    // test that is about something else keeps its shape, and the ones about
+    // rollout override these.
+    converge: async (slug) => { calls.push(`converge:${slug}`); return 1; },
+    readyAt: async (slug, release) => { calls.push(`ready:${slug}@${release}`); return "fleet-lab-1"; },
+    removeRelease: async (slug, release) => { calls.push(`removeRelease:${slug}@${release}`); },
+    // Instant, so the readiness budget costs the suite nothing.
+    wait: async () => {},
     log: () => {},
   };
   return { calls, p: { ...base, ...over } };
@@ -342,30 +348,44 @@ test("a router that never stops saying miss is given up on, not waited on foreve
   assert.equal(fleetVerdict(r).ok, false);
 });
 
-test("a full fleet leaves the app on Cloud Run instead of losing it", () => {
-  // chooseNode returning null had no handler anywhere. Unhandled, this is an app
-  // placed on the node named `null` — or a crash in the middle of a deploy that
-  // has already succeeded.
+test("a full fleet fails the deploy immediately rather than waiting to blame the app", () => {
+  // WHO ANSWERS "no room" CHANGED. It was `chooseNode` returning null, which had
+  // no handler anywhere — unhandled, that is an app placed on a node named
+  // `null`, or a crash in the middle of a deploy that had already succeeded. The
+  // deploy no longer picks a node at all, so the planner answers instead: it
+  // takes a step for every deploy, because the release is new every time and
+  // there is always something it has never placed, so ZERO steps means it found
+  // nowhere to put this.
+  //
+  // Answered immediately, and that is the point of asking. Waiting out the
+  // readiness budget and then reporting "the node never reported this version
+  // running" would send someone to debug a repository that is fine.
   return (async () => {
-    const { calls, p } = ports({ chooseNode: async () => null });
+    const { calls, p } = ports({ converge: async (slug) => { calls.push(`converge:${slug}`); return 0; } });
     const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
     assert.equal(r.placed, false);
     assert.match(r.reason!, /no node/i);
-    // Nothing was written. The app is exactly where the deploy left it.
-    assert.deepEqual(calls.filter((c) => !c.startsWith("chooseNode")), []);
+    // Never waited for readiness: the failure was known before the budget began.
+    assert.ok(!calls.some((c) => c.startsWith("ready:")), "it waited for a placement that was never made");
   })();
 });
 
-test("a version that does not answer is replaced by the one that did, on the node it was already on", async () => {
-  // The previous placement is on fleet-lab-2, a DIFFERENT node than the one
-  // this deploy's chooseNode hands back (fleet-lab-1). placeApp upserts on
-  // (slug, node), so restoring onto fleet-lab-1 instead of fleet-lab-2 would
-  // write a second row rather than putting back the one that was overwritten
-  // — this is the test that catches that mistake; a membership check on
-  // "was placeApp called with the right image" cannot see which node it went to.
+test("a version that does not answer gives the previous one back, through the planner", async () => {
+  // WHAT THIS TEST USED TO PROVE, and why the sequence changed. The restore used
+  // to be `placeApp(slug, previous.node, previous.spec)` — an in-memory copy of a
+  // spec read at the top of the function, written back onto the node it came
+  // from. Getting the NODE wrong wrote a second row instead of putting back the
+  // one that was overwritten, and that was what this asserted.
+  //
+  // There is nothing to get wrong now. The deploy never writes a placement, so
+  // it never overwrites one: it removes the failed release's placements, puts
+  // `desired` back, and converges. Where the previous version goes is the
+  // planner's answer, taken from the release row rather than from anything this
+  // function remembered.
   const { calls, p } = ports({
     probe: async () => { calls.push("probe"); return { code: 502 }; },
+    readDesired: async () => { calls.push("readDesired"); return 41; },
     readPlacement: async () => {
       calls.push("read");
       return { node: "fleet-lab-2", spec: { ...spec, image: "registry/myapp:good" } };
@@ -375,21 +395,24 @@ test("a version that does not answer is replaced by the one that did, on the nod
 
   assert.equal(r.placed, false);
   assert.equal(r.runUrl, undefined);
-  // The full ordered sequence, not just membership: it proves the read
-  // happened BEFORE the place that overwrites it (a read taken afterward would
-  // see the broken spec and "restore" it over itself) and that the restore
-  // lands on fleet-lab-2, not fleet-lab-1.
+  // The full ordered sequence, not membership. It proves the reads happen BEFORE
+  // anything is asked for — a `desired` read afterwards would see this deploy's
+  // own release and "restore" it over itself — and that the failed release's
+  // placements are removed BEFORE the convergence that brings the old one back,
+  // which is what stops the broken version taking traffic while it returns.
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    "place:myapp@fleet-lab-1:registry/myapp:bad",
+    "readDesired",
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "probe",
     // The node is asked whose failure this was before anything is restored, so
     // the log line the operator reads carries the answer too.
     "nodeFault",
-    "place:myapp@fleet-lab-2:registry/myapp:good",
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=fleet",
   ]);
   // And nothing goes to Cloud Run. There is no way back any more.
@@ -412,15 +435,20 @@ test("a first deploy that fails is unplaced rather than restored to nothing, and
   const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
+  // The deploy asks and the planner places, so there is no `place:` of its own
+  // to see. The restore is `removeRelease` — this release's placements and no
+  // other's — followed by a convergence that has nothing to bring back, because
+  // a first deploy has no previous release for `desired` to point at.
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    `place:myapp@fleet-lab-1:${spec.image}`,
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "probe",
     "nodeFault",
-    "unplace:myapp",
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=cloudrun",
   ]);
 });
@@ -436,7 +464,12 @@ test("place and verify, and only then is there an address to publish", async () 
   // keeps run_url with ONE writer: markAppLive would otherwise overwrite a flip
   // made here with the Cloud Run url it was already carrying.
   assert.equal(r.runUrl, "http://8.232.255.172");
-  assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", "place:myapp@fleet-lab-1:" + spec.image, "runtime:myapp=fleet", "probe"]);
+  // Two convergences, and the second is what makes the rollout rolling: the
+  // first places the new release BESIDE whatever is running, and the second runs
+  // once it is proven, which is when the planner drains the old one.
+  assert.deepEqual(calls, [
+    "read", "readRuntime", "runtime:myapp=fleet", "converge:myapp", "ready:myapp@1", "probe", "converge:myapp",
+  ]);
 });
 
 test("the probe asks the path the app said to ask", async () => {
@@ -563,14 +596,15 @@ test("a node fault does not stop the deploy rolling back", async () => {
 
   assert.equal(r.placed, false);
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    "place:myapp@fleet-lab-1:registry/myapp:bad",
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "probe",
     "nodeFault",
-    "place:myapp@fleet-lab-2:registry/myapp:good",
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=cloudrun",
   ]);
 });
@@ -589,7 +623,7 @@ test("a fault lookup that throws does not swallow the rollback", async () => {
 
   assert.equal(r.placed, false);
   assert.ok(!(r.reason ?? "").includes("FLEET_NODE_FAULT"));
-  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "the placement was not rolled back");
   assert.ok(calls.includes("runtime:myapp=fleet"));
 });
 
@@ -607,7 +641,7 @@ test("a port that is not wired at all cannot take the rollback with it", async (
 
   assert.equal(r.placed, false);
   assert.ok(!(r.reason ?? "").includes("FLEET_NODE_FAULT"));
-  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "the placement was not rolled back");
 });
 
 test("a node fault with nothing to add does not trail an empty dash", async () => {
@@ -792,7 +826,9 @@ test("a worker-only app is verified by the node's report, and never probed", asy
   assert.equal(r.runUrl, "http://8.232.255.172");
   assert.ok(calls.includes("running"), "the node was never asked what it is running");
   assert.ok(!calls.includes("probe"), "a worker-only app was probed over HTTP");
-  assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", `place:myapp@fleet-lab-1:${s.image}`, "runtime:myapp=fleet", "running"]);
+  assert.deepEqual(calls, [
+    "read", "readRuntime", "runtime:myapp=fleet", "converge:myapp", "ready:myapp@1", "running", "converge:myapp",
+  ]);
 });
 
 test("an app that serves HTTP is still verified by probing it", async () => {
@@ -825,14 +861,15 @@ test("a worker the node never confirms is rolled back onto the node it was alrea
   assert.equal(r.runUrl, undefined);
   assert.match(r.reason!, /not reporting/i);
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    `place:myapp@fleet-lab-1:${s.image}`,
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "running",
     "nodeFault",
-    `place:myapp@fleet-lab-2:${previous.image}`,
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=cloudrun",
   ]);
 });
@@ -849,7 +886,7 @@ test("the running reader being unwired cannot take the rollback with it", async 
   const r = await placeOnFleet("myapp", s, "8.232.255.172", p as PlacementPorts);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "the placement was not rolled back");
   assert.ok(calls.includes("runtime:myapp=fleet"), "the runtime flag was not restored");
 });
 
@@ -863,7 +900,7 @@ test("a reader that throws inside placeOnFleet still restores everything", async
   const r = await placeOnFleet("myapp", s, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:myapp"));
+  assert.ok(calls.includes("removeRelease:myapp@1"));
   assert.ok(calls.includes("runtime:myapp=fleet"));
 });
 
@@ -877,7 +914,7 @@ test("a probe that throws is a failed verdict too, not an escaped exception", as
   const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:myapp"), "a throwing probe skipped the rollback");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "a throwing probe skipped the rollback");
 });
 
 test("a redeploy is not passed by the version it is replacing", () => {
@@ -906,7 +943,7 @@ test("a redeploy is not passed by the version it is replacing", () => {
     assert.equal(r.placed, false, "a 200 from the outgoing version must not flip the deploy");
     assert.match(r.reason ?? "", /previous image|not reporting|running/i);
     // …and the restore still lands on the node the app was already on.
-    assert.ok(calls.includes("place:myapp@fleet-lab-2:registry/myapp:good"), `restore missing: ${calls.join(", ")}`);
+    assert.ok(calls.includes("removeRelease:myapp@1"), `restore missing: ${calls.join(", ")}`);
   })();
 });
 
@@ -1004,7 +1041,7 @@ test("a log read that throws does not skip the rollback", async () => {
   const r = await placeOnFleet("gzz9j", spec, "lb", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:gzz9j"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:gzz9j@1"), "the placement was not rolled back");
   assert.ok(calls.includes("runtime:gzz9j=fleet"), "the runtime flag was not restored");
 });
 
@@ -1017,7 +1054,7 @@ test("an unwired log port is not a crash", async () => {
   const r = await placeOnFleet("gzz9j", spec, "lb", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:gzz9j"));
+  assert.ok(calls.includes("removeRelease:gzz9j@1"));
 });
 
 /* -------------------------------------------------------------------------- */
@@ -1204,31 +1241,47 @@ test("a first deploy that fails leaves no desired release rather than inventing 
 //
 // Caught by a real deploy of q6doa: desired moved to 29 and the placement stayed
 // on 25.
-test("the placement records which release it is running", async () => {
-  const placed: unknown[] = [];
+test("the deploy asks for the release it recorded, and nothing else places it", async () => {
+  // WHAT THIS USED TO GUARD, and why it cannot happen any more. `placeApp` took a
+  // release argument, and a deploy that recorded 29 while writing a placement
+  // still claiming 25 left `desired` and the placement disagreeing permanently —
+  // the reconciler then rolled a second instance forward on every pass. Caught by
+  // a real deploy of q6doa.
+  //
+  // The deploy no longer writes a placement, so it can no longer write one that
+  // names the wrong release. It records the release, asks for it, and the planner
+  // copies the spec FROM THAT RELEASE ROW — the placement and the release cannot
+  // disagree, because there is only one of them now.
+  const asked: (number | null)[] = [];
   await placeOnFleet("lilna", spec, "10.0.0.1", ports({
     recordRelease: async () => 42,
-    placeApp: async (...args: unknown[]) => { placed.push(args); },
+    setDesired: async (_slug, release) => { asked.push(release); },
   }).p);
-  assert.equal(placed.length, 1);
-  assert.equal((placed[0] as unknown[])[3], 42, "placeApp must be told the release it is placing");
+  assert.deepEqual(asked, [42], "the deploy must ask for exactly the release it recorded");
 });
 
-// The restore is the exception, and it must stay one. Putting the previous spec
-// back should keep pointing at the release that spec belongs to — naming the
-// release that just failed would make the rollback claim to be the thing it
-// rolled back from.
-test("a restore names no release, so the placement keeps the one its spec belongs to", async () => {
-  const placed: unknown[][] = [];
+test("a failed deploy asks for the previous release rather than naming one itself", async () => {
+  // The restore used to be the exception: putting the previous SPEC back while
+  // naming no release, so the placement kept whichever release that spec belonged
+  // to. Naming the failed release would have made the rollback claim to be the
+  // thing it rolled back from.
+  //
+  // It is not an exception any more, and that is the improvement. The restore is
+  // the same write as the deploy in the other direction — `desired` goes back to
+  // the release that was asked for before — so the previous version comes back
+  // from its own recorded row instead of from a spec this function remembered.
+  const asked: (number | null)[] = [];
+  const removed: number[] = [];
   await placeOnFleet("lilna", spec, "10.0.0.1", ports({
     probe: async () => ({ code: 503 }),
     recordRelease: async () => 42,
+    readDesired: async () => 41,
     readPlacement: async () => ({ node: "fleet-lab-2", spec }),
-    placeApp: async (...args: unknown[]) => { placed.push(args); },
+    setDesired: async (_slug, release) => { asked.push(release); },
+    removeRelease: async (_slug, release) => { removed.push(release); },
   }).p);
-  assert.equal(placed.length, 2, "one place, then one restore");
-  assert.equal(placed[0][3], 42);
-  assert.equal(placed[1][3], undefined, "the restore must not claim the failed release");
+  assert.deepEqual(asked, [42, 41], "asked for the new release, then for the one before it");
+  assert.deepEqual(removed, [42], "and removed only the release that failed");
 });
 
 // A CRON-ONLY APP BELONGS ON THE FLEET, and the refusal that used to stand here

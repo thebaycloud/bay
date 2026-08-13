@@ -20,12 +20,12 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
-import { chooseNode, nodeFaultFor, placeApp, placementFor, runningOnNode, runtimeOf, setRuntime, unplaceApp } from "@/lib/fleet";
+import { nodeFaultFor, placementFor, runningOnNode, runtimeOf, setRuntime } from "@/lib/fleet";
 import { deployTargetFor } from "@/lib/deploy-target";
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec, type AgentProcess } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
-import { recordRelease, setDesired, desiredRelease } from "@/lib/reconcile";
+import { recordRelease, setDesired, desiredRelease, convergeApp, readyAt, removeRelease } from "@/lib/reconcile";
 import { getLogs } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
@@ -3630,7 +3630,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         placing,
         FLEET_LB,
         {
-          chooseNode, placeApp, unplaceApp, readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
+          readPlacement: placementFor, readRuntime: runtimeOf, setRuntime,
           // The deploy as a write: a row saying what shipped, and a column
           // saying which row should be running. The reconciler converges on the
           // difference, which is what makes rollback one call with an older id
@@ -3638,6 +3638,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           readDesired: desiredRelease,
           recordRelease: async (s, sp) => (await recordRelease(s, sp.image, sp)).id,
           setDesired,
+          // The rolling half. `converge` is the reconciler's own pass narrowed to
+          // this app, so a deploy places through exactly the code the scheduled
+          // pass uses — which is what the spec means by "the same function" — and
+          // does not wait up to a minute for the next tick to do it.
+          converge: async (s) => (await convergeApp(s))?.steps.length ?? 0,
+          readyAt,
+          removeRelease,
+          wait: (ms) => new Promise((r) => setTimeout(r, ms)),
           probe: (s) => fleetProbe(FLEET_LB, s, { path: primaryHealth.health.path }),
           runningOnNode: (s, n, sp) => awaitRunning(s, n, sp, runningOnNode),
           nodeFaultFor,

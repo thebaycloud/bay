@@ -551,3 +551,42 @@ export async function passRecord(): Promise<PassRecord | null> {
 export function convergeApp(slug: string, now: number = Date.now()): Promise<PassResult | null> {
   return reconcileOnce(now, slug);
 }
+
+/**
+ * The node holding a READY placement of this release, or null.
+ *
+ * READY is the node's own word. `promoteReady` writes it when the node's sync
+ * confirms a process whose image matches the release — which is what makes
+ * "which version answered" answerable during a roll, when two releases are
+ * placed at once and the load balancer may reach either. A probe cannot tell
+ * them apart; this can.
+ */
+export async function readyAt(slug: string, release: number): Promise<string | null> {
+  const r = await getPool(DB).query(
+    `SELECT node FROM fleet_placements
+      WHERE slug = $1 AND release_id = $2 AND state = 'ready'
+      ORDER BY instance LIMIT 1`,
+    [slug, release],
+  );
+  return r.rows[0]?.node ?? null;
+}
+
+/**
+ * Drop one release's placements, leaving every other release's alone.
+ *
+ * The failure path needs exactly this and not "unplace the app". Reverting
+ * `desired` on its own would leave the broken version placed while the previous
+ * one comes up beside it — the planner drains a stale placement only once the
+ * wanted one is ready — so the version that just failed its verify would go on
+ * taking traffic for the whole length of the recovery.
+ *
+ * The generation is bumped because a node must stop running this without waiting
+ * for its next poll.
+ */
+export async function removeRelease(slug: string, release: number): Promise<void> {
+  const r = await getPool(DB).query(
+    `DELETE FROM fleet_placements WHERE slug = $1 AND release_id = $2`,
+    [slug, release],
+  );
+  if (r.rowCount) await bumpFleetGeneration();
+}

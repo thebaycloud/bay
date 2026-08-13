@@ -144,6 +144,24 @@ let probeCode = 200;
  * file, not because anything actually cleared the table for it.
  */
 let placementTable = new Map<string, { node: string; spec: unknown }>();
+/**
+ * What the deploy asked to be placed, keyed by slug.
+ *
+ * The deploy no longer writes a placement — the planner does — so the fake
+ * `convergeApp` needs the spec from somewhere. The real planner copies it from
+ * the release row; this captures the same value where the release is recorded.
+ */
+/**
+ * A small, honest stand-in for `releases` and `apps.desired_release`.
+ *
+ * The deploy no longer writes placements — it records a release, asks for it,
+ * and the planner places the spec FROM THAT ROW. A fake that only remembered the
+ * last spec could not tell a rollout from a restore, because the restore's whole
+ * mechanism is asking for an EARLIER release.
+ */
+const releaseSpecs = new Map<number, unknown>();
+const desiredRelease = new Map<string, number | null>();
+let releaseCounter = 0;
 
 /**
  * What Secret Manager holds for the app, switchable per test.
@@ -222,10 +240,49 @@ async function install() {
   // and is a missing mock.
   mock.module("@/lib/reconcile", {
     namedExports: {
-      desiredRelease: async () => null,
-      recordRelease: async () => ({ id: 1, version: 1 }),
-      setDesired: asyncNoop,
+      recordRelease: async (_slug: string, _image: string, spec: never) => {
+        const id = ++releaseCounter;
+        releaseSpecs.set(id, spec);
+        return { id, version: id };
+      },
+      setDesired: async (slug: string, release: number | null) => { desiredRelease.set(slug, release); },
+      desiredRelease: async (slug: string) => desiredRelease.get(slug) ?? null,
       renewLeases: asyncNoop,
+      // The rolling ports, standing in for the planner. `convergeApp` reports a
+      // step and `readyAt` names a node straight away, so the default here is a
+      // deploy whose new release comes up — which is what every test that is
+      // about something else assumes. `placementTable` below is what actually
+      // records where the app went.
+      // Stands in for `planPlacements` + `apply`: the deploy no longer writes a
+      // placement itself, so the thing that converges is what must record one.
+      // `pendingSpec` is what the deploy asked for — the real planner reads it
+      // from the release row, which is the same fact by a different route.
+      // Stands in for `planPlacements` + `apply`: place whatever release is
+      // pointed at, and remove everything when nothing is.
+      convergeApp: async (slug: string) => {
+        const want = desiredRelease.get(slug) ?? null;
+        if (want === null) {
+          placementTable.delete(slug);
+          return { quorum: true, apps: 1, steps: [], held: 0 };
+        }
+        // Idempotent, like the planner it stands for: once the wanted release is
+        // placed there is nothing to do, and the second convergence of a
+        // successful deploy — the one that drains the version being replaced —
+        // must not read as a second placement.
+        const already = placementTable.get(slug) as { release?: number } | undefined;
+        if (already?.release === want) return { quorum: true, apps: 1, steps: [], held: 0 };
+        const spec = releaseSpecs.get(want);
+        active.placements.push({ slug, node: "fleet-lab-0", spec: spec as never });
+        placementTable.set(slug, { node: "fleet-lab-0", spec, release: want } as never);
+        return { quorum: true, apps: 1, steps: [{ kind: "place", slug }], held: 0 };
+      },
+      readyAt: async (slug: string, release: number) =>
+        (placementTable.get(slug) as { release?: number } | undefined)?.release === release ? "fleet-lab-0" : null,
+      removeRelease: async (slug: string, release: number) => {
+        if ((placementTable.get(slug) as { release?: number } | undefined)?.release === release) {
+          placementTable.delete(slug);
+        }
+      },
     },
   });
   mock.module("@/lib/plan-cache", { namedExports: { planKey: () => null, getCachedPlan: async () => null, putCachedPlan: asyncNoop } });
@@ -429,7 +486,19 @@ async function run(
   activeReplies = replies;
   // Fresh on every call, built from `seed` rather than left standing from
   // whatever the previous test's deploy did to it — see the declaration above.
-  placementTable = new Map(Object.entries(seed));
+  // A seeded placement is a version that already shipped, so it needs a release
+  // row and a pointer at it — otherwise a failed redeploy has nothing to restore
+  // and the test would be asserting against a fixture rather than a mechanism.
+  releaseSpecs.clear();
+  desiredRelease.clear();
+  releaseCounter = 0;
+  placementTable = new Map();
+  for (const [slug, v] of Object.entries(seed)) {
+    const id = ++releaseCounter;
+    releaseSpecs.set(id, v.spec);
+    desiredRelease.set(slug, id);
+    placementTable.set(slug, { ...v, release: id } as never);
+  }
   // The pipeline swallows nothing at the top level, so a throw here is a real
   // failure of the deploy rather than of the harness — recorded, not hidden,
   // because "what does it do when it fails" is half of what is being pinned.
@@ -835,7 +904,15 @@ test("a fleet redeploy that fails after taking traffic gets the previous version
   // also the one worth reading.
   assert.equal(rec.placements.at(-1)?.node, "fleet-lab-0", "the previous placement's node must be restored, not the node this failed attempt chose");
   assert.deepEqual(rec.placements.at(-1)?.spec, seedSpec, "the previous spec must be restored verbatim");
-  assert.deepEqual(finalPlacement, { node: "fleet-lab-0", spec: seedSpec }, "the fleet's placement table must read back the restored version, not the broken one");
+  // `release: 1` is the seeded version's own release id, and its presence is the
+  // point rather than noise: the restore is `desired` going back to that id and
+  // the planner placing it, so the row that comes back CARRIES the release it
+  // belongs to. The old restore copied a spec and named no release at all.
+  assert.deepEqual(
+    finalPlacement,
+    { node: "fleet-lab-0", spec: seedSpec, release: 1 },
+    "the fleet's placement table must read back the restored version, not the broken one",
+  );
 
   // Said honestly, not silently: the log line and the recorded failure both
   // have to tell the user what actually happened, per the ticket.
