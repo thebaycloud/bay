@@ -15,7 +15,7 @@ import { generateDockerfile, baseImage, dockerignore, manifestPaths, DockerfileE
 import { readRepoFacts, refusalReason } from "@/lib/repo-facts";
 import { readBuildHints, rememberBuildHints, aptPackagesIn } from "@/lib/build-hints";
 import { detect } from "@/lib/detect";
-import { planKey, getCachedPlan, putCachedPlan } from "@/lib/plan-cache";
+import { planKey, getCachedPlan, putCachedPlan, dropCachedPlan } from "@/lib/plan-cache";
 import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
@@ -3729,6 +3729,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
     if (!result.ok) {
       log(`✕ ${result.error}`);
+      // FORGET THE PLAN THIS DEPLOY WAS BUILT FROM. A cached plan that produces a
+      // failure is served to the next attempt too, which then fails identically —
+      // and retrying is the one thing a person can do about a failed deploy. A
+      // one-file Express app planned as a static site failed twice in a row on 13
+      // Aug for exactly this reason, and only a byte-level change to package.json
+      // — a different cache key — broke the loop.
+      if (cacheKey) await dropCachedPlan(cacheKey).catch(() => {});
       // The container started and then crashed: our error is only the symptom
       // ("didn't start on $PORT"). Pull its real crash log so the user — and the
       // repair agent — see the actual cause instead of guessing (which is how a

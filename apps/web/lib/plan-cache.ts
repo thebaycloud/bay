@@ -108,3 +108,32 @@ export async function putCachedPlan(key: string, plan: DeployPlan): Promise<void
     );
   } catch { /* the deploy matters more than remembering it */ }
 }
+
+/**
+ * Forget a plan that led to a failed deploy.
+ *
+ * A plan REJECTED during planning was never cached — the note at `putCachedPlan`'s
+ * call site says why. A plan that passes planning and then fails the BUILD was,
+ * and it was served again to the next attempt, which failed identically. That is
+ * a trap with no exit: retrying is the one thing a person can do, and it could
+ * not work, because the answer being retried was the cached one.
+ *
+ * Watched on 13 Aug: a one-file Express app was planned as a static site — `npm
+ * ci`, `npm run build`, output `dist` — and failed with `Missing script:
+ * "build"`. The second attempt failed the same way for the same reason. Changing
+ * one byte of package.json produced a different cache key, a fresh plan, and a
+ * deploy that worked in 53 seconds.
+ *
+ * EVICTING COSTS A RE-PLAN, and that is the right side to err on. A plan that was
+ * fine and an app that is broken pays for one more planner run per failure; a
+ * plan that is wrong and cached costs every future attempt, forever.
+ */
+export async function dropCachedPlan(key: string): Promise<void> {
+  try {
+    await ensure();
+    await getPool(DB).query(`DELETE FROM plan_cache WHERE key = $1`, [key]);
+  } catch {
+    // Best-effort, like the rest of this module: a cache that cannot be cleared
+    // must not turn a failed deploy into a crashed one.
+  }
+}

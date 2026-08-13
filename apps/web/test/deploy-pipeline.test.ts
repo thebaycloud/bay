@@ -144,6 +144,8 @@ let probeCode = 200;
  * file, not because anything actually cleared the table for it.
  */
 let placementTable = new Map<string, { node: string; spec: unknown }>();
+/** Cache keys the pipeline asked to forget, so a failed deploy can be checked. */
+const droppedPlans: string[] = [];
 /**
  * What the deploy asked to be placed, keyed by slug.
  *
@@ -285,7 +287,16 @@ async function install() {
       },
     },
   });
-  mock.module("@/lib/plan-cache", { namedExports: { planKey: () => null, getCachedPlan: async () => null, putCachedPlan: asyncNoop } });
+  // `planKey` returns a key so the eviction path below is reachable; the real one
+  // hashes the manifest, and a null key is what a folder with no manifest gets.
+  mock.module("@/lib/plan-cache", {
+    namedExports: {
+      planKey: () => "test-plan-key",
+      getCachedPlan: async () => null,
+      putCachedPlan: asyncNoop,
+      dropCachedPlan: async (key: string) => { droppedPlans.push(key); },
+    },
+  });
   mock.module("@/lib/pg-role", { namedExports: { ensureAppRole: asyncNoop, DB_PASSWORD_SECRET: "pw" } });
 
   // Stage rows: captured rather than written.
