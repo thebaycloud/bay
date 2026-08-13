@@ -16,6 +16,7 @@ const { spawn, spawnSync } = require("child_process");
 const { readEnvFiles, selectEnv, encodeEnvHeader } = require("./lib/envfile");
 const { joinExecArgs } = require("./lib/exec-args");
 const { whoHeader } = require("./lib/who");
+const { deletionRefusal } = require("./lib/confirm");
 
 const CFG_DIR = path.join(os.homedir(), ".supersonic");
 const CFG = path.join(CFG_DIR, "config.json");
@@ -390,7 +391,32 @@ async function rollback(args) {
   const app = needApp(args);
   const d = await api(`/api/apps/${app}/rollback`, { method: "POST" });
   if (args.json) return json(d);
-  print(green("✓ ") + `rolled back — now serving ${d.revision}`);
+  // `revision` was Cloud Run's word for it and there are no revisions any more:
+  // a rollback is one write moving `desired_release` to the version before, and
+  // the reconciler places it. Printing `d.revision` here said "now serving
+  // undefined" the moment the route stopped being Cloud-Run-shaped.
+  print(green("✓ ") + `rolled back to version ${d.version} — the fleet is placing it now`);
+  // Said every time, because it is the half a rollback cannot do. The API
+  // returns the same sentence; printing the server's own wording keeps the two
+  // from drifting into different promises.
+  if (d.note) print(dim("  " + d.note));
+}
+
+/**
+ * Delete an app. There is no undo and there is no prompt.
+ *
+ * The confirmation is a flag rather than a question because this CLI has none —
+ * "designed for agents, not humans" is the first thing index.js says about
+ * itself. `lib/confirm.js` holds the decision and the wording; this function is
+ * the call.
+ */
+async function del(args) {
+  const app = needApp(args);
+  const refusal = deletionRefusal(app, args);
+  if (refusal) die(refusal);
+  const d = await api(`/api/apps/${app}/delete`, { method: "POST" });
+  if (args.json) return json(d);
+  print(green("✓ ") + `${app} deleted — its database and storage bucket were kept`);
 }
 
 async function exec(args) {
@@ -1152,7 +1178,8 @@ ${bold("ship")} ${dim("(URL-first: a live link in ~0.1s, the build drawn on it w
   supersonic ship --prebuilt                  old path: build here, upload the result
   supersonic reship <app>                       rebuild from the app's source
   supersonic patch <app>                        the repair agent's fix, to pipe into git apply
-  supersonic rollback <app>                     roll back to the previous revision
+  supersonic rollback <app>                     roll back to the previous version
+  supersonic delete <app> --yes                 delete an app (its database and bucket are kept)
 
 ${bold("inspect")}
   supersonic apps                               list your apps
@@ -1196,7 +1223,7 @@ function parse(argv) {
  * prompt, README and script that already exists, so it does not get deprecated,
  * warned about, or removed. Two words, one command, forever.
  */
-const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, init, check, ship: deploy, deploy, reship: redeploy, redeploy, "__deploy-worker": deployWorker };
+const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, init, check, ship: deploy, deploy, reship: redeploy, redeploy, delete: del, rm: del, "__deploy-worker": deployWorker };
 
 (async () => {
   const [, , cmd, ...rest] = process.argv;

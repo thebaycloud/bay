@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 9777fd89a339e59c
+// supersonic-vendor-stamp d0c9c69afe9e0f91
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -74,7 +74,7 @@ var import_node_path = require("node:path");
 var CLOUD_RUN_DB = { host: "127.0.0.1", port: "5432" };
 
 // lib/lanes.ts
-var SERVICE_LANES = ["runner", "container", "buildpack"];
+var SERVICE_LANES = ["container", "buildpack"];
 var ALL_LANES = ["static", ...SERVICE_LANES];
 var DB_HOST = CLOUD_RUN_DB.host;
 var DB_PORT = CLOUD_RUN_DB.port;
@@ -1042,11 +1042,6 @@ function runnerServes(r) {
   }
   return true;
 }
-function declaredRuntime(runtime) {
-  const m = (runtime ?? "").trim().match(/^(python|node)\s*v?(\d+(?:\.\d+)*)$/i);
-  if (!m) return null;
-  return { language: m[1].toLowerCase(), spec: m[2], from: "supersonic.json" };
-}
 
 // lib/detect.ts
 function yarnInstall(dir) {
@@ -1764,18 +1759,9 @@ async function inferAppConfig(repoDir, detect2) {
 // lib/resolve.ts
 var ResolveError = class extends Error {
 };
-var RUNNER_RUNTIMES = [/^node/, /^python/];
 function laneFor(i) {
   if (i.language === "static") return "static";
-  const runnerAllowed = i.runnerEnabled ?? true;
-  const declaredPin = declaredRuntime(i.runtime);
-  const pinned = Boolean(i.runtimePinned) || (declaredPin ? !runnerServes(declaredPin) : false);
-  if (i.dockerfile && !i.runCommandSupplied) return "container";
-  const runtime = i.runtime ?? "";
-  const wantsRunner = !pinned && (RUNNER_RUNTIMES.some((re) => re.test(runtime)) || !runtime && (i.language === "node" || i.language === "python"));
-  if (wantsRunner) return runnerAllowed ? "runner" : i.dockerfile ? "container" : "buildpack";
-  if (i.dockerfile) return "container";
-  return "buildpack";
+  return i.dockerfile ? "container" : "buildpack";
 }
 function deriveLane(s) {
   return laneFor({ language: s.language, runtime: s.runtime, dockerfile: s.dockerfile });
@@ -1788,7 +1774,6 @@ var LANE_CONSUMES = {
   // the precise defect assert-consumed exists to catch, committed inside
   // assert-consumed's own table. An app that pins a version is routed to the
   // buildpack lane, which does implement it.
-  runner: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
   // No `start`: the Dockerfile's own CMD is the start command, and a second one
   // in the config would be read by nobody.
   container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
