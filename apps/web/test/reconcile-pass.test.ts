@@ -31,18 +31,31 @@ function fakeClient(rows: Record<string, unknown>[], nodes: { name: string; last
 const NOW = 1_000_000;
 const FRESH = NOW - 1_000;
 
-/** One row of the pass's own join: an app, and one of its placements. */
+/**
+ * One row of the pass's own join: an app, and one of its placements.
+ *
+ * `pinned` is a DERIVED column in the real query — `has_data OR (spec ?
+ * 'dataDir')` — so the fake derives it too. Returning the raw inputs and
+ * forgetting the derivation would make every pinning test pass against a pass
+ * that had stopped reading the column at all.
+ */
 const row = (o: Partial<Record<string, unknown>> & { slug: string }) => ({
   desired_release: 7,
+  has_data: false,
   desired_replicas: 1,
   instance: null,
   node: null,
   release_id: null,
   state: null,
   lease_until: null,
-  pinned: false,
   ...o,
-});
+}) as Record<string, unknown>;
+
+/** The same row, with the query's derived `pinned` column computed. */
+const joined = (o: Partial<Record<string, unknown>> & { slug: string }) => {
+  const r = row(o);
+  return { ...r, pinned: Boolean(r.has_data) };
+};
 
 test("a pass restricted to one app still measures the load of the whole fleet", async () => {
   // THE REASON THE FILTER IS NOT IN THE QUERY. A deploy converges one app
@@ -54,10 +67,10 @@ test("a pass restricted to one app still measures the load of the whole fleet", 
   // three apps, so the new placement goes to n1. That is the whole difference,
   // and it is invisible unless the other apps are in the rows.
   const rows = [
-    row({ slug: "mine", desired_release: 7 }),
-    row({ slug: "other1", instance: 0, node: "n2", release_id: 1, state: "ready", lease_until: NOW + 60_000 }),
-    row({ slug: "other2", instance: 0, node: "n2", release_id: 1, state: "ready", lease_until: NOW + 60_000 }),
-    row({ slug: "other3", instance: 0, node: "n2", release_id: 1, state: "ready", lease_until: NOW + 60_000 }),
+    joined({ slug: "mine", desired_release: 7 }),
+    joined({ slug: "other1", instance: 0, node: "n2", release_id: 1, state: "ready", lease_until: NOW + 60_000 }),
+    joined({ slug: "other2", instance: 0, node: "n2", release_id: 1, state: "ready", lease_until: NOW + 60_000 }),
+    joined({ slug: "other3", instance: 0, node: "n2", release_id: 1, state: "ready", lease_until: NOW + 60_000 }),
   ];
   const c = fakeClient(rows, [{ name: "n1", lastSeen: FRESH }, { name: "n2", lastSeen: FRESH }]);
 
@@ -76,8 +89,8 @@ test("a restricted pass plans for that app and no other", async () => {
   // along with it — the deploy would then report success or failure for work it
   // never intended to do.
   const rows = [
-    row({ slug: "mine", desired_release: 7 }),
-    row({ slug: "other", desired_release: 9 }),
+    joined({ slug: "mine", desired_release: 7 }),
+    joined({ slug: "other", desired_release: 9 }),
   ];
   const c = fakeClient(rows, [{ name: "n1", lastSeen: FRESH }]);
 
@@ -91,8 +104,8 @@ test("an unrestricted pass still plans for everything", async () => {
   // The restriction is an argument, not a change of behaviour: the scheduled
   // pass passes nothing and must keep converging the whole fleet.
   const rows = [
-    row({ slug: "mine", desired_release: 7 }),
-    row({ slug: "other", desired_release: 9 }),
+    joined({ slug: "mine", desired_release: 7 }),
+    joined({ slug: "other", desired_release: 9 }),
   ];
   const c = fakeClient(rows, [{ name: "n1", lastSeen: FRESH }, { name: "n2", lastSeen: FRESH }]);
 
@@ -107,7 +120,7 @@ test("no quorum holds an expired placement rather than moving it", async () => {
   // what it declined to do. `held` and `steps: []` together are the difference
   // between a quiet fleet and a blind one.
   const rows = [
-    row({ slug: "mine", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW - 1 }),
+    joined({ slug: "mine", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW - 1 }),
   ];
   const c = fakeClient(rows, [
     { name: "n1", lastSeen: FRESH },
@@ -120,4 +133,51 @@ test("no quorum holds an expired placement rather than moving it", async () => {
   assert.equal(result.quorum, false);
   assert.deepEqual(result.steps, []);
   assert.equal(result.held, 1);
+});
+
+test("an app with data on a node is pinned to it, and never evicted", async () => {
+  // §8: "Volumes pin. /srv/apps/<slug>/data is bind-mounted from a disk nothing
+  // replicates, which conflicts directly with the reconciler wanting to move
+  // apps. The placement model must be able to express 'this cannot move'."
+  //
+  // It expressed it and nothing ever set it. `pinned` was derived from
+  // `spec ? 'dataDir'`, and no code path has ever written dataDir into a spec —
+  // the agent computes that directory locally and keeps it off the wire, so the
+  // control plane could not tell who had data. Every app was movable, including
+  // the two carrying SQLite databases on fleet-lab-2.
+  //
+  // The pin is now the NODE's observation: it is the only thing that can see
+  // whether the directory has anything in it.
+  const rows = [
+    joined({ slug: "hasdata", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW - 1, has_data: true }),
+  ];
+  const c = fakeClient(rows, [
+    { name: "n1", lastSeen: FRESH },
+    { name: "n2", lastSeen: NOW - 999_000 },
+    { name: "n3", lastSeen: FRESH },
+  ]);
+
+  const result = await pass(c, NOW);
+
+  // Quorum holds — two of three nodes are reporting — and the lease has expired
+  // on a node nobody can hear, which is exactly the shape that gets evicted. It
+  // must not be, because the data does not follow.
+  assert.equal(result.quorum, true);
+  assert.deepEqual(result.steps, [], "an app with data was moved away from its data");
+});
+
+test("an app without data is still evicted from a node that cannot be heard", async () => {
+  // The control: without this, the test above would pass just as well against a
+  // planner that had stopped evicting anything at all.
+  const rows = [
+    joined({ slug: "nodata", instance: 0, node: "n2", release_id: 7, state: "ready", lease_until: NOW - 1 }),
+  ];
+  const c = fakeClient(rows, [
+    { name: "n1", lastSeen: FRESH },
+    { name: "n2", lastSeen: NOW - 999_000 },
+    { name: "n3", lastSeen: FRESH },
+  ]);
+
+  const result = await pass(c, NOW);
+  assert.deepEqual(result.steps, [{ kind: "evict", slug: "nodata", instance: 0 }]);
 });

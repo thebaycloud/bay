@@ -349,3 +349,33 @@ func TestADrainingAppWithNoReplacementStillServes(t *testing.T) {
 		t.Fatalf("the draining route is the only one there is, and must still serve: %+v", got)
 	}
 }
+
+func TestOnlyAppsThatHaveWrittenSomethingCountAsHavingData(t *testing.T) {
+	// The directory is created for EVERY app before the bind mount, so its
+	// existence says nothing at all — which is why this asks whether it has an
+	// entry in it. Getting that wrong would pin every app on the node and stop
+	// the reconciler moving anything, which is the opposite failure and just as
+	// bad: a node dies and nothing recovers.
+	root := t.TempDir()
+	empty := filepath.Join(root, "empty", "data")
+	full := filepath.Join(root, "full", "data")
+	for _, d := range []string{empty, full} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(full, "sqlite.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	a := &Agent{live: map[string]*live{
+		"empty--web.": {app: App{Slug: "empty", DataDir: empty}, proc: Process{Name: "web"}},
+		"full--web.":  {app: App{Slug: "full", DataDir: full}, proc: Process{Name: "web"}},
+		"none--web.":  {app: App{Slug: "none", DataDir: ""}, proc: Process{Name: "web"}},
+	}}
+
+	got := a.reportWithData()
+	if len(got) != 1 || got[0] != "full" {
+		t.Fatalf("only the app that wrote something should be pinned: got %v", got)
+	}
+}

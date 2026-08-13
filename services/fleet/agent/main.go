@@ -472,6 +472,56 @@ func (a *Agent) confirmRunning(id string, now time.Time) {
 // pointers puts a JSON encoder on one end of a data race. Command is copied for
 // the same reason — a shared backing array is shared state whether or not the
 // header is.
+// reportWithData answers which of this node's apps have written anything to
+// their /data directory.
+//
+// SECTION 8's PIN, made reachable. The placement model can express "this cannot
+// move" and nothing ever set it: the flag was derived from a `dataDir` field in
+// the spec, and no code path writes one — this agent computes DataDir locally
+// and keeps it off the wire. So the control plane could not tell which apps had
+// data, and every one of them was free to be moved away from it.
+//
+// The node is the only thing that can answer. It holds the disk.
+//
+// NON-EMPTY, not "exists": the directory is created for every app whether it is
+// used or not (container.go MkdirAll's it before the bind mount), so its
+// presence says nothing. One entry is enough — this is a yes/no question and
+// reading the whole tree to answer it would put a walk of every app's data on a
+// ten-second timer.
+func (a *Agent) reportWithData() []string {
+	a.mu.Lock()
+	slugs := make(map[string]string, len(a.live))
+	for _, l := range a.live {
+		slugs[l.app.Slug] = l.app.DataDir
+	}
+	a.mu.Unlock()
+
+	out := make([]string, 0, len(slugs))
+	for slug, dir := range slugs {
+		if dir == "" {
+			continue
+		}
+		f, err := os.Open(dir)
+		if err != nil {
+			// Unreadable is not the same as empty, and the safe reading is the
+			// cautious one: say it has data, and the app stays where it is. A
+			// wrong "no" moves a database; a wrong "yes" pins an app that did not
+			// need pinning.
+			if !os.IsNotExist(err) {
+				out = append(out, slug)
+			}
+			continue
+		}
+		names, _ := f.Readdirnames(1)
+		f.Close()
+		if len(names) > 0 {
+			out = append(out, slug)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (a *Agent) reportRunning() []ProcessState {
 	now := time.Now()
 	a.mu.Lock()
@@ -773,6 +823,7 @@ func main() {
 	if src.Endpoint != "" {
 		src.Report = a.reportFaults
 		src.ReportRunning = a.reportRunning
+		src.ReportWithData = a.reportWithData
 	}
 
 	go a.serve(*addr)

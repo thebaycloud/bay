@@ -6,7 +6,7 @@ import {
   fleetGeneration, decideSync,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
-import { renewLeases, promoteReady } from "@/lib/reconcile";
+import { renewLeases, promoteReady, recordDataUse } from "@/lib/reconcile";
 
 /**
  * The only endpoint a fleet node talks to.
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown; version?: unknown; generation?: unknown };
+  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown; withData?: unknown; version?: unknown; generation?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -108,6 +108,16 @@ export async function POST(req: Request) {
       // write failed is a worse outcome than a stale row. The verdict this feeds
       // fails closed, so a missed write costs a rolled-back deploy, never a
       // wrongly passed one.
+      // Which apps have data, from the only vantage point that can see it. Guarded
+      // on the field being present: absent means an agent that does not report it,
+      // and taking that as "nothing has data" would unpin every app on the node
+      // and let the reconciler move a database away from its disk.
+      if (Array.isArray(body.withData)) {
+        await recordDataUse(name, (body.withData as unknown[]).filter((s): s is string => typeof s === "string"))
+          .catch((e) => {
+            console.error("fleet sync: recording data use for", name, e instanceof Error ? e.message : String(e));
+          });
+      }
       await recordNodeRunning(name, body.running as ProcessState[]).catch((e) => {
         console.error("fleet sync: recording running for", name, e instanceof Error ? e.message : String(e));
       });

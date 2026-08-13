@@ -168,7 +168,13 @@ export async function pass(client: Client, now: number, only?: string): Promise<
             a.desired_replicas,
             p.instance, p.node, p.release_id, p.state,
             extract(epoch from p.lease_until) * 1000 AS lease_until,
-            (p.spec ? 'dataDir') AS pinned
+            -- Pinned by DATA. The spec ? 'dataDir' test was the original
+            -- expression of section 8's "this cannot move", and it has never been
+            -- true of any row: nothing writes dataDir into a spec. It is kept
+            -- because a declared volume would land there, and has_data is the
+            -- half that works — the node's own report of whether /data has
+            -- anything in it.
+            (p.has_data OR (p.spec ? 'dataDir')) AS pinned
        FROM apps a
        LEFT JOIN fleet_placements p ON p.slug = a.slug
       WHERE a.runtime = 'fleet'
@@ -589,4 +595,37 @@ export async function removeRelease(slug: string, release: number): Promise<void
     [slug, release],
   );
   if (r.rowCount) await bumpFleetGeneration();
+}
+
+/**
+ * Record which of a node's apps have written to their data directory.
+ *
+ * The pin section 8 asked for, arriving from the only place that can see it. The
+ * node holds the disk; the control plane holds the decision to move things, and
+ * until now it had no way to know which apps must not be moved.
+ *
+ * SCOPED TO THIS NODE, and that is what makes it safe to write from a report:
+ * another node's placements are untouched, so a node that goes quiet cannot
+ * unpin anything. Called only when the agent actually reported — an absent list
+ * leaves every flag alone, because "this agent does not say" and "this node has
+ * no data" are different facts and confusing them would unpin a database.
+ */
+export async function recordDataUse(node: string, slugs: string[]): Promise<void> {
+  const has = new Set(slugs);
+  const pool = getPool(DB);
+  const rows = (await pool.query(
+    `SELECT slug, has_data FROM fleet_placements WHERE node = $1`,
+    [node],
+  )).rows as { slug: string; has_data: boolean }[];
+
+  // Only the rows that actually change. A blanket UPDATE would rewrite every
+  // placement on the node every ten seconds, on a table the reconciler reads on
+  // every pass.
+  const flip = rows.filter((r) => r.has_data !== has.has(r.slug));
+  for (const r of flip) {
+    await pool.query(
+      `UPDATE fleet_placements SET has_data = $3 WHERE node = $1 AND slug = $2`,
+      [node, r.slug, has.has(r.slug)],
+    );
+  }
 }
