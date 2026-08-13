@@ -694,6 +694,33 @@ the design rather than merely delaying it.
     `us-central1-b`, so the fleet also spans two failure domains for the first
     time, and quorum can evict.*
 
+### The artifact pair, measured on 13 Aug, and why it stays one image
+
+§3 decided the artifact is "modelled as a pair — base and code — and implemented
+as a single image first". `recordRelease` writes the same digest into
+`base_image` and `code_image`, which is that first implementation and not an
+unfinished one.
+
+Splitting it would buy nothing today. What the pair was FOR is stated in §3: Cloud
+Build scheduled a worker, pulled a builder image, pulled a base image, and only
+then touched the code — "a cache you must download in full is not a cache; it is
+a slow registry". The long-lived BuildKit we own has a local cache, and the
+numbers moved accordingly.
+
+    build   3.4s p50, 5.7s p90     (54s of 238 when §3 was written)
+    fleet   25.1s p50, 30.2s p90
+    total   64.6s p50, 84.8s p90   (238s baseline)
+
+Measured over a day of real deploys from `deploy_stages`, and separately with a
+stopwatch on an app with three npm dependencies where only the source changed:
+4 seconds of build inside a 38-second deploy.
+
+WHAT THE MEASUREMENT POINTS AT INSTEAD is `fleet-pull`: 0.9s at p50 and 41.8s at
+p90. The image is pulled onto a node, and the tail is where a deploy's time now
+goes. That is §4's row — "cached locally on a disk that survives a reboot,
+through a per-site mirror once there is more than one node" — and it is the next
+thing worth doing for deploy speed, not the artifact split.
+
 ### Item 8, half done, and the half that matters is the other one
 
 **§3 said "emit BuildKit LLB instead of a Dockerfile". We do not have to.**

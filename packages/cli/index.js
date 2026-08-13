@@ -1063,6 +1063,20 @@ async function consumeDeploy(res, args, knownSlug) {
   // deploy_failures; without it a caller measuring a deploy has only the slug
   // and a guess at the time window.
   let runId = null;
+  // A TRANSPORT FAILURE IS NOT A VERDICT ON THE DEPLOY, and it used to be
+  // reported as one. `reader.read()` throws when the response body is cut —
+  // undici's message for that is the single word "terminated" — and with nothing
+  // catching it, that word travelled all the way to the user as `✗ terminated`
+  // for a deploy that had SUCCEEDED. Observed on 13 Aug: the job completed in
+  // 1m3s, the app was live on the new digest, and the CLI called it a failure
+  // because the stream had been cut at five minutes.
+  //
+  // The comment below already says what to do about a stream that ends without a
+  // result — "that is a fact about this connection, not about the deploy" — and
+  // an exception is the same fact arriving by a different door. So it lands in
+  // the same place: stop reading, and go ask the server what actually happened.
+  let streamError = null;
+  try {
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -1081,6 +1095,9 @@ async function consumeDeploy(res, args, knownSlug) {
       else if (ev.type === "done") { writeLockfile(ev.decided, ev.slug); if (args.json) json({ ok: true, slug: ev.slug, url: ev.url, runId }); else print(green("✓ live: ") + ev.url); process.exit(0); }
       else if (ev.type === "error") { if (args.json) json({ ok: false, error: ev.message, slug, runId }); die(ev.message); }
     }
+  }
+  } catch (e) {
+    streamError = e && e.message ? e.message : String(e);
   }
   // The server can answer with a plain JSON error instead of a stream — a plan limit,
   // a rejected request. That is not a build that timed out, and saying so sent someone
@@ -1117,8 +1134,12 @@ async function consumeDeploy(res, args, knownSlug) {
     die(`lost contact with the build and it was still running after 3 minutes. It may still land — check: supersonic logs ${slug}`);
   }
 
-  if (args.json) json({ ok: false, error: "deploy stream ended without a result" });
-  die("the deploy ended without confirming it went live — the build may have failed or timed out. Check: supersonic apps  ·  supersonic logs <app>");
+  // No slug to ask about — the stream died before it named one, so there is
+  // nothing to follow. The transport error is worth printing HERE, and only
+  // here: it is all the information there is.
+  const lost = streamError ? ` (the connection failed: ${streamError})` : "";
+  if (args.json) json({ ok: false, error: "deploy stream ended without a result", streamError });
+  die(`the deploy ended without confirming it went live${lost} — the build may have failed or timed out. Check: supersonic apps  ·  supersonic logs <app>`);
 }
 
 // ---------- helpers ----------
