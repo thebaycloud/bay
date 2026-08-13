@@ -809,6 +809,27 @@ export async function peersFor(node: string, routerPort = 8080): Promise<PeerRou
        JOIN fleet_nodes n ON n.name = p.node
       WHERE p.node <> $1
         AND a.runtime = 'fleet'
+        -- READY ONLY, and this is what makes a rolling deploy survivable.
+        --
+        -- During a roll one app is placed twice: the new release on one node and
+        -- the one it replaces on another, until the planner drains the old. This
+        -- query returned BOTH, so a third node's table held two routes for the
+        -- slug and forwarded to whichever came first — sometimes the draining
+        -- one, which by then had stopped serving. The receiving node cannot
+        -- forward again (the once-only rule exists so two skewed tables cannot
+        -- bounce a request between them until it times out), so the request died
+        -- as "Not on this node. Another machine forwarded this here and this one
+        -- does not hold it either."
+        --
+        -- Measured on the first rolling deploy, oxfgf: 90 requests through the
+        -- swap, 2 of them that 404. Not an outage and not nothing — a ~2% error
+        -- rate for the length of the overlap.
+        --
+        -- "ready" is the node's own word (see promoteReady), so this is the
+        -- spec's step 5 exactly: the edge moves traffic when it sees READY
+        -- placements, not merely placed ones. A starting instance is not yet an
+        -- answer and a draining one is no longer one.
+        AND p.state = 'ready'
         AND n.drain = false
         AND n.last_seen > now() - interval '90 seconds'
         AND n.internal_ip IS NOT NULL
