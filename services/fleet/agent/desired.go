@@ -169,7 +169,7 @@ type syncBody struct {
 	// alone, [] means "nothing on this node has data" and clears them. Getting
 	// that backwards for an older agent would unpin every app on it and let the
 	// reconciler move a database away from its disk.
-	WithData  *[]string       `json:"withData,omitempty"`
+	WithData *[]string `json:"withData,omitempty"`
 	// Version is which build of this agent is speaking.
 	//
 	// Absent from an older agent, which is why it is omitempty rather than a
@@ -261,7 +261,7 @@ type Source struct {
 	// fails leaves this at zero, the next poll claims nothing, and the control
 	// plane sends the full set.
 	lastGeneration int64
-	Report func() []ProcessFault
+	Report         func() []ProcessFault
 	// ReportRunning answers "what am I confirmed to be running right now", on
 	// the same sync. Nil carries the same meaning as a nil Report and is the
 	// state every agent built before this field was added is permanently in.
@@ -443,11 +443,4 @@ func (s *Source) fromFile(path string) (Desired, error) {
 		return d, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return d, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
