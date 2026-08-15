@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { getPool } from "./db";
+import { getTenantPool } from "./db";
 import { readAppSecret } from "./app-secrets";
 
 /**
@@ -37,12 +37,17 @@ export const DB_PASSWORD_SECRET = "SUPERSONIC_DB_PASSWORD";
 /**
  * Where `dropAppDatabase` connects FROM.
  *
- * Postgres refuses to drop a database the current session is using, and
- * `getPool` is keyed by database name — so asking it for the target would open
- * precisely the connection that blocks the drop. The platform's own database is
- * on the same instance and is never an app's.
+ * Postgres refuses to drop a database the current session is using, so the
+ * session has to be in a DIFFERENT database on the SAME instance.
+ *
+ * It used to be `supersonic_platform`, and that was right only while the two
+ * lived together. After the 12 Aug split the platform's database was no longer
+ * on the tenant instance, so this named a database that was not there — the
+ * drop went to the wrong server and, worse, so did the check that was supposed
+ * to catch it. `postgres` is the one database guaranteed to exist on every
+ * Cloud SQL instance and to belong to no app, which is the whole requirement.
  */
-const PLATFORM_DB_FOR_DROP = "supersonic_platform";
+const NEUTRAL_DB_FOR_DROP = "postgres";
 
 export interface AppRole {
   user: string;
@@ -133,7 +138,12 @@ export async function ensureAppRole(
   const existing = await readAppSecret(slug, DB_PASSWORD_SECRET);
   const password = existing && SAFE_PASSWORD.test(existing) ? existing : randomBytes(24).toString("hex");
 
-  const pool = getPool(dbName);
+  // The TENANT instance: `dbName` is an app's database, which is not where the
+  // control plane's tables live. Reaching for the platform pool here is what
+  // made this function fall back to the shared superuser credential for every
+  // app deployed after 12 Aug — the isolation this module exists to provide,
+  // switched off by a connection name.
+  const pool = getTenantPool(dbName);
   const client = await pool.connect().catch(() => null);
   if (!client) {
     log("! could not reach Postgres to isolate this app's database — using the shared credential");
@@ -254,10 +264,9 @@ export function dropStatements(role: string, dbName: string): string[] {
 /**
  * Drop the app's database and its role.
  *
- * Connected to the PLATFORM database, never to the one being dropped: Postgres
- * refuses to drop a database that the connection itself is using, and `getPool`
- * is keyed by database name, so asking it for the target would open exactly the
- * session that blocks the drop.
+ * Connected to a neighbouring database ON THE TENANT INSTANCE, never to the one
+ * being dropped: Postgres refuses to drop a database the connection itself is
+ * using, so the session has to be somewhere else on the same server.
  *
  * Every statement is allowed to fail on its own. An app that never had a
  * database, one whose role was never created, one already half-removed by a
@@ -265,6 +274,13 @@ export function dropStatements(role: string, dbName: string): string[] {
  * steps that follow. What is NOT tolerated silently is the database still being
  * there afterwards: that is a customer's data left on a shared instance after
  * they asked for it to be gone, and it is reported to the caller.
+ *
+ * That last check is only worth anything if it asks the RIGHT SERVER. On 16 Aug
+ * fifteen customers' databases were found still present after the platform had
+ * reported them deleted: the drop ran against the platform instance, failed
+ * because the database was not there, and the verification ran on that same
+ * wrong instance and agreed. A tolerant statement plus a check on the same
+ * broken connection is not a check at all.
  */
 export async function dropAppDatabase(
   slug: string,
@@ -276,7 +292,7 @@ export async function dropAppDatabase(
     return { dropped: false, reason: `"${role}"/"${dbName}" is not a usable identifier` };
   }
 
-  const pool = getPool(PLATFORM_DB_FOR_DROP);
+  const pool = getTenantPool(NEUTRAL_DB_FOR_DROP);
   const client = await pool.connect().catch(() => null);
   if (!client) return { dropped: false, reason: "could not reach Postgres" };
 

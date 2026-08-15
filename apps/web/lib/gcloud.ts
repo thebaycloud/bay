@@ -10,10 +10,13 @@ import { runIdsForSlug } from "./deploy-runs";
 import { appPingScheduleArgs } from "./process-deploy";
 import { SCHEDULER_SA } from "./identities";
 import { appLogFilter } from "./log-filter";
+import { TENANT_PG_INSTANCE } from "./pg-config";
 
 const PROJECT = "supersonic-deploy-prod";
-// The one shared Cloud SQL instance every app's database lives on.
-const PG_INSTANCE = "supersonic-shared-pg";
+// The one shared Cloud SQL instance every app's database lives on. Imported
+// rather than repeated: this literal existed in three modules and disagreed
+// with PG_CONN for four days. See lib/pg-config.ts.
+const PG_INSTANCE = TENANT_PG_INSTANCE;
 const DEPLOY_JOB_NAME = process.env.DEPLOY_JOB_NAME || "supersonic-deploy-job";
 const REGION = "us-central1";
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } as NodeJS.ProcessEnv;
