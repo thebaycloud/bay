@@ -16,7 +16,8 @@
     "bench:timing": "node --import tsx bench/run.ts --concurrency 1 --modes cold,warm --reps 3",
     "bench:report": "node --import tsx bench/report.ts",
     "bench:watch": "node --import tsx bench/watch.ts",
-    "bench:cleanup": "node --import tsx bench/cleanup.ts"
+    "bench:cleanup": "node --import tsx bench/cleanup.ts",
+    "drift": "node --import tsx scripts/drift.ts"
   },
   "dependencies": {
     "@types/pg": "^8.20.0",
