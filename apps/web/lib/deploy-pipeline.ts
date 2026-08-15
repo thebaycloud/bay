@@ -30,7 +30,7 @@ import { getLogs } from "@/lib/gcloud";
 import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primaryService, extraServices, servicePath, usesDatabase, releaseCommand, type ServiceConfig, type AppConfig, type HealthConfig } from "@/lib/app-config";
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv, restateDatabaseAt } from "@/lib/env-merge";
-import { pgConfig } from "@/lib/pg-config";
+import { pgConfig, TENANT_PG_INSTANCE } from "@/lib/pg-config";
 import { dbNameForSlug } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
@@ -612,7 +612,7 @@ async function deployProcesses(o: {
 async function databaseExists(slug: string): Promise<boolean> {
   try {
     await capture("gcloud", ["sql", "databases", "describe", dbNameForSlug(slug),
-      "--instance=supersonic-shared-pg", "--project", PROJECT, "--format=value(name)"]);
+      `--instance=${TENANT_PG_INSTANCE}`, "--project", PROJECT, "--format=value(name)"]);
     return true;
   } catch {
     return false;
@@ -626,7 +626,7 @@ function provisionPostgres(slug: string, log: (l: string) => void, at: DbAddress
   // Same helper the delete path uses, so an app's database can always be found
   // again by name — a second, drifting copy of this rule is how they got orphaned.
   const dbName = dbNameForSlug(slug);
-  return capture("gcloud", ["sql", "databases", "create", dbName, "--instance=supersonic-shared-pg", "--project", PROJECT])
+  return capture("gcloud", ["sql", "databases", "create", dbName, `--instance=${TENANT_PG_INSTANCE}`, "--project", PROJECT])
     .catch((e: Error) => { if (/already exists/i.test(e.message)) return ""; throw e; })
     .then(async () => {
       log(`Provisioned Postgres database ${dbName}`);
