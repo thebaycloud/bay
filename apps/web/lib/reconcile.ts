@@ -114,14 +114,14 @@ export interface PassResult {
  */
 const LOCK_KEY = 0x5501_1EE7; // "supersonic fleet", arbitrary and fixed
 
-export async function reconcileOnce(now: number = Date.now()): Promise<PassResult | null> {
+export async function reconcileOnce(now: number = Date.now(), only?: string): Promise<PassResult | null> {
   const pool = getPool(DB);
   const client = await pool.connect();
   try {
     const got = await client.query(`SELECT pg_try_advisory_lock($1) AS ok`, [LOCK_KEY]);
     if (!got.rows[0]?.ok) return null;
     try {
-      return await pass(client, now);
+      return await pass(client, now, only);
     } finally {
       await client.query(`SELECT pg_advisory_unlock($1)`, [LOCK_KEY]);
     }
@@ -132,7 +132,22 @@ export async function reconcileOnce(now: number = Date.now()): Promise<PassResul
 
 type Client = { query: (text: string, values?: unknown[]) => Promise<{ rows: any[] }> };
 
-async function pass(client: Client, now: number): Promise<PassResult> {
+/**
+ * One convergence, over the whole fleet or over a single app.
+ *
+ * Exported for the tests and for `convergeApp`, which is how a DEPLOY reaches
+ * this: the spec's step 3 is "the placement function creates placements for V —
+ * the same function the reconciler calls", and the cheapest way to mean that
+ * literally is one function with an argument rather than two that must be kept
+ * in step.
+ *
+ * `only` NARROWS THE PLANNING LOOP AND NOT THE QUERY, which is the whole subtlety
+ * of the parameter. "Which node is least loaded" is a fact about every placement
+ * on the fleet; reading one app's rows would show every other node as empty and
+ * send the new instance to whichever node happened to be first. So every app is
+ * read and counted, and only the planning is restricted.
+ */
+export async function pass(client: Client, now: number, only?: string): Promise<PassResult> {
   const nodes = (await client.query(
     `SELECT name, drain, extract(epoch from last_seen) * 1000 AS last_seen FROM fleet_nodes`,
   )).rows.map((r) => ({ name: r.name as string, drain: Boolean(r.drain), lastSeen: Number(r.last_seen) }));
@@ -153,7 +168,13 @@ async function pass(client: Client, now: number): Promise<PassResult> {
             a.desired_replicas,
             p.instance, p.node, p.release_id, p.state,
             extract(epoch from p.lease_until) * 1000 AS lease_until,
-            (p.spec ? 'dataDir') AS pinned
+            -- Pinned by DATA. The spec ? 'dataDir' test was the original
+            -- expression of section 8's "this cannot move", and it has never been
+            -- true of any row: nothing writes dataDir into a spec. It is kept
+            -- because a declared volume would land there, and has_data is the
+            -- half that works — the node's own report of whether /data has
+            -- anything in it.
+            (p.has_data OR (p.spec ? 'dataDir')) AS pinned
        FROM apps a
        LEFT JOIN fleet_placements p ON p.slug = a.slug
       WHERE a.runtime = 'fleet'
@@ -191,13 +212,33 @@ async function pass(client: Client, now: number): Promise<PassResult> {
     });
   }
 
-  const ordered = [...health].sort((a, b) => (load.get(a.name) ?? 0) - (load.get(b.name) ?? 0));
+  // Least loaded first, and the load TRAVELS with each node now. The order alone
+  // was enough while the planner only ever needed "which is emptiest"; rebalancing
+  // needs the size of the gap, because moving an app to correct a difference of
+  // one just creates the same difference the other way round.
+  const ordered = [...health]
+    .map((n) => ({ ...n, load: load.get(n.name) ?? 0 }))
+    .sort((a, b) => a.load - b.load);
 
   const steps: Step[] = [];
   let held = 0;
-  for (const [, e] of byApp) {
+  // At most one app is moved for balance per pass. See the note at the call.
+  let rebalanced = false;
+  for (const [appSlug, e] of byApp) {
+    // Counted above, planned for only when asked. See the note on `only`.
+    if (only !== undefined && appSlug !== only) continue;
     const desired = { ...e.desired, pinnedTo: e.pinnedTo };
-    const planned = planPlacements(desired, e.placed, ordered, now, quorum);
+    // One rebalance per pass, and the budget is here because the loop is here.
+    // Every app sees the same load snapshot — taken once, above — so without this
+    // every app on the fullest node moves at once and the snapshot they all acted
+    // on is wrong before the pass finishes.
+    const before = e.placed.length;
+    const planned = planPlacements(desired, e.placed, ordered, now, quorum, !rebalanced);
+    // A `place` for an app that was already at its desired count is a rebalance;
+    // anything else is the fleet catching up with what it was asked for.
+    if (!rebalanced && planned.some((s) => s.kind === "place") && before >= desired.replicas) {
+      rebalanced = true;
+    }
     // An app with an expired lease that produced no step because the fleet
     // cannot be seen. Counted so a quiet pass and a holding pass do not read the
     // same from outside.
@@ -208,7 +249,7 @@ async function pass(client: Client, now: number): Promise<PassResult> {
   for (const s of steps) await apply(client, s, now);
   if (steps.length) await bumpFleetGeneration();
 
-  return { quorum, apps: byApp.size, steps, held };
+  return { quorum, apps: only === undefined ? byApp.size : (byApp.has(only) ? 1 : 0), steps, held };
 }
 
 async function apply(client: Client, s: Step, now: number): Promise<void> {
@@ -309,4 +350,300 @@ export async function desiredRelease(slug: string): Promise<number | null> {
 export async function setDesired(slug: string, release: number | null): Promise<void> {
   await getPool(DB).query(`UPDATE apps SET desired_release = $2 WHERE slug = $1`, [slug, release]);
   await bumpFleetGeneration();
+}
+
+/* -------------------------------------------------------------------------- */
+/* Readiness: reported by the node, never inferred from outside.               */
+/* -------------------------------------------------------------------------- */
+
+/** A placement waiting to be told it is serving. */
+export interface Starting {
+  slug: string;
+  instance: number;
+  /** The image of the release this instance was placed with. */
+  image: string;
+}
+
+/** What a node says it is confirmed to be running, from its own sync report. */
+export interface Confirmed {
+  slug: string;
+  image: string;
+  /**
+   * Whether it is ANSWERING, not merely present — and absent when the question
+   * does not apply. A worker has no port to probe, so the node reports no health
+   * for it at all, and reading that absence as "not healthy" would leave a
+   * worker-only app unable to ever finish a rollout.
+   */
+  healthy?: boolean;
+}
+
+/**
+ * Which starting placements the node has just vouched for.
+ *
+ * The rollout turns on this: `planPlacements` will not drain the old instance
+ * until the new one is `ready`. Nothing wrote that field, so a rollout placed its
+ * new instance and stopped there — permanently. Found on q6doa, sitting at
+ * instance 0 ready on release 25 and instance 1 starting on 29, with the
+ * reconciler correctly reporting no steps because the new one was not cover yet.
+ *
+ * THE IMAGE IS THE PREDICATE, not the slug. A node still running the version
+ * being replaced reports the same slug, and promoting on that would mark the new
+ * instance ready on the strength of the OLD one answering — the same false
+ * positive `placeOnFleet` already guards its probe against, arriving one layer
+ * down.
+ */
+export function readyInstances(
+  starting: Starting[],
+  confirmed: Confirmed[],
+): { slug: string; instance: number }[] {
+  return starting
+    .filter((s) =>
+      confirmed.some((c) =>
+        c.slug === s.slug && c.image === s.image && c.healthy !== false))
+    .map((s) => ({ slug: s.slug, instance: s.instance }));
+}
+
+/**
+ * Promote everything this node has just confirmed, on the sync that confirmed it.
+ *
+ * Here rather than in the reconcile pass because this is the node speaking about
+ * itself, and the pass runs on a clock that has nothing to do with when a process
+ * came up. Waiting for the next tick would add up to a minute to every rollout
+ * for no reason.
+ */
+export async function promoteReady(
+  node: string,
+  confirmed: Confirmed[],
+): Promise<number> {
+  if (!confirmed.length) return 0;
+  const pool = getPool(DB);
+  const rows = (await pool.query(
+    `SELECT p.slug, p.instance, r.code_image AS image
+       FROM fleet_placements p JOIN releases r ON r.id = p.release_id
+      WHERE p.node = $1 AND p.state = 'starting'`,
+    [node],
+  )).rows.map((r) => ({ slug: r.slug as string, instance: Number(r.instance), image: r.image as string }));
+  if (!rows.length) return 0;
+
+  const ready = readyInstances(rows, confirmed);
+  for (const r of ready) {
+    await pool.query(
+      `UPDATE fleet_placements SET state = 'ready' WHERE slug = $1 AND instance = $2 AND state = 'starting'`,
+      [r.slug, r.instance],
+    );
+  }
+  // A promotion changes what the reconciler will do next pass, and the edge
+  // routes on ready placements — so both need to know without waiting.
+  if (ready.length) await bumpFleetGeneration();
+  return ready.length;
+}
+
+/* -------------------------------------------------------------------------- */
+/* The loop's own state, because a loop that lies about itself is the worst     */
+/* kind.                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How long a pass may go without succeeding before that is a fault.
+ *
+ * The scheduler calls every minute, so five is five missed chances — long
+ * enough that a bad minute is not an alarm, short enough that the forty minutes
+ * this exists because of would have been caught in five.
+ */
+const STALE_AFTER_MS = 5 * 60_000;
+
+export interface PassRecord {
+  lastAttemptAt: number;
+  lastSuccessAt: number | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
+/**
+ * Is the reconciler actually reconciling?
+ *
+ * THE FAILURE THIS EXISTS FOR: it errored on every pass for forty minutes and
+ * nothing noticed, because a loop that throws and a loop with nothing to do both
+ * answer "no steps". That is the same absent-versus-empty distinction this
+ * codebase enforces on the wire — `ProcessState`, `BuildsWindow`, `who` — made
+ * wrongly by the loop about itself.
+ *
+ * Two different unhealthy states, deliberately not collapsed. A loop that is
+ * FAILING is a bug in the pass; a loop that has not been CALLED is a scheduler
+ * that stopped, a job someone disabled, a trigger a deploy removed. They look
+ * identical in a "last success" timestamp and want completely different next
+ * moves, so they are told apart here rather than left to whoever reads it.
+ *
+ * Never run at all is not a fault. That is a fresh environment, and reporting
+ * absence of history as breakage would make every new one look broken.
+ */
+export function reconcileHealth(
+  r: PassRecord | null,
+  now: number,
+): { healthy: boolean; reason?: string } {
+  if (!r) return { healthy: true, reason: "the reconciler has never run here" };
+  if (now - r.lastAttemptAt > STALE_AFTER_MS) {
+    return {
+      healthy: false,
+      reason: `the reconciler has not been called for ${Math.round((now - r.lastAttemptAt) / 1000)}s — the schedule, not the pass`,
+    };
+  }
+  if (r.lastSuccessAt === null || now - r.lastSuccessAt > STALE_AFTER_MS) {
+    return {
+      healthy: false,
+      reason: `the reconciler has not completed a pass for ${
+        r.lastSuccessAt === null ? "as long as it has been called" : `${Math.round((now - r.lastSuccessAt) / 1000)}s`
+      } — ${r.consecutiveFailures} consecutive failures, last: ${r.lastError ?? "unknown"}`,
+    };
+  }
+  return { healthy: true };
+}
+
+let passEnsured: Promise<void> | null = null;
+function ensurePassTable(): Promise<void> {
+  if (!passEnsured) {
+    passEnsured = getPool(DB)
+      .query(
+        `CREATE TABLE IF NOT EXISTS fleet_reconcile (
+           only_row             boolean PRIMARY KEY DEFAULT true,
+           last_attempt_at      timestamptz NOT NULL DEFAULT now(),
+           last_success_at      timestamptz,
+           consecutive_failures int NOT NULL DEFAULT 0,
+           last_error           text,
+           CONSTRAINT fleet_reconcile_one_row CHECK (only_row)
+         )`,
+      )
+      .then(() => undefined)
+      .catch((e) => { passEnsured = null; throw e; });
+  }
+  return passEnsured;
+}
+
+/** Record how a pass went. Never throws: the loop's diary must not stop the loop. */
+export async function recordPass(ok: boolean, error?: string): Promise<void> {
+  try {
+    await ensurePassTable();
+    await getPool(DB).query(
+      `INSERT INTO fleet_reconcile (only_row, last_attempt_at, last_success_at, consecutive_failures, last_error)
+         VALUES (true, now(), CASE WHEN $1 THEN now() END, CASE WHEN $1 THEN 0 ELSE 1 END, $2)
+       ON CONFLICT (only_row) DO UPDATE SET
+         last_attempt_at = now(),
+         last_success_at = CASE WHEN $1 THEN now() ELSE fleet_reconcile.last_success_at END,
+         consecutive_failures = CASE WHEN $1 THEN 0 ELSE fleet_reconcile.consecutive_failures + 1 END,
+         last_error = $2`,
+      [ok, error ?? null],
+    );
+  } catch (e) {
+    console.error("reconcile: could not record the pass", e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** The loop's own state, or null if it has never run here. */
+export async function passRecord(): Promise<PassRecord | null> {
+  try {
+    await ensurePassTable();
+    const r = await getPool(DB).query(
+      `SELECT extract(epoch from last_attempt_at) * 1000 AS a,
+              extract(epoch from last_success_at) * 1000 AS s,
+              consecutive_failures AS f, last_error AS e
+         FROM fleet_reconcile WHERE only_row`);
+    const row = r.rows[0];
+    if (!row) return null;
+    return {
+      lastAttemptAt: Number(row.a),
+      lastSuccessAt: row.s === null ? null : Number(row.s),
+      consecutiveFailures: Number(row.f),
+      lastError: row.e ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Converge ONE app now, instead of waiting for the next scheduled pass.
+ *
+ * A deploy writes `apps.desired_release` and then wants the placement to happen
+ * immediately — waiting up to a minute for the tick would put the whole
+ * reconcile interval on the front of every deploy. It takes the same advisory
+ * lock, so a deploy and the scheduled pass cannot act on the fleet at once.
+ *
+ * Null means another pass holds the lock. That is not an error and not a
+ * failure to converge: the pass already running will see this app's new desired
+ * release, because it reads the row rather than a snapshot taken before.
+ */
+export function convergeApp(slug: string, now: number = Date.now()): Promise<PassResult | null> {
+  return reconcileOnce(now, slug);
+}
+
+/**
+ * The node holding a READY placement of this release, or null.
+ *
+ * READY is the node's own word. `promoteReady` writes it when the node's sync
+ * confirms a process whose image matches the release — which is what makes
+ * "which version answered" answerable during a roll, when two releases are
+ * placed at once and the load balancer may reach either. A probe cannot tell
+ * them apart; this can.
+ */
+export async function readyAt(slug: string, release: number): Promise<string | null> {
+  const r = await getPool(DB).query(
+    `SELECT node FROM fleet_placements
+      WHERE slug = $1 AND release_id = $2 AND state = 'ready'
+      ORDER BY instance LIMIT 1`,
+    [slug, release],
+  );
+  return r.rows[0]?.node ?? null;
+}
+
+/**
+ * Drop one release's placements, leaving every other release's alone.
+ *
+ * The failure path needs exactly this and not "unplace the app". Reverting
+ * `desired` on its own would leave the broken version placed while the previous
+ * one comes up beside it — the planner drains a stale placement only once the
+ * wanted one is ready — so the version that just failed its verify would go on
+ * taking traffic for the whole length of the recovery.
+ *
+ * The generation is bumped because a node must stop running this without waiting
+ * for its next poll.
+ */
+export async function removeRelease(slug: string, release: number): Promise<void> {
+  const r = await getPool(DB).query(
+    `DELETE FROM fleet_placements WHERE slug = $1 AND release_id = $2`,
+    [slug, release],
+  );
+  if (r.rowCount) await bumpFleetGeneration();
+}
+
+/**
+ * Record which of a node's apps have written to their data directory.
+ *
+ * The pin section 8 asked for, arriving from the only place that can see it. The
+ * node holds the disk; the control plane holds the decision to move things, and
+ * until now it had no way to know which apps must not be moved.
+ *
+ * SCOPED TO THIS NODE, and that is what makes it safe to write from a report:
+ * another node's placements are untouched, so a node that goes quiet cannot
+ * unpin anything. Called only when the agent actually reported — an absent list
+ * leaves every flag alone, because "this agent does not say" and "this node has
+ * no data" are different facts and confusing them would unpin a database.
+ */
+export async function recordDataUse(node: string, slugs: string[]): Promise<void> {
+  const has = new Set(slugs);
+  const pool = getPool(DB);
+  const rows = (await pool.query(
+    `SELECT slug, has_data FROM fleet_placements WHERE node = $1`,
+    [node],
+  )).rows as { slug: string; has_data: boolean }[];
+
+  // Only the rows that actually change. A blanket UPDATE would rewrite every
+  // placement on the node every ten seconds, on a table the reconciler reads on
+  // every pass.
+  const flip = rows.filter((r) => r.has_data !== has.has(r.slug));
+  for (const r of flip) {
+    await pool.query(
+      `UPDATE fleet_placements SET has_data = $3 WHERE node = $1 AND slug = $2`,
+      [node, r.slug, has.has(r.slug)],
+    );
+  }
 }

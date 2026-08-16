@@ -107,6 +107,40 @@ test -d /usr/local/bin/gvisor-bin \
 # handler, and the failure surfaces much later as "runsc not found".
 # ---------------------------------------------------------------------------
 
+# THE CONTENT STORE GOES ON THE FAST DISK, and this is §4's second finding:
+# containerd's root was left at its default, so images lived on the BOOT disk —
+# which carries autoDelete=true, so replacing an instance loses every image — and
+# layer unpacking, the most I/O-heavy part of a start, ran on the slower device.
+# Meanwhile the local NVMe mounted specifically for rebuildable state held 127 MB
+# against 369 GB free, while /var/lib/containerd held 20 GB.
+#
+# Images are exactly what /srv/state is for. The comment on that mount already
+# says so — "losing /srv/state costs an image pull, not an app's data" — which is
+# the definition of rebuildable state.
+#
+# ORDERING IS LOAD-BEARING: the mount must exist before containerd starts, or it
+# will create its root on the boot disk under that path and the mount will then
+# shadow files it is holding open. `supersonic-state.service` below owns the
+# mount and containerd is ordered after it.
+# IS THERE A FAST DISK? The content store only moves if there is somewhere
+# better to put it. On a node without a local SSD, /srv/state is the boot disk —
+# the same device the default root is already on — so pointing containerd at it
+# would move 26 GB of cached images from one directory to another for no gain and
+# throw the cache away in the process. Measured on fleet-lab-2, which has no SSD.
+STATE_ON_SSD=""
+for cand in /dev/disk/by-id/google-local-nvme-ssd-0 /dev/nvme0n1; do
+  [ -e "$cand" ] && { STATE_ON_SSD="yes"; break; }
+done
+if [ -n "$STATE_ON_SSD" ]; then
+  CTRD_ROOT="root = '/srv/state/containerd'"
+  CTRD_ROOT_V2='root = "/srv/state/containerd"'
+  log "content store will live on the local SSD"
+else
+  CTRD_ROOT=""
+  CTRD_ROOT_V2=""
+  log "no local SSD: leaving the content store where it is (boot disk)"
+fi
+
 log "configuring containerd for the runsc handler"
 CTRD_MAJOR="$(containerd --version | awk '{print $3}' | sed 's/^v//' | cut -d. -f1)"
 mkdir -p /etc/containerd
@@ -115,6 +149,8 @@ if [ "$CTRD_MAJOR" -ge 2 ]; then
   CRI_PLUGIN='io.containerd.cri.v1.runtime'
   cat > /etc/containerd/config.toml <<EOF
 version = 3
+
+${CTRD_ROOT}
 
 [plugins.'${CRI_PLUGIN}']
   [plugins.'${CRI_PLUGIN}'.containerd]
@@ -127,8 +163,10 @@ version = 3
       runtime_type = 'io.containerd.runsc.v1'
 EOF
 else
-  cat > /etc/containerd/config.toml <<'EOF'
+  cat > /etc/containerd/config.toml <<EOF
 version = 2
+
+${CTRD_ROOT_V2}
 
 [plugins."io.containerd.grpc.v1.cri".containerd]
   default_runtime_name = "runc"
@@ -167,7 +205,11 @@ log_level = "warning"
 EOF
 mkdir -p /var/log/runsc
 
-systemctl restart containerd
+# NOT RESTARTED HERE. The config written above puts containerd's content store
+# under /srv/state, and that mount is set up further down — restarting now would
+# create the store on the boot disk and then have the disk mounted over the top
+# of files containerd is holding open. The restart moved to just after the mount;
+# `enable` is safe at any point and stays.
 systemctl enable containerd
 
 # ---------------------------------------------------------------------------
@@ -214,10 +256,126 @@ if [ -n "$SSD_DEV" ]; then
     log "mounting local SSD at /srv/state"
     mount -o discard,defaults,nobarrier "$SSD_DEV" /srv/state
   fi
+  mkdir -p /srv/state/containerd
   # No fstab entry on purpose: a node whose local SSD is gone (post-stop) must
   # still boot. Losing /srv/state costs an image pull, not an app's data.
+  #
+  # BUT SOMETHING HAS TO REMOUNT IT, and nothing did. This script is run by hand
+  # — there is no startup-script metadata on any node — so after a reboot the
+  # disk stayed unmounted and every bundle, overlay and (now) image silently went
+  # to the boot disk instead. Found live: fleet-lab-3 had been serving from the
+  # boot disk since it was stopped and started earlier the same day, and nothing
+  # anywhere said so.
+  #
+  # The unit below does at boot exactly what this block does by hand, which is
+  # also what makes the containerd root above safe: the mount is guaranteed to
+  # exist before containerd starts, rather than happening to.
 else
   log "no local SSD; /srv/state will live on the boot disk (slower, still correct)"
+fi
+
+# --------------------------------------------------------------------------
+# The fast disk, at every boot rather than only when a human runs this script.
+# --------------------------------------------------------------------------
+#
+# A local SSD is BLANK after a stop — the data does not survive, and the device
+# comes back unformatted — so this cannot be an fstab line. It has to be able to
+# format before it mounts, which is a program, not a table.
+#
+# `nofail` is the property the fstab comment wanted and could not express: a node
+# whose SSD is missing degrades to the boot disk and still boots. Here that is
+# the `|| exit 0` — every step is best-effort, and a failure leaves the node
+# running on the slower disk exactly as it does today.
+log "installing supersonic-state.service (mounts the fast disk at boot)"
+cat > /usr/local/sbin/supersonic-mount-state <<'MOUNTEOF'
+#!/usr/bin/env bash
+# Mount the local NVMe at /srv/state, formatting it first if it is blank.
+# Idempotent, and silent about a node that has no such disk.
+set -uo pipefail
+mkdir -p /srv/state
+mountpoint -q /srv/state && { mkdir -p /srv/state/containerd; exit 0; }
+dev=""
+for cand in /dev/disk/by-id/google-local-nvme-ssd-0 /dev/nvme0n1; do
+  [ -e "$cand" ] && { dev="$(readlink -f "$cand")"; break; }
+done
+[ -n "$dev" ] || { echo "no local SSD; /srv/state stays on the boot disk"; exit 0; }
+blkid "$dev" >/dev/null 2>&1 || mkfs.ext4 -F -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard "$dev"
+mount -o discard,defaults,nobarrier "$dev" /srv/state || { echo "could not mount $dev; staying on the boot disk"; exit 0; }
+mkdir -p /srv/state/containerd
+echo "mounted $dev at /srv/state"
+MOUNTEOF
+chmod 0755 /usr/local/sbin/supersonic-mount-state
+
+cat > /etc/systemd/system/supersonic-state.service <<'UNITEOF'
+[Unit]
+Description=Mount the node's fast rebuildable-state disk
+DefaultDependencies=no
+After=local-fs.target
+Before=containerd.service
+# containerd's content store lives under this mount. Ordered, not required:
+# a node without the disk must still boot and serve from the slower one.
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/supersonic-mount-state
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+mkdir -p /etc/systemd/system/containerd.service.d
+cat > /etc/systemd/system/containerd.service.d/10-state-disk.conf <<'DROPEOF'
+# containerd writes its images under /srv/state, so it must not start before the
+# disk is there. Without this it would create the directory on the boot disk and
+# then have the mount pulled over the top of files it is holding open.
+[Unit]
+After=supersonic-state.service
+Wants=supersonic-state.service
+DROPEOF
+
+systemctl daemon-reload
+systemctl enable supersonic-state.service >/dev/null 2>&1 || true
+systemctl start supersonic-state.service || log "WARNING: could not mount the fast disk; the node stays on the boot disk"
+
+# NOW containerd may start, with its store on a disk that exists. This is the
+# restart moved down from the configuration block — see the note there.
+#
+# THE EXISTING CACHE MOVES WITH IT rather than being abandoned. A node that has
+# been serving has tens of gigabytes of images already unpacked — 20 GB on
+# fleet-lab-1 — and starting containerd on an empty root would make every app on
+# it re-pull. Moved only when the destination is empty, so a re-run never
+# disturbs a store that is already in the right place.
+if [ -n "$STATE_ON_SSD" ] && [ -d /var/lib/containerd ] && [ ! -d /srv/state/containerd/io.containerd.content.v1.content ]; then
+  log "moving the existing content store onto the state disk (this can take a minute)"
+  systemctl stop containerd || true
+  mkdir -p /srv/state/containerd
+  # `cp -a` then remove, rather than `mv`: these are different filesystems, and a
+  # move that fails halfway would leave neither root usable. The old one stays
+  # until the copy is complete.
+  if cp -a /var/lib/containerd/. /srv/state/containerd/; then
+    rm -rf /var/lib/containerd.migrated && mv /var/lib/containerd /var/lib/containerd.migrated
+    log "content store moved; the previous one is kept at /var/lib/containerd.migrated"
+  else
+    log "WARNING: could not copy the content store; leaving it where it is"
+  fi
+fi
+
+log "restarting containerd onto the state disk"
+systemctl restart containerd
+# AND THE AGENT, because stopping containerd stopped it too. `supersonicd`
+# declares `Requires=containerd.service`, and Requires propagates a STOP without
+# propagating the start back — so the migration above took the agent down with
+# containerd and left it down. The node then stopped heartbeating, its lease
+# expired after two minutes, and the reconciler moved all nineteen of its apps to
+# another node. That is the failover behaving exactly as designed, triggered by a
+# maintenance script that did not put back what it took away.
+# On a FRESH node there is no agent binary yet — the updater collects it a moment
+# later — so a failure here is normal and the warning was a false alarm on every
+# first provision. A warning that fires when nothing is wrong teaches people to
+# skip warnings, which is worse than not printing one.
+if [ -x /opt/agent/supersonicd ]; then
+  systemctl start supersonicd || log "WARNING: the agent did not start — this node will lose its placements"
+else
+  log "no agent binary yet; the updater will collect one and start it"
 fi
 
 # App data on a disk that outlives the node. Named by device rather than found
@@ -374,6 +532,51 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# What the agent needs to be able to speak at all.
+#
+# A NODE BUILT FROM THIS REPOSITORY USED TO COME UP MUTE. `agent.env` carries the
+# sync endpoint and the fleet token, and it was — in this file's own words
+# elsewhere — "added to the live unit by hand", present on no node this script
+# had ever built. Recreating fleet-lab-2 on 13 Aug proved it: the agent started,
+# logged "edge gate: OFF (no FLEET_EDGE_SECRET)", found nowhere to sync to, and
+# the node sat there while its thirteen apps were rehomed elsewhere.
+#
+# The values are fetched rather than baked. Both are secrets and the node's
+# service account can already read them — that is what the broker was built on —
+# so the only thing that was ever missing was this step.
+#
+# Written only when absent, like fleet.env above: a hand-edited value on a live
+# node is not overwritten by a re-run.
+if [ ! -s /etc/supersonic/agent.env ]; then
+  log "writing agent.env (endpoint and fleet token)"
+  TOKEN="$(gcloud secrets versions access latest --secret fleet-token \
+    --project supersonic-deploy-prod 2>/dev/null || true)"
+  if [ -n "$TOKEN" ]; then
+    cat > /etc/supersonic/agent.env <<EOF
+FLEET_ENDPOINT=https://supersonic-control-plane-540236122367.us-central1.run.app/api/fleet/sync
+FLEET_TOKEN=${TOKEN}
+EOF
+    chmod 0600 /etc/supersonic/agent.env
+  else
+    log "WARNING: could not read the fleet token — this node cannot register"
+  fi
+fi
+
+# The edge secret lives in fleet.env, and without it the node's router accepts a
+# slug from anyone who can reach the port. The agent says so at startup — "edge
+# gate: OFF" — which is how its absence was found.
+if ! grep -q '^FLEET_EDGE_SECRET=..*' /etc/supersonic/fleet.env 2>/dev/null; then
+  EDGE="$(gcloud secrets versions access latest --secret supersonic-fleet-edge-secret \
+    --project supersonic-deploy-prod 2>/dev/null || true)"
+  if [ -n "$EDGE" ]; then
+    log "adding FLEET_EDGE_SECRET to fleet.env"
+    printf 'FLEET_EDGE_SECRET=%s\n' "$EDGE" >> /etc/supersonic/fleet.env
+  else
+    log "WARNING: no edge secret — this node's router will accept any slug from anyone reaching it"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 7a. Log shipping
 #
 # App stdout and stderr land in /srv/apps/<slug>/<process>.log, written by the
@@ -391,7 +594,28 @@ fi
 # is the one dependency this section does not create for itself.
 # ---------------------------------------------------------------------------
 
-if ! systemctl list-unit-files 2>/dev/null | grep -q '^google-cloud-ops-agent'; then
+# A NOTE ON `| grep -q` IN THIS FILE, because it cost a node.
+#
+# This script runs under `set -euo pipefail`. `grep -q` exits the moment it
+# matches, which sends SIGPIPE to whatever is still writing into the pipe; that
+# producer then exits 141, and `pipefail` makes the whole pipeline 141. So
+#
+#     if systemctl list-unit-files | grep -q '^cloud-sql-proxy'; then
+#
+# is FALSE precisely when the unit EXISTS — the answer is inverted by success.
+# Verified on fleet-lab-3: the same test is true with `pipefail` off and false
+# with it on.
+#
+# It cost exactly what the comment further down predicted: a node that could not
+# start any app with a database, reporting `this node's database path
+# (10.200.0.1:5432) is not answering`. It also made the ops-agent check below
+# reinstall a 119 MB package on every run, since there the inverted answer is
+# harmless and merely wasteful.
+#
+# Existence is therefore asked of systemd directly — `systemctl cat` — with no
+# pipe to break.
+
+if ! systemctl cat google-cloud-ops-agent.service >/dev/null 2>&1; then
   log "installing google-cloud-ops-agent"
   curl -fsSL -o /tmp/add-google-cloud-ops-agent-repo.sh \
     https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
@@ -582,7 +806,7 @@ log "cgroup v2 controllers: $(cat /sys/fs/cgroup/cgroup.controllers)"
 #
 # which is the right answer and still a node nobody could deploy a database app
 # to. Enabled, then started only if its config is present.
-if systemctl list-unit-files 2>/dev/null | grep -q '^cloud-sql-proxy'; then
+if systemctl cat cloud-sql-proxy.service >/dev/null 2>&1; then
   systemctl enable cloud-sql-proxy >/dev/null 2>&1 || true
   if [ -s /etc/supersonic/fleet.env ] && grep -q '^PG_INSTANCE=..*' /etc/supersonic/fleet.env; then
     log "starting cloud-sql-proxy"

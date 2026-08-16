@@ -57,9 +57,6 @@ function reportFor(s: AppSpec): ProcessState[] {
 function ports(over: Partial<PlacementPorts> = {}) {
   const calls: string[] = [];
   const base: PlacementPorts = {
-    chooseNode: async () => { calls.push("chooseNode"); return "fleet-lab-1"; },
-    placeApp: async (slug, node, s) => { calls.push(`place:${slug}@${node}:${s.image}`); },
-    unplaceApp: async (slug) => { calls.push(`unplace:${slug}`); },
     readPlacement: async () => { calls.push("read"); return null; },
     readRuntime: async () => { calls.push("readRuntime"); return "fleet"; },
     setRuntime: async (slug, rt) => { calls.push(`runtime:${slug}=${rt}`); },
@@ -72,6 +69,15 @@ function ports(over: Partial<PlacementPorts> = {}) {
     readDesired: async () => null,
     recordRelease: async () => 1,
     setDesired: async () => {},
+    // The rolling ports. `converge` reports one step and `readyAt` answers
+    // immediately, so the DEFAULT is a deploy that rolls out cleanly — every
+    // test that is about something else keeps its shape, and the ones about
+    // rollout override these.
+    converge: async (slug) => { calls.push(`converge:${slug}`); return 1; },
+    readyAt: async (slug, release) => { calls.push(`ready:${slug}@${release}`); return "fleet-lab-1"; },
+    removeRelease: async (slug, release) => { calls.push(`removeRelease:${slug}@${release}`); },
+    // Instant, so the readiness budget costs the suite nothing.
+    wait: async () => {},
     log: () => {},
   };
   return { calls, p: { ...base, ...over } };
@@ -92,16 +98,19 @@ test("an app with a database goes to the fleet now that a node has a proxy", () 
   assert.equal(chooseRuntime(eligible).runtime, "fleet");
 });
 
-test("what the fleet cannot serve is named, and goes to Cloud Run", () => {
+test("what the fleet cannot serve is named, and the deploy fails saying which", () => {
+  // The title used to end "and goes to Cloud Run". Each of these is now a FAILED
+  // DEPLOY carrying the same reason — there is no second runtime to be turned
+  // away to — which is why naming the reason matters more than it used to and
+  // not less. The `runner` row went with the lane itself.
   const cases: Array<[Partial<typeof eligible>, RegExp]> = [
     [{ staticServe: true }, /static/i],
-    [{ lane: "runner" }, /runner/i],
     [{ lane: "buildpack" }, /buildpack/i],
     [{ image: "" }, /image/i],
-    // Serviceless with no worker is a CRON-ONLY app, and it is refused for a
-    // reason that survived the change: a cron sandbox is never in the agent's
-    // live set, so no node could report it running.
-    [{ serviceless: true }, /long-running|schedule/i],
+    // A cron-only app used to sit here and no longer does. The reason it was
+    // refused — a cron sandbox is never in the agent's live set — was a fact
+    // about the CHECK rather than about the fleet, and `runVerdict` now states
+    // the scheduled case instead of failing to see it.
   ];
   for (const [over, why] of cases) {
     const r = chooseRuntime({ ...eligible, ...over });
@@ -125,27 +134,35 @@ test("a worker-only app can be placed on the fleet now that the node reports wha
   assert.equal(chooseRuntime(eligibleWorker).runtime, "fleet");
 });
 
-test("a cron-only app is still refused, because nothing about it is ever running", () => {
-  // The distinction the whole verdict rests on. A cron process is never in the
+test("a cron-only app is placed, and the check that used to refuse it answers instead", () => {
+  // THIS REVERSES AN EARLIER DECISION, and the earlier reasoning was right about
+  // the mechanism and wrong about the conclusion. A cron process is never in the
   // agent's live set — `units` in reconcileOnce excludes it, because the
-  // scheduler owns it — so the node would report no rows and every deploy of a
-  // correctly-configured app would roll back.
+  // scheduler owns it — so a verdict demanding a running process would roll back
+  // every deploy of a correctly-configured app.
+  //
+  // That is a defect in the CHECK, not a limit of the fleet: the node has been
+  // firing `rtmsw--nightly` and `izuvx--nightly` every ten minutes since 11 Aug.
+  // `runVerdict` now states the scheduled case explicitly, so the routing does
+  // not have to refuse it — and there is nowhere left to refuse it TO, since the
+  // Cloud Run container lane is gone.
   const r = fleetEligibility({ ...eligibleWorker, workers: 0 });
-  assert.equal(r.ok, false);
-  assert.match(r.reason!, /long-running|schedule/i);
+  assert.equal(r.ok, true);
 });
 
-test("a serviceless app whose `workers` never arrived is refused, not placed", () => {
-  // Not hypothetical, and not a type error either: nothing in this repo
-  // typechecks the tests — the test command is `node --import tsx --test` and
-  // there is no typecheck script — so a caller that forgets this field ships.
-  // `workers === 0` would be FALSE for undefined and place a cron-only app on a
-  // node that can never confirm it. Asked the way a caller who forgot would ask.
+test("a missing `workers` count no longer decides anything, because nothing turns on it", () => {
+  // This test used to defend a guard written `!(x > 0)` rather than `=== 0`,
+  // because nothing in this repo typechecks the tests and an undefined `workers`
+  // would have made a cron-only app eligible — the mechanism defeating the rule
+  // it implemented.
+  //
+  // The rule is gone: a cron-only app IS eligible now, so undefined and zero
+  // reach the same answer and neither is a trap. Kept rather than deleted,
+  // pointed at what it now guards — that the field's absence cannot make an app
+  // UNPLACEABLE either.
   const missing = { ...eligibleWorker } as Partial<typeof eligibleWorker>;
   delete missing.workers;
-  const r = fleetEligibility(missing as typeof eligibleWorker);
-  assert.equal(r.ok, false, "an app with no `workers` count at all was declared placeable");
-  assert.match(r.reason!, /long-running|schedule/i);
+  assert.equal(fleetEligibility(missing as typeof eligibleWorker).ok, true);
 });
 
 test("a worker-only app with no Dockerfile is refused, because `--pack` built its image", () => {
@@ -175,16 +192,6 @@ test("a static app is not placeable, and the reason says why", () => {
   const r = fleetEligibility({ ...eligible, staticServe: true });
   assert.equal(r.ok, false);
   assert.match(r.reason!, /static/i);
-});
-
-test("a runner-lane app is not placeable — its image is not its own", () => {
-  // The runner lane runs a shared prebuilt image and delivers the customer's
-  // code as an encrypted bundle. A node given that image would start the runner,
-  // not the app. This is one of the 19 that stayed behind, and it is not a bug
-  // to fix here: it is the lane that is being deleted.
-  const r = fleetEligibility({ ...eligible, lane: "runner" });
-  assert.equal(r.ok, false);
-  assert.match(r.reason!, /runner/i);
 });
 
 test("an app whose build produced no image is not placeable", () => {
@@ -243,15 +250,14 @@ test("a buildpack-lane app with no Dockerfile is still refused, and says why", (
 
 test("a Dockerfile does not rescue the lanes refused for other reasons", () => {
   // Each of these is refused for something a Dockerfile does not change: a
-  // static app has no image of its own, the runner's image is shared and the
-  // app's code is not in it, and a cron-only app has nothing a node could ever
-  // report as running. The serviceless case used to sit here for a fourth reason
+  // static app has no image of its own, and the runner's image is shared with
+  // the app's code not in it. A cron-only app used to be a third entry and is
+  // now placeable — its refusal was a limit of the check, not of the fleet. The
+  // serviceless case used to sit here for a fourth reason
   // — no route to probe — and a Dockerfile did not change that one either. It is
   // gone because the reason is gone, not because the rule weakened.
   for (const c of [
     { lane: "static" as const, staticServe: true, serviceless: false, workers: 0 },
-    { lane: "runner" as const, staticServe: false, serviceless: false, workers: 0 },
-    { lane: "container" as const, staticServe: false, serviceless: true, workers: 0 },
   ]) {
     const got = fleetEligibility({
       lane: c.lane,
@@ -342,30 +348,44 @@ test("a router that never stops saying miss is given up on, not waited on foreve
   assert.equal(fleetVerdict(r).ok, false);
 });
 
-test("a full fleet leaves the app on Cloud Run instead of losing it", () => {
-  // chooseNode returning null had no handler anywhere. Unhandled, this is an app
-  // placed on the node named `null` — or a crash in the middle of a deploy that
-  // has already succeeded.
+test("a full fleet fails the deploy immediately rather than waiting to blame the app", () => {
+  // WHO ANSWERS "no room" CHANGED. It was `chooseNode` returning null, which had
+  // no handler anywhere — unhandled, that is an app placed on a node named
+  // `null`, or a crash in the middle of a deploy that had already succeeded. The
+  // deploy no longer picks a node at all, so the planner answers instead: it
+  // takes a step for every deploy, because the release is new every time and
+  // there is always something it has never placed, so ZERO steps means it found
+  // nowhere to put this.
+  //
+  // Answered immediately, and that is the point of asking. Waiting out the
+  // readiness budget and then reporting "the node never reported this version
+  // running" would send someone to debug a repository that is fine.
   return (async () => {
-    const { calls, p } = ports({ chooseNode: async () => null });
+    const { calls, p } = ports({ converge: async (slug) => { calls.push(`converge:${slug}`); return 0; } });
     const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
     assert.equal(r.placed, false);
     assert.match(r.reason!, /no node/i);
-    // Nothing was written. The app is exactly where the deploy left it.
-    assert.deepEqual(calls.filter((c) => !c.startsWith("chooseNode")), []);
+    // Never waited for readiness: the failure was known before the budget began.
+    assert.ok(!calls.some((c) => c.startsWith("ready:")), "it waited for a placement that was never made");
   })();
 });
 
-test("a version that does not answer is replaced by the one that did, on the node it was already on", async () => {
-  // The previous placement is on fleet-lab-2, a DIFFERENT node than the one
-  // this deploy's chooseNode hands back (fleet-lab-1). placeApp upserts on
-  // (slug, node), so restoring onto fleet-lab-1 instead of fleet-lab-2 would
-  // write a second row rather than putting back the one that was overwritten
-  // — this is the test that catches that mistake; a membership check on
-  // "was placeApp called with the right image" cannot see which node it went to.
+test("a version that does not answer gives the previous one back, through the planner", async () => {
+  // WHAT THIS TEST USED TO PROVE, and why the sequence changed. The restore used
+  // to be `placeApp(slug, previous.node, previous.spec)` — an in-memory copy of a
+  // spec read at the top of the function, written back onto the node it came
+  // from. Getting the NODE wrong wrote a second row instead of putting back the
+  // one that was overwritten, and that was what this asserted.
+  //
+  // There is nothing to get wrong now. The deploy never writes a placement, so
+  // it never overwrites one: it removes the failed release's placements, puts
+  // `desired` back, and converges. Where the previous version goes is the
+  // planner's answer, taken from the release row rather than from anything this
+  // function remembered.
   const { calls, p } = ports({
     probe: async () => { calls.push("probe"); return { code: 502 }; },
+    readDesired: async () => { calls.push("readDesired"); return 41; },
     readPlacement: async () => {
       calls.push("read");
       return { node: "fleet-lab-2", spec: { ...spec, image: "registry/myapp:good" } };
@@ -375,21 +395,24 @@ test("a version that does not answer is replaced by the one that did, on the nod
 
   assert.equal(r.placed, false);
   assert.equal(r.runUrl, undefined);
-  // The full ordered sequence, not just membership: it proves the read
-  // happened BEFORE the place that overwrites it (a read taken afterward would
-  // see the broken spec and "restore" it over itself) and that the restore
-  // lands on fleet-lab-2, not fleet-lab-1.
+  // The full ordered sequence, not membership. It proves the reads happen BEFORE
+  // anything is asked for — a `desired` read afterwards would see this deploy's
+  // own release and "restore" it over itself — and that the failed release's
+  // placements are removed BEFORE the convergence that brings the old one back,
+  // which is what stops the broken version taking traffic while it returns.
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    "place:myapp@fleet-lab-1:registry/myapp:bad",
+    "readDesired",
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "probe",
     // The node is asked whose failure this was before anything is restored, so
     // the log line the operator reads carries the answer too.
     "nodeFault",
-    "place:myapp@fleet-lab-2:registry/myapp:good",
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=fleet",
   ]);
   // And nothing goes to Cloud Run. There is no way back any more.
@@ -412,15 +435,20 @@ test("a first deploy that fails is unplaced rather than restored to nothing, and
   const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
+  // The deploy asks and the planner places, so there is no `place:` of its own
+  // to see. The restore is `removeRelease` — this release's placements and no
+  // other's — followed by a convergence that has nothing to bring back, because
+  // a first deploy has no previous release for `desired` to point at.
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    `place:myapp@fleet-lab-1:${spec.image}`,
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "probe",
     "nodeFault",
-    "unplace:myapp",
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=cloudrun",
   ]);
 });
@@ -436,7 +464,12 @@ test("place and verify, and only then is there an address to publish", async () 
   // keeps run_url with ONE writer: markAppLive would otherwise overwrite a flip
   // made here with the Cloud Run url it was already carrying.
   assert.equal(r.runUrl, "http://8.232.255.172");
-  assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", "place:myapp@fleet-lab-1:" + spec.image, "runtime:myapp=fleet", "probe"]);
+  // Two convergences, and the second is what makes the rollout rolling: the
+  // first places the new release BESIDE whatever is running, and the second runs
+  // once it is proven, which is when the planner drains the old one.
+  assert.deepEqual(calls, [
+    "read", "readRuntime", "runtime:myapp=fleet", "converge:myapp", "ready:myapp@1", "probe", "converge:myapp",
+  ]);
 });
 
 test("the probe asks the path the app said to ask", async () => {
@@ -563,14 +596,15 @@ test("a node fault does not stop the deploy rolling back", async () => {
 
   assert.equal(r.placed, false);
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    "place:myapp@fleet-lab-1:registry/myapp:bad",
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "probe",
     "nodeFault",
-    "place:myapp@fleet-lab-2:registry/myapp:good",
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=cloudrun",
   ]);
 });
@@ -589,7 +623,7 @@ test("a fault lookup that throws does not swallow the rollback", async () => {
 
   assert.equal(r.placed, false);
   assert.ok(!(r.reason ?? "").includes("FLEET_NODE_FAULT"));
-  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "the placement was not rolled back");
   assert.ok(calls.includes("runtime:myapp=fleet"));
 });
 
@@ -607,7 +641,7 @@ test("a port that is not wired at all cannot take the rollback with it", async (
 
   assert.equal(r.placed, false);
   assert.ok(!(r.reason ?? "").includes("FLEET_NODE_FAULT"));
-  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "the placement was not rolled back");
 });
 
 test("a node fault with nothing to add does not trail an empty dash", async () => {
@@ -705,17 +739,24 @@ test("the node running the PREVIOUS command at the same image is not it either",
   assert.match(v.reason!, /different command/i);
 });
 
-test("a placement with nothing long-running to confirm is not vacuously true", () => {
+test("scheduled work passes by being named, not by requiring nothing", () => {
   // "Everything I required is running" is trivially true of nothing, which is
   // the shape a check quietly becomes when the thing it checks is refactored out
-  // from under it. Unreachable through `fleetEligibility` today, and that is
-  // exactly why it is worth pinning.
+  // from under it. That hazard is why the cron case is an EXPLICIT branch rather
+  // than a relaxed guard: it passes because it says "the placement is the
+  // confirmation", not because the loop it would have entered is empty.
   const cronOnly = buildAppSpec({
     slug: "myapp", image: "img", env: [], secrets: [],
     processes: [resolveProcess("nightly", { command: "python export.py", schedule: "0 3 * * *" })],
   });
   assert.deepEqual(requiredProcesses(cronOnly), []);
-  assert.equal(runVerdict(cronOnly, []).ok, false);
+  const v = runVerdict(cronOnly, []);
+  assert.equal(v.ok, true);
+  assert.match(v.reason ?? "", /scheduled/i);
+
+  // And a spec that declares NOTHING is still refused — that is the vacuous case
+  // the guard was written for, and it survives untouched.
+  assert.equal(runVerdict({ ...cronOnly, processes: [] }, []).ok, false);
 });
 
 test("the first question is asked after a reconcile interval, not before one", async () => {
@@ -785,7 +826,9 @@ test("a worker-only app is verified by the node's report, and never probed", asy
   assert.equal(r.runUrl, "http://8.232.255.172");
   assert.ok(calls.includes("running"), "the node was never asked what it is running");
   assert.ok(!calls.includes("probe"), "a worker-only app was probed over HTTP");
-  assert.deepEqual(calls, ["chooseNode", "read", "readRuntime", `place:myapp@fleet-lab-1:${s.image}`, "runtime:myapp=fleet", "running"]);
+  assert.deepEqual(calls, [
+    "read", "readRuntime", "runtime:myapp=fleet", "converge:myapp", "ready:myapp@1", "running", "converge:myapp",
+  ]);
 });
 
 test("an app that serves HTTP is still verified by probing it", async () => {
@@ -818,14 +861,15 @@ test("a worker the node never confirms is rolled back onto the node it was alrea
   assert.equal(r.runUrl, undefined);
   assert.match(r.reason!, /not reporting/i);
   assert.deepEqual(calls, [
-    "chooseNode",
     "read",
     "readRuntime",
-    `place:myapp@fleet-lab-1:${s.image}`,
     "runtime:myapp=fleet",
+    "converge:myapp",
+    "ready:myapp@1",
     "running",
     "nodeFault",
-    `place:myapp@fleet-lab-2:${previous.image}`,
+    "removeRelease:myapp@1",
+    "converge:myapp",
     "runtime:myapp=cloudrun",
   ]);
 });
@@ -842,7 +886,7 @@ test("the running reader being unwired cannot take the rollback with it", async 
   const r = await placeOnFleet("myapp", s, "8.232.255.172", p as PlacementPorts);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:myapp"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "the placement was not rolled back");
   assert.ok(calls.includes("runtime:myapp=fleet"), "the runtime flag was not restored");
 });
 
@@ -856,7 +900,7 @@ test("a reader that throws inside placeOnFleet still restores everything", async
   const r = await placeOnFleet("myapp", s, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:myapp"));
+  assert.ok(calls.includes("removeRelease:myapp@1"));
   assert.ok(calls.includes("runtime:myapp=fleet"));
 });
 
@@ -870,7 +914,7 @@ test("a probe that throws is a failed verdict too, not an escaped exception", as
   const r = await placeOnFleet("myapp", spec, "8.232.255.172", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:myapp"), "a throwing probe skipped the rollback");
+  assert.ok(calls.includes("removeRelease:myapp@1"), "a throwing probe skipped the rollback");
 });
 
 test("a redeploy is not passed by the version it is replacing", () => {
@@ -899,7 +943,7 @@ test("a redeploy is not passed by the version it is replacing", () => {
     assert.equal(r.placed, false, "a 200 from the outgoing version must not flip the deploy");
     assert.match(r.reason ?? "", /previous image|not reporting|running/i);
     // …and the restore still lands on the node the app was already on.
-    assert.ok(calls.includes("place:myapp@fleet-lab-2:registry/myapp:good"), `restore missing: ${calls.join(", ")}`);
+    assert.ok(calls.includes("removeRelease:myapp@1"), `restore missing: ${calls.join(", ")}`);
   })();
 });
 
@@ -997,7 +1041,7 @@ test("a log read that throws does not skip the rollback", async () => {
   const r = await placeOnFleet("gzz9j", spec, "lb", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:gzz9j"), "the placement was not rolled back");
+  assert.ok(calls.includes("removeRelease:gzz9j@1"), "the placement was not rolled back");
   assert.ok(calls.includes("runtime:gzz9j=fleet"), "the runtime flag was not restored");
 });
 
@@ -1010,7 +1054,7 @@ test("an unwired log port is not a crash", async () => {
   const r = await placeOnFleet("gzz9j", spec, "lb", p);
 
   assert.equal(r.placed, false);
-  assert.ok(calls.includes("unplace:gzz9j"));
+  assert.ok(calls.includes("removeRelease:gzz9j@1"));
 });
 
 /* -------------------------------------------------------------------------- */
@@ -1187,4 +1231,90 @@ test("a first deploy that fails leaves no desired release rather than inventing 
     setDesired: async (_s, r) => { said.push(r); },
   }).p);
   assert.deepEqual(said, [1, null]);
+});
+
+// The placement must carry the release it is running, or `desired` and the
+// placement diverge permanently: the deploy records release N, asks for it, and
+// then places a row still claiming N-1. The reconciler then sees an app whose
+// only instance runs the wrong release and rolls a second one forward on every
+// pass — for a deploy that had already placed the right thing.
+//
+// Caught by a real deploy of q6doa: desired moved to 29 and the placement stayed
+// on 25.
+test("the deploy asks for the release it recorded, and nothing else places it", async () => {
+  // WHAT THIS USED TO GUARD, and why it cannot happen any more. `placeApp` took a
+  // release argument, and a deploy that recorded 29 while writing a placement
+  // still claiming 25 left `desired` and the placement disagreeing permanently —
+  // the reconciler then rolled a second instance forward on every pass. Caught by
+  // a real deploy of q6doa.
+  //
+  // The deploy no longer writes a placement, so it can no longer write one that
+  // names the wrong release. It records the release, asks for it, and the planner
+  // copies the spec FROM THAT RELEASE ROW — the placement and the release cannot
+  // disagree, because there is only one of them now.
+  const asked: (number | null)[] = [];
+  await placeOnFleet("lilna", spec, "10.0.0.1", ports({
+    recordRelease: async () => 42,
+    setDesired: async (_slug, release) => { asked.push(release); },
+  }).p);
+  assert.deepEqual(asked, [42], "the deploy must ask for exactly the release it recorded");
+});
+
+test("a failed deploy asks for the previous release rather than naming one itself", async () => {
+  // The restore used to be the exception: putting the previous SPEC back while
+  // naming no release, so the placement kept whichever release that spec belonged
+  // to. Naming the failed release would have made the rollback claim to be the
+  // thing it rolled back from.
+  //
+  // It is not an exception any more, and that is the improvement. The restore is
+  // the same write as the deploy in the other direction — `desired` goes back to
+  // the release that was asked for before — so the previous version comes back
+  // from its own recorded row instead of from a spec this function remembered.
+  const asked: (number | null)[] = [];
+  const removed: number[] = [];
+  await placeOnFleet("lilna", spec, "10.0.0.1", ports({
+    probe: async () => ({ code: 503 }),
+    recordRelease: async () => 42,
+    readDesired: async () => 41,
+    readPlacement: async () => ({ node: "fleet-lab-2", spec }),
+    setDesired: async (_slug, release) => { asked.push(release); },
+    removeRelease: async (_slug, release) => { removed.push(release); },
+  }).p);
+  assert.deepEqual(asked, [42, 41], "asked for the new release, then for the one before it");
+  assert.deepEqual(removed, [42], "and removed only the release that failed");
+});
+
+// A CRON-ONLY APP BELONGS ON THE FLEET, and the refusal that used to stand here
+// was never about capability. The node runs crons — `rtmsw--nightly` and
+// `izuvx--nightly` have been firing every ten minutes on fleet-lab-2 all day. It
+// was about the CHECK: `runVerdict` demands a running process, a cron is never
+// running (the agent's `units` excludes it, because the scheduler owns it), so
+// every deploy of such an app would roll back.
+//
+// The check now has an explicit answer for it rather than a vacuous one. The
+// distinction matters: "everything I required is running" is TRUE of nothing,
+// and that is the shape a check becomes when the thing it checks is refactored
+// away. This is a stated case, not an empty loop.
+test("an app whose only work is scheduled is placed, and its placement is the confirmation", () => {
+  const spec = {
+    slug: "digest", image: "img", port: 8080, memoryBytes: 1, cpuShares: 1,
+    processes: [{ name: "nightly", kind: "cron" as const, schedule: "*/10 * * * *" }],
+  };
+  assert.equal(fleetEligibility({
+    lane: "container", image: "img", staticServe: false,
+    serviceless: true, hasDockerfile: true, workers: 0,
+  }).ok, true, "the fleet runs crons; it always could");
+
+  const v = runVerdict(spec, []);
+  assert.equal(v.ok, true);
+  assert.match(v.reason ?? "", /scheduled/i);
+});
+
+// And the vacuous case stays refused. An app with NO processes at all — not a
+// cron, not a worker, nothing — is still a placement that confirms nothing, and
+// the comment this guard carries is about exactly that.
+test("a placement declaring nothing at all is still refused", () => {
+  const spec = { slug: "empty", image: "img", port: 8080, memoryBytes: 1, cpuShares: 1 };
+  const v = runVerdict({ ...spec, processes: [] }, []);
+  assert.equal(v.ok, false);
 });

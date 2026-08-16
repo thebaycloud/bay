@@ -10,10 +10,13 @@ import { runIdsForSlug } from "./deploy-runs";
 import { appPingScheduleArgs } from "./process-deploy";
 import { SCHEDULER_SA } from "./identities";
 import { appLogFilter } from "./log-filter";
+import { TENANT_PG_INSTANCE } from "./pg-config";
 
 const PROJECT = "supersonic-deploy-prod";
-// The one shared Cloud SQL instance every app's database lives on.
-const PG_INSTANCE = "supersonic-shared-pg";
+// The one shared Cloud SQL instance every app's database lives on. Imported
+// rather than repeated: this literal existed in three modules and disagreed
+// with PG_CONN for four days. See lib/pg-config.ts.
+const PG_INSTANCE = TENANT_PG_INSTANCE;
 const DEPLOY_JOB_NAME = process.env.DEPLOY_JOB_NAME || "supersonic-deploy-job";
 const REGION = "us-central1";
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } as NodeJS.ProcessEnv;
@@ -419,22 +422,13 @@ export async function listRevisions(slug: string): Promise<Revision[]> {
     .sort((a, b) => (a.created < b.created ? 1 : -1));
 }
 
-/**
- * Roll traffic back to the last revision that can actually serve.
- *
- * "The one before" is not good enough: a deploy that failed to start still leaves
- * a revision behind, and Cloud Run refuses to route to it — so rolling back off a
- * repaired app aimed straight at the broken revision it had just replaced and died
- * with a raw gcloud error. Skip anything that never became Ready.
+/*
+ * WAS: `rollback` — `gcloud run revisions list` and a traffic split back to the
+ * last Ready revision. It went with the container lane that produced those
+ * revisions. Rolling back is now one write to `apps.desired_release`, which the
+ * reconciler converges on through the same function a deploy uses; see
+ * lib/rollback.ts.
  */
-export async function rollback(slug: string): Promise<string> {
-  const revs = await listRevisions(slug);
-  if (revs.length < 2) throw new Error("no previous revision to roll back to");
-  const target = revs.slice(1).find((r) => r.ready)?.name;
-  if (!target) throw new Error("no earlier revision of this app ever started, so there is nothing to roll back to");
-  await capture(["run", "services", "update-traffic", slug, "--to-revisions", `${target}=100`, "--region", REGION, "--project", PROJECT]);
-  return target;
-}
 
 /**
  * Permanently delete an app and everything a deploy of it created.

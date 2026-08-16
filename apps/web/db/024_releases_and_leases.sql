@@ -123,12 +123,36 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- converges to one instance without anything being deleted here — a migration
 -- that decided which of two live copies to kill would be making that call with
 -- less information than the reconciler has, and irreversibly.
-UPDATE fleet_placements p
-   SET instance = n.rn
-  FROM (SELECT slug, node,
-               row_number() OVER (PARTITION BY slug ORDER BY placed_at DESC, node) - 1 AS rn
-          FROM fleet_placements) n
- WHERE n.slug = p.slug AND n.node = p.node AND p.instance <> n.rn;
+-- ONLY while duplicates can still exist, which is only before the unique index
+-- below has been built and proven valid.
+--
+-- This is a one-time backfill of rows that all defaulted to instance 0, and it
+-- runs on EVERY deploy, because every file here does. Once instances are
+-- legitimately numbered it stops being a backfill and becomes a renumbering that
+-- fights real data: a rollout leaves instance 0 on the old release and instance
+-- 1 on the new, this statement decides the newer one should be 0, and a bulk
+-- UPDATE swapping two values collides with the unique index mid-statement.
+--
+-- Which is exactly what it did, on the deploy after the first rollout: `duplicate
+-- key value violates unique constraint "fleet_placements_instance"`, from a
+-- migration whose whole purpose was to make that constraint possible.
+--
+-- Guarded on the index rather than on a row count: with a valid unique index in
+-- place duplicates cannot exist, so there is nothing for this to fix and the
+-- honest condition is "has the thing I exist to enable been enabled yet".
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+     WHERE c.relname = 'fleet_placements_instance' AND i.indisvalid
+  ) THEN
+    UPDATE fleet_placements p
+       SET instance = n.rn
+      FROM (SELECT slug, node,
+                   row_number() OVER (PARTITION BY slug ORDER BY placed_at DESC, node) - 1 AS rn
+              FROM fleet_placements) n
+     WHERE n.slug = p.slug AND n.node = p.node AND p.instance <> n.rn;
+  END IF;
+END $$;
 
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS fleet_placements_instance
   ON fleet_placements (slug, instance);

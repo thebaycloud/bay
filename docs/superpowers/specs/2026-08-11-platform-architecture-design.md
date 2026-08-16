@@ -668,6 +668,11 @@ is worth saying plainly rather than letting it be discovered.
 
 Dependency order, not priority order. Each entry is a separate spec.
 
+**Status as of 12 Aug.** Items 1, 2, 4, 5 and 6 are done and in production; the
+reconciler runs on a Cloud Scheduler job every minute. What each of them turned
+up on the way is recorded below the list, because three of the findings changed
+the design rather than merely delaying it.
+
 1. **A deploy path for the agent.** Everything node-side is dark until this
    exists, and it has now blocked three separate things.
 2. **The edge's local snapshot.** Closes the Railway failure mode. Independent of
@@ -677,17 +682,268 @@ Dependency order, not priority order. Each entry is a separate spec.
    The one expensive schema change; everything in §5, §9 and §10 waits on it.
 5. **The reconciler**, with quorum and singleton locks.
 6. **Long-poll sync** with per-node generations.
-7. **Workers and crons off Cloud Run** onto the node.
-8. **The build plane** — Railpack, our own BuildKit, local cache.
-9. **The secret broker.**
-10. **Node three**, then the provider decision. Node two already exists —
-    `fleet-lab-2` was running 8 sandboxes on 11 Aug, arrived outside this order,
-    and is not represented in the placement model. Three is not a round number
-    here: it is the count at which the quorum rule in §5 can evict at all.
+7. **Workers and crons off Cloud Run** onto the node. *Done. Witnessed in
+   production: `rtmsw--nightly` and `izuvx--nightly` fire and finish every ten
+   minutes on `fleet-lab-2`.*
+8. **The build plane** — Railpack, our own BuildKit, local cache. *Done.
+   Railpack is the default builder; `buildkit-1` runs the daemon and the deploy
+   job builds against it directly.*
+9. **The secret broker.** *Done. The grant was removed on 12 Aug 00:31 UTC and
+   the next cron firing at 00:40:02 resolved its secrets through the broker.*
+10. **Node three**, then the provider decision. *Done. `fleet-lab-3` is in
+    `us-central1-b`, so the fleet also spans two failure domains for the first
+    time, and quorum can evict.*
+
+### The artifact pair, measured on 13 Aug, and why it stays one image
+
+§3 decided the artifact is "modelled as a pair — base and code — and implemented
+as a single image first". `recordRelease` writes the same digest into
+`base_image` and `code_image`, which is that first implementation and not an
+unfinished one.
+
+Splitting it would buy nothing today. What the pair was FOR is stated in §3: Cloud
+Build scheduled a worker, pulled a builder image, pulled a base image, and only
+then touched the code — "a cache you must download in full is not a cache; it is
+a slow registry". The long-lived BuildKit we own has a local cache, and the
+numbers moved accordingly.
+
+    build   3.4s p50, 5.7s p90     (54s of 238 when §3 was written)
+    fleet   25.1s p50, 30.2s p90
+    total   64.6s p50, 84.8s p90   (238s baseline)
+
+Measured over a day of real deploys from `deploy_stages`, and separately with a
+stopwatch on an app with three npm dependencies where only the source changed:
+4 seconds of build inside a 38-second deploy.
+
+WHAT THE MEASUREMENT POINTS AT INSTEAD is `fleet-pull`: 0.9s at p50 and 41.8s at
+p90. The image is pulled onto a node, and the tail is where a deploy's time now
+goes. That is §4's row — "cached locally on a disk that survives a reboot,
+through a per-site mirror once there is more than one node" — and it is the next
+thing worth doing for deploy speed, not the artifact split.
+
+### Item 8, half done, and the half that matters is the other one
+
+**§3 said "emit BuildKit LLB instead of a Dockerfile". We do not have to.**
+Railpack ships as a BuildKit *frontend*, so the plan is executed by any BuildKit
+— including the one our existing buildx lane already starts per build. The whole
+integration is one flag and one filename:
+
+```
+docker buildx build --build-arg BUILDKIT_SYNTAX=ghcr.io/railwayapp/railpack-frontend \
+  -f railpack-plan.json .
+```
+
+`buildkitBuildConfig` already threaded both `-f` and `--build-arg`, so the Cloud
+Build config needed no change at all. Writing LLB ourselves would have been work
+done to reach a place we could already stand in.
+
+**The split that fell out of it.** Railpack's schema has no `release`, no
+`framework`, no `database`, no confidence. Those are not gaps — they are the
+platform layer, which Railway also keeps above Railpack. So `detect()` stays and
+`lib/railpack.ts` is the seam. Railpack owns *how to build*; we keep *what this
+app is*. That is a smaller change than "replace lib/dockerfile.ts" and a more
+defensible one.
+
+**Where we may overrule it:** only on `confidence: "certain"` — the repo or the
+user said so in as many words. Overruling from our own framework-signal guess
+would keep us owning the answer we are adopting Railpack to stop owning.
+
+**What is NOT ported, stated plainly.** `build-hints` maps cleanly onto
+`buildAptPackages` and is carried. `publicUrlBuildArgs` is not: it learns which
+address variables a build will hear by reading `ARG` declarations, and a plan
+declares none. An app whose bundle needs `VITE_API_URL` gets silence on this
+lane — the "signup form posts to localhost:8000" failure. `buildEnv` in
+supersonic.json is the working substitute and the deploy log says so. Closing it
+means learning those names from the source instead, which is a port, not a line.
+
+**And the speed is still in the other half.** Build is 54 s of the measured
+238 s, and Railpack alone does not remove it: the cache is still
+`--cache-from type=registry` pulled onto a clean Cloud Build worker, which §3
+already called "not a cache; a slow registry". The long-lived BuildKit with a
+local cache is what collects that, and it is infrastructure that costs money, so
+it is a decision rather than a commit. Railpack landing first is still the right
+order — it is the part that makes the warm builder worth having.
+
+### Item 7, written but never witnessed
+
+An audit on 12 Aug found both sides present, which is not the same as working:
+
+- the control plane builds `processes` into the placement spec (`buildAppSpec`),
+  and `FLEET_OWNS_PROCESSES` is a named empty list so a fleet app declares
+  nothing to Cloud Run while the orphan pass removes the worker-pools and jobs
+  it used to have;
+- the agent has `web`/`worker`/`cron`/`release`, a cron runner with schedules,
+  timezones and a consecutive-failure tracker.
+
+**Nothing here proves it runs.** Reading code establishes that somebody wrote
+it. The proof this item is waiting for is one deploy of `examples/shapes/crm`
+onto the fleet — web, a `release` that migrates, and a `nightly` on `*/10` in
+`Asia/Almaty`, which is every kind at once and is why that fixture exists. Until
+that has been watched, this item stays open no matter how complete the code
+looks, because the last four findings in this document were all in code that
+looked complete.
+
+### What the build plane measures, on 12 Aug
+
+The first build on `buildkit-1` was cold: it pulled the Railpack frontend, the
+Go toolchain through mise and the base images, and took the daemon's cache from
+120 KB to 2.0 GB. The second deploy of the same app took **101 s end to end** —
+from the CLI command to the app answering — and left the cache at 2.0 GB, which
+is the whole claim in one number: it downloaded nothing.
+
+Against the 238 s p50 this document opens with. The comparison is honest about
+its own limits: a different app, one sample, and the job cold start varies. What
+it is not is ambiguous about where the remaining time goes.
+
+**The build has stopped being the interesting part.** In the deploy before it,
+`Building on the fleet's own BuildKit` is logged at 03:04:07 and the app prints
+`listening on 8080` at 03:04:26 — nineteen seconds for build, push, placement
+and start together, on a Go app with a migration. The execution had begun at
+03:02:00. So roughly two of every two-and-a-bit minutes is still Cloud Run
+scheduling a container to run the pipeline in, exactly as the table at the top
+of this document said in a week when the build looked like the problem.
+
+That is §9's work, not §3's: once a deploy is "build → write a release → set
+desired", there is no per-deploy container to cold-start. The build plane
+removed the block it was aimed at and made the next one impossible to miss.
+
+### The whole path, measured end to end on 12 Aug
+
+79 seconds from `supersonic ship` to the app answering:
+
+```
+04:09:26  ship
+04:10:20  release runs on the node, before the app starts
+04:10:36  migrated
+04:10:45  listening on 8080
+```
+
+Against the 238 s p50 this document opens with. What that one deploy exercised,
+in order: dispatch to the warm worker instead of a Cloud Run Job execution;
+Railpack planning the build; the build running on `buildkit-1` against a warm
+local cache (`#5 CACHED`); a push by digest; placement through the release and
+lease model; the release migration running in a sandbox on a node; and every
+secret in it resolved through the broker by a node whose service account cannot
+read Secret Manager at all.
+
+Six of the eleven decisions in this document, in one command, on a fleet that
+also now spans two zones.
+
+**The honest limits.** One app, one sample, on a Go service small enough that
+its own compile is not the story. The number to watch is not 79 — it is that
+`job-cold-start`, 118 s of the original 238, no longer appears at all, because
+there is no per-deploy container to start.
+
+### The night of 11–12 Aug, and four things it found
+
+Items 7, 8, 9 and 10 closed in one session. What is worth keeping is not that
+they closed but what closing them turned up, because none of it was in the plan.
+
+**The fleet had one door.** `fleet-backend` had a single instance group holding
+`fleet-lab-1`. `fleet-lab-2` was healthy, held 26 routes, and received traffic
+only by being forwarded to from the other node — so losing `fleet-lab-1` would
+have taken every app down while a perfectly good node sat behind no load
+balancer. Both are backends now, and `fleet-lab-3` joins from `us-central1-b`,
+which is also the first time this fleet has spanned two zones.
+
+**`provision.sh` had never once started the SQL proxy.** Under `set -euo
+pipefail`,
+
+    if systemctl list-unit-files | grep -q '^cloud-sql-proxy'; then
+
+is FALSE exactly when the unit EXISTS: `grep -q` exits at the first match, the
+producer takes SIGPIPE and exits 141, and `pipefail` promotes that to the
+pipeline's status. So the block that starts the proxy was skipped on every run,
+and the new node could not run a single app with a database. The comment above
+that block already described this failure, on a node it already named. Three
+more instances of the same shape were found and removed; one of them would have
+made the fleet silently stop collecting agent updates.
+
+**The agent outran its own control plane.** Nodes collect a new agent every two
+minutes on a systemd timer; the broker's route and the agent that calls it
+landed as two independently-triggered workflows. The agent won, and three apps
+failed their releases against a 404 that was the Next.js shell. CI now blocks
+the agent publish until the control plane at the same commit is live.
+
+**The same question, asked in three variables.** `hasDockerfile`,
+`hasDockerfileNow` and `useDockerBuild` all answer "is there something here that
+builds a container". Teaching the first about Railpack plans and not the second
+produced a deploy that built an image correctly and then refused itself with
+"this lane has no image of its own to build".
+
+Every one of these was in code that looked complete, which is the note this
+document has been making about item 7 for a day.
+
+### Item 9, and the one step that actually removes the risk
+
+Both halves are in production and **nothing is safer yet**, which is worth
+stating plainly rather than letting the commits imply otherwise. The broker
+answers, the agent asks it, and the node's service account still holds
+`secretmanager.secretAccessor` project-wide. Until that binding is removed the
+old path remains open and an escape still reads everything.
+
+**The remaining step, in order, because the order is the whole risk:**
+
+1. Roll the agent carrying `broker.go` onto both nodes.
+2. Watch a real start resolve through the broker — the agent logs
+   `secrets resolve through …` once at boot, and a failure is loud because there
+   is no fallback.
+3. **Then** remove `roles/secretmanager.secretAccessor` from the node service
+   account.
+
+Doing 3 before 2 takes every app that restarts with it. Doing 1 and 2 and never
+doing 3 is where this work quietly amounts to nothing.
+
+**Verified in production on 12 Aug**, against a real placement and without
+fetching a single secret value — asking for a key that does not exist separates
+"was I authorised" from "does the secret exist", and the two answers differ:
+
+| asked | answer |
+|---|---|
+| `q6doa` on `fleet-lab-1`, absent key | Secret Manager's own 404 — *placement and lease passed* |
+| `q6doa` on `fleet-lab-2` | `q6doa is not placed on fleet-lab-2` |
+| `q6doa` asking for `app-anatf-DATABASE_URL` | `not q6doa's to read` |
+| `q6doa` asking for `fleet-edge-secret` | `not q6doa's to read` |
+| `q6doa` asking for `app-q6doaX-DATABASE_URL` | `not q6doa's to read` — the prefix attack |
+
+**Two checks, not one.** Placement answers "may this node act for `shop`" and
+says nothing about which ids the request lists. Without the second, a node
+holding `shop` asks for `app-blog-DATABASE_URL` and the broker fetches it with
+the *control plane's* credentials — broader than the node's have ever been. A
+smaller blast radius was the goal; that would have been a larger one with an
+audit trail.
+
+**What it is worth today, exactly.** `FLEET_TOKEN` is shared across the fleet,
+so it proves *a* node and not *which* node: a compromised node can still claim
+to be another and read the apps placed there. The gain is nonetheless real and
+this specific — the node's SA loses secret access entirely, so a stolen metadata
+token gets nothing; and `fleet-edge-secret`, the control plane's own database
+password and every other platform secret leave the reachable set, since none is
+named `app-<slug>-<KEY>`. The per-node claim becomes true when the GCE instance
+identity token replaces the shared string, which the sync route's header already
+describes.
 
 ## What this does not decide
 
 The hosting provider (§2, deliberately). Whether to move the shared Cloud SQL
 instance (§8). Static apps, which ADR 0001 keeps on Cloud Run permanently and
 which nothing here disturbs. Lazy image loading (§4), left open rather than
-chosen. The rollout percentage policy that should replace the `FLEET_APPS` list.
+chosen.
+
+**Decided on 13 Aug: the rollout policy.** 34% of the fleet — about one node of
+three, the smallest blast radius this fleet can express — then promotion to 100%
+once a node has REPORTED running the new build, and a failed workflow if none
+does. About, not exactly: each node decides by hashing its own name with the
+digest, so the count is an expectation and the second live rollout put two nodes
+in the first wave. The
+node decides for itself whether it is in the rollout, from a hash of its own name
+and the digest it is offered, so there is no list to keep in step with reality
+and the same node reaches the same answer on every tick. Hashed with the digest
+rather than the name alone, so the canary moves between builds: a permanently
+first node is the node a bad build always breaks, and if it is holding apps that
+cannot move — see the volume pin — that is the worst case every time.
+
+Prompted by the two things `FLEET_APPS`'s deletion cost in one day: a
+schema-dependent write that broke every deploy at once, and an agent rollout that
+reached all three nodes inside two minutes and contaminated the measurement being
+taken at the time.

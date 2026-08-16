@@ -20,10 +20,10 @@
 import { CLOUD_RUN_DB, type DbAddress } from "./db-address";
 
 /** Which strategy builds and runs a service. Derived by the resolver, never authored. */
-export type Lane = "static" | "runner" | "container" | "buildpack";
+export type Lane = "static" | "container" | "buildpack";
 
 /** The lanes that produce a Cloud Run service. `static` publishes to GCS instead. */
-export const SERVICE_LANES: Lane[] = ["runner", "container", "buildpack"];
+export const SERVICE_LANES: Lane[] = ["container", "buildpack"];
 
 /**
  * Every lane, as values rather than as a type.
@@ -392,7 +392,10 @@ export function deployArgs(d: LaneDeploy): string[] {
   // "whatever this lane already did" — true only while a service never changes
   // lane — and "whatever this service already did", which survives a repo gaining
   // a `supersonic.json` that moves it from buildpack to runner.
-  const scoped = Boolean(d.cloudsql) || (d.existingScoped ?? d.lane === "runner");
+  // `?? d.lane === "runner"` was the third arm: the runner lane always named its
+  // container, so a service it had deployed was known-scoped without a read. The
+  // lane is gone, and with no live shape to read the answer is the database.
+  const scoped = Boolean(d.cloudsql) || (d.existingScoped ?? false);
 
   const buildSource = d.image ? ["--image", d.image] : ["--source", d.source!];
   // A multi-container service has no other way to say which container answers

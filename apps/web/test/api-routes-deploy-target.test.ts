@@ -33,8 +33,9 @@ mock.module("@/lib/session", {
 mock.module("@/lib/ownership", {
   namedExports: { ownsApp: async () => true },
 });
+let appRow: Record<string, unknown> = { status: "live" };
 mock.module("@/lib/apps", {
-  namedExports: { getAppBySlug: async () => ({ status: "live" }) },
+  namedExports: { getAppBySlug: async () => appRow },
 });
 mock.module("@/lib/deploys", {
   namedExports: { getDeploy: async () => null },
@@ -95,6 +96,7 @@ function reset() {
   gcloudCalls.length = 0;
   fleetWriteCalls.length = 0;
   envKeys = ["EXISTING"];
+  appRow = { status: "live" };
 }
 
 test("status route answers from the fleet only when deployTargetForApp says fleet", async () => {
@@ -182,24 +184,37 @@ test("exec runs on the cloudrun target", async () => {
   assert.deepEqual(gcloudCalls, ["execCommand:app1"]);
 });
 
-test("rollback is refused on the fleet target, by supports(\"rollback\")", async () => {
+test("rollback is allowed on the fleet target, and calls no gcloud", async () => {
+  // The reverse of what this asserted before, and the reason is the whole point:
+  // a placement used to be the only record of a version, so there was nothing to
+  // go back TO and the route answered 501. `releases` now holds every version
+  // with the spec that shipped.
+  //
+  // `gcloudCalls` staying empty is the other half. A rollback is one write to
+  // `apps.desired_release`; the reconciler places the older release beside what
+  // is running, waits for the node to report ready, and drains the newer one.
+  // Nothing here shells out, and nothing here waits.
   reset();
   storedRuntime = "fleet";
   const { FLEET_TARGET } = await loadedTarget;
-  assert.equal(FLEET_TARGET.supports("rollback"), false, "sanity: this is the fact the route must agree with");
+  assert.equal(FLEET_TARGET.supports("rollback"), true, "sanity: this is the fact the route must agree with");
   const { POST } = await loadedRollback;
   const res = await POST(new Request("http://x"), { params: { slug: "app1" } });
-  assert.equal(res.status, 501);
+  assert.notEqual(res.status, 501);
   assert.deepEqual(gcloudCalls, []);
 });
 
-test("rollback runs on the cloudrun target", async () => {
+test("rollback is refused for a static app, which has no versions", async () => {
+  // The cloudrun target is what a static app resolves to — it is served from a
+  // bucket by the shared static server — and `rollback` left that capability set
+  // with the lane it belonged to. So this is still a 501, for a reason that is
+  // now about the app rather than about the mechanism being unbuilt.
   reset();
   storedRuntime = "cloudrun";
   const { POST } = await loadedRollback;
   const res = await POST(new Request("http://x"), { params: { slug: "app1" } });
-  assert.equal(res.status, 200);
-  assert.deepEqual(gcloudCalls, ["rollback:app1"]);
+  assert.equal(res.status, 501);
+  assert.deepEqual(gcloudCalls, []);
 });
 
 test("every route's decision traces back to the one deployTargetFor mapping — the property that stops a route and the (future-migrated) pipeline from disagreeing", async () => {
@@ -225,4 +240,38 @@ test("every route's decision traces back to the one deployTargetFor mapping — 
       `rollback route vs supports("rollback") for ${kind}`,
     );
   }
+});
+
+test("the status route reports the repository the app was deployed from", async () => {
+  // `supersonic redeploy` reads exactly this field and dies without it — "was
+  // deployed from a computer — run `supersonic deploy` in its folder". That
+  // message was right for an upload and wrong for everything else: `repo` came
+  // from a `SUPERSONIC_REPO` env var on the Cloud Run SERVICE, so once an app ran
+  // on a node there was no service to read it from and redeploy refused every
+  // app on the fleet.
+  //
+  // It now comes from `apps.repo_url`, which is the row rather than the runtime —
+  // the same answer whichever branch of this route serves it.
+  reset();
+  storedRuntime = "fleet";
+  placement = { node: "n1", spec: { image: "img" } };
+  appRow = { status: "live", repo_url: "https://github.com/acme/api" };
+  const { GET } = await loadedStatus;
+  const res = await GET(new Request("http://x"), { params: { slug: "app1" } });
+  const body = await res.json();
+  assert.equal(body.repo, "https://github.com/acme/api");
+});
+
+test("an app with no recorded repository reports an empty one, not a missing field", async () => {
+  // The CLI checks `if (!d.repo)`, so undefined and "" behave the same for it —
+  // but the field being ABSENT and being EMPTY read differently to anything else
+  // consuming this route, and an app uploaded as a folder genuinely has none.
+  reset();
+  storedRuntime = "fleet";
+  placement = { node: "n1", spec: { image: "img" } };
+  appRow = { status: "live", repo_url: null };
+  const { GET } = await loadedStatus;
+  const res = await GET(new Request("http://x"), { params: { slug: "app1" } });
+  const body = await res.json();
+  assert.equal(body.repo, "");
 });

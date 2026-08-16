@@ -131,7 +131,9 @@ function shellCommand(command: string, cloudsql: string | null | undefined): str
  * twice would just be thirty more seconds in the worst case.
  */
 function delivery(d: ProcessDeploy, command: string): { env: string[]; command: string[] } {
-  if (d.lane === "runner") return { env: withEnv(d.env, "SUPERSONIC_RUN", command), command: [] };
+  // WAS: the runner lane, whose shared base image read its start command out of
+  // `SUPERSONIC_RUN` because the image could not contain one. A generated image
+  // has the command as its CMD.
   return { env: d.env, command: shellCommand(command, d.cloudsql) };
 }
 

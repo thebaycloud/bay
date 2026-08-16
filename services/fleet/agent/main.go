@@ -92,6 +92,19 @@ type Desired struct {
 	// address that reaches it. Absent from an older control plane, in which case
 	// the node forwards nothing and behaves exactly as it did.
 	Peers []PeerRoute `json:"peers,omitempty"`
+	// Draining is the slugs on THIS node whose placement is on its way out: the
+	// replacement is already ready somewhere else, and these should stop
+	// receiving new requests while the ones already inside them finish.
+	//
+	// They stay in Apps, and that is deliberate — a process killed the moment it
+	// is drained cannot finish anything. What stops is the ROUTE, which is why
+	// this is a separate list rather than a flag inside the spec: the spec is the
+	// record of what shipped and does not change because the placement is
+	// retiring.
+	//
+	// Absent from an older control plane, in which case nothing drains and the
+	// node behaves exactly as it did.
+	Draining []string `json:"draining,omitempty"`
 	// Generation is the control plane's counter at the moment it answered. The
 	// node echoes it back on the next poll; an unchanged counter means it may
 	// keep what it has. Zero from a control plane too old to send one, which
@@ -172,6 +185,9 @@ type Agent struct {
 	src  *Source
 	mu   sync.Mutex
 	live map[string]*live
+	// lastWithData is the pinned set as it was last logged, so a change is
+	// reported once rather than on every sync.
+	lastWithData string
 	// writeMu serialises publishing the routing table. Starts run concurrently
 	// and each publishes on completion, so without this two goroutines share one
 	// temp path and the rename can land a half-written file — a node briefly
@@ -421,6 +437,14 @@ func (a *Agent) reportFaults() []ProcessFault {
 // back, which is the safe direction. Deliberately shorter than the 90 seconds
 // nodeFaultFor allows a fault row, because this steers a deploy to PASS and a
 // fault only ever steers one to fail.
+// How long to leave a withdrawn route unrouted before killing what it pointed at.
+//
+// The router reloads by polling the routes file's mtime every 500ms (see
+// router.go's `watch`, which explains why it polls rather than uses inotify), so
+// this has to outlast one poll. A second is two polls and costs a deploy nothing
+// — it is paid once per reconcile that removes something, not per app.
+const routeWithdrawGrace = 1 * time.Second
+
 const confirmWindow = 30 * time.Second
 
 // confirmRunning records that this process was just seen running.
@@ -451,6 +475,77 @@ func (a *Agent) confirmRunning(id string, now time.Time) {
 // pointers puts a JSON encoder on one end of a data race. Command is copied for
 // the same reason — a shared backing array is shared state whether or not the
 // header is.
+// reportWithData answers which of this node's apps have written anything to
+// their /data directory.
+//
+// SECTION 8's PIN, made reachable. The placement model can express "this cannot
+// move" and nothing ever set it: the flag was derived from a `dataDir` field in
+// the spec, and no code path writes one — this agent computes DataDir locally
+// and keeps it off the wire. So the control plane could not tell which apps had
+// data, and every one of them was free to be moved away from it.
+//
+// The node is the only thing that can answer. It holds the disk.
+//
+// NON-EMPTY, not "exists": the directory is created for every app whether it is
+// used or not (container.go MkdirAll's it before the bind mount), so its
+// presence says nothing. One entry is enough — this is a yes/no question and
+// reading the whole tree to answer it would put a walk of every app's data on a
+// ten-second timer.
+func (a *Agent) reportWithData() []string {
+	a.mu.Lock()
+	slugs := make(map[string]string, len(a.live))
+	for _, l := range a.live {
+		slugs[l.app.Slug] = l.app.DataDir
+	}
+	a.mu.Unlock()
+
+	out := make([]string, 0, len(slugs))
+	for slug, dir := range slugs {
+		if dir == "" {
+			continue
+		}
+		f, err := os.Open(dir)
+		if err != nil {
+			// Unreadable is not the same as empty, and the safe reading is the
+			// cautious one: say it has data, and the app stays where it is. A
+			// wrong "no" moves a database; a wrong "yes" pins an app that did not
+			// need pinning.
+			if !os.IsNotExist(err) {
+				out = append(out, slug)
+			}
+			continue
+		}
+		names, _ := f.Readdirnames(1)
+		f.Close()
+		if len(names) > 0 {
+			out = append(out, slug)
+		}
+	}
+	sort.Strings(out)
+
+	// Said once, when it changes. The pin is visible in the control plane's
+	// placement table and was invisible from here — the machine that actually
+	// holds the disk — so "why will this app not move" had no answer on the node
+	// itself. Logging it every ten seconds would bury the rest of the log; logging
+	// the change is the fact worth having.
+	// Under the lock, like every other field on the agent. Only the sync loop
+	// calls this today, and a field guarded by nothing on a struct guarded by a
+	// mutex is a race waiting for its second caller.
+	joined := strings.Join(out, " ")
+	a.mu.Lock()
+	changed := joined != a.lastWithData
+	a.lastWithData = joined
+	a.mu.Unlock()
+	if changed {
+		if joined == "" {
+			log.Printf("no app on this node has data; nothing is pinned here")
+		} else {
+			log.Printf("pinned by data: %s", joined)
+		}
+	}
+	return out
+}
+
 func (a *Agent) reportRunning() []ProcessState {
 	now := time.Now()
 	a.mu.Lock()
@@ -678,6 +773,24 @@ func main() {
 		src.Identity = id
 		log.Printf("node %s in %s (%s), %d cpus, %.0f GiB",
 			id.Name, id.Zone, id.InternalIP, id.CPUs, float64(id.MemoryBytes)/(1<<30))
+
+		// Secrets now come from the control plane rather than from this node's
+		// own service account. Configured here because it needs the identity,
+		// and refused loudly rather than silently falling back: a node that
+		// cannot derive a broker address would otherwise keep reading Secret
+		// Manager directly, and the grant this exists to remove would stay
+		// necessary without anyone noticing.
+		brokerToken, brokerNode = src.Token, id.Name
+		if brokerEndpoint = brokerURL(src.Endpoint); brokerEndpoint == "" {
+			// Loud, and NOT fatal. This unit is Restart=always, so refusing to
+			// start would be a crash loop that leaves every sandbox on this node
+			// running with nothing supervising it — a worse outcome than
+			// resolving secrets the old way for one more deploy.
+			log.Printf("! no secret broker could be derived from FLEET_ENDPOINT %q — "+
+				"secrets will be read directly, which is the access this node is meant to lose", src.Endpoint)
+		} else {
+			log.Printf("secrets resolve through %s", brokerEndpoint)
+		}
 	} else {
 		log.Printf("no FLEET_ENDPOINT set; reading desired state from %s", statePath)
 	}
@@ -734,6 +847,7 @@ func main() {
 	if src.Endpoint != "" {
 		src.Report = a.reportFaults
 		src.ReportRunning = a.reportRunning
+		src.ReportWithData = a.reportWithData
 	}
 
 	go a.serve(*addr)
@@ -754,10 +868,22 @@ func main() {
 
 	log.Printf("supersonicd up; reconciling every %s", *interval)
 	for {
+		// SLEEP THE REMAINDER, not the interval. The control plane now holds a
+		// sync open until it has something to send, so a pass that waited ten
+		// seconds for an answer has already spent the interval — sleeping another
+		// one on top would halve the heartbeat rate and double the time this node
+		// takes to notice anything the hold did not cover.
+		//
+		// A pass that returns immediately — because there WAS something to do —
+		// still sleeps almost the whole interval, which is what keeps a busy node
+		// from spinning.
+		started := time.Now()
 		if err := a.reconcileOnce(); err != nil {
 			log.Printf("reconcile: %v", err)
 		}
-		time.Sleep(*interval)
+		if rest := *interval - time.Since(started); rest > 0 {
+			time.Sleep(rest)
+		}
 	}
 }
 
@@ -858,17 +984,48 @@ func (a *Agent) reconcileOnce() error {
 	// Remove what is no longer wanted, before starting anything new: on a node
 	// near its memory ceiling, starting first would be the difference between a
 	// clean swap and an OOM.
+	//
+	// THE ROUTE COMES OUT BEFORE THE PROCESS DOES, and that ordering is a drain.
+	// `a.rt.Stop(id)` used to run first, and the routing table is derived from
+	// `a.live` — so between the sandbox dying and the next `writeRoutes` the
+	// table still pointed at it, and a request arriving in that window reached a
+	// route with nothing behind it. Measured on the first rolling deploys, once
+	// the routing side had been fixed: 1 request in 64 answered 502 with
+	// `x-supersonic-router: upstream-error`, at the instant of the swap.
+	//
+	// Withdrawn for every id first, published once, and only then stopped. The
+	// pause is because the router reloads by polling the file's mtime every
+	// 500ms — republishing without waiting for it to be read would move the race
+	// rather than close it.
+	// id -> the slug it belonged to, "" when it was not live. Carried out of this
+	// pass because the clean-up below needs what was deleted here, and reading
+	// `a.live` after the delete would find nothing.
+	withdrawn := make(map[string]string, len(have))
+	for _, id := range have {
+		if _, ok := units[id]; !ok {
+			a.mu.Lock()
+			slug := ""
+			if l, wasLive := a.live[id]; wasLive {
+				delete(a.slots, l.index)
+				slug = l.app.Slug
+			}
+			delete(a.live, id)
+			a.mu.Unlock()
+			withdrawn[id] = slug
+		}
+	}
+	if len(withdrawn) > 0 {
+		if err := a.writeRoutes(); err != nil {
+			log.Printf("! could not withdraw routes before stopping (%v) — stopping anyway", err)
+		} else {
+			time.Sleep(routeWithdrawGrace)
+		}
+	}
+
 	for _, id := range have {
 		if _, ok := units[id]; !ok {
 			log.Printf("%s: removing (no longer desired)", id)
 			a.rt.Stop(id)
-			a.mu.Lock()
-			l, wasLive := a.live[id]
-			if wasLive {
-				delete(a.slots, l.index)
-			}
-			delete(a.live, id)
-			a.mu.Unlock()
 			// A start recorded but never reported — this id undeployed inside
 			// the one poll interval between them — must not survive to be handed
 			// to whatever the next process at this same sandbox id turns out to
@@ -887,8 +1044,8 @@ func (a *Agent) reconcileOnce() error {
 			// `id` here could never match a cron record — remove by the app's
 			// slug prefix instead, matching sandboxID's `slug + "--" + name + "."`
 			// shape.
-			if wasLive && !survivingSlugs[l.app.Slug] {
-				a.relFail.forgetPrefix(l.app.Slug + "@")
+			if slug := withdrawn[id]; slug != "" && !survivingSlugs[slug] {
+				a.relFail.forgetPrefix(slug + "@")
 			}
 		}
 	}
@@ -1278,7 +1435,22 @@ func (a *Agent) reconcileOnce() error {
 	}
 
 	a.syncCron(d)
-	a.probeAll()
+	// A JUST-STARTED APP IS NOT LISTENING YET, and one probe at this instant
+	// almost always finds nothing. The steady-state health loop then leaves it
+	// unhealthy for up to five more seconds — which the deploy waits out, because
+	// readiness is reported only once the node's own probe has passed.
+	//
+	// So the first probe after a start is retried, briefly and only while
+	// something is still unhealthy. Bounded at three seconds: past that it is not
+	// a slow bind, it is an app that does not come up, and the health loop is the
+	// right thing to be watching it.
+	for i := 0; i < 6; i++ {
+		a.probeAll()
+		if a.allHealthy() {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	if err := a.writeRoutes(); err != nil {
 		return err
 	}
@@ -1418,6 +1590,25 @@ func (a *Agent) startMany(items []work) {
 	wg.Wait()
 }
 
+// allHealthy reports whether every routable process on this node is answering.
+//
+// Used to stop the post-start probe loop as soon as there is nothing left to
+// wait for. A node with nothing routable is trivially healthy, which is the
+// right answer: there is nothing to retry.
+func (a *Agent) allHealthy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, l := range a.live {
+		if l.proc.Kind != KindWeb || l.proc.Visibility == "internal" {
+			continue
+		}
+		if !l.ok {
+			return false
+		}
+	}
+	return true
+}
+
 // probeAll health-checks every running app.
 //
 // Not a gate on "did the deploy work" — that stays in the control plane, which
@@ -1468,6 +1659,65 @@ func (a *Agent) probeAll() {
 // Written atomically. The router reads this file on every change, and a partial
 // read during a rewrite would be a node briefly serving 502s for every app it
 // holds.
+
+// mergeRoutes decides what this node advertises, given what it runs and what the
+// fleet holds elsewhere.
+//
+// Pulled out of `writeRoutes` so it can be tested: every rule below was learned
+// from a request that failed in production, and none of them was checkable while
+// this lived inside a method that needs a live agent to call.
+//
+// The order it produces is the preference, and the caller sorts stably to keep
+// it: healthy local, then peer, then draining or unhealthy local.
+func mergeRoutes(local []Route, peers []PeerRoute, draining []string) []Route {
+	isDraining := make(map[string]bool, len(draining))
+	for _, slug := range draining {
+		isDraining[slug] = true
+	}
+
+	// A slug is "held here" only if this node can actually serve it. Local-first
+	// is still the rule — the placement this node is reading may be one sync
+	// older than the app it started — but a route that cannot serve does not
+	// hold anything.
+	//
+	// DRAINING counts as cannot-serve even though the process is healthy and
+	// running. That is the whole point of a drain: the version is on its way out,
+	// something else is already ready, and new requests belong to the new one.
+	// The process keeps running so the requests already inside it can finish.
+	held := make(map[string]bool, len(local))
+	first := local[:0:0]
+	last := make([]Route, 0, 2)
+	for _, r := range local {
+		if r.Healthy && !isDraining[r.Slug] {
+			held[r.Slug] = true
+			first = append(first, r)
+		} else {
+			last = append(last, r)
+		}
+	}
+
+	out := first
+	for _, p := range peers {
+		if held[p.Slug] || p.Slug == "" || p.Addr == "" {
+			continue
+		}
+		out = append(out, Route{
+			Slug: p.Slug, Addr: p.Addr,
+			// Healthy because the node that holds it decides that, and this node
+			// has no way to ask. Forwarding and letting the far end answer 503 is
+			// the truthful failure; refusing here would report an app down on the
+			// word of a machine that is not running it.
+			Healthy: true,
+			Peer:    true,
+		})
+	}
+	// Kept rather than dropped: with nowhere else to send the request, "this app
+	// is not healthy" is a true answer and "not on this node" would be a false
+	// one from the machine that is holding it. A draining route serves for the
+	// same reason — better the outgoing version than nothing.
+	return append(out, last...)
+}
+
 func (a *Agent) writeRoutes() error {
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
@@ -1489,29 +1739,14 @@ func (a *Agent) writeRoutes() error {
 			Prefix:  l.proc.Prefix,
 		})
 	}
-	// Everything the fleet holds that this node does not. Local first: a slug
-	// this node runs is never routed off it, whatever the control plane said —
-	// the placement it is reading may be one sync older than the app it started.
-	local := make(map[string]bool, len(routes))
-	for _, r := range routes {
-		local[r.Slug] = true
-	}
-	for _, p := range a.desired.Peers {
-		if local[p.Slug] || p.Slug == "" || p.Addr == "" {
-			continue
-		}
-		routes = append(routes, Route{
-			Slug: p.Slug, Addr: p.Addr,
-			// Healthy because the node that holds it decides that, and this node
-			// has no way to ask. Forwarding and letting the far end answer 503 is
-			// the truthful failure; refusing here would report an app down on the
-			// word of a machine that is not running it.
-			Healthy: true,
-			Peer:    true,
-		})
-	}
+	routes = mergeRoutes(routes, a.desired.Peers, a.desired.Draining)
+	// The lock covers `a.live` and `a.desired`, which is everything read above.
+	// `mergeRoutes` is pure and the marshalling below touches no shared state, so
+	// this is as early as it can be released — and it MUST be released: the block
+	// this replaced ended with this line, and dropping it deadlocked every later
+	// reader of a.mu. Caught by the agent's own suite going from 7 seconds to a
+	// timeout.
 	a.mu.Unlock()
-	sort.Slice(routes, func(i, j int) bool { return routes[i].Slug < routes[j].Slug })
 
 	b, err := json.MarshalIndent(routes, "", "  ")
 	if err != nil {

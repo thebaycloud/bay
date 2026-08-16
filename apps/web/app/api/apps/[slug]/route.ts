@@ -21,6 +21,25 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   const deploy = await getDeploy(slug).catch(() => null);
   const deploying = deploy?.status === "building";
 
+  /**
+   * WHERE THIS APP CAME FROM, read once and answered the same by every branch.
+   *
+   * `supersonic redeploy` reads this field and dies without it. Its message was
+   * right for an upload and wrong for everything else: `repo` used to come from a
+   * `SUPERSONIC_REPO` environment variable on the Cloud Run SERVICE, so an app
+   * running on a node had no service to read it from and redeploy refused every
+   * app on the fleet with "was deployed from a computer".
+   *
+   * The row is the right source precisely because it is not the runtime. Where
+   * an app came from does not change when it moves, and the three branches below
+   * — fleet, Cloud Run, and the row alone — must not be able to disagree about it.
+   *
+   * "" and not undefined when unknown: the CLI's `if (!d.repo)` cannot tell them
+   * apart, but the field being absent and being empty read differently to
+   * everything else, and an app uploaded as a folder genuinely has none.
+   */
+  const repo = (await getAppBySlug(slug).catch(() => null))?.repo_url ?? "";
+
   // WHERE the app runs, before anything else is asked.
   //
   // This route used to go straight to Cloud Run, and for a fleet app that is
@@ -42,6 +61,7 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
         const running = await runningOnNode(slug, placed.node);
         return Response.json({
           ...statusFromFleet(slug, placed.spec, running),
+          repo,
           deploying,
           stage: deploy?.stage ?? "",
         });
@@ -52,7 +72,10 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   }
 
   try {
-    return Response.json({ ...(await describeService(slug)), deploying, stage: deploy?.stage ?? "" });
+    // `repo` LAST, so the row wins over the service's `SUPERSONIC_REPO`. The env
+    // var is whatever was set when the service was last deployed; the row is
+    // maintained by every deploy since the column existed.
+    return Response.json({ ...(await describeService(slug)), repo, deploying, stage: deploy?.stage ?? "" });
   } catch {
     // No Cloud Run service of its own. That is the normal, healthy shape of a
     // static app — it is served by the shared static service — and also of an app
@@ -76,7 +99,7 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
       image: "",
       envKeys: [],
       cloudsql: "",
-      repo: "",
+      repo,
       served: "static",
     });
   }

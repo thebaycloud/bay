@@ -273,8 +273,16 @@ test("the recorded vocabulary is the executed one, and the database agrees", () 
   // that could not answer the question 004 was created to ask.
   //
   // Three things now have to agree, and nothing but this test makes them.
-  assert.deepEqual(STAGE_LANES, ["unknown", "static", "runner", "container", "buildpack"]);
+  assert.deepEqual(STAGE_LANES, ["unknown", "static", "container", "buildpack", "runner"]);
   for (const lane of ALL_LANES) assert.ok(STAGE_LANES.includes(lane), `${lane} deploys but cannot be recorded`);
+
+  // `runner` is recordable and no longer deployable, and that asymmetry is
+  // deliberate: this list is what the COLUMN may hold, `ALL_LANES` is what a
+  // deploy may WRITE, and the table is full of rows from when the runner lane
+  // existed. The loop above is the direction that must never break — everything
+  // that deploys can be recorded. The reverse is not required and would delete
+  // history if it were.
+  assert.ok(!ALL_LANES.includes("runner" as never), "the runner lane is deleted");
 
   // The database CHECK is phase THREE of a two-phase change and is not applied
   // yet — see db/012_stage_lane_check_is_phase_two.sql for why 011 adding it was

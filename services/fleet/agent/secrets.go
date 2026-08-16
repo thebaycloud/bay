@@ -105,9 +105,17 @@ func resolveSecret(project, name string) (string, error) {
 //
 // Concurrent, because an app with a database has several and doing them in
 // series adds a round trip each to every cold start.
-func resolveAll(project string, refs map[string]string) (map[string]string, error) {
+func resolveAll(project, slug string, refs map[string]string) (map[string]string, error) {
 	if len(refs) == 0 {
 		return nil, nil
+	}
+
+	// The broker when there is a control plane, which is every real node. The
+	// direct path below survives only for the lab, where `FLEET_ENDPOINT` is
+	// unset and there is nothing to ask — see broker.go on why there is no
+	// fallback for a node that HAS a control plane and cannot reach it.
+	if brokerEndpoint != "" {
+		return resolveViaBroker(brokerEndpoint, brokerToken, brokerNode, slug, refs)
 	}
 	type res struct {
 		key, val string

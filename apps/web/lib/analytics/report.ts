@@ -273,6 +273,9 @@ export function reliability(input: ReportInput, attempts: Attempt[]): Reliabilit
   // records — see db/010_stage_lane_vocabulary.sql. `fast` and `generic` were
   // the recorder's own names for the buildpack and container lanes, and the
   // migration rewrote every historical row, so nothing here has to know both.
+  // `runner` is deleted as a LANE and kept here on purpose: this reads history,
+  // and `deploy_stages` holds rows from every deploy that took it. Dropping it
+  // would silently reclassify those as unknown. Same reasoning as `STAGE_LANES`.
   const KNOWN_LANES = ["static", "runner", "container", "buildpack"];
   const byLaneMap = groupBy(attempts.filter((a) => a.lane), (a) => a.lane as string);
   const lanes = [...KNOWN_LANES, ...[...byLaneMap.keys()].filter((l) => !KNOWN_LANES.includes(l))];

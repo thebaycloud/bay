@@ -141,6 +141,35 @@ export async function desiredFor(node: string): Promise<AppSpec[]> {
 }
 
 /**
+ * The apps on this node whose placement is DRAINING.
+ *
+ * A drained placement keeps running — `desiredFor` still returns it, and that is
+ * deliberate: a process killed the moment it is drained cannot finish the
+ * requests already in it. What has to stop is new traffic ARRIVING at it, and
+ * the node is the only thing that can stop that, because it owns the local route
+ * that the load balancer reaches directly.
+ *
+ * Without this the old version went on answering from its own node until the
+ * next scheduled pass removed the placement — up to a minute, and about ten
+ * seconds in the measurement that prompted this. A deploy said "live" while the
+ * version it replaced was still serving anyone the load balancer happened to
+ * send to that machine.
+ */
+export async function drainingOn(node: string): Promise<string[]> {
+  const r = await getPool(DB).query(
+    `SELECT DISTINCT p.slug
+       FROM fleet_placements p
+       JOIN apps a ON a.slug = p.slug
+      WHERE p.node = $1
+        AND a.runtime = 'fleet'
+        AND p.state = 'draining'
+      ORDER BY p.slug`,
+    [node],
+  );
+  return r.rows.map((row) => row.slug as string);
+}
+
+/**
  * Place an app on a node.
  *
  * The spec is stored denormalised. Resolving it per pull would put the deploy
@@ -809,6 +838,27 @@ export async function peersFor(node: string, routerPort = 8080): Promise<PeerRou
        JOIN fleet_nodes n ON n.name = p.node
       WHERE p.node <> $1
         AND a.runtime = 'fleet'
+        -- READY ONLY, and this is what makes a rolling deploy survivable.
+        --
+        -- During a roll one app is placed twice: the new release on one node and
+        -- the one it replaces on another, until the planner drains the old. This
+        -- query returned BOTH, so a third node's table held two routes for the
+        -- slug and forwarded to whichever came first — sometimes the draining
+        -- one, which by then had stopped serving. The receiving node cannot
+        -- forward again (the once-only rule exists so two skewed tables cannot
+        -- bounce a request between them until it times out), so the request died
+        -- as "Not on this node. Another machine forwarded this here and this one
+        -- does not hold it either."
+        --
+        -- Measured on the first rolling deploy, oxfgf: 90 requests through the
+        -- swap, 2 of them that 404. Not an outage and not nothing — a ~2% error
+        -- rate for the length of the overlap.
+        --
+        -- "ready" is the node's own word (see promoteReady), so this is the
+        -- spec's step 5 exactly: the edge moves traffic when it sees READY
+        -- placements, not merely placed ones. A starting instance is not yet an
+        -- answer and a draining one is no longer one.
+        AND p.state = 'ready'
         AND n.drain = false
         AND n.last_seen > now() - interval '90 seconds'
         AND n.internal_ip IS NOT NULL
@@ -818,4 +868,44 @@ export async function peersFor(node: string, routerPort = 8080): Promise<PeerRou
   return r.rows
     .filter((row) => row.internal_ip)
     .map((row) => ({ slug: row.slug as string, addr: `${row.internal_ip}:${routerPort}` }));
+}
+
+/**
+ * Hold until the fleet generation moves, or until the budget runs out.
+ *
+ * THIS IS THE LATENCY HALF OF §6, and only the other half was built. Generations
+ * made the ANSWER small — a node that is up to date gets `unchanged: true`
+ * instead of the whole desired set — and left the question on a ten-second timer.
+ * So a placement written by a deploy waited an average of five seconds for a node
+ * to ask about it, and that wait was pure clock.
+ *
+ * Held server-side rather than polled faster by the node, because the node
+ * asking twice as often costs twice as many requests to learn nothing. Here the
+ * node is already waiting when the change happens, and hears within one step.
+ *
+ * The step is 400ms and the read is one row by primary key. Three nodes at 2.5
+ * reads a second is not a load; the alternative — LISTEN/NOTIFY — needs a
+ * connection held outside the pool, which is a different kind of complexity for
+ * a fleet this size.
+ *
+ * Returns the new generation, or null if the budget expired. Aborts with the
+ * request: a node that hangs up should not leave us counting.
+ */
+export async function waitForGenerationChange(
+  from: number,
+  budgetMs: number,
+  signal?: AbortSignal,
+  stepMs = 400,
+): Promise<number | null> {
+  const until = Date.now() + budgetMs;
+  while (Date.now() < until) {
+    if (signal?.aborted) return null;
+    await new Promise((r) => setTimeout(r, stepMs));
+    if (signal?.aborted) return null;
+    // Swallowed: a database blip during the hold is not worth failing a sync
+    // over. The node re-asks in a moment and the generation is still there.
+    const now = await fleetGeneration().catch(() => from);
+    if (now !== from) return now;
+  }
+  return null;
 }

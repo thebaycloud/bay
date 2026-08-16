@@ -1,4 +1,5 @@
 import { dbNameForSlug } from "./db";
+import { TENANT_PG_INSTANCE } from "./pg-config";
 
 /**
  * Per-app database backup and restore.
@@ -26,7 +27,8 @@ import { dbNameForSlug } from "./db";
  */
 
 const PROJECT = "supersonic-deploy-prod";
-const INSTANCE = "supersonic-shared-pg";
+// One source for the tenant instance name — see lib/pg-config.ts.
+const INSTANCE = TENANT_PG_INSTANCE;
 
 /** Private, lifecycle-expired at 30 days, writable by the Cloud SQL service agent. */
 export const BACKUP_BUCKET = "supersonic-db-backups";

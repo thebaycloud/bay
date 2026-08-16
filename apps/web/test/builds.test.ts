@@ -73,14 +73,20 @@ test("the deploy's own narration decides the outcome", () => {
   assert.equal(noise.outcome, "failed");
 });
 
-test("the deploy job records the build's ending beside the run's", () => {
-  // The defect this covers cannot be reached by a unit test: scripts/deploy-job.ts
-  // runs main() at import, and every ending it has is inside one finally. What is
-  // being defended is that the finally has BOTH endings in it — for the whole of
-  // this branch it had only finishRun, so every build in production read
+test("a deploy records the build's ending beside the run's", () => {
+  // The defect this covers cannot be reached by a unit test: the entry point runs
+  // at import, and every ending it has is inside one finally. What is being
+  // defended is that the finally has BOTH endings in it — for the whole of one
+  // branch it had only finishRun, so every build in production read
   // `ended_at: null, outcome: null` forever. Source-level, like stages.test.ts's
   // emitter scan, and for the same reason.
-  const src = readFileSync(join(__dirname, "..", "scripts", "deploy-job.ts"), "utf8");
+  //
+  // It scans lib/deploy-one.ts and not scripts/deploy-job.ts because the pipeline
+  // moved there when the warm worker arrived: the Job and the worker differ in
+  // how a deploy is STARTED and in nothing after it, so there is now one finally
+  // for both. A test pinned to the old file would have failed for the one reason
+  // that is not a defect — the code being in the right place.
+  const src = readFileSync(join(__dirname, "..", "lib", "deploy-one.ts"), "utf8");
   assert.match(src, /await finishRun\(runId\);\s*(?:\/\/[^\n]*\n\s*)*await finishBuild\(runId, watch\.outcome\);/,
     "deploy-job must finish the build wherever it finishes the run");
   // The outcome must come from what the deploy said, not from reaching the end

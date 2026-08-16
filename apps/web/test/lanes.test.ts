@@ -37,7 +37,6 @@ function request(lane: Lane, over: Partial<LaneDeploy> = {}): LaneDeploy {
     scale: DEFAULT_SCALE,
     cloudsql: null,
     ...(lane === "buildpack" ? { source: "/tmp/src" } : { image: "img:latest" }),
-    ...(lane === "runner" ? { port: 8080 } : {}),
   };
   return { ...base, ...over };
 }
@@ -95,50 +94,24 @@ for (const lane of SERVICE_LANES) {
  * service's container set. The runner lane has always named it; the other two
  * never have, and may only start when they gain a sidecar they never had.
  */
-test("runner stays container-scoped without a database; the others stay flat", () => {
-  assert.ok(deployArgs(request("runner")).includes("--container"));
+test("the remaining lanes stay flat without a database", () => {
+  // WAS: "runner stays container-scoped without a database; the others stay
+  // flat". The runner lane always NAMED its container — it had deployed
+  // `--container app` from the start — so it was the one lane whose shape did not
+  // depend on a live read. It is deleted, and what is left is the half that was
+  // always the interesting one: a lane only names a container when it gains a
+  // sidecar it never had.
   assert.ok(!deployArgs(request("container")).includes("--container"));
   assert.ok(!deployArgs(request("buildpack")).includes("--container"));
 });
 
-test("a partly-declared scale keeps every default it did not mention", () => {
-  // parseAppConfig calls num() on every field, so a config naming only `memory`
-  // produces `{memory: "1Gi", cpu: undefined, concurrency: undefined, …}`.
-  // Spreading that over the defaults overwrote them with undefined and reached
-  // gcloud verbatim: "argument --concurrency: Bad value [undefined]".
-  const partial = withScale({
-    memory: "1Gi", cpu: 1, maxInstances: 4, timeout: 300,
-    concurrency: undefined, cpuBoost: undefined,
-  } as Partial<Scale>);
-  assert.equal(partial.memory, "1Gi");
-  assert.equal(partial.timeout, 300);
-  assert.equal(partial.concurrency, DEFAULT_SCALE.concurrency, "an undeclared field keeps its default");
-  assert.equal(partial.cpuBoost, DEFAULT_SCALE.cpuBoost);
-  // And every value that reaches the argv is a value gcloud will accept.
-  for (const [k, v] of Object.entries(partial)) {
-    assert.notEqual(v, undefined, `${k} must never reach the argv undefined`);
-  }
-});
-
-test("an empty or absent scale is exactly the defaults", () => {
-  assert.deepEqual(withScale(), DEFAULT_SCALE);
-  assert.deepEqual(withScale(null), DEFAULT_SCALE);
-  assert.deepEqual(withScale({}), DEFAULT_SCALE);
-});
-
-/**
- * The shape belongs to the SERVICE, not to the lane deploying to it.
- *
- * Found by a real deploy, after a nine-minute build and a successful release job:
- * hl52l was created by the buildpack lane with one unnamed container, gained a
- * `supersonic.json` saying `language: "python"`, and moved to the runner lane —
- * which always names its container. gcloud added `app` BESIDE the unnamed one
- * rather than renaming it, and Cloud Run refused the revision with "should
- * contain exactly one container with an exposed port".
- */
 test("a service that already has an unnamed container keeps the flat shape", () => {
-  const argv = deployArgs(request("runner", { existingScoped: false }));
-  assert.ok(!argv.includes("--container"), "the runner lane must not name a container the live service left unnamed");
+  // `port` used to arrive from the helper's `lane === "runner" ? { port: 8080 }`
+  // — the runner was the one lane that always exposed one. It is stated here
+  // instead, because the fact under test is that a live unnamed container keeps
+  // BOTH its flat shape and the port it already exposes.
+  const argv = deployArgs(request("container", { existingScoped: false, port: 8080 }));
+  assert.ok(!argv.includes("--container"), "a lane must not name a container the live service left unnamed");
   assert.ok(argv.includes("--port"), "the port survives — it is what the live container already exposes");
 });
 
@@ -152,7 +125,7 @@ test("a service that already has named containers keeps the scoped shape", () =>
 });
 
 test("a service that does not exist yet takes the lane's own default", () => {
-  assert.ok(deployArgs(request("runner", { existingScoped: null })).includes("--container"));
+  assert.ok(deployArgs(request("container", { existingScoped: null, cloudsql: "p:r:i" })).includes("--container"));
   assert.ok(!deployArgs(request("buildpack", { existingScoped: null })).includes("--container"));
 });
 

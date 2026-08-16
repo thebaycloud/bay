@@ -1,12 +1,21 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * How long a sync may be held open waiting for something to send.
+ *
+ * Ten seconds: the same cadence the node used to sleep for, so heartbeats arrive
+ * exactly as often as they always did, and comfortably inside the agent's own
+ * 20-second client timeout.
+ */
+const SYNC_HOLD_MS = 10_000;
+
 import {
-  heartbeatNode, desiredFor, recordNodeFaults, recordNodeRunning, peersFor,
+  heartbeatNode, desiredFor, drainingOn, recordNodeFaults, recordNodeRunning, peersFor, waitForGenerationChange,
   fleetGeneration, decideSync,
   type NodeReport, type ProcessFault, type ProcessState,
 } from "@/lib/fleet";
-import { renewLeases } from "@/lib/reconcile";
+import { renewLeases, promoteReady, recordDataUse } from "@/lib/reconcile";
 
 /**
  * The only endpoint a fleet node talks to.
@@ -60,7 +69,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown; version?: unknown; generation?: unknown };
+  let body: Partial<NodeReport> & { processes?: unknown; running?: unknown; withData?: unknown; version?: unknown; generation?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -108,8 +117,29 @@ export async function POST(req: Request) {
       // write failed is a worse outcome than a stale row. The verdict this feeds
       // fails closed, so a missed write costs a rolled-back deploy, never a
       // wrongly passed one.
+      // Which apps have data, from the only vantage point that can see it. Guarded
+      // on the field being present: absent means an agent that does not report it,
+      // and taking that as "nothing has data" would unpin every app on the node
+      // and let the reconciler move a database away from its disk.
+      if (Array.isArray(body.withData)) {
+        await recordDataUse(name, (body.withData as unknown[]).filter((s): s is string => typeof s === "string"))
+          .catch((e) => {
+            console.error("fleet sync: recording data use for", name, e instanceof Error ? e.message : String(e));
+          });
+      }
       await recordNodeRunning(name, body.running as ProcessState[]).catch((e) => {
         console.error("fleet sync: recording running for", name, e instanceof Error ? e.message : String(e));
+      });
+      // And the placement's own state, promoted on the sync that confirmed it
+      // rather than on the reconciler's clock. A rollout will not drain the old
+      // instance until the new one is `ready`, so waiting for the next pass
+      // would add up to a minute to every rollout for nothing — and until this
+      // existed, nothing wrote that field at all and a rollout stopped forever
+      // one instance in.
+      await promoteReady(name, (body.running as ProcessState[]).map((r) => ({
+        slug: r.slug, image: r.image, healthy: r.healthy ?? undefined,
+      }))).catch((e) => {
+        console.error("fleet sync: promoting for", name, e instanceof Error ? e.message : String(e));
       });
     }
 
@@ -136,11 +166,30 @@ export async function POST(req: Request) {
     // deploy that reported success and never reached the machine.
     //
     // One ordering costs a wasted request. The other loses a deploy.
-    const current = await fleetGeneration();
-    const decision = decideSync(
+    let current = await fleetGeneration();
+    let decision = decideSync(
       typeof body.generation === "number" ? body.generation : undefined,
       current,
     );
+    // NOTHING TO SEND YET — so wait for something, rather than telling the node
+    // to come back in ten seconds. Every write this request carries is already
+    // done above: the heartbeat, the running report, the data report and the
+    // lease renewal all happen before this line, so holding the ANSWER delays
+    // none of them.
+    //
+    // Held for less than the agent's own 20s client timeout, and for about the
+    // interval it would otherwise have slept, so the heartbeat cadence is what it
+    // always was while the reaction time stops being a coin toss against a clock.
+    if (!decision.send) {
+      const moved = await waitForGenerationChange(current, SYNC_HOLD_MS, req.signal);
+      if (moved !== null) {
+        current = moved;
+        decision = decideSync(
+          typeof body.generation === "number" ? body.generation : undefined,
+          current,
+        );
+      }
+    }
     if (!decision.send) {
       // Nothing has changed since this node last asked. It keeps what it has,
       // which is the same set it would have been sent — so this is a smaller
@@ -159,7 +208,18 @@ export async function POST(req: Request) {
       console.error("fleet sync: peers for", name, e instanceof Error ? e.message : String(e));
       return [];
     });
-    return Response.json({ generation: decision.generation, apps, peers });
+    // Which of this node's apps are being drained. The node keeps RUNNING them —
+    // they are still in `apps` — and stops offering them a local route, so the
+    // load balancer reaching this machine is sent on to the version that
+    // replaced them instead of being served the one on its way out.
+    //
+    // Best-effort like `peers`: a list that cannot be read costs the promptness
+    // of a drain, not the node's ability to serve.
+    const draining = await drainingOn(name).catch((e) => {
+      console.error("fleet sync: draining for", name, e instanceof Error ? e.message : String(e));
+      return [] as string[];
+    });
+    return Response.json({ generation: decision.generation, apps, peers, draining });
   } catch (e) {
     // A node that gets an error here keeps running what it already has, which is
     // the correct failure: the cached desired state is still the last thing the

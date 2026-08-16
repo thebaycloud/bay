@@ -63,22 +63,33 @@ test("both targets have release as a stage with its own deploy_stages row", asyn
   assert.equal(FLEET_TARGET.hasReleaseStage, true);
 });
 
-test("cloud run supports everything asked of it at the 21 sites today", async () => {
+test("the cloud run target keeps only what still guards a static app", async () => {
   const { CLOUD_RUN_TARGET } = await loadedTarget;
-  for (const capability of ["exec", "rollback", "domainMapping", "autoRollbackOnFailure"] as const) {
+  for (const capability of ["exec", "domainMapping", "autoRollbackOnFailure"] as const) {
     assert.equal(CLOUD_RUN_TARGET.supports(capability), true, capability);
   }
+  // `rollback` LEFT this set, and the removal is the same change as the addition
+  // below. Cloud Run's rollback walked `gcloud run revisions list` and split
+  // traffic back to the last Ready one; that lane is deleted, and the only apps
+  // still on this target are static — files in a bucket, with no revisions.
+  assert.equal(CLOUD_RUN_TARGET.supports("rollback"), false);
 });
 
-test("the fleet supports none of the four", async () => {
-  // exec and rollback are refused at the API. domainMapping and
-  // autoRollbackOnFailure are now both guarded in deploy-pipeline.ts through
-  // this same `supports(...)` call (:4225 and :3918) rather than left to run
-  // unconditionally and fail silently for a fleet app. This target still
-  // states their value independently of any one call site, so the next site
-  // that needs the answer asks here instead of re-deriving it.
+test("the fleet supports rollback, and still none of the other three", async () => {
+  // ROLLBACK IS THE FIRST ENTRY THIS SET HAS EVER HAD, and what changed is not
+  // the fleet's ambition — it is that a placement stopped being the only record
+  // of a version. `releases` holds every one with the spec that shipped, so
+  // rolling back is `apps.desired_release = previous` and the reconciler
+  // converges through the same function a deploy uses.
+  //
+  // The other three remain false, and each is a fact rather than a TODO: `exec`
+  // has no isolated per-app execution on a node, `domainMapping` names a Cloud
+  // Run service, and `autoRollbackOnFailure` is Cloud Run's traffic-split undo —
+  // a different mechanism from this one, since a failed fleet deploy is handled
+  // by restoring the previous placement rather than by walking a history.
   const { FLEET_TARGET } = await loadedTarget;
-  for (const capability of ["exec", "rollback", "domainMapping", "autoRollbackOnFailure"] as const) {
+  assert.equal(FLEET_TARGET.supports("rollback"), true);
+  for (const capability of ["exec", "domainMapping", "autoRollbackOnFailure"] as const) {
     assert.equal(FLEET_TARGET.supports(capability), false, capability);
   }
 });

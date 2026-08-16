@@ -1,0 +1,17 @@
+-- Where a deployed app came from, so the platform can build it again.
+--
+-- `apps` has never held this. lib/adopt.ts opens with what that cost: the deploy
+-- run carrying the URL is deleted when the run finishes, so there was "nothing to
+-- redeploy FROM" and twenty live apps had to be moved onto the fleet by adopting
+-- their running image instead of rebuilding them.
+--
+-- NULLABLE, and it stays nullable. Two things legitimately have no repository: an
+-- app uploaded as a folder, and every app that already exists — this column
+-- cannot be backfilled, because the value it wants was never written down. A NOT
+-- NULL with a '' default would turn "we do not know" into a value readers trust.
+--
+-- Only ever assigned from `redeployableRepo` (lib/repo-source.ts), which returns
+-- null for anything that cannot be cloned a second time. The write below is
+-- COALESCE-shaped for the same reason: a redeploy from an upload must not erase
+-- what an earlier git deploy recorded.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS repo_url text;

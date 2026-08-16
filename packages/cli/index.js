@@ -16,6 +16,7 @@ const { spawn, spawnSync } = require("child_process");
 const { readEnvFiles, selectEnv, encodeEnvHeader } = require("./lib/envfile");
 const { joinExecArgs } = require("./lib/exec-args");
 const { whoHeader } = require("./lib/who");
+const { deletionRefusal } = require("./lib/confirm");
 
 const CFG_DIR = path.join(os.homedir(), ".supersonic");
 const CFG = path.join(CFG_DIR, "config.json");
@@ -390,7 +391,32 @@ async function rollback(args) {
   const app = needApp(args);
   const d = await api(`/api/apps/${app}/rollback`, { method: "POST" });
   if (args.json) return json(d);
-  print(green("✓ ") + `rolled back — now serving ${d.revision}`);
+  // `revision` was Cloud Run's word for it and there are no revisions any more:
+  // a rollback is one write moving `desired_release` to the version before, and
+  // the reconciler places it. Printing `d.revision` here said "now serving
+  // undefined" the moment the route stopped being Cloud-Run-shaped.
+  print(green("✓ ") + `rolled back to version ${d.version} — the fleet is placing it now`);
+  // Said every time, because it is the half a rollback cannot do. The API
+  // returns the same sentence; printing the server's own wording keeps the two
+  // from drifting into different promises.
+  if (d.note) print(dim("  " + d.note));
+}
+
+/**
+ * Delete an app. There is no undo and there is no prompt.
+ *
+ * The confirmation is a flag rather than a question because this CLI has none —
+ * "designed for agents, not humans" is the first thing index.js says about
+ * itself. `lib/confirm.js` holds the decision and the wording; this function is
+ * the call.
+ */
+async function del(args) {
+  const app = needApp(args);
+  const refusal = deletionRefusal(app, args);
+  if (refusal) die(refusal);
+  const d = await api(`/api/apps/${app}/delete`, { method: "POST" });
+  if (args.json) return json(d);
+  print(green("✓ ") + `${app} deleted — its database, bucket and images went with it`);
 }
 
 async function exec(args) {
@@ -1037,6 +1063,20 @@ async function consumeDeploy(res, args, knownSlug) {
   // deploy_failures; without it a caller measuring a deploy has only the slug
   // and a guess at the time window.
   let runId = null;
+  // A TRANSPORT FAILURE IS NOT A VERDICT ON THE DEPLOY, and it used to be
+  // reported as one. `reader.read()` throws when the response body is cut —
+  // undici's message for that is the single word "terminated" — and with nothing
+  // catching it, that word travelled all the way to the user as `✗ terminated`
+  // for a deploy that had SUCCEEDED. Observed on 13 Aug: the job completed in
+  // 1m3s, the app was live on the new digest, and the CLI called it a failure
+  // because the stream had been cut at five minutes.
+  //
+  // The comment below already says what to do about a stream that ends without a
+  // result — "that is a fact about this connection, not about the deploy" — and
+  // an exception is the same fact arriving by a different door. So it lands in
+  // the same place: stop reading, and go ask the server what actually happened.
+  let streamError = null;
+  try {
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -1055,6 +1095,9 @@ async function consumeDeploy(res, args, knownSlug) {
       else if (ev.type === "done") { writeLockfile(ev.decided, ev.slug); if (args.json) json({ ok: true, slug: ev.slug, url: ev.url, runId }); else print(green("✓ live: ") + ev.url); process.exit(0); }
       else if (ev.type === "error") { if (args.json) json({ ok: false, error: ev.message, slug, runId }); die(ev.message); }
     }
+  }
+  } catch (e) {
+    streamError = e && e.message ? e.message : String(e);
   }
   // The server can answer with a plain JSON error instead of a stream — a plan limit,
   // a rejected request. That is not a build that timed out, and saying so sent someone
@@ -1091,8 +1134,12 @@ async function consumeDeploy(res, args, knownSlug) {
     die(`lost contact with the build and it was still running after 3 minutes. It may still land — check: supersonic logs ${slug}`);
   }
 
-  if (args.json) json({ ok: false, error: "deploy stream ended without a result" });
-  die("the deploy ended without confirming it went live — the build may have failed or timed out. Check: supersonic apps  ·  supersonic logs <app>");
+  // No slug to ask about — the stream died before it named one, so there is
+  // nothing to follow. The transport error is worth printing HERE, and only
+  // here: it is all the information there is.
+  const lost = streamError ? ` (the connection failed: ${streamError})` : "";
+  if (args.json) json({ ok: false, error: "deploy stream ended without a result", streamError });
+  die(`the deploy ended without confirming it went live${lost} — the build may have failed or timed out. Check: supersonic apps  ·  supersonic logs <app>`);
 }
 
 // ---------- helpers ----------
@@ -1152,7 +1199,8 @@ ${bold("ship")} ${dim("(URL-first: a live link in ~0.1s, the build drawn on it w
   supersonic ship --prebuilt                  old path: build here, upload the result
   supersonic reship <app>                       rebuild from the app's source
   supersonic patch <app>                        the repair agent's fix, to pipe into git apply
-  supersonic rollback <app>                     roll back to the previous revision
+  supersonic rollback <app>                     roll back to the previous version
+  supersonic delete <app> --yes                 delete an app (its database and bucket are kept)
 
 ${bold("inspect")}
   supersonic apps                               list your apps
@@ -1196,7 +1244,7 @@ function parse(argv) {
  * prompt, README and script that already exists, so it does not get deprecated,
  * warned about, or removed. Two words, one command, forever.
  */
-const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, init, check, ship: deploy, deploy, reship: redeploy, redeploy, "__deploy-worker": deployWorker };
+const COMMANDS = { signup, login, logout, whoami, apps, status, logs, errors, diagnose, env, patch, rollback, exec, open, init, check, ship: deploy, deploy, reship: redeploy, redeploy, delete: del, rm: del, "__deploy-worker": deployWorker };
 
 (async () => {
   const [, , cmd, ...rest] = process.argv;

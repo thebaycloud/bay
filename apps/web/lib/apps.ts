@@ -14,9 +14,19 @@ export interface AppRecord {
   visibility: Visibility;
   status: "deploying" | "live" | "failed";
   /**
+   * The repository this app was deployed from, or null when the platform does
+   * not know — which is not the same as "it has none". See lib/repo-source.ts.
+   *
+   * `getAppBySlug` selects `*`, so this arrived with the column and the type was
+   * simply not told. A field the row has and the type denies is one an editor
+   * refuses to complete and a reviewer cannot find.
+   */
+  repo_url: string | null;
+  /**
    * This app's site inside the shared umami instance, when it has one.
    *
-   * Optional on the type as well as nullable in the column: `getAppBySlug` is a
+   * Optional on the type as well as nullable in the column, which is the one
+   * difference from `repo_url` above and is deliberate: `getAppBySlug` is a
    * `SELECT *`, so on a database that has not run 027 yet the key is simply
    * absent, and a type that promised `string | null` would be lying to every
    * reader in exactly the window where being wrong is most expensive.
@@ -28,13 +38,26 @@ export interface AppRecord {
 /** Insert (or reclaim) the row for a slug. Called BEFORE the deploy runs. */
 export async function createAppRecord(o: {
   slug: string; workspaceId: string; ownerId: string;
+  /**
+   * The repository this deploy came from, or null when there is not one worth
+   * keeping — see `redeployableRepo`, which is the only thing that should ever
+   * produce this value.
+   *
+   * COALESCE, not assignment. Null means LEAVE WHAT IS THERE: an app deployed
+   * from GitHub and then redeployed from a local folder must not lose the
+   * repository it came from, because the point of the column is to be able to
+   * build the app again without its owner present.
+   */
+  repoUrl?: string | null;
 }): Promise<string> {
   const r = await getPool(DB).query(
-    `INSERT INTO apps(slug, workspace_id, owner_id, status)
-     VALUES($1, $2, $3, 'deploying')
-     ON CONFLICT(slug) DO UPDATE SET status = 'deploying'
+    `INSERT INTO apps(slug, workspace_id, owner_id, status, repo_url)
+     VALUES($1, $2, $3, 'deploying', $4)
+     ON CONFLICT(slug) DO UPDATE SET
+       status = 'deploying',
+       repo_url = COALESCE($4, apps.repo_url)
      RETURNING id`,
-    [o.slug, o.workspaceId, o.ownerId]
+    [o.slug, o.workspaceId, o.ownerId, o.repoUrl ?? null]
   );
   await provisionAnalytics(o.slug);
   return r.rows[0].id;
@@ -142,6 +165,13 @@ export interface OwnedApp {
   status: "deploying" | "live" | "failed";
   visibility: Visibility;
   createdAt: string;
+  /**
+   * The repository this app was deployed from, or null when the platform does
+   * not know — which is NOT the same as "it has none". Null covers an app
+   * uploaded as a folder, and every app deployed before the column existed,
+   * because the value was never written down and cannot be backfilled.
+   */
+  repoUrl: string | null;
   /** Why the last deploy failed, when it did. From the deploy record. */
   error?: string;
 }
@@ -195,6 +225,11 @@ const OWNED_APPS = (order: string) =>
           a.status,
           a.visibility,
           a.created_at,
+          -- Where this app came from, when the platform kept it. Null for every
+          -- app that predates the column and for every app uploaded as a folder,
+          -- and the reader has to say "unknown" rather than "none" — see
+          -- lib/repo-source.ts for why those are different facts.
+          a.repo_url,
           d.error
      FROM apps a
      LEFT JOIN deploys d ON d.slug = a.slug
@@ -247,6 +282,7 @@ export async function listOwnedApps(ownerId: string, sort: AppSort = "deployed")
     status: row.status,
     visibility: row.visibility,
     createdAt: row.created_at?.toISOString?.() ?? String(row.created_at ?? ""),
+    repoUrl: row.repo_url ?? null,
     error: row.status === "failed" ? (row.error ?? undefined) : undefined,
   }));
 }

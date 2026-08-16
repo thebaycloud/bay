@@ -144,6 +144,26 @@ let probeCode = 200;
  * file, not because anything actually cleared the table for it.
  */
 let placementTable = new Map<string, { node: string; spec: unknown }>();
+/** Cache keys the pipeline asked to forget, so a failed deploy can be checked. */
+const droppedPlans: string[] = [];
+/**
+ * What the deploy asked to be placed, keyed by slug.
+ *
+ * The deploy no longer writes a placement — the planner does — so the fake
+ * `convergeApp` needs the spec from somewhere. The real planner copies it from
+ * the release row; this captures the same value where the release is recorded.
+ */
+/**
+ * A small, honest stand-in for `releases` and `apps.desired_release`.
+ *
+ * The deploy no longer writes placements — it records a release, asks for it,
+ * and the planner places the spec FROM THAT ROW. A fake that only remembered the
+ * last spec could not tell a rollout from a restore, because the restore's whole
+ * mechanism is asking for an EARLIER release.
+ */
+const releaseSpecs = new Map<number, unknown>();
+const desiredRelease = new Map<string, number | null>();
+let releaseCounter = 0;
 
 /**
  * What Secret Manager holds for the app, switchable per test.
@@ -154,7 +174,6 @@ let placementTable = new Map<string, { node: string; spec: unknown }>();
 let storedSecrets: { key: string; name: string }[] = [];
 
 /** Which build implementation this process is exercising. See `generatedBuild`. */
-const COLLAPSED = process.env.RUNNER === "0";
 
 let active: Recorded = { argv: [], events: [], stages: [], placements: [], repairs: [], live: [], runtimeWrites: [] };
 let activeReplies: Replies = () => ({});
@@ -223,13 +242,61 @@ async function install() {
   // and is a missing mock.
   mock.module("@/lib/reconcile", {
     namedExports: {
-      desiredRelease: async () => null,
-      recordRelease: async () => ({ id: 1, version: 1 }),
-      setDesired: asyncNoop,
+      recordRelease: async (_slug: string, _image: string, spec: never) => {
+        const id = ++releaseCounter;
+        releaseSpecs.set(id, spec);
+        return { id, version: id };
+      },
+      setDesired: async (slug: string, release: number | null) => { desiredRelease.set(slug, release); },
+      desiredRelease: async (slug: string) => desiredRelease.get(slug) ?? null,
       renewLeases: asyncNoop,
+      // The rolling ports, standing in for the planner. `convergeApp` reports a
+      // step and `readyAt` names a node straight away, so the default here is a
+      // deploy whose new release comes up — which is what every test that is
+      // about something else assumes. `placementTable` below is what actually
+      // records where the app went.
+      // Stands in for `planPlacements` + `apply`: the deploy no longer writes a
+      // placement itself, so the thing that converges is what must record one.
+      // `pendingSpec` is what the deploy asked for — the real planner reads it
+      // from the release row, which is the same fact by a different route.
+      // Stands in for `planPlacements` + `apply`: place whatever release is
+      // pointed at, and remove everything when nothing is.
+      convergeApp: async (slug: string) => {
+        const want = desiredRelease.get(slug) ?? null;
+        if (want === null) {
+          placementTable.delete(slug);
+          return { quorum: true, apps: 1, steps: [], held: 0 };
+        }
+        // Idempotent, like the planner it stands for: once the wanted release is
+        // placed there is nothing to do, and the second convergence of a
+        // successful deploy — the one that drains the version being replaced —
+        // must not read as a second placement.
+        const already = placementTable.get(slug) as { release?: number } | undefined;
+        if (already?.release === want) return { quorum: true, apps: 1, steps: [], held: 0 };
+        const spec = releaseSpecs.get(want);
+        active.placements.push({ slug, node: "fleet-lab-0", spec: spec as never });
+        placementTable.set(slug, { node: "fleet-lab-0", spec, release: want } as never);
+        return { quorum: true, apps: 1, steps: [{ kind: "place", slug }], held: 0 };
+      },
+      readyAt: async (slug: string, release: number) =>
+        (placementTable.get(slug) as { release?: number } | undefined)?.release === release ? "fleet-lab-0" : null,
+      removeRelease: async (slug: string, release: number) => {
+        if ((placementTable.get(slug) as { release?: number } | undefined)?.release === release) {
+          placementTable.delete(slug);
+        }
+      },
     },
   });
-  mock.module("@/lib/plan-cache", { namedExports: { planKey: () => null, getCachedPlan: async () => null, putCachedPlan: asyncNoop } });
+  // `planKey` returns a key so the eviction path below is reachable; the real one
+  // hashes the manifest, and a null key is what a folder with no manifest gets.
+  mock.module("@/lib/plan-cache", {
+    namedExports: {
+      planKey: () => "test-plan-key",
+      getCachedPlan: async () => null,
+      putCachedPlan: asyncNoop,
+      dropCachedPlan: async (key: string) => { droppedPlans.push(key); },
+    },
+  });
   mock.module("@/lib/pg-role", { namedExports: { ensureAppRole: asyncNoop, DB_PASSWORD_SECRET: "pw" } });
 
   // Stage rows: captured rather than written.
@@ -430,7 +497,19 @@ async function run(
   activeReplies = replies;
   // Fresh on every call, built from `seed` rather than left standing from
   // whatever the previous test's deploy did to it — see the declaration above.
-  placementTable = new Map(Object.entries(seed));
+  // A seeded placement is a version that already shipped, so it needs a release
+  // row and a pointer at it — otherwise a failed redeploy has nothing to restore
+  // and the test would be asserting against a fixture rather than a mechanism.
+  releaseSpecs.clear();
+  desiredRelease.clear();
+  releaseCounter = 0;
+  placementTable = new Map();
+  for (const [slug, v] of Object.entries(seed)) {
+    const id = ++releaseCounter;
+    releaseSpecs.set(id, v.spec);
+    desiredRelease.set(slug, id);
+    placementTable.set(slug, { ...v, release: id } as never);
+  }
   // The pipeline swallows nothing at the top level, so a throw here is a real
   // failure of the deploy rather than of the harness — recorded, not hidden,
   // because "what does it do when it fails" is half of what is being pinned.
@@ -555,32 +634,30 @@ test("a pinned runtime the runner cannot serve already builds a generated image"
   assert.ok(builtAnImage(rec));
 });
 
-test("an ordinary Node app: buildpacks under RUNNER=1, its own image under RUNNER=0", NEEDS_MOCKS, async () => {
-  // THE ROW THE COLLAPSE CHANGES, asserted in both directions from one file so
-  // the cutover is visible rather than inferred.
+test("an ordinary Node app builds an image of its own", NEEDS_MOCKS, async () => {
+  // THE ROW THE COLLAPSE CHANGED, and it is no longer conditional. This used to
+  // assert both directions of `RUNNER`, because the collapse was a rollout with a
+  // switch: under RUNNER=1 a plain Node app took `run deploy --source` — the
+  // buildpack lane — and under RUNNER=0 it built a generated image.
   //
-  // A plain Node app with no Dockerfile and no unservable pin takes `run deploy
-  // --source` today — the buildpack lane, which step 4 deletes. Under RUNNER=0 it
-  // builds a generated image instead, which is what makes "any language, any
-  // version" true for the apps that are not runtime-pinned.
+  // There is only one direction left. The buildpack lane handed the source to
+  // Cloud Run and let Cloud Run name what came out, so at decision time there was
+  // no reference to give a node; with Cloud Run deleted, an app that builds no
+  // image of its own has nowhere to run at all. `RUNNER` is gone with it, which
+  // also means the three tests that were skipped whenever it was unset — a static
+  // site, and two about siblings — now run in the ordinary suite.
   const rec = await run(
     { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
     {},
     detect(),
   );
 
-  if (!COLLAPSED) {
-    assert.equal(laneOf(rec), "buildpack");
-    assert.ok(!builtAnImage(rec), "the buildpack lane builds no image of its own");
-    assert.ok(deployedFromSource(rec), "it hands the source to Cloud Run");
-    return;
-  }
-  assert.equal(laneOf(rec), "container", "the collapse must route this to the container lane");
-  assert.ok(builtAnImage(rec), "the collapse must build a generated image");
-  assert.ok(!deployedFromSource(rec), "nothing should still be handed to buildpacks");
+  assert.equal(laneOf(rec), "container");
+  assert.ok(builtAnImage(rec), "every app builds a generated image now");
+  assert.ok(!deployedFromSource(rec), "nothing is handed to buildpacks any more");
 });
 
-test("the collapse does not disturb a static site", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
+test("the collapse does not disturb a static site", NEEDS_MOCKS, async () => {
   // Checked under RUNNER=0 specifically. Part 1 marks this lane "(unchanged)", and
   // the failure it is guarding against is silent: a site whose build produces
   // files and nothing to run, containerised around an entrypoint the build never
@@ -590,7 +667,7 @@ test("the collapse does not disturb a static site", { ...NEEDS_MOCKS, skip: !COL
   assert.ok(!builtAnImage(rec));
 });
 
-test("a sibling builds from its own directory into its own image", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
+test("a sibling builds from its own directory into its own image", NEEDS_MOCKS, async () => {
   // `deploySibling` refused anything that was not node or python, because a
   // sibling was always a runner bundle and the runner has two images. That was
   // never a statement about siblings. With a generated image a sibling can be Go —
@@ -663,26 +740,33 @@ test("a fleet app's real crash reaches the repair agent, not just the symptom", 
   // repair agent with no actual cause attached. That is exactly the guess this
   // function exists to prevent (see the comment above `fetchContainerError`).
   const distinctiveCrash = "TypeError: Cannot read properties of undefined (reading 'db')";
-  const rec = await run(
-    { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
-    {},
-    (argv) => {
-      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
-      // The deploy itself fails at container startup — the one path that makes
-      // the pipeline go fetch the container's real crash log.
-      if (argv[1] === "run" && argv[2] === "deploy") {
-        return { code: 1, stderr: "Revision failed to start and listen on the port defined by the PORT=8080\n" };
-      }
-      // The fleet node's log entry for that crash — jsonPayload, not textPayload.
-      if (argv[1] === "logging" && argv[2] === "read") {
-        return { stdout: JSON.stringify([{ jsonPayload: { message: distinctiveCrash } }]) };
-      }
-      return {};
-    },
-  );
+  // Driven through a FLEET failure, because that is the only kind left. It used
+  // to fail the deploy by making `gcloud run deploy` exit 1 with "Revision failed
+  // to start and listen on the port" — Cloud Run's own words, on a path that no
+  // longer exists. The fleet says it differently and gets the app's last words by
+  // a different route (`recentAppLogs` → `getLogs`), but the parsing under test is
+  // the same and still has no other guard.
+  probeCode = 503;
+  let rec: Recorded;
+  try {
+    rec = await run(
+      { "package.json": '{"scripts":{"start":"node index.js"}}', "index.js": "" },
+      {},
+      (argv) => {
+        if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
+        // The fleet node's log entry for that crash — jsonPayload, not textPayload.
+        if (argv[1] === "logging" && argv[2] === "read") {
+          return { stdout: JSON.stringify([{ jsonPayload: { message: distinctiveCrash } }]) };
+        }
+        return {};
+      },
+    );
+  } finally {
+    probeCode = 200;
+  }
 
   const errors = rec.events.filter((e) => (e as { type?: string }).type === "error");
-  assert.ok(errors.length > 0, "a container that doesn't start on $PORT must still fail the deploy");
+  assert.ok(errors.length > 0, "an app that does not answer from the fleet must fail the deploy");
   const text = JSON.stringify(errors);
   assert.ok(
     text.includes(distinctiveCrash),
@@ -759,6 +843,29 @@ async function onFleet(
   }
 }
 
+test("an app on nobody's canary list still lands on the fleet", NEEDS_MOCKS, async () => {
+  // `fleetPlacementWanted` used to gate this: an app absent from FLEET_APPS, on a
+  // control plane without FLEET_PLACEMENT=1, deployed to Cloud Run instead. That
+  // was a routing decision with two destinations, and one of them no longer
+  // exists — so the gate is not relaxed here, it is gone.
+  //
+  // Deliberately does NOT set FLEET_APPS. `onFleet` above exists precisely
+  // because the fleet used to need asking for; this test is the assertion that
+  // it no longer does, so borrowing that helper would test the opposite thing.
+  //
+  // The gate was also the source of a live split-brain, which is why this is
+  // worth a test of its own rather than a deletion: on 12 Aug the control plane
+  // had FLEET_APPS=q6doa and no FLEET_PLACEMENT, while the deploy worker had
+  // both — so the same app landed on a different runtime depending on which
+  // service happened to run its deploy.
+  // `detect()` rather than `run`'s own default of no replies: this test is about
+  // WHERE a deploy lands, so it has to be a deploy that otherwise works.
+  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
+  const errs = rec.events.filter((e) => (e as { type?: string }).type === "error");
+  assert.deepEqual(errs, [], "the deploy itself should have succeeded");
+  assert.ok(placementTable.get("demo"), "the app should have been placed on a node");
+});
+
 test("a fleet redeploy that fails after taking traffic gets the previous version back", NEEDS_MOCKS, async () => {
   // The bug docs/research/cloud-run-shape.md found and the GitHub issue named:
   // `rollBackToLastGood` guarded `staticServe || serviceless` but not `toFleet`,
@@ -808,7 +915,15 @@ test("a fleet redeploy that fails after taking traffic gets the previous version
   // also the one worth reading.
   assert.equal(rec.placements.at(-1)?.node, "fleet-lab-0", "the previous placement's node must be restored, not the node this failed attempt chose");
   assert.deepEqual(rec.placements.at(-1)?.spec, seedSpec, "the previous spec must be restored verbatim");
-  assert.deepEqual(finalPlacement, { node: "fleet-lab-0", spec: seedSpec }, "the fleet's placement table must read back the restored version, not the broken one");
+  // `release: 1` is the seeded version's own release id, and its presence is the
+  // point rather than noise: the restore is `desired` going back to that id and
+  // the planner placing it, so the row that comes back CARRIES the release it
+  // belongs to. The old restore copied a spec and named no release at all.
+  assert.deepEqual(
+    finalPlacement,
+    { node: "fleet-lab-0", spec: seedSpec, release: 1 },
+    "the fleet's placement table must read back the restored version, not the broken one",
+  );
 
   // Said honestly, not silently: the log line and the recorded failure both
   // have to tell the user what actually happened, per the ticket.
@@ -908,32 +1023,6 @@ test("a repair of a fleet deploy redeploys to the fleet, and is told so", NEEDS_
   assert.ok(!repair.ranCloudRunDeploy, "a fleet deploy must never be repaired onto Cloud Run — its DATABASE_URL names 10.200.0.1");
   assert.ok(repair.placedAgain, "the repair's redeploy must place on the fleet again");
   assert.equal(repair.named, "fleet", "the agent must be told which runtime its redeploy reaches");
-});
-
-test("a repair of a Cloud Run deploy still redeploys to Cloud Run", NEEDS_MOCKS, async () => {
-  // The other half, and not a formality: a fix that routes every repair to the
-  // fleet is the same bug pointing the other way, and it would be invisible in
-  // a suite that only ever exercised the fleet.
-  const rec = await run(
-    { "Dockerfile": "FROM alpine\n", "index.js": "" },
-    AUTO_FIX,
-    (argv) => {
-      if (argv.includes("--api")) return { stdout: detectorEnvelope({}) };
-      if (argv[1] === "run" && argv[2] === "deploy") return { code: 1 };
-      return {};
-    },
-  );
-
-  assert.equal(rec.repairs.length, 1, `no repair ran; events were ${JSON.stringify(rec.events).slice(0, 300)}`);
-  assert.equal(rec.repairs[0].named, "cloudrun");
-  assert.ok(rec.repairs[0].ranCloudRunDeploy, "a Cloud Run deploy is repaired on Cloud Run");
-  assert.ok(!rec.repairs[0].placedAgain, "nothing may be placed on a node by a Cloud Run repair");
-});
-
-/** A one-service config, so `appConfig` exists and `declared` is the author's. */
-const configWith = (service: Record<string, unknown>) => JSON.stringify({
-  version: 1,
-  services: [{ name: "web", dir: ".", path: "/", ...service }],
 });
 
 test("an app that declares scale deploys to the fleet and gets the size it asked for", NEEDS_MOCKS, async () => {
@@ -1046,7 +1135,13 @@ test("a fleet placement that never comes up records its release as failed too", 
   assert.equal(release[0].outcome, "failed", `a placement that never verified must not report its release as ok, got ${JSON.stringify(release)}`);
 });
 
-test("a sibling's Dockerfile is written for the context it is built in", { ...NEEDS_MOCKS, skip: !COLLAPSED }, async () => {
+/** A one-service config, so `appConfig` exists and `declared` is the author's. */
+const configWith = (service: Record<string, unknown>) => JSON.stringify({
+  version: 1,
+  services: [{ name: "web", dir: ".", path: "/", ...service }],
+});
+
+test("a sibling's Dockerfile is written for the context it is built in", NEEDS_MOCKS, async () => {
   // The bug that broke EVERY sibling, and it is invisible from argv alone: the
   // context was right and the file inside it was written for a different one.
   //
@@ -1105,19 +1200,6 @@ test("a sibling's Dockerfile is written for the context it is built in", { ...NE
 const madeAWorkerPool = (rec: Recorded) =>
   rec.argv.some((a) => a[0] === "gcloud" && a[1] === "beta" && a[2] === "run" && a[3] === "worker-pools" && a[4] === "deploy");
 
-test("an app on Cloud Run still gets its Cloud Run worker pool", NEEDS_MOCKS, async () => {
-  // The control for the test below. Without this the next assertion is satisfied
-  // by a pipeline that has simply stopped deploying workers altogether, which
-  // would be a far worse bug than the one being fixed.
-  const rec = await run(
-    { "Dockerfile": "FROM alpine\n", "Procfile": "web: node index.js\nbot: node bot.js\n", "index.js": "" },
-    {},
-    detect(),
-  );
-
-  assert.ok(madeAWorkerPool(rec), `no worker pool was deployed off the fleet; argv was ${JSON.stringify(rec.argv.map((a) => a.slice(0, 5)))}`);
-});
-
 test("an app on the fleet does not ALSO run its workers on Cloud Run", NEEDS_MOCKS, async () => {
   // The defect this closes, and the reason it belongs in this slice. The
   // `deployProcesses` call was gated on `result.ok && !staticServe` with no
@@ -1171,30 +1253,6 @@ test("a worker-only app deploys to the fleet, verified by the node rather than b
   assert.ok(!madeAWorkerPool(rec), "the bot runs on the node AND on Cloud Run");
 });
 
-test("a deploy that goes to Cloud Run says so, so the node stops being handed the app", async () => {
-  // The door nobody had closed. setRuntime was only ever called by placeOnFleet
-  // and by its rollback, so an app that had been placed on the fleet and then
-  // deployed to Cloud Run kept runtime='fleet' AND kept its placement row.
-  // desiredFor yields every placement whose app reads 'fleet', so the node went
-  // on running a second copy of an app Cloud Run was already serving.
-  //
-  // Seen on p6mx8 the moment it was withdrawn from the canary: Cloud Run served
-  // it while fleet-lab-1 kept failing its release every few minutes.
-  //
-  // Asserted as a VALUE, not as "setRuntime was called": a stub that wrote
-  // 'fleet' here would satisfy a membership check and reintroduce the bug.
-  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
-
-  assert.ok(
-    rec.runtimeWrites.some((w) => w.runtime === "cloudrun"),
-    `a Cloud Run deploy never wrote runtime=cloudrun: ${JSON.stringify(rec.runtimeWrites)}`,
-  );
-  assert.ok(
-    !rec.runtimeWrites.some((w) => w.runtime === "fleet"),
-    `a Cloud Run deploy claimed the fleet: ${JSON.stringify(rec.runtimeWrites)}`,
-  );
-});
-
 /** Did the pipeline ask Cloud Run's domain-mapping API to map this app's name? */
 const mappedADomain = (rec: Recorded) =>
   rec.argv.some((a) => a[0] === "gcloud" && a.includes("domain-mappings") && a.includes("create"));
@@ -1213,13 +1271,6 @@ test("a fleet deploy makes no domain-mapping call", NEEDS_MOCKS, async () => {
     !rec.events.some((e) => JSON.stringify(e).includes("custom domain skipped")),
     "the dead call's log line must be gone, and nothing may replace it",
   );
-});
-
-test("a Cloud Run deploy still gets its domain mapping", NEEDS_MOCKS, async () => {
-  // The other half — this removes a call on the fleet path, not the feature.
-  const rec = await run({ "Dockerfile": "FROM alpine\n", "index.js": "" }, {}, detect());
-
-  assert.ok(mappedADomain(rec), `a Cloud Run deploy must still map its domain: ${JSON.stringify(rec.argv.map((a) => a.slice(0, 4)))}`);
 });
 
 /* -------------------------------------------------------------------------- */

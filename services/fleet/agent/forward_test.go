@@ -251,3 +251,131 @@ func TestALocalHopStillLosesTheSecret(t *testing.T) {
 		t.Errorf("the app was handed the platform's secret: %q", seen)
 	}
 }
+
+// A process that has started but not yet passed its first probe must not hide
+// the copy still serving elsewhere.
+//
+// This is the ordering `writeRoutes` builds — healthy local, then peer, then
+// unhealthy local — asserted at the router, which is where it has to hold. The
+// table used to be "local first, whatever its health", so during a rollout or a
+// rollback the node that had just started the incoming version answered 503
+// "This app is not healthy" while the outgoing version was still up on another
+// machine. Measured on a live rollback: 400 requests, exactly one 503, carrying
+// `x-supersonic-router: unhealthy` at the instant the previous version returned.
+func TestAHealthyPeerBeatsAnUnhealthyLocalRoute(t *testing.T) {
+	far := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("the version that is actually up"))
+	}))
+	defer far.Close()
+
+	// The order `writeRoutes` produces for this situation.
+	rt, _ := routerOver(t, []Route{
+		{Slug: "app", Addr: far.Listener.Addr().String(), Healthy: true, Peer: true},
+		{Slug: "app", Addr: "127.0.0.1:1", Healthy: false},
+	})
+
+	req := httptest.NewRequest("GET", "http://app.supersonic.cv/", nil)
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("a starting local process shadowed a serving peer: got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Supersonic-Router"); got != "forwarded" {
+		t.Errorf("the request should have been forwarded to the node that can serve it: got %q", got)
+	}
+}
+
+// …and with nowhere else to send it, the unhealthy local route still answers.
+//
+// The point of keeping it rather than dropping it: "this app is not healthy" is
+// a true and useful answer, and "not on this node" would be a false one from the
+// machine that is holding the app.
+func TestAnUnhealthyLocalRouteStillAnswersWhenItIsTheOnlyOne(t *testing.T) {
+	rt, _ := routerOver(t, []Route{{Slug: "app", Addr: "127.0.0.1:1", Healthy: false}})
+
+	req := httptest.NewRequest("GET", "http://app.supersonic.cv/", nil)
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 503 {
+		t.Fatalf("an app that is down everywhere should say so: got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Supersonic-Router"); got != "unhealthy" {
+		t.Errorf("the reason should be the app's health, not a routing miss: got %q", got)
+	}
+}
+
+func TestADrainingAppStopsTakingNewRequestsButKeepsRunning(t *testing.T) {
+	// The window this closes, measured: a deploy reported "live" and the version
+	// it replaced went on answering for about ten seconds — anyone the load
+	// balancer happened to send to the old version's node got the old version,
+	// because that node still held a healthy local route for it and local wins.
+	//
+	// Draining is now "cannot serve" for routing purposes even though the process
+	// is healthy and still running. The process keeps running so the requests
+	// already inside it can finish; what stops is new ones arriving.
+	local := []Route{{Slug: "app", Addr: "127.0.0.1:9", Healthy: true}}
+	peers := []PeerRoute{{Slug: "app", Addr: "10.0.0.2:8080"}}
+
+	// Not draining: the local route wins and no peer is offered at all.
+	got := mergeRoutes(local, peers, nil)
+	if len(got) != 1 || got[0].Peer {
+		t.Fatalf("a healthy local route must hold the slug: %+v", got)
+	}
+
+	// Draining: the peer is offered first, and the outgoing version is kept
+	// behind it rather than dropped.
+	got = mergeRoutes(local, peers, []string{"app"})
+	if len(got) != 2 {
+		t.Fatalf("expected the peer and the draining local route: %+v", got)
+	}
+	if !got[0].Peer {
+		t.Errorf("new requests must go to the version that replaced it: %+v", got[0])
+	}
+	if got[1].Peer || got[1].Slug != "app" {
+		t.Errorf("the draining route must be kept as the fallback: %+v", got[1])
+	}
+}
+
+func TestADrainingAppWithNoReplacementStillServes(t *testing.T) {
+	// Draining without anywhere to send the traffic must not black-hole the app.
+	// The planner only drains once a replacement is ready, so this should not
+	// happen — and "should not happen" is exactly the condition worth pinning,
+	// because the cost of being wrong is an app that answers nothing at all.
+	got := mergeRoutes([]Route{{Slug: "app", Addr: "127.0.0.1:9", Healthy: true}}, nil, []string{"app"})
+	if len(got) != 1 || got[0].Peer {
+		t.Fatalf("the draining route is the only one there is, and must still serve: %+v", got)
+	}
+}
+
+func TestOnlyAppsThatHaveWrittenSomethingCountAsHavingData(t *testing.T) {
+	// The directory is created for EVERY app before the bind mount, so its
+	// existence says nothing at all — which is why this asks whether it has an
+	// entry in it. Getting that wrong would pin every app on the node and stop
+	// the reconciler moving anything, which is the opposite failure and just as
+	// bad: a node dies and nothing recovers.
+	root := t.TempDir()
+	empty := filepath.Join(root, "empty", "data")
+	full := filepath.Join(root, "full", "data")
+	for _, d := range []string{empty, full} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(full, "sqlite.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	a := &Agent{live: map[string]*live{
+		"empty--web.": {app: App{Slug: "empty", DataDir: empty}, proc: Process{Name: "web"}},
+		"full--web.":  {app: App{Slug: "full", DataDir: full}, proc: Process{Name: "web"}},
+		"none--web.":  {app: App{Slug: "none", DataDir: ""}, proc: Process{Name: "web"}},
+	}}
+
+	got := a.reportWithData()
+	if len(got) != 1 || got[0] != "full" {
+		t.Fatalf("only the app that wrote something should be pinned: got %v", got)
+	}
+}

@@ -1,0 +1,23 @@
+-- Whether the app on this placement has written anything to its /data.
+--
+-- §8 decided that volumes PIN: `/srv/apps/<slug>/data` is bind-mounted from a
+-- disk nothing replicates, so the placement model "must be able to express 'this
+-- cannot move'". It expressed it — `planPlacements` honours `pinnedTo` in both
+-- eviction and placement — and nothing ever set it. The pin was derived from
+-- `spec ? 'dataDir'`, and no code path has ever written `dataDir` into a spec:
+-- the agent computes that directory locally and keeps it off the wire
+-- (`DataDir string json:"-"`), so the control plane could not tell who had data.
+--
+-- Every app was therefore movable, including the two holding SQLite databases on
+-- fleet-lab-2. A move would have left the database behind.
+--
+-- THE NODE IS THE ONLY THING THAT CAN SEE THIS. The control plane has no view of
+-- a directory on someone else's disk, and the app's config does not declare a
+-- volume — there is no such field. So this is an OBSERVATION reported on the
+-- sync, not a declaration, and it belongs on the placement rather than the app:
+-- it is a fact about data on one node, and it is what makes that placement
+-- immovable.
+--
+-- Default false: an app nobody has reported on yet is movable, which is the
+-- behaviour that exists today and the safe direction for an app with no data.
+ALTER TABLE fleet_placements ADD COLUMN IF NOT EXISTS has_data boolean NOT NULL DEFAULT false;

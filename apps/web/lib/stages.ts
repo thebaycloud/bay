@@ -25,7 +25,12 @@ const DB = "supersonic_platform";
  * chosen is a fact, and null would make it indistinguishable from a failure to
  * record one.
  */
-export type StageLane = Lane | "unknown";
+/**
+ * What the `deploy_stages.lane` COLUMN may hold — which is a superset of what a
+ * deploy may write. `"runner"` is the difference: that lane is deleted, so
+ * nothing writes it, and the table is full of rows from when something did.
+ */
+export type StageLane = Lane | "unknown" | "runner";
 
 /**
  * `StageLane` as values, and the single source for what the column may hold.
@@ -34,8 +39,15 @@ export type StageLane = Lane | "unknown";
  * test/stages.test.ts reads the migration and compares. That pairing is the
  * actual fix: the reason two vocabularies could coexist is that nothing anywhere
  * asserted they were the same set.
+ *
+ * `runner` IS NOT IN `ALL_LANES` AND IS STILL HERE, which is the one place these
+ * two lists are allowed to differ. `ALL_LANES` is what a deploy may WRITE, and no
+ * deploy can write `runner` any more — the lane is deleted. This list is what the
+ * COLUMN may hold, and `deploy_stages` is full of rows from when it could. Drop
+ * the value here and the CHECK in db/012 — phase three, still unapplied — would
+ * be written against a vocabulary that its own table already violates.
  */
-export const STAGE_LANES: StageLane[] = ["unknown", ...ALL_LANES];
+export const STAGE_LANES: StageLane[] = ["unknown", ...ALL_LANES, "runner"];
 export type Outcome = "ok" | "failed" | "skipped";
 
 /**

@@ -1,7 +1,8 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { getPool, dbNameForSlug } from "@/lib/db";
+// The TENANT instance: this browses an APP's database, not the platform's.
+import { getTenantPool, dbNameForSlug } from "@/lib/db";
 
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
@@ -14,7 +15,7 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
   const table = url.searchParams.get("table");
   const db = dbNameForSlug(slug);
   try {
-    const pool = getPool(db);
+    const pool = getTenantPool(db);
     if (table) {
       if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) return Response.json({ error: "invalid table name" }, { status: 400 });
       const r = await pool.query(`SELECT * FROM "${table}" LIMIT 100`);
@@ -45,7 +46,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   if (!/^select\b/i.test(q)) return Response.json({ error: "only SELECT queries are allowed" }, { status: 400 });
   if (q.includes(";")) return Response.json({ error: "one statement only" }, { status: 400 });
   try {
-    const pool = getPool(db);
+    const pool = getTenantPool(db);
     const r = await pool.query(q);
     return Response.json({ columns: r.fields.map((f) => f.name), rows: r.rows });
   } catch (e) {

@@ -45,7 +45,24 @@ export interface Placed {
 export interface NodeHealth {
   name: string;
   healthy: boolean;
+  /**
+   * How many placements this node is carrying, fleet-wide.
+   *
+   * Passed in rather than counted here for the same reason the ORDER is: which
+   * node is least loaded is a fact about every app, and this function sees one.
+   */
+  load: number;
 }
+
+/**
+ * How much emptier another node must be before an app is moved to it.
+ *
+ * Two, and the number is the whole defence against oscillation. Moving an app to
+ * correct a difference of ONE creates the mirror image of that difference, which
+ * a rebalancer then corrects by moving it back, forever. At two the move leaves
+ * the fleet strictly closer to level and there is nothing left to correct.
+ */
+const REBALANCE_GAP = 2;
 
 export type Step =
   | { kind: "place"; slug: string; instance: number; node: string; release: number }
@@ -69,6 +86,22 @@ export function planPlacements(
   nodes: NodeHealth[],
   now: number,
   quorum: boolean,
+  /**
+   * Whether this app may be rebalanced on this pass.
+   *
+   * ONE APP PER PASS, and the budget has to live in the CALLER because that is
+   * where the loop is. This function returning a single step was never enough:
+   * `pass` calls it once per app, every app sees the same load snapshot taken at
+   * the start of the pass, and so every app on the fullest node decides to move
+   * at once.
+   *
+   * Watched happen in production the moment a rebuilt node registered: nineteen
+   * apps placed a second instance on it in one pass, the loads swung from 13/19/0
+   * to 13/19/32, and the next pass did it again in the other direction. A
+   * rebalancer that acts on a snapshot it is invalidating is not converging, it
+   * is ringing.
+   */
+  mayRebalance = true,
 ): Step[] {
   const { slug } = desired;
 
@@ -133,19 +166,67 @@ export function planPlacements(
   // fleet-place.ts had already named the shape: "two copies of the app running
   // at once, which is exactly what this sequence exists to prevent."
   //
-  // The lowest-numbered instances are kept, so the choice is stable across
-  // passes: a rule that picked by node or by age could pick differently on the
-  // next pass and remove the one it had just decided to keep.
+  // THE FULLEST NODE LOSES ITS COPY, which is what completes a rebalance. This
+  // used to keep the lowest-numbered instances, and the reason given was
+  // stability: "a rule that picked by node or by age could pick differently on
+  // the next pass and remove the one it had just decided to keep."
+  //
+  // That danger is real and this ordering answers it. Load is the primary key
+  // and the instance number is the tie-break, so two nodes carrying the same
+  // amount fall back to exactly the old rule — deterministic — while a genuine
+  // imbalance resolves the same way every pass until it is gone. Keeping the
+  // lowest instance instead would undo every rebalance the moment it was made,
+  // moving an app back and forth forever.
   if (wanted.length > desired.replicas) {
+    const loadOf = new Map(nodes.map((n) => [n.name, n.load]));
     return wanted
       .slice()
-      .sort((a, b) => a.instance - b.instance)
-      .slice(desired.replicas)
+      .sort((a, b) => (loadOf.get(b.node) ?? 0) - (loadOf.get(a.node) ?? 0) || b.instance - a.instance)
+      .slice(0, wanted.length - desired.replicas)
       .map((p) => ({ kind: "remove" as const, slug, instance: p.instance }));
   }
 
   if (stale.length && ready >= desired.replicas) {
     return stale.map((p) => ({ kind: "drain" as const, slug, instance: p.instance }));
+  }
+
+  // REBALANCING, and it is last on purpose: everything above is the fleet not
+  // being what it should be, and this is the fleet being right but lopsided.
+  // Nothing here runs while there is real work outstanding.
+  //
+  // The fleet used to level out only as new apps arrived. After a node failure
+  // and its recovery one machine sat empty while another carried nineteen, and
+  // no pass would ever have moved one back.
+  //
+  // Every guard below is a way this could do harm rather than good:
+  //   - no quorum, no move. The loads being balanced against are read from the
+  //     fleet, and a control plane that cannot see it is balancing against stale
+  //     numbers.
+  //   - pinned apps never move. Their data is on one machine and nothing
+  //     replicates it; tidiness is the worst possible reason to leave it behind.
+  //   - only a placement that is READY. Mid-deploy the loads are still moving,
+  //     and moving an app that has not finished arriving abandons a pull that is
+  //     already half done.
+  //   - one app per pass, because this returns as soon as it acts. The next pass
+  //     sees the fleet the move produced rather than the one it started from.
+  //
+  // BESIDE, never instead: this emits a `place` on the emptier node while the app
+  // goes on serving where it is, and the trim above completes the move on a later
+  // pass — after the new instance exists.
+  if (mayRebalance && quorum && desired.pinnedTo === null && wanted.length === desired.replicas && ready === desired.replicas) {
+    const healthyNodes = nodes.filter((n) => n.healthy);
+    const taken = new Set(placements.map((p) => p.node));
+    const emptiest = healthyNodes.filter((n) => !taken.has(n.name)).sort((a, b) => a.load - b.load)[0];
+    const fullest = wanted
+      .map((p) => healthyNodes.find((n) => n.name === p.node))
+      .filter((n): n is NodeHealth => Boolean(n))
+      .sort((a, b) => b.load - a.load)[0];
+    if (emptiest && fullest && fullest.load - emptiest.load >= REBALANCE_GAP) {
+      const used = new Set(placements.map((p) => p.instance));
+      let instance = 0;
+      while (used.has(instance)) instance++;
+      return [{ kind: "place", slug, instance, node: emptiest.name, release: desired.release }];
+    }
   }
 
   return [];

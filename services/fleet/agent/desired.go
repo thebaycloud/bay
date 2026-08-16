@@ -158,6 +158,18 @@ type syncBody struct {
 	NodeIdentity
 	Processes *[]ProcessFault `json:"processes,omitempty"`
 	Running   *[]ProcessState `json:"running,omitempty"`
+	// WithData is every slug on this node whose /data directory has something in
+	// it. Section 8 decided that volumes PIN — the directory is bind-mounted from a
+	// disk nothing replicates — and the control plane cannot see it: DataDir is
+	// computed here and deliberately kept off the wire. So this is the only way
+	// it can know which placements must not move.
+	//
+	// A pointer, and the same three states as the two above: absent means "this
+	// agent does not report it" and the control plane leaves the stored flags
+	// alone, [] means "nothing on this node has data" and clears them. Getting
+	// that backwards for an older agent would unpin every app on it and let the
+	// reconciler move a database away from its disk.
+	WithData *[]string `json:"withData,omitempty"`
 	// Version is which build of this agent is speaking.
 	//
 	// Absent from an older agent, which is why it is omitempty rather than a
@@ -249,11 +261,15 @@ type Source struct {
 	// fails leaves this at zero, the next poll claims nothing, and the control
 	// plane sends the full set.
 	lastGeneration int64
-	Report func() []ProcessFault
+	Report         func() []ProcessFault
 	// ReportRunning answers "what am I confirmed to be running right now", on
 	// the same sync. Nil carries the same meaning as a nil Report and is the
 	// state every agent built before this field was added is permanently in.
 	ReportRunning func() []ProcessState
+	// ReportWithData answers "which of my apps have written to /data". Optional
+	// for the same reason ReportRunning is: an older control plane ignores it, and
+	// a nil hook means this agent stays silent rather than claiming nothing.
+	ReportWithData func() []string
 }
 
 func (s *Source) Fetch() (Desired, error) {
@@ -372,6 +388,17 @@ func (s *Source) fromControlPlane() (Desired, error) {
 		}
 		payload.Running = &r
 	}
+	if s.ReportWithData != nil {
+		// Same nil-to-empty normalisation as the two above, and here it matters
+		// most: reading a null as "does not report" would leave stale pins in
+		// place forever, and an app whose data was deleted would stay welded to a
+		// node it no longer needs.
+		w := s.ReportWithData()
+		if w == nil {
+			w = []string{}
+		}
+		payload.WithData = &w
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return d, err
@@ -416,11 +443,4 @@ func (s *Source) fromFile(path string) (Desired, error) {
 		return d, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return d, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

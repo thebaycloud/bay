@@ -16,16 +16,21 @@ user / their coding agent
         │  (CLI · GitHub · git URL · MCP)
         ▼
   control-plane API ──► deploy-agent (Gemini, sandbox)
-        │                     │ detect stack, write Dockerfile, fix-to-green
+        │                     │ detect stack, plan the build (Railpack), fix-to-green
         │                     ▼
-        │               Cloud Run (the running app)  ◄─ *.supersonic.cv (wildcard DNS+SSL)
+        │               a node in the fleet ◄─ load balancer ◄─ *.supersonic.cv (wildcard DNS+SSL)
+        │                 (gVisor sandbox, one resident process per declared process)
+        │
+        │               static apps instead publish to a bucket served by
+        │               supersonic-static — see ADR 0001, which keeps them there
         ▼
   provisioners (auto, inferred from the code):
     • DB        → Cloud SQL / AlloyDB / Mongo / Redis (polyglot, by ORM)
     • Auth      → Identity Platform (we own end-user auth)
     • Storage   → GCS + CDN
     • Email     → transactional (deliverability)
-    • Jobs      → Cloud Run Jobs / Scheduler
+    • Jobs      → processes in the app's own spec, run by the node (release before
+                  the app starts; cron on the node's scheduler)
     • Secrets   → Secret Manager   (only human-supplied input)
     • Security  → secret scan · rate limit · Cloud Armor WAF
     • Analytics → Umami / PostHog (embedded)
