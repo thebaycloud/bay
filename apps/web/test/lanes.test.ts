@@ -36,7 +36,7 @@ function request(lane: Lane, over: Partial<LaneDeploy> = {}): LaneDeploy {
     appFlags: APP_FLAGS,
     scale: DEFAULT_SCALE,
     cloudsql: null,
-    ...(lane === "buildpack" ? { source: "/tmp/src" } : { image: "img:latest" }),
+    image: "img:latest",
   };
   return { ...base, ...over };
 }
@@ -102,7 +102,6 @@ test("the remaining lanes stay flat without a database", () => {
   // always the interesting one: a lane only names a container when it gains a
   // sidecar it never had.
   assert.ok(!deployArgs(request("container")).includes("--container"));
-  assert.ok(!deployArgs(request("buildpack")).includes("--container"));
 });
 
 test("a service that already has an unnamed container keeps the flat shape", () => {
@@ -126,28 +125,30 @@ test("a service that already has named containers keeps the scoped shape", () =>
 
 test("a service that does not exist yet takes the lane's own default", () => {
   assert.ok(deployArgs(request("container", { existingScoped: null, cloudsql: "p:r:i" })).includes("--container"));
-  assert.ok(!deployArgs(request("buildpack", { existingScoped: null })).includes("--container"));
 });
 
 test("a sidecar forces the scoped shape whatever the live service looks like", () => {
   // Not a free choice: Cloud Run requires it once more than one container exists,
   // so an app gaining a database has to migrate however it looked before.
-  const argv = deployArgs(request("buildpack", { existingScoped: false, cloudsql: "p:r:i" }));
+  const argv = deployArgs(request("container", { existingScoped: false, cloudsql: "p:r:i" }));
   assert.ok(argv.includes("--container"));
   assert.ok(argv.includes("--depends-on"));
 });
 
 test("a lane names its code the way that lane builds", () => {
-  assert.ok(deployArgs(request("buildpack")).includes("--source"));
-  assert.ok(!deployArgs(request("buildpack")).includes("--image"));
+  // The `--source` half went with the buildpack lane: that flag WAS the lane —
+  // `gcloud run deploy --source` handing the build to Cloud Run. One way left to
+  // name code, and it is a built image.
   assert.ok(deployArgs(request("container")).includes("--image"));
   assert.ok(!deployArgs(request("container")).includes("--source"));
 });
 
 test("lane-specific container flags survive to the argv", () => {
-  // The buildpack retry after gcloud asks for --clear-base-image. Appended to
-  // the CONTAINER, not the service: it describes how this code is built.
-  const argv = deployArgs(request("buildpack", { containerFlags: ["--clear-base-image"] }));
+  // Appended to the CONTAINER, not the service: they describe how this code is
+  // built. The flag that motivated this — `--clear-base-image`, the buildpack
+  // retry gcloud asks for — went with that lane; the plumbing is still what
+  // carries any per-container flag to the argv.
+  const argv = deployArgs(request("container", { containerFlags: ["--clear-base-image"] }));
   assert.ok(argv.includes("--clear-base-image"));
 });
 

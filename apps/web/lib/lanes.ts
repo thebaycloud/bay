@@ -19,11 +19,29 @@
 
 import { CLOUD_RUN_DB, type DbAddress } from "./db-address";
 
-/** Which strategy builds and runs a service. Derived by the resolver, never authored. */
-export type Lane = "static" | "container" | "buildpack";
+/**
+ * Which strategy builds and runs a service. Derived by the resolver, never authored.
+ *
+ * Two, and there used to be four. `runner` — one shared prebuilt image per
+ * language, customer code arriving as an encrypted bundle — went first. Then
+ * `buildpack`: `gcloud run deploy --source`, where Google's buildpacks built the
+ * image inside Cloud Run. A node cannot be handed that image, so the lane could
+ * only ever reach Cloud Run, and once an unplaceable deploy became a FAILED
+ * deploy rather than a fallback it led nowhere at all. Thirty-five deploys used
+ * it in the platform's whole history; the last was 5 Aug.
+ *
+ * `container` now means what it says: an image is built for this app and a node
+ * runs it. Whether the author committed the Dockerfile or `generateDockerfile`
+ * wrote one is a fact about the source, not about the lane.
+ *
+ * Historical `deploy_stages` rows still carry "runner" and "buildpack", and the
+ * analytics vocabulary still names them. A lane that no longer runs is not a
+ * lane that never ran.
+ */
+export type Lane = "static" | "container";
 
-/** The lanes that produce a Cloud Run service. `static` publishes to GCS instead. */
-export const SERVICE_LANES: Lane[] = ["container", "buildpack"];
+/** The lane that produces a runnable image. `static` publishes to GCS instead. */
+export const SERVICE_LANES: Lane[] = ["container"];
 
 /**
  * Every lane, as values rather than as a type.

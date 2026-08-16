@@ -22,16 +22,23 @@ const config = (o: unknown) => JSON.stringify(o);
 
 /* ── the lane is derived, never authored ─────────────────────────────────── */
 
-test("the lane follows from whether the repository builds its own image", () => {
+test("everything that is not static is a container, whoever wrote the Dockerfile", () => {
   assert.equal(deriveLane({ language: "static" }), "static");
 
-  // EVERY VERSION IS THE SAME ANSWER NOW, and the rows this test used to have
-  // are the reason that matters. `node` and `python` went to the runner — one
-  // shared prebuilt image per language — while `python3.12` went to buildpacks,
-  // because the runner HAD 3.14 and an app asking for 3.12 got 3.14 and died at
-  // start inside its own code. A pinned version was a demotion away from the
-  // runner; there is no runner left to be demoted from, and an image built for
-  // the version the app asked for is what every one of these gets.
+  // TWO LANES LEFT, and the collapse is what the platform already does.
+  //
+  // `buildpack` meant `gcloud run deploy --source`: Google's buildpacks building
+  // the image inside Cloud Run. The fleet was never able to take that image —
+  // `fleetEligibility` refuses it in those words — and Cloud Run stopped being a
+  // destination when an unplaceable deploy became a failed deploy instead of a
+  // fallback. So the lane led nowhere. Measured before removing it: 35 deploys
+  // in the platform's whole history, the last on 5 Aug.
+  //
+  // What is left is one question — is an image built for this app — and the
+  // answer is yes for every non-static app. An author's Dockerfile and one this
+  // platform generates from `install`/`build`/`start` produce the same thing: an
+  // image a node pulls and runs. They were two lanes only because one of them
+  // was built somewhere else.
   const services: ServiceConfig[] = [
     { language: "node" }, { language: "python" }, { language: "other" },
     { runtime: "python3.14" }, { runtime: "python3.12" },
@@ -39,8 +46,36 @@ test("the lane follows from whether the repository builds its own image", () => 
     { runtime: "java21" }, { runtime: "go1.23" },
   ];
   for (const service of services) {
-    assert.equal(deriveLane(service), "buildpack", `${JSON.stringify(service)} builds its own image`);
+    assert.equal(deriveLane(service), "container", `${JSON.stringify(service)} still gets an image built for it`);
   }
+});
+
+test("the container lane reads the fields a generated Dockerfile is generated FROM", () => {
+  // The half of the collapse that is a bug fix rather than a deletion.
+  //
+  // `install`, `build`, `start` and `runtime` were listed under `buildpack` and
+  // deliberately NOT under `container` — "the Dockerfile's own CMD is the start
+  // command, and a second one in the config would be read by nobody". True of an
+  // author's Dockerfile. False of one `generateDockerfile` writes, which reads
+  // exactly these four to write it.
+  //
+  // And an app with no Dockerfile of its own was already labelled `buildpack`
+  // here while the pipeline went on to generate one and build it as a container
+  // — so the lane has been describing the wrong thing for those apps. With one
+  // lane the label cannot disagree with the build, and refusing `install:` on an
+  // app the platform builds FROM `install:` is no longer possible.
+  // No `dockerfile` on the service: the platform writes one, so these are read.
+  assert.doesNotThrow(() => assertConsumed({
+    ...service(), lane: "container",
+    declared: ["install", "build", "start", "runtime"],
+  }));
+
+  // With the author's own Dockerfile they are NOT read, and saying so is the
+  // rule this collapse had to keep rather than flatten away.
+  assert.throws(() => assertConsumed({
+    ...service(), lane: "container", dockerfile: "Dockerfile",
+    declared: ["start"],
+  }), /does not implement: start/);
 });
 
 test("a committed Dockerfile outranks anything inferred about the language", () => {
@@ -93,7 +128,7 @@ test("a static service that declares secrets is refused — there is nowhere to 
 
 test("a field the lane does implement passes", () => {
   const s = {
-    name: "api", dir: ".", path: "/", lane: "buildpack" as const,
+    name: "api", dir: ".", path: "/", lane: "container" as const,
     release: "python manage.py migrate", start: "gunicorn app:app",
     spaFallback: false,
   processes: [], uses: [], env: {}, buildEnv: {}, secrets: ["K"], envNeeded: [],
@@ -126,7 +161,7 @@ test("a server with no start command is refused before anything is built", () =>
     "supersonic.json": config({ version: 1, services: [{ language: "python" }] }),
   });
   return resolve(dir).then((app) => {
-    assert.throws(() => validate(app, dir), /lane runs a server and this service has no `start` command/);
+    assert.throws(() => validate(app, dir), /no `start` command and no Dockerfile of its own/);
   });
 });
 
@@ -589,19 +624,24 @@ test("the deploy and the CLI answer the lane through one function", () => {
   // and deploy on another with nobody informed. One function is the fix, and it
   // outlives the lanes it was arbitrating between.
   //
-  // The truth table used to have four axes. Two are gone with the runner: RUNNER
-  // itself, and whether the deploying agent supplied a `--run` that outranked a
-  // committed Dockerfile — an override that only made sense while there was a
-  // runner to fall back to. What is left is the question that decides anything:
-  // does the repository build its own image.
+  // The truth table used to have four axes and is now down to none that change
+  // the answer. RUNNER went with the runner; the agent's `--run` override went
+  // with it, since it only made sense while there was a runner to fall back to;
+  // and the Dockerfile axis went when the buildpack lane did. Every non-static
+  // service gets an image built for it and a node to run it on.
+  //
+  // The cases are kept rather than collapsed to one, because what this test
+  // guards is that ONE function answers for both the CLI and the deploy — and a
+  // table that still varies its inputs is what would catch the two drifting
+  // apart again, whatever the answers happen to be today.
   const cases: Array<[string, boolean, string]> = [
-    ["python3.14", false, "buildpack"],
+    ["python3.14", false, "container"],
     ["python3.14", true,  "container"],
-    ["node24",     false, "buildpack"],
+    ["node24",     false, "container"],
     ["go1.23",     true,  "container"],
-    ["go1.23",     false, "buildpack"],
+    ["go1.23",     false, "container"],
     ["",           true,  "container"],
-    ["",           false, "buildpack"],
+    ["",           false, "container"],
   ];
 
   for (const [runtime, dockerfile, expected] of cases) {
@@ -623,7 +663,7 @@ test("a written config answers for the lane it describes, with no deploy overrid
   // is no control-plane state in the answer at all, which is a stronger version
   // of the same guarantee.
   assert.equal(deriveLane({ language: "node" }), laneFor({ language: "node" }));
-  assert.equal(deriveLane({ runtime: "python3.14" }), "buildpack");
+  assert.equal(deriveLane({ runtime: "python3.14" }), "container");
   assert.equal(deriveLane({ runtime: "python3.14", dockerfile: "Dockerfile" }), "container");
 });
 
@@ -664,13 +704,15 @@ test("a pinned runtime gets the version it asked for", () => {
   // that reads the repo's own version files. Now there is no runner to demote
   // from and no version the platform holds, so a pin is simply a version, and
   // every app builds an image for the one it named.
-  assert.equal(laneFor({ runtime: "python3.12" }), "buildpack");
-  assert.equal(laneFor({ runtime: "python3.14" }), "buildpack");
-  // A committed Dockerfile still outranks everything: the author was explicit.
+  assert.equal(laneFor({ runtime: "python3.12" }), "container");
+  assert.equal(laneFor({ runtime: "python3.14" }), "container");
+  // A committed Dockerfile changes who WRITES the image recipe — which is still
+  // a real difference, and `assertConsumed` still turns on it — but it no longer
+  // changes the lane, because both answers now end on a node.
   assert.equal(laneFor({ runtime: "python3.12", dockerfile: "Dockerfile" }), "container");
 });
 
-test("the buildpack lane implements `runtime`, because the builder reads the file", () => {
+test("a service with no Dockerfile of its own implements `runtime`, because generateDockerfile reads it", () => {
   // This used to assert the other half too: `LANE_CONSUMES.runner` listed
   // `runtime` while the runner had exactly one version per language, so
   // `runtime: "python3.12"` was parsed, validated, printed back by `supersonic
@@ -678,12 +720,12 @@ test("the buildpack lane implements `runtime`, because the builder reads the fil
   // catch, committed inside assert-consumed's own table. The lane that made that
   // possible is gone; the half that outlives it is that a lane which DOES honour
   // a field must say so.
-  assert.doesNotThrow(() => assertConsumed({ ...service(), lane: "buildpack", declared: ["runtime"] }));
+  assert.doesNotThrow(() => assertConsumed({ ...service(), lane: "container", declared: ["runtime"] }));
 });
 
 function service(): ResolvedService {
   return {
-    name: "app", dir: ".", path: "/", lane: "buildpack", spaFallback: false,
+    name: "app", dir: ".", path: "/", lane: "container", spaFallback: false,
     uses: [], processes: [], env: {}, buildEnv: {}, secrets: [], envNeeded: [],
     health: { path: "/", expect: 200 }, scale: DEFAULT_SCALE, declared: [],
   } as ResolvedService;
@@ -700,7 +742,7 @@ test("a repo file and a config field are independent signals, and either one pin
   // by construction rather than by the operator. What is asserted here is exactly
   // that: neither signal, in either combination, can move an app off the lane its
   // own image puts it on.
-  assert.equal(laneFor({ runtime: "python3.12", runtimePinned: false }), "buildpack");
-  assert.equal(laneFor({ language: "python", runtimePinned: true }), "buildpack");
-  assert.equal(laneFor({ runtime: "python3.14", runtimePinned: false }), "buildpack");
+  assert.equal(laneFor({ runtime: "python3.12", runtimePinned: false }), "container");
+  assert.equal(laneFor({ language: "python", runtimePinned: true }), "container");
+  assert.equal(laneFor({ runtime: "python3.14", runtimePinned: false }), "container");
 });

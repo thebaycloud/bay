@@ -204,7 +204,18 @@ export function laneFor(i: LaneInputs): Lane {
   // anyway. With no runner to fall back to, overriding it would route the app to
   // the buildpack lane — which builds no image of its own, and therefore now has
   // nowhere to run.
-  return i.dockerfile ? "container" : "buildpack";
+  // ONE ANSWER for everything that is not static, and the inputs above are kept
+  // because callers pass them and `LaneInputs` is a public shape — not because
+  // this still branches on them.
+  //
+  // It used to be `i.dockerfile ? "container" : "buildpack"`, and that was wrong
+  // in a way nothing caught: `dockerfile` here is the AUTHOR's file, so an app
+  // the platform generates a Dockerfile for was labelled `buildpack` and then
+  // built as a container anyway. The label described where the image came from
+  // in a world where that changed where it ran. It no longer does — every image
+  // is built by us and run on a node — so the distinction has nothing left to
+  // decide.
+  return "container";
 }
 
 /** The lane a written config describes, with no deploy-time overrides applied. */
@@ -223,17 +234,31 @@ export function deriveLane(s: ServiceConfig): Lane {
  */
 const LANE_CONSUMES: Record<Lane, ReadonlyArray<keyof ResolvedService>> = {
   static: ["install", "build", "outputDir", "spaFallback", "buildEnv", "env"],
-  // No `runtime`: the runner has exactly one version per language and cannot
-  // honour a declared one. Listing it here is what let `runtime: "python3.12"` be
-  // parsed, validated, printed back by `supersonic check` and silently ignored —
-  // the precise defect assert-consumed exists to catch, committed inside
-  // assert-consumed's own table. An app that pins a version is routed to the
-  // buildpack lane, which does implement it.
-  // No `start`: the Dockerfile's own CMD is the start command, and a second one
-  // in the config would be read by nobody.
+  // No `start`: when the author committed the Dockerfile, its own CMD is the
+  // start command and a second one in the config would be read by nobody. That
+  // is still true, and it is the reason this list is not simply the union of the
+  // two lanes it replaces.
   container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
-  buildpack: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"],
 };
+
+/**
+ * What a container service reads IN ADDITION when the platform writes its
+ * Dockerfile rather than the author.
+ *
+ * This is the half of the old `buildpack` lane that was never about buildpacks.
+ * The lane answered two questions at once — where the image is BUILT, and which
+ * config fields are READ — and only the first one died with Cloud Run.
+ * `generateDockerfile` reads exactly these four to write a Dockerfile, so for an
+ * app that has none of its own they are consumed, and refusing them would mean
+ * rejecting `install:` on an app the platform builds FROM `install:`.
+ *
+ * Keyed off the Dockerfile rather than the lane because that is what it actually
+ * depends on. Conflating the two is how `runtime: "python3.12"` was once parsed,
+ * validated, echoed back by `supersonic check` and silently ignored.
+ */
+const GENERATED_DOCKERFILE_CONSUMES: ReadonlyArray<keyof ResolvedService> = [
+  "install", "build", "start", "runtime",
+];
 
 /** Fields that are always meaningful and so are never "unconsumed". */
 const UNIVERSAL: ReadonlyArray<keyof ResolvedService> = ["name", "dir", "path", "lane", "envNeeded", "declared"];
@@ -246,7 +271,13 @@ const UNIVERSAL: ReadonlyArray<keyof ResolvedService> = ["name", "dir", "path", 
  * rediscovering it from `gcloud exited 1`.
  */
 export function assertConsumed(s: ResolvedService): void {
-  const allowed = new Set<string>([...LANE_CONSUMES[s.lane], ...UNIVERSAL]);
+  const allowed = new Set<string>([
+    ...LANE_CONSUMES[s.lane],
+    ...UNIVERSAL,
+    // An app whose Dockerfile the platform writes reads four more fields, because
+    // they are what it is written FROM. See GENERATED_DOCKERFILE_CONSUMES.
+    ...(s.lane === "container" && !s.dockerfile ? GENERATED_DOCKERFILE_CONSUMES : []),
+  ]);
   const ignored = s.declared.filter((f) => !allowed.has(f as string));
   if (!ignored.length) return;
   throw new ResolveError(
@@ -461,9 +492,17 @@ export function validate(app: ResolvedApp, dir: string): void {
       if (!s.build && s.outputDir && !existsSync(join(dir, s.outputDir))) {
         problems.push(`${where}: outputDir "${s.outputDir}" does not exist and no build command would create it`);
       }
-    } else if (s.lane !== "container" && !s.start && !s.processes.length) {
-      // Not asked of the container lane: its Dockerfile carries its own CMD, and
-      // that is the whole reason an author committed one.
+    } else if (!s.dockerfile && !s.start && !s.processes.length) {
+      // Asked of an app whose Dockerfile the PLATFORM writes, because `start`
+      // becomes its CMD and there is nothing else to put there.
+      //
+      // Not asked when the author committed a Dockerfile: it carries its own CMD,
+      // and that is the whole reason they committed one. This used to read
+      // `s.lane !== "container"`, which meant the same thing only while "has its
+      // own Dockerfile" and "is on the container lane" were the same fact. They
+      // stopped being the same fact when the buildpack lane was removed and every
+      // non-static app became a container — and a condition that survives on a
+      // coincidence stops checking anything the moment the coincidence does.
       //
       // Nor of a service that declared its `processes`. `start` is the older
       // spelling of exactly one shape — one HTTP server on one port — and
@@ -472,7 +511,7 @@ export function validate(app: ResolvedApp, dir: string): void {
       // exists to stop. What the processes ARE is checked by lib/processes.ts,
       // which knows what each primitive accepts.
       problems.push(
-        `${where}: the ${s.lane} lane runs a server and this service has no \`start\` command\n` +
+        `${where}: this service has no \`start\` command and no Dockerfile of its own\n` +
         `  If this app is a worker, a bot or a scheduled job, declare "processes" instead.`,
       );
     }

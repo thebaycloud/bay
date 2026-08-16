@@ -38,7 +38,7 @@ function job(lane: Lane, over: Partial<ReleaseJob> = {}): ReleaseJob {
     secrets: SECRETS,
     scale: DEFAULT_SCALE,
     cloudsql: CONN,
-    ...(lane === "buildpack" ? { source: "/tmp/src" } : { image: "img:latest" }),
+    image: "img:latest",
     ...over,
   };
 }
@@ -116,14 +116,11 @@ for (const lane of SERVICE_LANES) {
   test(`${lane} release names its code the way that lane builds`, () => {
     // Without a database, so the proxy's own --image cannot stand in for the
     // release container's.
+    // One branch left: the `--source` half went with the buildpack lane, where
+    // Cloud Run built the image and named it afterwards.
     const argv = releaseJobArgs(job(lane, { cloudsql: null }));
-    if (lane === "buildpack") {
-      assert.ok(argv.includes("--source"));
-      assert.ok(!argv.includes("--image"));
-    } else {
-      assert.equal(argv[argv.indexOf("--image") + 1], "img:latest");
-      assert.ok(!argv.includes("--source"));
-    }
+    assert.equal(argv[argv.indexOf("--image") + 1], "img:latest");
+    assert.ok(!argv.includes("--source"));
   });
 
   test(`${lane} release is deployed as a job, under a name a redeploy reuses`, () => {

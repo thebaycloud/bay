@@ -105,7 +105,8 @@ test("what the fleet cannot serve is named, and the deploy fails saying which", 
   // not less. The `runner` row went with the lane itself.
   const cases: Array<[Partial<typeof eligible>, RegExp]> = [
     [{ staticServe: true }, /static/i],
-    [{ lane: "buildpack" }, /buildpack/i],
+    // The `buildpack` row went with the lane, the same way the `runner` row went
+    // with the runner. What it was catching is the `image: ""` row below.
     [{ image: "" }, /image/i],
     // A cron-only app used to sit here and no longer does. The reason it was
     // refused — a cron sandbox is never in the agent's live set — was a fact
@@ -200,53 +201,29 @@ test("an app whose build produced no image is not placeable", () => {
   assert.match(r.reason!, /image/i);
 });
 
-test("a buildpack app is not placeable — its image is made by the deploy it is skipping", () => {
-  // This lane used to be allowed here, and was kept off the fleet only by
-  // `image: ""` — the pipeline has no name for a buildpack image at decision
-  // time, because `run deploy --source` builds it and Cloud Run names it. That
-  // is an accident, not a decision: give the lane a deterministic tag and it
-  // becomes eligible again, and what it would place is an image no build in
-  // this deploy produced. The fleet branch runs no `--source`, so there is
-  // nothing to hand a node, and the refusal now says which.
-  const r = fleetEligibility({ ...eligible, lane: "buildpack" });
+test("an app whose image cannot be named is not placeable, whatever produced it", () => {
+  // WAS three tests about the buildpack lane: that it was refused, that it was
+  // refused even with an image name, and that a buildpack-labelled app WITH a
+  // Dockerfile was allowed anyway. The lane is gone (lib/lanes.ts), and with it
+  // the label those three were disagreeing about.
+  //
+  // What they were really guarding survives, and is simpler than the lane was:
+  // a node pulls an image by name, so a deploy that produced no nameable image
+  // has nothing to place. `gcloud run deploy --source` was one way to reach that
+  // state — Cloud Run built it and named the result, after the decision — but it
+  // was never the only one, and the rule never needed to know which.
+  const r = fleetEligibility({ ...eligible, image: "" });
   assert.equal(r.ok, false);
-  assert.match(r.reason!, /buildpack/i);
-  // …and it stays refused even when an image name IS supplied, which is the
-  // whole point of naming it rather than leaning on the empty-image check.
-  assert.equal(fleetEligibility({ ...eligible, lane: "buildpack", image: "img" }).ok, false);
+  assert.match(r.reason!, /no image to place/i);
+
+  // And a real digest is placeable, which is the other half: the refusal is
+  // about the image, not about how the app was described.
+  assert.equal(
+    fleetEligibility({ ...eligible, image: "us-central1-docker.pkg.dev/p/r/x@sha256:abc" }).ok,
+    true,
+  );
 });
 
-test("a buildpack-lane app that has a Dockerfile is placeable", () => {
-  // The lane is fixed before the pipeline writes the SPA and Next.js fallback
-  // Dockerfiles, so an app can carry lane "buildpack" and still build a normal
-  // image with a resolvable digest. Refusing it reads the label instead of the
-  // fact next to it.
-  const got = fleetEligibility({
-    lane: "buildpack",
-    image: "us-central1-docker.pkg.dev/p/r/x@sha256:abc",
-    staticServe: false,
-    serviceless: false,
-    hasDockerfile: true,
-    workers: 0,
-  });
-  assert.equal(got.ok, true, `refused a real image: ${got.ok ? "" : got.reason}`);
-});
-
-test("a buildpack-lane app with no Dockerfile is still refused, and says why", () => {
-  // This is the genuine case: `gcloud run deploy --source` builds it and Cloud
-  // Run names the result, so at decision time there is no reference to hand a
-  // node.
-  const got = fleetEligibility({
-    lane: "buildpack",
-    image: "",
-    staticServe: false,
-    serviceless: false,
-    hasDockerfile: false,
-    workers: 0,
-  });
-  assert.equal(got.ok, false);
-  if (!got.ok) assert.match(got.reason!, /buildpack|source/i);
-});
 
 test("a Dockerfile does not rescue the lanes refused for other reasons", () => {
   // Each of these is refused for something a Dockerfile does not change: a
