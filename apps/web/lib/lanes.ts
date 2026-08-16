@@ -19,11 +19,29 @@
 
 import { CLOUD_RUN_DB, type DbAddress } from "./db-address";
 
-/** Which strategy builds and runs a service. Derived by the resolver, never authored. */
-export type Lane = "static" | "container" | "buildpack";
+/**
+ * Which strategy builds and runs a service. Derived by the resolver, never authored.
+ *
+ * Two, and there used to be four. `runner` — one shared prebuilt image per
+ * language, customer code arriving as an encrypted bundle — went first. Then
+ * `buildpack`: `gcloud run deploy --source`, where Google's buildpacks built the
+ * image inside Cloud Run. A node cannot be handed that image, so the lane could
+ * only ever reach Cloud Run, and once an unplaceable deploy became a FAILED
+ * deploy rather than a fallback it led nowhere at all. Thirty-five deploys used
+ * it in the platform's whole history; the last was 5 Aug.
+ *
+ * `container` now means what it says: an image is built for this app and a node
+ * runs it. Whether the author committed the Dockerfile or `generateDockerfile`
+ * wrote one is a fact about the source, not about the lane.
+ *
+ * Historical `deploy_stages` rows still carry "runner" and "buildpack", and the
+ * analytics vocabulary still names them. A lane that no longer runs is not a
+ * lane that never ran.
+ */
+export type Lane = "static" | "container";
 
-/** The lanes that produce a Cloud Run service. `static` publishes to GCS instead. */
-export const SERVICE_LANES: Lane[] = ["container", "buildpack"];
+/** The lane that produces a runnable image. `static` publishes to GCS instead. */
+export const SERVICE_LANES: Lane[] = ["container"];
 
 /**
  * Every lane, as values rather than as a type.
@@ -376,63 +394,3 @@ export function needsServiceRecreate(d: { cloudsql?: string | null; existingScop
   return Boolean(d.cloudsql) && d.existingScoped === false;
 }
 
-export function deployArgs(d: LaneDeploy): string[] {
-  if (d.lane === "static") {
-    throw new Error("the static lane publishes to GCS and deploys no Cloud Run service");
-  }
-  if (!d.image && !d.source) {
-    throw new Error(`lane "${d.lane}" needs an image or a source directory`);
-  }
-  // A sidecar leaves no choice — Cloud Run requires the scoped shape once more
-  // than one container is involved, so an app with a proxy beside it must migrate
-  // whatever it looked like before. Otherwise the LIVE service decides, because
-  // the shape belongs to it: a service already carrying named containers keeps
-  // them, one carrying an unnamed container keeps that, and only a service that
-  // does not exist yet takes the lane's default. That is the difference between
-  // "whatever this lane already did" — true only while a service never changes
-  // lane — and "whatever this service already did", which survives a repo gaining
-  // a `supersonic.json` that moves it from buildpack to runner.
-  // `?? d.lane === "runner"` was the third arm: the runner lane always named its
-  // container, so a service it had deployed was known-scoped without a read. The
-  // lane is gone, and with no live shape to read the answer is the database.
-  const scoped = Boolean(d.cloudsql) || (d.existingScoped ?? false);
-
-  const buildSource = d.image ? ["--image", d.image] : ["--source", d.source!];
-  // A multi-container service has no other way to say which container answers
-  // requests, so Cloud Run makes the port the marker and gcloud refuses the
-  // whole revision without one:
-  //
-  //   ERROR: (gcloud.run.deploy) Invalid value for [--container]:
-  //   Exactly one container must specify --port or --use-http2
-  //
-  // Which is what a container-lane app WITH a database got, every time, from the
-  // moment Phase 0 gave that combination the sidecar it had been missing. The
-  // parity fix moved it from "deploys with an empty environment" to "does not
-  // deploy at all", and nothing caught it because the assertions asked what the
-  // argv contained and never what gcloud would do with it.
-  //
-  // 8080 rather than anything discovered from the image: it is Cloud Run's own
-  // default, so this is the port the same app already gets on the flat shape.
-  // The invariant that matters is that attaching a sidecar does not move the
-  // app's port — a container that only ever bound $PORT is told 8080 either way.
-  const ingressPort = d.port ?? (scoped ? DEFAULT_PORT : null);
-  const port = ingressPort === null ? [] : ["--port", String(ingressPort)];
-  const container = [
-    ...buildSource,
-    ...port,
-    ...scaleContainerFlags(d.scale),
-    ...d.appFlags,
-    ...(d.containerFlags ?? []),
-  ];
-
-  const head = ["run", "deploy", d.service, ...d.serviceFlags, ...scaleServiceFlags(d.scale)];
-
-  if (!scoped) return [...head, ...container];
-
-  return [
-    ...head,
-    "--container", "app",
-    ...container,
-    ...(d.cloudsql ? ["--depends-on", "cloudsql-proxy", ...dbContainerArgs(d.cloudsql)] : []),
-  ];
-}

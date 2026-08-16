@@ -67,9 +67,26 @@ export type DeployCapability = "exec" | "rollback" | "domainMapping" | "autoRoll
  * the module doc above; deploy/describe/exec staying out of here is still
  * true of all of them.
  */
+/**
+ * What a target IS, which is no longer the same thing as what `apps.runtime`
+ * stores.
+ *
+ * The column's values are "cloudrun" and "fleet", and `kind` was that column's
+ * type because the two questions had one answer. They stopped having one: no app
+ * deploys to a per-app Cloud Run service, and the only apps still reaching the
+ * non-fleet target are STATIC — files published to a bucket and served by one
+ * shared server. The capability table below has said so in a comment since
+ * rollback moved; this is the name catching up.
+ *
+ * `apps.runtime` keeps its spelling. Renaming a persisted value is a migration,
+ * and no row holds "cloudrun" today anyway — `deployTargetFor` maps the legacy
+ * value here so the column and the concept can differ without anybody guessing
+ * which one they are holding.
+ */
+export type TargetKind = "static" | "fleet";
+
 export interface DeployTarget {
-  /** "cloudrun" | "fleet" — the value already stored in `apps.runtime`. */
-  readonly kind: Runtime;
+  readonly kind: TargetKind;
 
   /** Where this target's apps reach Postgres. See lib/db-address.ts. */
   readonly databaseAddress: DbAddress;
@@ -103,13 +120,13 @@ export interface DeployTarget {
   supports(capability: DeployCapability): boolean;
 }
 
-const CAPABILITIES: Record<Runtime, ReadonlySet<DeployCapability>> = {
+const CAPABILITIES: Record<TargetKind, ReadonlySet<DeployCapability>> = {
   // `rollback` is GONE from this one, and that is the same change as adding it
   // below. Cloud Run's rollback was `gcloud run revisions list` and a traffic
   // split back to the last Ready one; the container lane it belonged to is
   // deleted, and the only apps still on this target are static — files in a
   // bucket, which have no revisions to walk. What is left here guards static.
-  cloudrun: new Set<DeployCapability>(["exec", "domainMapping", "autoRollbackOnFailure"]),
+  static: new Set<DeployCapability>(["exec", "domainMapping", "autoRollbackOnFailure"]),
   // `rollback` is here now, and it is the first entry this set has ever had.
   //
   // It was empty with the note "nothing on this list works for a fleet app
@@ -129,13 +146,19 @@ const CAPABILITIES: Record<Runtime, ReadonlySet<DeployCapability>> = {
   fleet: new Set<DeployCapability>(["rollback"]),
 };
 
-/** cloudrun: unchanged from before this module existed. */
-export const CLOUD_RUN_TARGET: DeployTarget = {
-  kind: "cloudrun",
+/**
+ * static: files in a bucket, served by one shared Cloud Run service.
+ *
+ * `databaseAddress` is vestigial here and deliberately left rather than made
+ * optional — a static app declares no database, so nothing reads it, and a field
+ * every target answers is easier to reason about than one two of them do.
+ */
+export const STATIC_TARGET: DeployTarget = {
+  kind: "static",
   databaseAddress: CLOUD_RUN_DB,
   ownsProcessLifecycle: false,
   hasReleaseStage: true,
-  supports: (capability) => CAPABILITIES.cloudrun.has(capability),
+  supports: (capability) => CAPABILITIES.static.has(capability),
 };
 
 /** fleet: the node owns everything Cloud Run's per-app primitives used to. */
@@ -147,9 +170,15 @@ export const FLEET_TARGET: DeployTarget = {
   supports: (capability) => CAPABILITIES.fleet.has(capability),
 };
 
-/** The target for a runtime value already in hand — e.g. from `apps.runtime`. */
-export function deployTargetFor(kind: Runtime): DeployTarget {
-  return kind === "fleet" ? FLEET_TARGET : CLOUD_RUN_TARGET;
+/**
+ * The target for a runtime value already in hand — e.g. from `apps.runtime`.
+ *
+ * Takes the COLUMN's vocabulary and answers in the TARGET's, which is the whole
+ * reason it is a function and not a lookup: `"cloudrun"` is a value the column
+ * may still hold and no longer a place anything deploys to.
+ */
+export function deployTargetFor(runtime: Runtime): DeployTarget {
+  return runtime === "fleet" ? FLEET_TARGET : STATIC_TARGET;
 }
 
 /**

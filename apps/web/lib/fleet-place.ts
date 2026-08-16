@@ -211,36 +211,14 @@ export function fleetEligibility(a: {
   // WAS: the runner lane — one shared prebuilt runtime whose customer code
   // arrived as an encrypted bundle at start, so a node handed that image would
   // start the runner and never the app. It is deleted, and this refusal with it.
-  if (a.lane === "buildpack" && !a.hasDockerfile) {
-    // A buildpack image is made BY the deploy: `gcloud run deploy --source`
-    // runs the builder and Cloud Run names what comes out, so at decision time
-    // there is no reference to hand a node. The fleet has no `--source` of its
-    // own to run.
-    //
-    // Only when there is no Dockerfile, and that qualifier is the whole point.
-    // The lane is fixed before the pipeline writes its generated, SPA and
-    // Next.js fallback Dockerfiles, so an app can reach here labelled
-    // "buildpack" having built a perfectly ordinary image with a resolvable
-    // digest. `useDockerBuild` in the pipeline asks this same question at build
-    // time; this asks it at decision time, which is when it is needed.
-    //
-    // The pipeline has a second builder — `builds submit --pack`, guarded by
-    // `serviceless` — and it is deliberately not borrowed for this. It writes
-    // no cloudbuild.yaml, so it has no logging destination, and Cloud Build
-    // REFUSES a user-specified build account without one: it is the only build
-    // in the pipeline that still runs as the default account, and using it here
-    // would move every buildpack app off the scoped build identity as a side
-    // effect of a fleet canary. It would also mean naming the image before
-    // anything built it, which is the exact mistake — a tag is not evidence —
-    // that the fleet branch exists to stop making.
-    //
-    // Until then this lane is named rather than accidentally excluded. It was
-    // already excluded, by `!a.image` below, because the pipeline has no name
-    // for a buildpack image at decision time — but that is a refusal that
-    // disappears the moment somebody gives the lane a deterministic tag, and
-    // what it would leave behind is a node running an image nobody built.
-    return { ok: false, reason: "a buildpack image is made by the deploy itself, so there is none to hand a node" };
-  }
+  // WAS: the buildpack refusal. `gcloud run deploy --source` ran the builder and
+  // Cloud Run named what came out, so at decision time there was no reference to
+  // hand a node — the fleet has no `--source` of its own to run. The lane is
+  // deleted (see lib/lanes.ts), and this refusal with it.
+  //
+  // `!a.image` below already covers what it covered, and covers it by the fact
+  // that matters: an image nobody can name is an image no node can pull,
+  // whatever produced it.
   if (!a.image) return { ok: false, reason: "this deploy produced no image to place" };
   return { ok: true };
 }

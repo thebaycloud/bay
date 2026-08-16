@@ -97,7 +97,13 @@ export const LANE_KNOWN_STAGES = [
   //
   // Rows already written under it are untouched: this list governs what may be
   // WRITTEN, and every query names its stages in SQL.
-  "unpack", "build", "upload", "release", "deploy", "verify", "processes", "repair-agent", "fleet",
+  // `processes` went the same way as `bundle`, one stage later. It timed
+  // `deployProcesses`, which deployed an app's workers and crons to Cloud Run as
+  // worker pools and jobs — and by the end deployed nothing at all, passing an
+  // empty list so the orphan sweep would DELETE what an app still had there. The
+  // node owns those processes now and there is nothing left on Cloud Run to
+  // sweep, so the emitter is gone and the name goes with it.
+  "unpack", "build", "upload", "release", "deploy", "verify", "repair-agent", "fleet",
   "fleet-pull", "fleet-boot",
 ] as const;
 

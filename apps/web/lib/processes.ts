@@ -399,3 +399,21 @@ export function resolveProcesses(configs: Record<string, ProcessConfig>): Resolv
 
   return [...webs, ...resolved.filter((p) => p.kind !== "web")];
 }
+
+/**
+ * Whether this app has a `web` process — and therefore a Cloud Run service.
+ *
+ * The distinction a worker-only app turns on. A Telegram bot is a worker and
+ * nothing else: no HTTP, no port, no URL, no domain mapping, nothing to probe. If
+ * the pipeline deploys a service for it anyway, the bot is back to pretending to
+ * be a web server, which is the defect this whole plan exists to remove.
+ *
+ * The `declared.length` guard is what keeps this from breaking every app that
+ * exists. An app that declares NO processes is not a worker-only app — it is an
+ * ordinary app whose `start` command is its web process under an older spelling,
+ * and it must take exactly the path it took yesterday. Only an app that said what
+ * its processes are, and did not say `web`, is serviceless.
+ */
+export function isServiceless(declared: ResolvedProcess[]): boolean {
+  return declared.length > 0 && !declared.some((p) => p.kind === "web");
+}

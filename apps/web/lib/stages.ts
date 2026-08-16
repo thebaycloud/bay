@@ -27,10 +27,14 @@ const DB = "supersonic_platform";
  */
 /**
  * What the `deploy_stages.lane` COLUMN may hold — which is a superset of what a
- * deploy may write. `"runner"` is the difference: that lane is deleted, so
- * nothing writes it, and the table is full of rows from when something did.
+ * deploy may write. `"runner"` and `"buildpack"` are the difference: both lanes
+ * are deleted, so nothing writes them, and the table is full of rows from when
+ * something did. 207 rows say `runner`, 35 say `buildpack`.
+ *
+ * A deleted lane is not a lane that never ran, and the measurement history is
+ * the one thing the platform has that cannot be regenerated.
  */
-export type StageLane = Lane | "unknown" | "runner";
+export type StageLane = Lane | "unknown" | "runner" | "buildpack";
 
 /**
  * `StageLane` as values, and the single source for what the column may hold.
@@ -40,14 +44,15 @@ export type StageLane = Lane | "unknown" | "runner";
  * actual fix: the reason two vocabularies could coexist is that nothing anywhere
  * asserted they were the same set.
  *
- * `runner` IS NOT IN `ALL_LANES` AND IS STILL HERE, which is the one place these
- * two lists are allowed to differ. `ALL_LANES` is what a deploy may WRITE, and no
- * deploy can write `runner` any more — the lane is deleted. This list is what the
- * COLUMN may hold, and `deploy_stages` is full of rows from when it could. Drop
- * the value here and the CHECK in db/012 — phase three, still unapplied — would
- * be written against a vocabulary that its own table already violates.
+ * `runner` AND `buildpack` ARE NOT IN `ALL_LANES` AND ARE STILL HERE, which is
+ * the one place these two lists are allowed to differ. `ALL_LANES` is what a
+ * deploy may WRITE, and no deploy can write either any more — both lanes are
+ * deleted. This list is what the COLUMN may hold, and `deploy_stages` is full of
+ * rows from when it could. Drop a value here and the CHECK in db/012 — phase
+ * three, still unapplied — would be written against a vocabulary that its own
+ * table already violates.
  */
-export const STAGE_LANES: StageLane[] = ["unknown", ...ALL_LANES, "runner"];
+export const STAGE_LANES: StageLane[] = ["unknown", ...ALL_LANES, "buildpack", "runner"];
 export type Outcome = "ok" | "failed" | "skipped";
 
 /**
