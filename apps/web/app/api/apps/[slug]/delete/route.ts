@@ -10,6 +10,7 @@ import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { unplaceApp } from "@/lib/fleet";
 import { supersedeRunsFor } from "@/lib/deploy-runs";
+import { deleteWebsite } from "@/lib/umami";
 
 export async function POST(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -77,6 +78,14 @@ export async function POST(_req: Request, { params }: { params: { slug: string }
     // clear, and a hiccup here must not turn "delete my app" into a 500 for
     // everything else this call already did.
     await unplaceApp(slug).catch(() => {});
+    // And the site its visitors were counted in. This is other people's users'
+    // data, so it goes when the app goes rather than sitting in umami forever
+    // under a slug that has been re-issued to somebody else — five-character
+    // slugs get reused, and inheriting a stranger's visitor history is the
+    // worst version of this feature. Read from the row fetched above, because
+    // by now the row is gone. Best effort, like every teardown below the
+    // delete itself.
+    if (app?.umami_website_id) await deleteWebsite(app.umami_website_id).catch(() => {});
     return Response.json({ ok: true });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

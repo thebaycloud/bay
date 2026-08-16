@@ -1,0 +1,85 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { getAppBySlug, setAnalyticsEnabled } from "@/lib/apps";
+import { currentUserId } from "@/lib/session";
+
+/**
+ * The owner's switch, and nothing else.
+ *
+ * This is other people's users' data. An owner who does not want their visitors
+ * counted has to be able to say so from the same surface that shows them the
+ * count — not by filing a ticket, and not by deleting the app. Off stops the
+ * injection and stops the reads, both, from the next request onward; what was
+ * already collected stays until the app is deleted, which is when its umami
+ * site is deleted too.
+ *
+ * Called from the panel, which is injected into `<slug>.supersonic.cv` and so
+ * is a different origin than this one — the same shape as the share route, and
+ * the same allowlist of our own subdomains.
+ */
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("origin") ?? "";
+  try {
+    const h = new URL(origin).hostname;
+    if (h === "supersonic.cv" || h.endsWith(".supersonic.cv")) {
+      return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        Vary: "Origin",
+      };
+    }
+  } catch { /* no/invalid origin — same-origin call, no CORS headers needed */ }
+  return {};
+}
+
+export async function OPTIONS(req: Request) {
+  return new Response(null, { status: 204, headers: corsHeaders(req) });
+}
+
+async function ownedApp(slug: string) {
+  const uid = await currentUserId();
+  if (!uid) return null;
+  const app = await getAppBySlug(slug);
+  if (!app || app.owner_id !== uid) return null;
+  return app;
+}
+
+export async function GET(req: Request, { params }: { params: { slug: string } }) {
+  const cors = corsHeaders(req);
+  const app = await ownedApp(decodeURIComponent(params.slug));
+  if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
+  return Response.json(
+    {
+      // Two facts, not one. "Off" is the owner's decision; "no site" is ours —
+      // an app created before analytics existed, or one whose provisioning call
+      // did not land. The panel says different things about them and cannot
+      // work out which is which from a single boolean.
+      enabled: app.analytics_enabled !== false,
+      provisioned: Boolean(app.umami_website_id),
+    },
+    { headers: cors }
+  );
+}
+
+export async function POST(req: Request, { params }: { params: { slug: string } }) {
+  const cors = corsHeaders(req);
+  const slug = decodeURIComponent(params.slug);
+  const app = await ownedApp(slug);
+  if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
+
+  const body = await req.json().catch(() => ({}));
+  if (typeof body.enabled !== "boolean") {
+    return Response.json({ error: "enabled must be true or false" }, { status: 400, headers: cors });
+  }
+  await setAnalyticsEnabled(slug, body.enabled);
+  // The edge caches app rows for thirty seconds, so the switch takes effect
+  // within that rather than instantly. Said here rather than discovered by an
+  // owner who flipped it and reloaded twice.
+  return Response.json(
+    { enabled: body.enabled, provisioned: Boolean(app.umami_website_id), settlesInSeconds: 30 },
+    { headers: cors }
+  );
+}

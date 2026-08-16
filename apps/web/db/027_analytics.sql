@@ -1,0 +1,26 @@
+-- Which umami site an app's visitors are counted in, and whether they are.
+--
+-- The panel's Analytics half answers "did anyone open it" — visitors, pages,
+-- where they came from — which the edge cannot answer at all. The edge counts
+-- REQUESTS, from one process's memory, since it last started; a person who
+-- loads a page with eleven assets on it is eleven of those. That is a fine
+-- answer to "is this app being hit" and the wrong answer to "did anyone read
+-- it", and no amount of arithmetic turns one into the other.
+--
+-- So a second source, and one row here per app to point at it.
+--
+-- `umami_website_id` is umami's own id for this app's site, which it mints. It
+-- is null for an app created before this, for an app whose provisioning call
+-- failed, and for an app created while umami was down — all three of which must
+-- keep deploying normally. Analytics that can stop a deploy is a much worse
+-- thing than an app with no analytics, so every reader treats null as "no
+-- analytics for this app" and nothing else.
+--
+-- `analytics_enabled` is the owner's switch. DEFAULT true is on purpose and is
+-- the same reasoning has_web used: this migration cannot know anything about an
+-- existing row, and the safe default is the behaviour the product describes.
+-- Turning it off stops the injection AND the reads; it does not delete what was
+-- already collected, because the app's own owner is the only one who can ask
+-- for that and deleting the app is how they do it.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS umami_website_id uuid;
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS analytics_enabled boolean NOT NULL DEFAULT true;

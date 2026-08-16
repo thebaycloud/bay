@@ -7,6 +7,7 @@ function row(slug: string, over: Partial<AppRow> = {}): AppRow {
     id: "id-" + slug, slug, workspace_id: "w", owner_id: "o", owner_email: "a@b.c",
     owner_plan: null, owner_status: null, run_url: "https://" + slug + ".run.app",
     visibility: "public", status: "live", deploy: null, routes: null, has_web: true,
+    umami_website_id: null, analytics_enabled: true,
     ...over,
   };
 }

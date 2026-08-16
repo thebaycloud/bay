@@ -1,4 +1,5 @@
 import { getPool } from "./db";
+import { ensureWebsite, umamiConfigured } from "./umami";
 
 const DB = "supersonic_platform";
 
@@ -12,6 +13,16 @@ export interface AppRecord {
   run_url: string | null;
   visibility: Visibility;
   status: "deploying" | "live" | "failed";
+  /**
+   * This app's site inside the shared umami instance, when it has one.
+   *
+   * Optional on the type as well as nullable in the column: `getAppBySlug` is a
+   * `SELECT *`, so on a database that has not run 027 yet the key is simply
+   * absent, and a type that promised `string | null` would be lying to every
+   * reader in exactly the window where being wrong is most expensive.
+   */
+  umami_website_id?: string | null;
+  analytics_enabled?: boolean;
 }
 
 /** Insert (or reclaim) the row for a slug. Called BEFORE the deploy runs. */
@@ -25,7 +36,45 @@ export async function createAppRecord(o: {
      RETURNING id`,
     [o.slug, o.workspaceId, o.ownerId]
   );
+  await provisionAnalytics(o.slug);
   return r.rows[0].id;
+}
+
+/**
+ * Give this app a site to be counted in, once.
+ *
+ * Only ever on the way in, and only for an app that has no id yet: this runs on
+ * every deploy, not only the first, and umami has no unique constraint that
+ * would stop a second site being minted for the same domain. Reading the column
+ * first means a redeploy costs one indexed lookup and no network call at all.
+ *
+ * `try` around the whole thing rather than around each call, and a `catch` that
+ * only logs, because the caller is the first step of a deploy. This is the one
+ * property this function must have: analytics can be broken, unreachable, or
+ * not configured, and the app still ships. Note also the missing-column branch —
+ * the control plane deploys ahead of migrations, and a deploy must not start
+ * failing in the window between the two.
+ */
+async function provisionAnalytics(slug: string): Promise<void> {
+  if (!umamiConfigured()) return;
+  try {
+    const cur = await getPool(DB).query(
+      `SELECT umami_website_id FROM apps WHERE slug = $1`,
+      [slug]
+    );
+    if (cur.rows[0]?.umami_website_id) return;
+    const id = await ensureWebsite(slug);
+    if (!id) return;
+    await getPool(DB).query(
+      `UPDATE apps SET umami_website_id = $2 WHERE slug = $1 AND umami_website_id IS NULL`,
+      [slug, id]
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/column .*umami_website_id.* does not exist/i.test(msg)) {
+      console.error(`analytics: no site for ${slug} —`, msg);
+    }
+  }
 }
 
 export async function markAppLive(
@@ -218,6 +267,11 @@ export async function markAppFailed(slug: string): Promise<void> {
 export async function getAppBySlug(slug: string): Promise<AppRecord | null> {
   const r = await getPool(DB).query(`SELECT * FROM apps WHERE slug = $1`, [slug]);
   return r.rows[0] ?? null;
+}
+
+/** The owner's analytics switch. Off stops the injection and the reads, both. */
+export async function setAnalyticsEnabled(slug: string, enabled: boolean): Promise<void> {
+  await getPool(DB).query(`UPDATE apps SET analytics_enabled = $2 WHERE slug = $1`, [slug, enabled]);
 }
 
 export async function setVisibility(slug: string, v: Visibility): Promise<void> {

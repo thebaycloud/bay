@@ -1,5 +1,6 @@
 import { xray as liveXray, type Xray } from "./xray";
 import { listBuilds as listBuildsDb, type Tick } from "./builds";
+import { audienceFor, type Audience, type AudienceWindow } from "./analytics";
 
 /**
  * Everything the X-ray shows about one app at one moment, as a single thing.
@@ -33,11 +34,20 @@ export interface Reading {
   live: Xray;
   builds: Tick[];
   /**
-   * Two windows, not one. The live half lives in this process's memory and dies
-   * with a release; builds are durable. Collapsing them into one `since` would
-   * lie about whichever half it did not describe.
+   * People, over the last day, or null when there are none to report.
+   *
+   * Null covers all three of "not read", "could not be read" and "switched
+   * off", which is why it is never rendered without the window beside it. The
+   * same shape and the same rule as `builds`.
    */
-  since: { live: number; builds: BuildsWindow };
+  audience: Audience | null;
+  /**
+   * Three windows, not one. The live half lives in this process's memory and
+   * dies with a release; builds are durable; the audience half comes from a
+   * service that can be off or unreachable independently of both. Collapsing
+   * them into one `since` would lie about whichever half it did not describe.
+   */
+  since: { live: number; builds: BuildsWindow; audience: AudienceWindow };
 }
 
 export interface ReadingDeps {
@@ -45,24 +55,50 @@ export interface ReadingDeps {
   /** The builds, or null when they could not be read — see BuildsWindow. */
   listBuilds: (slug: string) => Promise<Tick[] | null>;
   door: (slug: string) => Promise<{ door: string; open: boolean }>;
+  /**
+   * The audience, or null when it could not be read.
+   *
+   * Absent — not a function that returns null, but no function at all — is how
+   * a caller says analytics is OFF for this app: no site, or the owner turned
+   * it off. The two states are different sentences in the panel and this is the
+   * seam that keeps them apart at the source rather than guessing later.
+   */
+  audience?: () => Promise<Audience | null>;
 }
 
 export async function assembleReading(slug: string, deps: ReadingDeps): Promise<Reading> {
   const live = deps.xray(slug);
-  const [builds, d] = await Promise.all([deps.listBuilds(slug), deps.door(slug)]);
+  const [builds, d, audience] = await Promise.all([
+    deps.listBuilds(slug),
+    deps.door(slug),
+    deps.audience ? deps.audience() : Promise.resolve(undefined),
+  ]);
   return {
     slug, door: d.door, open: d.open, live,
     // Empty either way; the window beside it is what says which emptiness this
     // is. The live half already degrades honestly — "since this proxy started" —
     // and this is the same promise kept by the half that outlives a release.
     builds: builds ?? [],
-    since: { live: live.since, builds: builds ? "durable" : "unreadable" },
+    audience: audience ?? null,
+    since: {
+      live: live.since,
+      builds: builds ? "durable" : "unreadable",
+      // `undefined` means nobody was asked; `null` means somebody was asked and
+      // could not answer. Those are the two different emptinesses this field
+      // exists to tell apart, and `??` would erase the distinction.
+      audience: audience === undefined ? "off" : audience === null ? "unreadable" : "read",
+    },
   };
 }
 
 /** The real dependencies, for callers that are not tests. */
-export const liveDeps = (doorOf: ReadingDeps["door"]): ReadingDeps => ({
+export const liveDeps = (
+  doorOf: ReadingDeps["door"],
+  /** This app's umami site, when it has one and the owner has left it on. */
+  websiteId?: string | null,
+): ReadingDeps => ({
   xray: liveXray,
   listBuilds: listBuildsDb,
   door: doorOf,
+  audience: websiteId ? () => audienceFor(websiteId) : undefined,
 });
