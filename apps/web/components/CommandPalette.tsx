@@ -1,6 +1,7 @@
 "use client";
 
 import { Search } from "lucide-react";
+import { xrayUrl } from "@/lib/app-urls";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -48,7 +49,8 @@ export function CommandPalette({ apps }: { apps: App[] }) {
       id: `app:${a.slug}`,
       label: a.name || a.slug,
       hint: `${a.slug}.supersonic.cv`,
-      href: `/apps/${a.slug}`,
+      // The app's own X-ray, not the platform's page about it.
+      href: xrayUrl(a.slug),
     })),
     [apps],
   );
@@ -85,6 +87,15 @@ export function CommandPalette({ apps }: { apps: App[] }) {
   function go(item?: CommandItem) {
     if (!item) return;
     setOpen(false);
+    // An app's X-ray is on the app's OWN origin, which the client router cannot
+    // route to — `router.push` handles paths within this app and quietly does
+    // nothing useful with another host. The palette's whole promise is that
+    // typing a name gets you there, so an absolute URL leaves through the
+    // browser instead.
+    if (/^https?:\/\//.test(item.href)) {
+      window.location.href = item.href;
+      return;
+    }
     router.push(item.href);
   }
 

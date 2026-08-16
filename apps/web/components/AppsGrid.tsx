@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, Rocket, TriangleAlert, SlidersHorizontal, Check } from "lucide-react";
+import { ArrowUpRight, Rocket, TriangleAlert, SlidersHorizontal, Check, Scan } from "lucide-react";
+import { xrayUrl } from "@/lib/app-urls";
 
 export interface App {
   slug: string; name: string; url: string; ready: boolean;
@@ -520,9 +521,20 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
               <div className="shelf-preview">
                 <Thumb slug={a.slug} src={a.thumbnail} version={a.deployedAt} />
                 <div className="preview-open">
-                  <Link className="po-btn primary" href={`/apps/${a.slug}`}>
-                    <SlidersHorizontal size={13} />Manage app
-                  </Link>
+                  {/*
+                    The X-ray, at the app's OWN address — not a page about the
+                    app on the platform. See lib/app-urls.ts for the move this
+                    is part of, and CONTEXT.md for why this word and not
+                    "manage" or "dashboard".
+
+                    A real <a>, and it has to be: this is a different origin,
+                    and a Next <Link> to another host does not navigate. It
+                    silently does nothing, which is the worst way for a primary
+                    button to fail.
+                  */}
+                  <a className="po-btn primary" href={xrayUrl(a.slug)}>
+                    <Scan size={13} />X-ray
+                  </a>
                   <a
                     className="po-btn"
                     href={`https://${a.slug}.supersonic.cv`}
@@ -546,12 +558,13 @@ export function AppsGrid({ initial, initialError }: { initial: App[]; initialErr
                       the app's subtitle, and the corner is worth more as a
                       place to act than as a place to label. */}
                   <Status ready={a.ready} probe={probes[a.slug]} />
-                  {/* Manage leads and carries the fill: this is the dashboard,
-                      and the address below is already a way to the site. */}
+                  {/* The X-ray leads and carries the fill: it is what an owner
+                      came to look at, and the address below is already a way to
+                      the site. */}
                   <div className="head-acts">
-                    <Link className="row-btn primary" href={`/apps/${a.slug}`}>
-                      <SlidersHorizontal size={13} />Manage app
-                    </Link>
+                    <a className="row-btn primary" href={xrayUrl(a.slug)}>
+                      <Scan size={13} />X-ray
+                    </a>
                     <a className="row-btn" href={`https://${a.slug}.supersonic.cv`} target="_blank" rel="noreferrer">
                       Open website<ArrowUpRight size={14} />
                     </a>
