@@ -32,8 +32,45 @@ function poolFor(cfg: { connectionName: string; user: string; password: string }
   const pool = isCloudRun()
     ? new Pool({ host: `/cloudsql/${cfg.connectionName}`, user: cfg.user, password: cfg.password, database: dbName, max: 3 })
     : new Pool({ host: "127.0.0.1", port: localPort, user: cfg.user, password: cfg.password, database: dbName, max: 3, connectionTimeoutMillis: 6000 });
+  // An IDLE client dying is not an exception anybody is awaiting, so `pg` emits
+  // it on the pool — and an 'error' event with no listener is how Node ends a
+  // process. Measured on 16 Aug against production: dropping an app's database
+  // runs `pg_terminate_backend` over it, the control plane still held a pooled
+  // connection to that database from the deploy that created it, and the
+  // resulting unhandled event took the process down. Nothing was awaiting the
+  // dead client, so nothing could catch it.
+  //
+  // Not specific to the drop, which is why the handler is here and not there:
+  // Cloud SQL maintenance restarts every few months and severs every idle
+  // connection on the instance. The same crash, on Google's schedule.
+  //
+  // Logged rather than swallowed. A pool whose clients keep dying is a real
+  // condition, and `pg` replaces the client on the next acquire either way.
+  pool.on("error", (e) => {
+    console.error(`db pool ${key}: idle client error — ${e instanceof Error ? e.message : String(e)}`);
+  });
   pools.set(key, pool);
   return pool;
+}
+
+/**
+ * Forget the pool for a database that is about to stop existing.
+ *
+ * `DROP DATABASE` fails outright while any session is connected, so the drop
+ * path terminates them — including this process's own pooled connections, which
+ * it cannot see. Ending the pool first turns a severed connection into a closed
+ * one, and drops the entry so a later caller for a REUSED slug does not receive
+ * a pool pointed at a database that was deleted underneath it.
+ *
+ * `end()` is not awaited: the caller is about to drop the database, and a pool
+ * that is still finishing its shutdown must not delay that or fail it.
+ */
+export function forgetTenantPool(dbName: string): void {
+  const key = `${tenantPgConfig().connectionName}/${dbName}`;
+  const pool = pools.get(key);
+  if (!pool) return;
+  pools.delete(key);
+  pool.end().catch(() => { /* already gone; the point was to stop using it */ });
 }
 
 /** A pool on the PLATFORM instance — the control plane's own tables. */

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { getTenantPool } from "./db";
+import { getTenantPool, forgetTenantPool } from "./db";
 import { readAppSecret } from "./app-secrets";
 
 /**
@@ -291,6 +291,15 @@ export async function dropAppDatabase(
   if (!SAFE_IDENT.test(role) || !SAFE_IDENT.test(dbName)) {
     return { dropped: false, reason: `"${role}"/"${dbName}" is not a usable identifier` };
   }
+
+  // Our OWN connections to the database, before anything terminates them.
+  // `dropStatements` runs `pg_terminate_backend` over every session on it, and
+  // this process is one of them — `ensureAppRole` opened a pool there on the
+  // deploy that created this app, and it is still in the map. A terminated idle
+  // client raises 'error' on its pool, which with no listener ends the process.
+  // Measured: this crashed the drop on 16 Aug, after the drop had already
+  // succeeded, so the database went and the caller heard a stack trace.
+  forgetTenantPool(dbName);
 
   const pool = getTenantPool(NEUTRAL_DB_FOR_DROP);
   const client = await pool.connect().catch(() => null);
