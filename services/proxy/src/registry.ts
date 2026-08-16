@@ -233,7 +233,7 @@ async function fetchAppRow(slug: string): Promise<AppRow | null> {
         // every app was assumed to have before the column existed.
         has_web: (raw as unknown as { has_web?: unknown }).has_web !== false,
         // Normalised for the same reason has_web is, and with the opposite
-        // default. `SELECT a.*` on a database that has not run 027 yields
+        // default. `SELECT a.*` on a database that has not run 030 yields
         // undefined for both columns, and the edge deploys ahead of migrations.
         // An absent id means no analytics — never "some other app's site" and
         // never a crash — while an absent switch reads as on, which is what the

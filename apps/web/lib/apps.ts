@@ -27,7 +27,7 @@ export interface AppRecord {
    *
    * Optional on the type as well as nullable in the column, which is the one
    * difference from `repo_url` above and is deliberate: `getAppBySlug` is a
-   * `SELECT *`, so on a database that has not run 027 yet the key is simply
+   * `SELECT *`, so on a database that has not run 030 yet the key is simply
    * absent, and a type that promised `string | null` would be lying to every
    * reader in exactly the window where being wrong is most expensive.
    */

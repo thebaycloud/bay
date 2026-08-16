@@ -60,6 +60,23 @@ export function umamiConfigured(): boolean {
 }
 
 /**
+ * Long enough for a service that is asleep to wake up.
+ *
+ * Umami runs at min-instances 0, so the FIRST call after an idle period pays a
+ * container start plus a Prisma connection — comfortably more than the eight
+ * seconds this used to allow. That was not an edge case: provisioning happens
+ * when somebody deploys an app, which is exactly when nobody has touched
+ * analytics recently, so the cold path was the COMMON path and the timeout
+ * meant most new apps would silently never get a site.
+ *
+ * Generous on purpose. Nothing waits on this — it runs inside a deploy that
+ * takes minutes, and failing it costs an app its analytics. The proxy's read
+ * path keeps its own much shorter timeout, because there a person is waiting
+ * and "unreadable" is a better answer than a hang.
+ */
+const COLD_START_MS = 45_000;
+
+/**
  * The admin token, cached until it is nearly stale.
  *
  * Umami issues a JWT with a long life and no refresh endpoint, so the cheap
@@ -76,7 +93,7 @@ async function authToken(): Promise<string | null> {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await invoker()) },
       body: JSON.stringify({ username: USER, password: PASSWORD }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(COLD_START_MS),
     });
     if (!r.ok) {
       console.error(`umami: login refused (${r.status})`);
@@ -105,7 +122,7 @@ async function api(path: string, init: RequestInit = {}): Promise<Response | nul
         Authorization: `Bearer ${t}`,
         ...(init.body ? { "Content-Type": "application/json" } : {}),
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(COLD_START_MS),
     });
   } catch (e) {
     console.error(`umami: ${path} —`, e instanceof Error ? e.message : e);
