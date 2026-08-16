@@ -34,22 +34,22 @@ const loadedTarget = import("../lib/deploy-target");
 const loadedDbAddress = import("../lib/db-address");
 
 test("the two targets are the only two, and they answer every fact asked of them", async () => {
-  const { CLOUD_RUN_TARGET, FLEET_TARGET } = await loadedTarget;
-  assert.equal(CLOUD_RUN_TARGET.kind, "cloudrun");
+  const { STATIC_TARGET, FLEET_TARGET } = await loadedTarget;
+  assert.equal(STATIC_TARGET.kind, "static");
   assert.equal(FLEET_TARGET.kind, "fleet");
-  assert.notEqual(CLOUD_RUN_TARGET.kind, FLEET_TARGET.kind);
+  assert.notEqual(STATIC_TARGET.kind, FLEET_TARGET.kind);
 });
 
 test("databaseAddress matches lib/db-address.ts exactly — one fact, not a second copy of it", async () => {
-  const { CLOUD_RUN_TARGET, FLEET_TARGET } = await loadedTarget;
+  const { STATIC_TARGET, FLEET_TARGET } = await loadedTarget;
   const { CLOUD_RUN_DB, FLEET_DB } = await loadedDbAddress;
-  assert.deepEqual(CLOUD_RUN_TARGET.databaseAddress, CLOUD_RUN_DB);
+  assert.deepEqual(STATIC_TARGET.databaseAddress, CLOUD_RUN_DB);
   assert.deepEqual(FLEET_TARGET.databaseAddress, FLEET_DB);
 });
 
 test("only the fleet owns its own process lifecycle", async () => {
-  const { CLOUD_RUN_TARGET, FLEET_TARGET } = await loadedTarget;
-  assert.equal(CLOUD_RUN_TARGET.ownsProcessLifecycle, false);
+  const { STATIC_TARGET, FLEET_TARGET } = await loadedTarget;
+  assert.equal(STATIC_TARGET.ownsProcessLifecycle, false);
   assert.equal(FLEET_TARGET.ownsProcessLifecycle, true);
 });
 
@@ -58,21 +58,21 @@ test("both targets have release as a stage with its own deploy_stages row", asyn
   // fleet deploy (:3754) the same way it always has for Cloud Run's (:2757).
   // Kept as its own assertion rather than deleted now that the two agree —
   // see the field's own doc comment for why the fact is still worth pinning.
-  const { CLOUD_RUN_TARGET, FLEET_TARGET } = await loadedTarget;
-  assert.equal(CLOUD_RUN_TARGET.hasReleaseStage, true);
+  const { STATIC_TARGET, FLEET_TARGET } = await loadedTarget;
+  assert.equal(STATIC_TARGET.hasReleaseStage, true);
   assert.equal(FLEET_TARGET.hasReleaseStage, true);
 });
 
 test("the cloud run target keeps only what still guards a static app", async () => {
-  const { CLOUD_RUN_TARGET } = await loadedTarget;
+  const { STATIC_TARGET } = await loadedTarget;
   for (const capability of ["exec", "domainMapping", "autoRollbackOnFailure"] as const) {
-    assert.equal(CLOUD_RUN_TARGET.supports(capability), true, capability);
+    assert.equal(STATIC_TARGET.supports(capability), true, capability);
   }
   // `rollback` LEFT this set, and the removal is the same change as the addition
   // below. Cloud Run's rollback walked `gcloud run revisions list` and split
   // traffic back to the last Ready one; that lane is deleted, and the only apps
   // still on this target are static — files in a bucket, with no revisions.
-  assert.equal(CLOUD_RUN_TARGET.supports("rollback"), false);
+  assert.equal(STATIC_TARGET.supports("rollback"), false);
 });
 
 test("the fleet supports rollback, and still none of the other three", async () => {
@@ -94,10 +94,16 @@ test("the fleet supports rollback, and still none of the other three", async () 
   }
 });
 
-test("deployTargetFor is a pure lookup, not a fresh object per call", async () => {
-  const { deployTargetFor, CLOUD_RUN_TARGET, FLEET_TARGET } = await loadedTarget;
+test("deployTargetFor takes the column's vocabulary and answers in the target's", async () => {
+  const { deployTargetFor, STATIC_TARGET, FLEET_TARGET } = await loadedTarget;
   assert.equal(deployTargetFor("fleet"), FLEET_TARGET);
-  assert.equal(deployTargetFor("cloudrun"), CLOUD_RUN_TARGET);
+  // `"cloudrun"` is a value `apps.runtime` may still hold and NOT a place
+  // anything deploys to. The column keeps its spelling — renaming a persisted
+  // value is a migration — and this function is where the two vocabularies meet,
+  // so that nothing else has to know they differ.
+  assert.equal(deployTargetFor("cloudrun"), STATIC_TARGET);
+  // A pure lookup, not a fresh object per call: identity is what callers compare.
+  assert.equal(deployTargetFor("fleet"), deployTargetFor("fleet"));
 });
 
 test("deployTargetForApp reads the same column runtimeOf does, for the same slug", async () => {
@@ -108,9 +114,9 @@ test("deployTargetForApp reads the same column runtimeOf does, for the same slug
   assert.equal(queriedSlug, "t1ppt");
 });
 
-test("an app with no runtime row reads as cloudrun — the same default runtimeOf documents", async () => {
-  const { deployTargetForApp, CLOUD_RUN_TARGET } = await loadedTarget;
+test("an app with no runtime row reads as the non-fleet target — the same default runtimeOf documents", async () => {
+  const { deployTargetForApp, STATIC_TARGET } = await loadedTarget;
   storedRuntime = null;
   const target = await deployTargetForApp("unknown-app");
-  assert.equal(target, CLOUD_RUN_TARGET);
+  assert.equal(target, STATIC_TARGET);
 });

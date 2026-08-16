@@ -21,7 +21,7 @@ import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppS
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
 import { nodeFaultFor, placementFor, runningOnNode, runtimeOf, setRuntime } from "@/lib/fleet";
-import { deployTargetFor } from "@/lib/deploy-target";
+import { FLEET_TARGET, STATIC_TARGET } from "@/lib/deploy-target";
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec, type AgentProcess } from "@/lib/fleet-spec";
 import { awaitRunning, chooseRuntime, fleetProbe, placeOnFleet } from "@/lib/fleet-place";
@@ -2140,7 +2140,10 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // instead of re-deriving `toFleet`'s meaning at each call site — see
     // lib/deploy-target.ts for why that re-derivation is exactly how the
     // domain-mapping bug below survived.
-    const deployTarget = deployTargetFor(toFleet ? "fleet" : "cloudrun");
+    // Named targets, not a runtime string round-tripped through a lookup. The
+    // `!toFleet` case reaches here only for a static app — the throw above sends
+    // everything else away — so saying STATIC_TARGET is saying what happens.
+    const deployTarget = toFleet ? FLEET_TARGET : STATIC_TARGET;
     // The address the database is provisioned at is `deployTarget`'s, and
     // that follows `toFleet`, never `target.runtime` alone — the two differ
     // for exactly the apps this gate exists for: an app the fleet could serve
