@@ -11,8 +11,9 @@ import { ownsApp } from "@/lib/ownership";
 import { unplaceApp } from "@/lib/fleet";
 import { supersedeRunsFor } from "@/lib/deploy-runs";
 import { deleteWebsite } from "@/lib/umami";
+import { withCors, optionsHandler } from "@/lib/cors";
 
-export async function POST(_req: Request, { params }: { params: { slug: string } }) {
+async function postHandler(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid) return Response.json({ error: "forbidden" }, { status: 403 });
@@ -91,3 +92,9 @@ export async function POST(_req: Request, { params }: { params: { slug: string }
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
+
+
+// Reachable from the app's own X-ray drawer, which runs on the app's own
+// origin. See lib/cors.ts: only THAT origin is allowed, never every subdomain.
+export const OPTIONS = optionsHandler;
+export const POST = withCors(postHandler);

@@ -17,9 +17,10 @@ import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { setPlacementEnv, placementEnvKeys } from "@/lib/fleet";
 import { deployTargetForApp } from "@/lib/deploy-target";
+import { withCors, optionsHandler } from "@/lib/cors";
 
 // GET  -> list env var KEYS (values are never exposed)
-export async function GET(_req: Request, { params }: { params: { slug: string } }) {
+async function getHandler(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ keys: [], error: "forbidden" }, { status: 403 });
@@ -40,7 +41,7 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
 }
 
 // POST { set?: {K:V}, unset?: [K] } -> update env, new revision
-export async function POST(req: Request, { params }: { params: { slug: string } }) {
+async function postHandler(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
@@ -68,3 +69,10 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }
+
+
+// Reachable from the app's own X-ray drawer, which runs on the app's own
+// origin. See lib/cors.ts: only THAT origin is allowed, never every subdomain.
+export const OPTIONS = optionsHandler;
+export const GET = withCors(getHandler);
+export const POST = withCors(postHandler);

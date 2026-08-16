@@ -1,5 +1,5 @@
 import { config } from "./config";
-import { XRAY_CSS, XRAY_JS } from "./xray-panel";
+import { DRAWER_CSS, DRAWER_JS } from "./drawer";
 
 // The Supersonic overlay injected into every hosted app's HTML. It renders inside
 // a Shadow DOM so the app's own CSS can't reach it (no style bleed, no glow) and
@@ -42,7 +42,7 @@ const OWNER_CSS = String.raw`.bar{position:fixed;top:14px;right:14px;display:fle
 .reqs .ap{background:#2ea86a;color:#05130b;border:0;border-radius:6px;padding:5px 10px;font:600 11px sans-serif;cursor:pointer}
 .reqs .dn{background:none;border:0;color:#9db0a6;cursor:pointer;font:400 11px sans-serif}
 .bar .xray{background:#2b2a26;color:#fff}
-${XRAY_CSS}`;
+${DRAWER_CSS}`;
 
 const OWNER_JS = String.raw`
 // toolbar (owner)
@@ -94,12 +94,13 @@ share.onclick=function(){
   api().then(function(j){if(j&&j.visibility){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();}});
 };
 
-${XRAY_JS}
-xrayBtn.onclick=toggleXray;
+${DRAWER_JS}
+xrayBtn.onclick=openDrawer;
 // A key as well as a button, because the point of this layer is that it is one
 // gesture away from the app rather than a place you navigate to.
 document.addEventListener('keydown',function(e){
-  if(e.key==='x'&&(e.metaKey||e.ctrlKey)&&e.shiftKey){ e.preventDefault(); toggleXray(); }
+  if(e.key==='x'&&(e.metaKey||e.ctrlKey)&&e.shiftKey){ e.preventDefault(); openDrawer(); }
+  if(e.key==='Escape'&&dw){ closeDrawer(); }
 });
 `;
 

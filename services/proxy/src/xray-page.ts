@@ -1,5 +1,5 @@
 import { escapeHtml } from "./pages";
-import { XRAY_CSS, XRAY_JS } from "./xray-panel";
+import { DRAWER_CSS, DRAWER_JS } from "./drawer";
 
 /**
  * The x-ray as a page of its own, at the app's own `/_xray`.
@@ -22,7 +22,7 @@ export function xrayPage(slug: string): string {
   body{margin:0;min-height:100vh;background:#15140f;color:#eae8df;
        font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
        display:flex;align-items:flex-start;justify-content:center;padding:28px 16px}
-  ${XRAY_CSS}
+  ${DRAWER_CSS}
   /* On a page of its own the panel is the content, not something floating over
      an app, so it drops the fixed position it needs inside the overlay. */
   /* Full width of the column rather than its own 560px: the column already is
@@ -34,12 +34,6 @@ export function xrayPage(slug: string): string {
   .top .door:hover{color:#2ea86a}
   .top .out{color:#7a786f;font:400 11.5px/1 sans-serif;text-decoration:none;flex:none}
   .top .out:hover{color:#eae8df}
-  /* The half that has not moved yet, named rather than hidden. An owner who
-     came here for their app's data should be told where it is, not left to
-     guess that this page is all there is. */
-  .rest{margin:14px 0 0;color:#7a786f;font:400 11.5px/1.6 sans-serif}
-  .rest a{color:#9c9a8f;text-decoration:none;border-bottom:1px solid #35342e}
-  .rest a:hover{color:#eae8df}
 </style>
 <div class="col">
   <div class="top">
@@ -49,8 +43,6 @@ export function xrayPage(slug: string): string {
     <a class="out" href="https://app.supersonic.cv">All apps</a>
   </div>
   <div id="root"></div>
-  <p class="rest">Its data, files, jobs and secrets are still on
-    <a href="https://app.supersonic.cv/apps/${escapeHtml(slug)}">supersonic.cv</a>.</p>
 </div>
 <script>(function(){
 // C.app as well as C.slug: the panel's analytics switch posts to the control
@@ -61,7 +53,10 @@ var C={slug:${JSON.stringify(slug).replace(/</g, "\\u003c").replace(/>/g, "\\u00
 var root=document.getElementById('root');
 var pop=null;
 function h(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;}
-${XRAY_JS}
-toggleXray();
+${DRAWER_JS}
+// Flat: on a page of its own the drawer is the content, not something sliding
+// over an app, so it neither slides nor needs a way to be dismissed.
+root.appendChild(buildDrawer(true));
+dwSelect('xray');
 })();</script>`;
 }

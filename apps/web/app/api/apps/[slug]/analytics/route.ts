@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { getAppBySlug, setAnalyticsEnabled } from "@/lib/apps";
 import { currentUserId } from "@/lib/session";
+import { corsFor, optionsHandler } from "@/lib/cors";
 
 /**
  * The owner's switch, and nothing else.
@@ -18,26 +19,7 @@ import { currentUserId } from "@/lib/session";
  * is a different origin than this one — the same shape as the share route, and
  * the same allowlist of our own subdomains.
  */
-function corsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("origin") ?? "";
-  try {
-    const h = new URL(origin).hostname;
-    if (h === "supersonic.cv" || h.endsWith(".supersonic.cv")) {
-      return {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        Vary: "Origin",
-      };
-    }
-  } catch { /* no/invalid origin — same-origin call, no CORS headers needed */ }
-  return {};
-}
-
-export async function OPTIONS(req: Request) {
-  return new Response(null, { status: 204, headers: corsHeaders(req) });
-}
+export const OPTIONS = optionsHandler;
 
 async function ownedApp(slug: string) {
   const uid = await currentUserId();
@@ -48,8 +30,9 @@ async function ownedApp(slug: string) {
 }
 
 export async function GET(req: Request, { params }: { params: { slug: string } }) {
-  const cors = corsHeaders(req);
-  const app = await ownedApp(decodeURIComponent(params.slug));
+  const slug = decodeURIComponent(params.slug);
+  const cors = corsFor(req, slug);
+  const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
   return Response.json(
     {
@@ -65,8 +48,8 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
 }
 
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
-  const cors = corsHeaders(req);
   const slug = decodeURIComponent(params.slug);
+  const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
 
