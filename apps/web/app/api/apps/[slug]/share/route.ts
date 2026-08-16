@@ -7,32 +7,15 @@ import { sendAccessGranted } from "@/lib/email";
 import { currentUserId } from "@/lib/session";
 import { entitlement, countPublicApps } from "@/lib/entitlements";
 import { publicLimitMessage, noAccountMessage } from "@/lib/plan-copy";
+import { corsFor, optionsHandler } from "@/lib/cors";
 
 const VISIBILITIES: Visibility[] = ["private", "shared", "public"];
 
-// The injected toolbar edits access from <slug>.supersonic.cv (a different origin
-// than app.supersonic.cv), so allow credentialed cross-origin calls from our own
-// subdomains — and only those.
-function corsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("origin") ?? "";
-  try {
-    const h = new URL(origin).hostname;
-    if (h === "supersonic.cv" || h.endsWith(".supersonic.cv")) {
-      return {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        Vary: "Origin",
-      };
-    }
-  } catch { /* no/invalid origin — same-origin call, no CORS headers needed */ }
-  return {};
-}
-
-export async function OPTIONS(req: Request) {
-  return new Response(null, { status: 204, headers: corsHeaders(req) });
-}
+// The drawer edits access from <slug>.supersonic.cv, a different origin than
+// app.supersonic.cv. This used to allow ANY *.supersonic.cv origin, which is
+// every tenant's own JavaScript — see lib/cors.ts for the cross-tenant CSRF
+// that permits and why the allowlist is now this app's origin alone.
+export const OPTIONS = optionsHandler;
 
 async function ownedApp(slug: string) {
   const uid = await currentUserId();
@@ -43,8 +26,8 @@ async function ownedApp(slug: string) {
 }
 
 export async function GET(req: Request, { params }: { params: { slug: string } }) {
-  const cors = corsHeaders(req);
   const slug = decodeURIComponent(params.slug);
+  const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
   const [grants, requests] = await Promise.all([listGrants(slug), listPending(slug)]);
@@ -52,8 +35,8 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
 }
 
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
-  const cors = corsHeaders(req);
   const slug = decodeURIComponent(params.slug);
+  const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
 

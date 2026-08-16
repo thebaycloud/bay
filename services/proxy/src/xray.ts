@@ -31,10 +31,31 @@ const MAX_APPS = 300;
 
 interface PathStat {
   hits: number;
-  errors: number;
+  /** Requests the app itself failed — 5xx. Lifetime, since this process started. */
+  broke: number;
+  /** Requests for something that is not there — 4xx. Lifetime, same window. */
+  missing: number;
   /** Recent durations, newest last, capped at SAMPLES. */
   ms: number[];
   lastAt: number;
+  /**
+   * When the app last failed here. 0 = it never has.
+   *
+   * A count on its own cannot answer the only question worth asking about a
+   * break — is it happening now. Without a time, a path that failed all morning
+   * and has been healthy since still reads as the app's worst problem until the
+   * proxy restarts, which is a fact about our memory dressed up as a fact about
+   * the app.
+   */
+  lastBrokeAt: number;
+  /**
+   * When the current unbroken run of failures began. 0 = the last request here
+   * succeeded, so it is not failing now.
+   *
+   * Cleared by a success and never by a 4xx: somebody asking for a page that is
+   * not there, in the middle of an outage, is not the app recovering.
+   */
+  brokeSince: number;
 }
 
 interface Presence {
@@ -91,11 +112,22 @@ export function record(
     let p = a.paths.get(path);
     if (!p) {
       if (a.paths.size >= MAX_PATHS) { a.dropped++; return; }
-      p = { hits: 0, errors: 0, ms: [], lastAt: 0 };
+      p = { hits: 0, broke: 0, missing: 0, ms: [], lastAt: 0, lastBrokeAt: 0, brokeSince: 0 };
       a.paths.set(path, p);
     }
     p.hits++;
-    if (input.status >= 400) p.errors++;
+    // Three outcomes, not two. `status >= 400` in one bucket meant every app
+    // without a favicon led its own list of failures, and no amount of sorting
+    // fixes that — the two are different facts about different people.
+    if (input.status >= 500) {
+      p.broke++;
+      p.lastBrokeAt = Date.now();
+      if (!p.brokeSince) p.brokeSince = p.lastBrokeAt;
+    } else if (input.status >= 400) {
+      p.missing++;
+    } else {
+      p.brokeSince = 0;
+    }
     p.ms.push(input.ms);
     if (p.ms.length > SAMPLES) p.ms.shift();
     p.lastAt = Date.now();
@@ -112,11 +144,25 @@ function quantile(sorted: number[], q: number): number {
 export interface XrayPath {
   path: string;
   hits: number;
-  errors: number;
+  /** Requests the app itself failed — 5xx. */
+  broke: number;
+  /** Requests for something that is not there — 4xx. */
+  missing: number;
   p50: number;
   p95: number;
   /** Seconds since this path was last hit. */
   ago: number;
+  /**
+   * Seconds since the app last failed here. `null` — never `0` — when it never
+   * has, because zero seconds ago reads as "it just broke".
+   */
+  brokeAgo: number | null;
+  /**
+   * Seconds the app has been failing here with no success in between, or `null`
+   * when the last request succeeded. This is the difference between "it broke
+   * today" and "it is broken".
+   */
+  brokenFor: number | null;
 }
 
 export interface Xray {
@@ -141,9 +187,11 @@ export function xray(slug: string): Xray {
   for (const [path, p] of a.paths) {
     const sorted = [...p.ms].sort((x, y) => x - y);
     paths.push({
-      path, hits: p.hits, errors: p.errors,
+      path, hits: p.hits, broke: p.broke, missing: p.missing,
       p50: quantile(sorted, 0.5), p95: quantile(sorted, 0.95),
       ago: Math.round((now - p.lastAt) / 1000),
+      brokeAgo: p.lastBrokeAt ? Math.round((now - p.lastBrokeAt) / 1000) : null,
+      brokenFor: p.brokeSince ? Math.round((now - p.brokeSince) / 1000) : null,
     });
   }
   // Costliest first: an owner opening this wants the thing that is slow, and

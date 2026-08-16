@@ -13,6 +13,7 @@ import { decideEdge } from "./edge";
 import { pickRoute, pickPrefix } from "./routes";
 import { badgeRequired } from "./plan";
 import { forward } from "./forward";
+import { serveBay } from "./bay";
 
 function slugFromHost(host: string | undefined): string | null {
   if (!host) return null;
@@ -54,6 +55,19 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   const app = await lookupApp(slug);
   if (!app) return html(res, 404, page404());
 
+  // The app's own analytics, on the app's own address. Answered here, before
+  // anything else looks at this request, for two reasons that are both about
+  // what the visitor experiences: the tracker has to be same-origin or content
+  // blockers eat it, and it must not depend on the app being up — a page that
+  // has already rendered goes on reporting while its API is failing.
+  //
+  // `site` is null for an app with no umami site and for an owner who turned
+  // analytics off, and `serveBay` then declines to answer at all, so /_bay
+  // reaches the app exactly like any other path it does not know about. See
+  // bay.ts for why this is a proxy and not a script tag.
+  const site = app.umami_website_id && app.analytics_enabled ? { websiteId: app.umami_website_id } : null;
+  if (await serveBay(req, res, site)) return;
+
   // Who is asking, resolved on demand and only ever once. Three of the branches
   // below need it and no two of them are on the same path, so each asks for it
   // where it is needed; a /_xray request from someone who is not the owner used
@@ -93,7 +107,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       // False for an app that has never once answered for itself, which is a
       // state a reading can now actually be fetched in.
       open: Boolean(app.run_url),
-    })));
+    }), site?.websiteId));
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -150,7 +164,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // app row that has already been fetched and cached, so this costs nothing.
   const badge = badgeRequired(app.owner_plan, app.owner_status);
   const serve = (visitorCtx: { userId: string; email: string; name: string }, wd: string, owner: boolean) =>
-    forward(req, res, target as string, visitorCtx, wd, { slug, owner, badge }, prefix);
+    forward(req, res, target as string, visitorCtx, wd, { slug, owner, badge, websiteId: site?.websiteId ?? null }, prefix);
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
   if (app.visibility === "public") {

@@ -31,6 +31,24 @@ export const XRAY_CSS = String.raw`.xr{position:fixed;top:58px;right:14px;width:
 .xr td.bad{color:#d1615d}
 .xr .none{font:400 12px/1.5 sans-serif;color:#9c9a8f}
 .xr .drop{font:400 10.5px sans-serif;color:#7a786f;margin-top:6px}
+.xr .big{font:600 15px/1.3 sans-serif;color:#eae8df}
+.xr .big .u{font:400 12px sans-serif;color:#9c9a8f}
+.xr .up{color:#2ea86a}.xr .down{color:#d1615d}
+.xr .sub{font:400 11.5px/1.5 sans-serif;color:#9c9a8f;margin-top:3px}
+.xr .cols{display:flex;gap:14px;margin-top:9px}
+.xr .cols>div{flex:1;min-width:0}
+.xr .ch{font:600 10px sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#7a786f;margin-bottom:4px}
+/* Three columns share the panel's width, so the shared word-break:break-all
+   that keeps a long PATH readable in Speed is wrong here: a referrer hostname
+   wrapped to "news.ycombinator.co / m" and pushed its own count onto the line
+   above. Truncate instead of wrap, and fix the layout so one long value cannot
+   steal width from the other two columns. */
+.xr .cols table{table-layout:fixed;width:100%}
+.xr .cols td.p{word-break:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.xr .cols td.n{width:40px}
+.xr .kbar{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.xr .sw{background:none;border:0;padding:0;color:#7a786f;font:400 10.5px sans-serif;cursor:pointer;flex:none}
+.xr .sw:hover{color:#eae8df}
 `;
 
 /**
@@ -93,7 +111,7 @@ function drawXray(d){
       var td1=h('td','p',p.path);
       var td2=h('td','n'+(p.p95>=1000?' slow':''),p.p95+'ms');
       var td3=h('td','n',p.hits+'×');
-      var td4=h('td','n'+(p.errors?' bad':''),p.errors?p.errors+' failed':ago(p.ago));
+      var td4=h('td','n'+(p.broke?' bad':''),p.broke?p.broke+' broke':ago(p.ago));
       tr.appendChild(td1);tr.appendChild(td2);tr.appendChild(td3);tr.appendChild(td4);
       t.appendChild(tr);
     });
@@ -103,7 +121,10 @@ function drawXray(d){
   xr.appendChild(s2);
 
   // breaks
-  var bad=live.paths.filter(function(p){return p.errors>0});
+  // Only what the app itself failed. A request for a page that was never there
+  // is somebody else's mistake, and while it shared a counter with this it was
+  // every faviconless app's headline problem.
+  var bad=live.paths.filter(function(p){return p.broke>0});
   var s3=sec('Breaks');
   if(!bad.length) s3.appendChild(h('div','none','Nothing has failed.'));
   else {
@@ -111,13 +132,110 @@ function drawXray(d){
     bad.slice(0,8).forEach(function(p){
       var tr=document.createElement('tr');
       tr.appendChild(h('td','p',p.path));
-      tr.appendChild(h('td','n bad',p.errors+' of '+p.hits));
-      tr.appendChild(h('td','n',ago(p.ago)));
+      tr.appendChild(h('td','n bad',p.broke+' of '+p.hits));
+      // Broken now, or broken once. Until the count carried a time these read
+      // identically, and this morning's fixed outage outranked tonight's real
+      // one for as long as the process lived.
+      tr.appendChild(p.brokenFor!==null
+        ? h('td','n bad','broken '+dur(p.brokenFor))
+        : h('td','n','last broke '+ago(p.brokeAgo)));
       t2.appendChild(tr);
     });
     s3.appendChild(t2);
   }
   xr.appendChild(s3);
+
+  // who visited
+  //
+  // The other half of the panel's question, and the only half that is about
+  // PEOPLE. Everything above this line is the edge's own measurement of
+  // machines: requests, milliseconds, status codes. This is umami's count of
+  // humans over the last day, and the two are never added together, never
+  // compared, and never drawn as the same number — one page view with eleven
+  // assets on it is eleven requests up there and one visitor down here, and
+  // both readings are correct.
+  //
+  // Four states again, tested in this order, each with its own words:
+  // not asked yet, switched off, could not be read, and read.
+  var aw=d.since&&d.since.audience;
+  var s5=document.createElement('sec');
+  var kbar=h('div','kbar');
+  kbar.appendChild(h('div','k','Who visited · last 24h'));
+  // The switch lives HERE, beside the numbers, and not three screens away in a
+  // settings page. This is somebody else's users' data being counted; the person
+  // who can decide that should meet the decision at the moment they are looking
+  // at the result of it. Hidden only while the first read is still in flight,
+  // because a control whose label would be a guess is worse than no control.
+  if(aw){
+    var sw=h('button','sw',aw==='off'?'turn on':'turn off');
+    sw.onclick=function(){
+      var want=aw==='off';
+      sw.textContent='...';
+      fetch(C.app+'/api/apps/'+C.slug+'/analytics',{
+        method:'POST',credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({enabled:want})
+      }).then(function(r){return r.json()}).then(function(j){
+        // The edge caches app rows, so the next poll will still show the old
+        // state for up to half a minute. Say so rather than letting the panel
+        // look like it ignored the click.
+        sw.textContent=j&&j.error?'could not change':(want?'on in a moment':'off in a moment');
+      }).catch(function(){sw.textContent='could not change'});
+    };
+    kbar.appendChild(sw);
+  }
+  s5.appendChild(kbar);
+  if(!aw){
+    // The placeholder toggleXray paints has no audience key at all. Drawing
+    // "nobody visited" over an app with a thousand visitors, for one frame,
+    // every time the panel opens, is the same lie the builds half already
+    // learned not to tell.
+    s5.appendChild(h('div','none','Reading...'));
+  } else if(aw==='off'){
+    // Not a failure and not an empty app. Said plainly, because the owner is
+    // the person who turned it off and should recognise their own decision.
+    s5.appendChild(h('div','none','Analytics is off for this app.'));
+  } else if(aw==='unreadable'){
+    // Never flattened into zeroes. An analytics service that will not answer is
+    // not a fact about this app's visitors.
+    s5.appendChild(h('div','none','Could not read visitor numbers just now.'));
+  } else if(!d.audience||!d.audience.visitors){
+    s5.appendChild(h('div','none','Nobody has opened this app in the last day.'));
+  } else {
+    var a=d.audience;
+    var big=h('div','big');
+    big.appendChild(h('span',null,a.visitors===1?'1 person':a.visitors+' people'));
+    // Only against a window that had somebody in it. The read side sends null
+    // rather than 0 for a brand-new app, and "+0%" about a day that never
+    // happened is exactly the kind of confident nonsense this panel avoids.
+    if(a.change!==null&&a.change!==undefined){
+      big.appendChild(h('span','u',' '));
+      big.appendChild(h('span',a.change>=0?'up':'down',(a.change>=0?'+':'')+a.change+'%'));
+    }
+    big.appendChild(h('span','u',' · '+a.views+(a.views===1?' page view':' page views')));
+    s5.appendChild(big);
+    // Bounce and dwell are per SESSION, which is why they are phrased as
+    // sentences about people rather than printed as bare percentages.
+    s5.appendChild(h('div','sub',a.bounce+'% left after one page · '+dur(a.avgSeconds)+' each, on average'));
+
+    var cols=h('div','cols');
+    [['Pages',a.pages],['Came from',a.from],['On',a.on]].forEach(function(c){
+      if(!c[1]||!c[1].length)return;
+      var col=document.createElement('div');
+      col.appendChild(h('div','ch',c[0]));
+      var tb=document.createElement('table');
+      c[1].slice(0,5).forEach(function(row){
+        var tr=document.createElement('tr');
+        tr.appendChild(h('td','p',row[0]));
+        tr.appendChild(h('td','n',String(row[1])));
+        tb.appendChild(tr);
+      });
+      col.appendChild(tb);
+      cols.appendChild(col);
+    });
+    if(cols.children.length) s5.appendChild(cols);
+  }
+  xr.appendChild(s5);
 
   // what happened
   //

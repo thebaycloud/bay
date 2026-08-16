@@ -39,4 +39,16 @@ export const config = {
    * default, so this is the ordinary way to create one, not an exotic mistake.
    */
   edgeSecret: (process.env.FLEET_EDGE_SECRET ?? "").trim(),
+  /**
+   * The shared umami instance, reachable by the platform and by nothing else.
+   *
+   * Empty means analytics is off everywhere: no tracker is injected, `/_bay/*`
+   * answers 404 exactly as any other unclaimed path would, and the panel says
+   * so rather than showing zeroes. That is the state this proxy is in on a
+   * developer's machine and in every environment where umami has not been
+   * deployed yet, and all of it has to keep working.
+   */
+  umamiUrl: (process.env.UMAMI_URL ?? "").replace(/\/$/, "").trim(),
+  umamiUser: process.env.UMAMI_USER ?? "admin",
+  umamiPassword: (process.env.UMAMI_PASSWORD ?? "").trim(),
 };

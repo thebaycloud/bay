@@ -4,10 +4,11 @@ export const dynamic = "force-dynamic";
 import { listJobs, createJob, deleteJob, runJob, describeService } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
+import { withCors, optionsHandler } from "@/lib/cors";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export async function GET(_req: Request, { params }: { params: { slug: string } }) {
+async function getHandler(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ jobs: [], error: "forbidden" }, { status: 403 });
@@ -15,7 +16,7 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   catch (e) { return Response.json({ jobs: [], error: msg(e) }); }
 }
 
-export async function POST(req: Request, { params }: { params: { slug: string } }) {
+async function postHandler(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
@@ -33,7 +34,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   } catch (e) { return Response.json({ error: msg(e) }); }
 }
 
-export async function DELETE(req: Request, { params }: { params: { slug: string } }) {
+async function deleteHandler(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
@@ -42,3 +43,11 @@ export async function DELETE(req: Request, { params }: { params: { slug: string 
   try { await deleteJob(id); return Response.json({ ok: true }); }
   catch (e) { return Response.json({ error: msg(e) }); }
 }
+
+
+// Reachable from the app's own X-ray drawer, which runs on the app's own
+// origin. See lib/cors.ts: only THAT origin is allowed, never every subdomain.
+export const OPTIONS = optionsHandler;
+export const GET = withCors(getHandler);
+export const POST = withCors(postHandler);
+export const DELETE = withCors(deleteHandler);

@@ -15,6 +15,7 @@
 # supersonic-deployer@ may drive a `--source` build; it may. Deploy succeeded,
 # revision supersonic-proxy-00021-8jm took 100% of traffic, and the checks below
 # answered `/_healthz → 200` and `anatf through the proxy → 200` — the second
+# (since generalised; see the check below for why the slug is a variable now)
 # being the one that would have caught a wiped edge secret. All six env vars
 # survived, which is the whole reason this file passes no --set-env-vars.
 #
@@ -100,11 +101,25 @@ jobs:
       # returns a 307 from a completely different service, which is the kind of
       # green light that is worse than no light at all.
       #
-      # So a real tenant app is fetched through the proxy too. anatf is on the
-      # fleet, so a 200 there also proves the signed forward still works end to
-      # end: the proxy holding a good FLEET_EDGE_SECRET and the node accepting
-      # it. That is exactly what a deploy carrying --set-env-vars would break,
-      # and it would break it silently.
+      # So a real tenant app is fetched through the proxy too, which is what
+      # proves the edge resolved a row and routed on it rather than merely
+      # booting.
+      #
+      # THE SLUG IS A VARIABLE, AND 404 IS THE FAILURE, NOT "NOT 200".
+      #
+      # This named `anatf` and demanded 200. Both halves were wrong within days.
+      # The apps it named were test apps and were deleted to save money, so the
+      # check began asserting that a deleted app still serves — 404 is the
+      # CORRECT answer for it, and the deploy failed on a healthy proxy. And
+      # `= 200` was never right anyway: a PRIVATE app answers 401, the sign-in
+      # gate, which the edge can only reach after `lookupApp` has found the row.
+      # A green check that depends on one app staying public forever is a check
+      # that will one day be wrong in the other direction and pass a dark edge.
+      #
+      # So: 200 or 401 both prove routing. 404 means the edge did not find the
+      # app, which is either a broken deploy or a slug that no longer exists —
+      # and the message says both, because the reader has to be able to tell.
+      # Set the `PROXY_SMOKE_APP` repository variable when the slug changes.
       - name: Check the proxy answers
         run: |
           url=$(gcloud run services describe supersonic-proxy \
@@ -113,7 +128,15 @@ jobs:
           echo "proxy url: $url"
           live=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url/_healthz" || true)
           echo "proxy /_healthz → $live"
-          app=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://anatf.supersonic.cv/ || true)
-          echo "anatf through the proxy → $app"
           [ "$live" = "200" ] || { echo "the proxy process is not answering"; exit 1; }
-          [ "$app" = "200" ] || { echo "the proxy is up but is not serving an app"; exit 1; }
+
+          slug="${{ vars.PROXY_SMOKE_APP || 'l3sgp' }}"
+          app=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$slug.supersonic.cv/" || true)
+          echo "$slug through the proxy → $app"
+          case "$app" in
+            200|401) echo "the edge found the app and routed on it" ;;
+            404) echo "the edge did not find $slug. Either this deploy is broken, or"
+                 echo "$slug has been deleted — if so, point PROXY_SMOKE_APP at a live app."
+                 exit 1 ;;
+            *)   echo "the proxy is up but answered $app for $slug"; exit 1 ;;
+          esac

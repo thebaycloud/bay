@@ -1,5 +1,5 @@
 import { config } from "./config";
-import { XRAY_CSS, XRAY_JS } from "./xray-panel";
+import { DRAWER_CSS, DRAWER_JS } from "./drawer";
 
 // The Supersonic overlay injected into every hosted app's HTML. It renders inside
 // a Shadow DOM so the app's own CSS can't reach it (no style bleed, no glow) and
@@ -42,7 +42,7 @@ const OWNER_CSS = String.raw`.bar{position:fixed;top:14px;right:14px;display:fle
 .reqs .ap{background:#2ea86a;color:#05130b;border:0;border-radius:6px;padding:5px 10px;font:600 11px sans-serif;cursor:pointer}
 .reqs .dn{background:none;border:0;color:#9db0a6;cursor:pointer;font:400 11px sans-serif}
 .bar .xray{background:#2b2a26;color:#fff}
-${XRAY_CSS}`;
+${DRAWER_CSS}`;
 
 const OWNER_JS = String.raw`
 // toolbar (owner)
@@ -94,12 +94,13 @@ share.onclick=function(){
   api().then(function(j){if(j&&j.visibility){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();}});
 };
 
-${XRAY_JS}
-xrayBtn.onclick=toggleXray;
+${DRAWER_JS}
+xrayBtn.onclick=openDrawer;
 // A key as well as a button, because the point of this layer is that it is one
 // gesture away from the app rather than a place you navigate to.
 document.addEventListener('keydown',function(e){
-  if(e.key==='x'&&(e.metaKey||e.ctrlKey)&&e.shiftKey){ e.preventDefault(); toggleXray(); }
+  if(e.key==='x'&&(e.metaKey||e.ctrlKey)&&e.shiftKey){ e.preventDefault(); openDrawer(); }
+  if(e.key==='Escape'&&dw){ closeDrawer(); }
 });
 `;
 
@@ -138,9 +139,43 @@ ${owner ? OWNER_JS : ""}
 })();</script>`;
 }
 
-/** Inject the overlay script just before </body> (or append if there's no body). */
-export function injectOverlay(htmlBody: string, slug: string, owner: boolean, badge: boolean): string {
-  const snippet = overlayScript(slug, owner, badge);
+/**
+ * The analytics tracker, for EVERY visitor.
+ *
+ * Outside `overlayScript` entirely, and that placement is the point. Everything
+ * in there is behind `owner ? OWNER_JS : ""` because an owner-only surface a
+ * visitor can read in the page source is not owner-only. This is the opposite
+ * kind of thing: it must run for the anonymous visitor, who is the only visitor
+ * most of these apps have, and it must give away nothing about the panel while
+ * doing it. A reader of the source sees two paths on the app's own origin and
+ * an opaque id, which is all there is to see.
+ *
+ * `defer`, so it never blocks the app's own render. Umami follows
+ * `history.pushState` on its own, which is what closes the client-side-routing
+ * gap the edge cannot see: a single-page app's second screen is a request the
+ * proxy never hears about and a page view a person definitely had.
+ */
+function trackerTag(websiteId: string): string {
+  return `<script defer src="/_bay/a.js" data-website-id="${JSON.stringify(websiteId).slice(1, -1)}" data-host-url="/_bay"></script>`;
+}
+
+/**
+ * Inject whatever this response has earned, just before </body>.
+ *
+ * Order matters only in that the tracker goes first: it is the thing that has
+ * to run on a page the overlay may have no business on at all.
+ */
+export function injectOverlay(
+  htmlBody: string,
+  slug: string,
+  owner: boolean,
+  badge: boolean,
+  websiteId?: string | null,
+): string {
+  const snippet =
+    (websiteId ? trackerTag(websiteId) : "") +
+    (hasOverlay(owner, badge) ? overlayScript(slug, owner, badge) : "");
+  if (!snippet) return htmlBody;
   const idx = htmlBody.toLowerCase().lastIndexOf("</body>");
   if (idx === -1) return htmlBody + snippet;
   return htmlBody.slice(0, idx) + snippet + htmlBody.slice(idx);
@@ -157,6 +192,19 @@ export function injectOverlay(htmlBody: string, slug: string, owner: boolean, ba
  */
 export function hasOverlay(owner: boolean, badge: boolean): boolean {
   return owner || badge;
+}
+
+/**
+ * Whether this response has to be buffered.
+ *
+ * The overlay was the only reason to buffer, so this used to be `hasOverlay`
+ * alone at the call site. A Pro customer's app shown to a stranger now has a
+ * second reason — it is the app whose owner most wants to know who is visiting
+ * — and reading `hasOverlay` there would have quietly given analytics to
+ * everyone EXCEPT the people paying for it.
+ */
+export function needsBody(owner: boolean, badge: boolean, websiteId?: string | null): boolean {
+  return hasOverlay(owner, badge) || Boolean(websiteId);
 }
 
 /** True only for a top-level HTML document we should decorate. */
