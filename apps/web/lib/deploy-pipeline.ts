@@ -53,7 +53,7 @@ import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
 import { causeOf, failureSentence, FailureRecorder } from "@/lib/deploy-failures";
-import { releaseJobArgs, releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, proxyWait } from "@/lib/release-job";
+import { releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, proxyWait } from "@/lib/release-job";
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
@@ -66,8 +66,7 @@ import { redeployableRepo } from "@/lib/repo-source";
 import { railpackConfig, railpackPrepareArgs } from "@/lib/railpack";
 import { detectRelease, RELEASE_FILES } from "@/lib/release-detect";
 import { readProcfile } from "@/lib/procfile";
-import { mergeProcfile, resolveProcess, resolveProcesses, type ResolvedProcess } from "@/lib/processes";
-import { planProcesses, orphans, isServiceless, listWorkerPoolsArgs, listProcessJobsArgs, type LiveProcess } from "@/lib/process-plan";
+import { mergeProcfile, resolveProcess, resolveProcesses, isServiceless, type ResolvedProcess } from "@/lib/processes";
 import { buildEnvelope, assertReached } from "@/lib/envelope";
 import { planResources, type Declared } from "@/lib/resources";
 
@@ -325,30 +324,6 @@ function fixPrompt(slug: string, error: string): string {
   ].join("\n");
 }
 
-// onRaw sees EVERY line; onLine only the ones worth showing a user. The
-// distinction matters for `--source` deploys: gcloud prints the id of the build
-// it just started on an ordinary informational line, which the onLine filter
-// drops — and that id is the only thing that later identifies whose build failed.
-function gcloudDeploy(args: string[], onLine: (l: string) => void, onRaw?: (l: string) => void) {
-  return new Promise<string>((resolve, reject) => {
-    const p = spawn("gcloud", args, { env: ENV });
-    let out = "";
-    const errTail: string[] = [];
-    p.stdout.on("data", (d: Buffer) => (out += d));
-    p.stderr.on("data", (d: Buffer) => {
-      d.toString().split(/\r?\n/).forEach((raw) => {
-        const l = raw.trim();
-        if (!l) return;
-        onRaw?.(l);
-        errTail.push(l);
-        if (errTail.length > 60) errTail.shift();
-        if (/fail|error|listen on the port|Revision|Cloud Run error/i.test(l)) onLine(l);
-      });
-    });
-    p.on("error", reject);
-    p.on("close", (c) => (c === 0 ? resolve(out) : reject(new Error(diagnose(errTail)))));
-  });
-}
 
 /**
  * The variable NAMES the live service already carries, or none when there is no
@@ -425,20 +400,6 @@ function readProcesses(dir: string, config: ServiceConfig | undefined, log: (l: 
   }
 }
 
-/**
- * The image the live service is running.
- *
- * The buildpack lane's image is built by `run deploy --source` and named by Cloud
- * Run, so it cannot be known before the deploy and must not be guessed. Reading
- * it back is one API call; the alternative — handing each worker `--source` — pays
- * for the whole build again per process, on a lane whose release job already pays
- * for it twice and says so.
- */
-async function liveContainerImage(service: string): Promise<string | null> {
-  const s = await describeServiceRest(service).catch(() => null);
-  const image = s?.spec?.template?.spec?.containers?.[0]?.image;
-  return typeof image === "string" && image ? image : null;
-}
 
 /**
  * What this app declares to Cloud Run when the fleet is running it: nothing.
@@ -451,152 +412,6 @@ async function liveContainerImage(service: string): Promise<string | null> {
  */
 const FLEET_OWNS_PROCESSES: ResolvedProcess[] = [];
 
-/**
- * Deploy the app's workers and crons, and remove the ones it no longer declares.
- *
- * The imperative half of the process model. Every decision is made by the pure
- * planner in lib/process-plan.ts and every argv by lib/process-deploy.ts, so what
- * is left here is a loop — which is the point of the split: the risk lives in
- * about thirty lines and the rules stay under test.
- *
- * Nothing in here can fail the deploy. A worker that does not come up leaves an
- * app whose web service is live, and tearing that down would make the situation
- * strictly worse; the same rule a sibling already follows. Failures are logged
- * AND written to the deploy row, because the log is a window — on a build with
- * dense output the one line that says why scrolls out of it.
- */
-async function deployProcesses(o: {
-  slug: string;
-  dir: string;
-  lane: Lane;
-  image?: string;
-  source?: string;
-  env: string[];
-  secrets: string | null;
-  cloudsql: string | null;
-  labels: string[];
-  config?: ServiceConfig;
-  processes: ResolvedProcess[];
-  log: (l: string) => void;
-}): Promise<void> {
-  const { slug, log } = o;
-
-  // Resolved once, by `readProcesses`, and handed in — because whether this app
-  // has a `web` process decided whether a Cloud Run service was deployed at all,
-  // long before this runs. Re-reading here could disagree with that decision.
-  //
-  // The same read is repeated in strict mode purely to report WHY a malformed set
-  // was empty: `readProcesses` swallows the error so a bad Procfile cannot fail a
-  // deploy, and swallowing it silently is the defect this plan is named after.
-  const { processes } = o;
-  try {
-    resolveProcesses(mergeProcfile(o.config?.processes, readProcfile(join(o.dir, o.config?.dir ?? "."))));
-  } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
-    log(`! ${why}`);
-    await setDeploy(slug, { stage: `processes not deployed — ${why}` });
-    return;
-  }
-
-  // A Procfile `release:` line is read and does not run yet: the release phase
-  // has its own path (lib/release-job.ts) that already knows the two things easy
-  // to get wrong there, and a second implementation is the defect this plan is
-  // named after. Said out loud rather than dropped, and it names the field that
-  // does work today.
-  if (processes.some((p) => p.kind === "release") && !releaseCommand(o.config ?? {})) {
-    log(`! the Procfile declares a "release" process and it did NOT run — put it in ${CONFIG_FILENAME} as "release" instead`);
-  }
-
-  // Without an artifact there is nothing to run, and a worker deployed from a
-  // source tree would build the app a third time. Loud rather than silent: the
-  // processes did not deploy and the deploy row says why.
-  if (!o.image && !o.source && processes.some((p) => p.kind === "worker" || p.kind === "cron")) {
-    const why = "could not resolve the image the app was deployed with";
-    log(`! processes not deployed — ${why}`);
-    await setDeploy(slug, { stage: `processes not deployed — ${why}` });
-    return;
-  }
-
-  const d = {
-    service: slug, lane: o.lane, region: REGION, project: PROJECT,
-    image: o.image, source: o.source, serviceAccount: APP_RUNTIME_SA || undefined,
-    labels: o.labels, env: o.env, secrets: o.secrets, cloudsql: o.cloudsql,
-  };
-  const steps = planProcesses(processes, d, { schedulerServiceAccount: SCHEDULER_SA });
-
-  const failed: string[] = [];
-  for (const step of steps) {
-    // Notes before the attempt: a field that will not be emitted is something the
-    // author should hear about whether or not the deploy then works.
-    for (const note of step.notes) log(`! ${note}`);
-    try {
-      log(`Deploying ${step.label}…`);
-      await capture("gcloud", step.deploy);
-      if (step.schedule) {
-        // Update-then-create, because `scheduler jobs create` is not
-        // create-or-update: it fails ALREADY_EXISTS on the second deploy of an
-        // unchanged app, which would fail every redeploy of a CRM on a cron that
-        // was already correct.
-        await capture("gcloud", step.schedule.update)
-          .catch(() => capture("gcloud", step.schedule!.create));
-      }
-      log(`${step.label} is running`);
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e);
-      // A missing role is not the app's problem and must never reach the repair
-      // agent — the same rule IAM_FAILURE already encodes for the invoker binding.
-      //
-      // Not hypothetical: the first CRM to reach this step created its Cloud Run
-      // job and then could not create the schedule that triggers it, because the
-      // deploy identity carries run.admin, cloudsql.admin, secretmanager.admin and
-      // storage.admin and no cloudscheduler role at all. The app was correct, the
-      // argv was correct, and a one-line permission gap surfaced as a generic
-      // failure with nothing pointing at the fix.
-      const denied = /PERMISSION_DENIED|does not have permission|forbidden|\b403\b/i.test(raw);
-      const why = denied && step.kind === "cron"
-        ? `${IAM_FAILURE}: the deploy identity cannot manage Cloud Scheduler. `
-          + `Grant roles/cloudscheduler.admin to ${SCHEDULER_SA} — nothing in the app can fix this.`
-        : raw;
-      log(`! ${step.label} did not deploy: ${why}`);
-      await setDeploy(slug, { stage: `${step.label} did not deploy — ${why}` });
-      failed.push(step.label);
-    }
-  }
-
-  // What the app HAS that its config no longer describes.
-  //
-  // Listed every time rather than only when processes are declared, and the two
-  // list calls are the cost of that. The alternative is skipping the pass for an
-  // app that declares none — which is exactly the app that just deleted its last
-  // worker, so the one case where cleanup matters most is the one that would be
-  // skipped. Two reads on a deploy that takes minutes is the right trade.
-  const live: LiveProcess[] = [];
-  const [pools, jobs] = await Promise.all([
-    capture("gcloud", listWorkerPoolsArgs(d)).catch(() => ""),
-    capture("gcloud", listProcessJobsArgs(d)).catch(() => ""),
-  ]);
-  for (const [out, primitive] of [[pools, "worker-pool"], [jobs, "job"]] as const) {
-    for (const name of out.split("\n").map((l) => l.trim()).filter(Boolean)) live.push({ name, primitive });
-  }
-
-  for (const gone of orphans(live, steps, d)) {
-    log(`Removing ${gone.label} — it is no longer in the config`);
-    for (const argv of gone.deletes) {
-      // Best-effort and in order. A schedule that is already gone is not a
-      // failure, and stopping here would leave the job it pointed at behind.
-      await capture("gcloud", argv).catch((e) => log(`! could not remove ${gone.name}: ${e instanceof Error ? e.message : String(e)}`));
-    }
-  }
-
-  // Thrown so the STAGE records a failure, after the cleanup pass has run.
-  //
-  // Caught by the caller, which is what keeps a failed worker from failing the
-  // deploy — but a stage that reports "ok" while a worker never started would put
-  // the platform back in the position this plan is about: telemetry that agrees
-  // with the code rather than with what happened. Every individual failure has
-  // already been logged and written to the deploy row; this is the summary.
-  if (failed.length) throw new Error(`${failed.length} of ${steps.length} processes did not deploy: ${failed.join(", ")}`);
-}
 
 /**
  * Whether this app's database actually exists on the shared instance.
@@ -749,43 +564,7 @@ const IAM_FAILURE = "IAM binding failed";
  */
 const AMBIGUOUS_STACK = "Cannot tell what this app is";
 
-/** IAM member string for the identity this control plane runs as. */
-async function callerMember(): Promise<string> {
-  const out = await capture("gcloud", ["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"]);
-  const acct = out.trim().split("\n")[0].trim();
-  if (!acct) throw new Error(`${IAM_FAILURE}: gcloud reports no active account`);
-  return acct.endsWith(".gserviceaccount.com") ? `serviceAccount:${acct}` : `user:${acct}`;
-}
 
-/**
- * Only the proxy may serve the app to the world — that is what seals the
- * *.run.app bypass. The control plane grants itself the same right because it
- * has to probe the app it just deployed; without that the probe would 403 on
- * every fresh deploy and hand a perfectly good app to the repair agent.
- *
- * This runs before the probe, and a failure fails the deploy: a sealed app
- * that the proxy cannot invoke is unreachable, and reporting it live would be
- * a lie.
- */
-async function grantInvokers(slug: string, log: (l: string) => void): Promise<void> {
-  for (const member of [`serviceAccount:${PROXY_SA}`, await callerMember()]) {
-    try {
-      await capture("gcloud", [
-        "run", "services", "add-iam-policy-binding", slug,
-        "--member", member,
-        "--role", "roles/run.invoker",
-        "--region", REGION, "--project", PROJECT,
-      ]);
-    } catch (e) {
-      throw new Error(`${IAM_FAILURE} for ${member}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  // Says what the visitor will actually experience, not what the platform did.
-  // "Sealed" described our end of it and left people clicking their own brand-new
-  // URL, hitting a sign-in wall, and concluding the deploy was broken — the one
-  // remaining way a successful deploy still looked like a failure.
-  log("Private by default — anyone opening this link has to sign in. Change that in the dashboard.");
-}
 
 /** Mint an ID token for a Cloud Run URL so we can call a sealed service. */
 async function idTokenFor(audience: string): Promise<string> {
@@ -1243,39 +1022,6 @@ async function removeDomainMapping(slug: string, log: (l: string) => void): Prom
   }
 }
 
-/**
- * Clear a Cloud SQL attachment the app no longer has any use for.
- *
- * The drift the resource engine exists to end, in its original form. Nothing in
- * the deploy path sets this annotation any more — `deployArgs` deliberately does
- * not (`--set-cloudsql-instances` mounts a Unix socket, which apps that build a
- * connection URL out of parts cannot express), and the proxy runs as a sidecar
- * instead. So every annotation still out there is residue from the
- * managed-database era, and nothing has ever removed one.
- *
- * It is not inert residue. `describeService` reports a "Database" card off it,
- * so an app with no database is told it has one; and `execCommand` builds its
- * one-off jobs with `--set-cloudsql-instances` read straight from it, so the
- * drift propagates into a second feature. Tonight it also carried a container
- * shape across a lane change and broke a deploy outright.
- *
- * Only when the app has NO platform database. An app that has one gets its
- * connection from the sidecar and the annotation is equally stale — but clearing
- * it there is a change to a working app's spec for no benefit this step needs,
- * and that belongs with the wholesale spec-replace rather than here.
- */
-async function clearStaleCloudSql(slug: string, log: (l: string) => void): Promise<void> {
-  const live = await describeServiceRest(slug).catch(() => null);
-  const ann = live?.spec?.template?.metadata?.annotations?.["run.googleapis.com/cloudsql-instances"];
-  if (!ann) return;
-  try {
-    await capture("gcloud", ["run", "services", "update", slug, "--clear-cloudsql-instances",
-      "--region", REGION, "--project", PROJECT, "--quiet"]);
-    log(`Cleared a leftover Cloud SQL attachment (${ann}) — this app has no platform database`);
-  } catch (e) {
-    log(`! could not clear the leftover Cloud SQL attachment: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
 
 async function createDomainMapping(slug: string, log: (l: string) => void, service: string = slug): Promise<void> {
   try {
@@ -4067,64 +3813,20 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // own Cloud Run service with its own URL, and the edge proxy split traffic
     // between them by path. Siblings are now placed on the same node as their
     // primary by `runFleetDeploy`, which is where `deploySibling` is called from.
-    // The app's OTHER processes: its workers and its crons.
     //
-    // Additive, and that is deliberate. `web` still deploys exactly as it did
-    // above, `release` still runs through lib/release-job.ts, and everything here
-    // is a resource that did not exist before — so an app with no processes
-    // declared takes a path identical to yesterday's, and an app with them gets
-    // more without its web service moving.
+    // WAS ALSO: the app's workers and crons, deployed to Cloud Run as worker
+    // pools and jobs. By the end it was not deploying them at all — it passed
+    // `FLEET_OWNS_PROCESSES`, an empty list, so that the orphan pass inside
+    // `deployProcesses` would DELETE the ones an app still had there. A migration
+    // step wearing a deploy step's clothes.
     //
-    // Reported and recorded, never fatal: a worker that fails to come up leaves
-    // an app whose frontend is live, and tearing the frontend down would make
-    // that strictly worse. Same rule as a sibling, for the same reason.
-    // The buildpack lane's image only exists once `run deploy` has run, and its
-    // name is Cloud Run's to choose — so it is read off the service that was
-    // just deployed rather than guessed. Null means the read failed, and a
-    // worker with no image is skipped loudly inside deployProcesses rather than
-    // deployed from a source tree that would build a third time.
-    //
-    // On the fleet branch this reads back the same image `runFleetDeploy`
-    // already placed — workers and crons still deploy through Cloud Run
-    // regardless of which runtime serves the web process, so this lookup
-    // still has to happen even when the web process itself did not go there.
-    let built: string | null = null;
-    let allRefs: SecretRef[] = [];
-    if (result.ok && !staticServe) {
-      built = processImage ?? await liveContainerImage(slug);
-      // EVERY secret the app has, not just the ones this deploy stored. The
-      // service path can pass the delta because `--update-secrets` merges; these
-      // primitives are deployed with `--set-secrets`, so a secret not passed is a
-      // secret dropped. See allAppSecrets for the deploy this cost.
-      allRefs = await allAppSecrets(slug, secretRefs);
-      const allSecrets = setSecretsFlag(allRefs);
-      await stages.around("processes", () => deployProcesses({
-        slug, dir, lane, image: built ?? undefined,
-        env: extraEnv, secrets: allSecrets || null,
-        cloudsql, labels: labelPairs, config: primaryConfigService,
-        // The node owns this app's workers and crons, so Cloud Run must own
-        // neither — and passing NO processes is how that is said, because the
-        // orphan pass inside `deployProcesses` then deletes the worker-pools and
-        // jobs this app already has there. Nothing new is needed for the
-        // removal; that machinery exists and this is exactly what it is for.
-        //
-        // Until now this ran unguarded, and for a web app on the fleet the
-        // duplicate workers were the documented status quo. For a WORKER-ONLY
-        // app they are not survivable: the entire app would run twice — a
-        // Telegram bot double-polling getUpdates, a queue consumer
-        // double-consuming — and the new verdict would truthfully report the
-        // node running it while the Cloud Run copy ran beside it. The guard
-        // belongs in the slice that first makes an app depend on the node alone.
-        processes: FLEET_OWNS_PROCESSES,
-        log,
-      })).catch((e) => log(`! processes: ${e instanceof Error ? e.message : String(e)}`));
-    }
+    // The migration is over. Every app's processes are owned by the node that
+    // holds it, and there is nothing left on Cloud Run to sweep: no app services,
+    // no worker pools, no per-app jobs — checked against the API, not assumed.
 
-    // The two routing models are mutually exclusive: a per-app domain
-    // mapping points straight at Cloud Run, which a sealed app refuses.
-    // `db-proxy` is a `remove` kind, and this is what removing it means for a
-    // service that was attached to Cloud SQL under the old model.
-    if (!wants("db-proxy") && !staticServe) await clearStaleCloudSql(slug, log);
+    // WAS: `clearStaleCloudSql`, detaching a Cloud SQL instance from an app's
+    // Cloud Run service when it stopped wanting `db-proxy`. Apps have no Cloud
+    // Run service to detach anything from.
 
     if (!wants("domain")) {
       // A worker-only app has no address, and saying so plainly is the point. It

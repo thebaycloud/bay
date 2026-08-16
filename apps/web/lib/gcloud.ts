@@ -7,7 +7,6 @@ import { dbNameForSlug, getPool } from "./db";
 import { deleteAppSecrets } from "./app-secrets";
 import { dropAppDatabase } from "./pg-role";
 import { runIdsForSlug } from "./deploy-runs";
-import { appPingScheduleArgs } from "./process-deploy";
 import { SCHEDULER_SA } from "./identities";
 import { appLogFilter } from "./log-filter";
 import { TENANT_PG_INSTANCE } from "./pg-config";
@@ -792,3 +791,71 @@ async function execLogs(jobName: string, execName: string): Promise<string[]> {
     return [];
   }
 }
+
+/** One cron as the dashboard states it: a path on the app, on a schedule. */
+export interface AppPing {
+  /** The Cloud Scheduler job's own id. */
+  id: string;
+  schedule: string;
+  /** The app's Cloud Run service url. */
+  serviceUrl: string;
+  /** The path on it the cron requests. */
+  path: string;
+  region: string;
+  project: string;
+  /** The identity Cloud Scheduler authenticates as. */
+  schedulerServiceAccount: string;
+}
+
+/**
+ * `gcloud scheduler jobs create http` argv for a cron created in the dashboard.
+ *
+ * This is the defect the comment above predicted, now closed. The shape stays
+ * what it was — a request at the app's own URL, with everything that costs, said
+ * plainly above `cronJobArgs` — because moving these onto jobs needs the app to
+ * declare a process and this does not. What changes is that the request is now
+ * signed.
+ *
+ * **OIDC, not OAuth**, exactly inverting `cronScheduleArgs`, and gcloud's own
+ * help states the rule: an OIDC token is used "except for Google APIs hosted on
+ * *.googleapis.com: these APIs expect an OAuth token". That function targets one
+ * of those APIs. This one targets a customer's private Cloud Run service.
+ *
+ * The audience is sent explicitly, and the honest reason is narrower than it
+ * looks. Omitted, Cloud Scheduler falls back to "the URI specified in target"
+ * (its own help) — the path included — and that was measured against a sealed
+ * app and accepted: 200, same as pinning it. So this flag is not what makes the
+ * cron work. It is here because the service url is the audience Cloud Run
+ * DOCUMENTS, and the one `probeApp` already depends on; a path-bearing `aud`
+ * working is tolerance, not a promise, and it would fail silently and nightly.
+ *
+ * It takes the url and the path rather than the joined uri so those two cannot
+ * describe different services — a caller holding a uri and an audience holds two
+ * strings that must agree, and this is not a disagreement anyone would notice.
+ */
+export function appPingScheduleArgs(a: AppPing): string[] {
+  const base = a.serviceUrl.replace(/\/+$/, "");
+  const uri = base + (a.path.startsWith("/") ? a.path : `/${a.path}`);
+  return [
+    "scheduler", "jobs", "create", "http", a.id,
+    "--location", a.region, "--project", a.project,
+    `--schedule=${a.schedule}`,
+    `--uri=${uri}`,
+    "--http-method=POST",
+    `--oidc-service-account-email=${a.schedulerServiceAccount}`,
+    `--oidc-token-audience=${base}`,
+  ];
+}
+
+/**
+ * The service-level flags a `web` process adds beyond what `deployArgs` builds.
+ *
+ * One flag today, and it is the one that makes an agent server's private API
+ * expressible: `--ingress=internal` accepts traffic from inside the VPC and from
+ * other Cloud Run services in the project, and nothing from the internet.
+ *
+ * `--ingress=all` is stated explicitly rather than omitted for public. Omitting
+ * it leaves whatever the service already had, so an app that was internal and
+ * becomes public would stay unreachable with a config that says otherwise — a
+ * silent no-op on the one field whose whole purpose is to be observable.
+ */

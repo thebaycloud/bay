@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  deployArgs, dbContainerArgs, databaseEnv, databaseEnvNames,
+  dbContainerArgs, databaseEnv, databaseEnvNames,
   DEFAULT_SCALE, DEFAULT_PORT, withScale, SERVICE_LANES,
   needsServiceRecreate,
   type Lane, type LaneDeploy, type Scale } from "../lib/lanes";
@@ -41,52 +41,6 @@ function request(lane: Lane, over: Partial<LaneDeploy> = {}): LaneDeploy {
   return { ...base, ...over };
 }
 
-for (const lane of SERVICE_LANES) {
-  test(`${lane} lane carries the app environment and secrets`, () => {
-    const argv = deployArgs(request(lane));
-    for (const flag of APP_FLAGS) {
-      assert.ok(argv.includes(flag), `${lane} dropped ${flag.split("=")[0]}`);
-    }
-  });
-
-  test(`${lane} lane sets its own resource envelope`, () => {
-    const argv = deployArgs(request(lane));
-    // Not Cloud Run's 512 MiB default, which OOM-kills a real Node app at 564
-    // MiB before it binds $PORT and reports it as "didn't start on $PORT".
-    assert.ok(argv.includes("--memory"), `${lane} left memory at the Cloud Run default`);
-    assert.equal(argv[argv.indexOf("--memory") + 1], DEFAULT_SCALE.memory);
-    assert.ok(argv.includes(`--max-instances=${DEFAULT_SCALE.maxInstances}`), `${lane} scales unbounded`);
-    assert.ok(argv.includes(`--timeout=${DEFAULT_SCALE.timeout}`), `${lane} keeps the 300s default`);
-    assert.ok(argv.includes(`--concurrency=${DEFAULT_SCALE.concurrency}`));
-    assert.ok(argv.includes("--cpu-boost"));
-  });
-
-  test(`${lane} lane attaches the Cloud SQL proxy when the app has a database`, () => {
-    const argv = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
-    assert.ok(argv.includes("--depends-on"), `${lane} deployed a database app with no proxy`);
-    assert.equal(argv[argv.indexOf("--depends-on") + 1], "cloudsql-proxy");
-    for (const flag of dbContainerArgs("proj:region:inst")) assert.ok(argv.includes(flag));
-    // With a sidecar the app's own flags must be scoped to a NAMED container, or
-    // gcloud attributes them to whichever container it saw last — which would
-    // hand the app's secrets to the proxy.
-    const appAt = argv.indexOf("--container");
-    assert.equal(argv[appAt + 1], "app");
-    assert.ok(appAt < argv.indexOf(APP_FLAGS[0]), `${lane} put app flags before --container app`);
-  });
-
-  test(`${lane} lane keeps service-level flags ahead of any --container`, () => {
-    const argv = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
-    const first = argv.indexOf("--container");
-    for (const flag of [...SERVICE_FLAGS, `--timeout=${DEFAULT_SCALE.timeout}`]) {
-      assert.ok(argv.indexOf(flag) < first, `${flag} must precede --container (gcloud rejects it otherwise)`);
-    }
-  });
-
-  test(`${lane} lane deploys the service under its own name`, () => {
-    const argv = deployArgs(request(lane, { service: "other-app" }));
-    assert.deepEqual(argv.slice(0, 3), ["run", "deploy", "other-app"]);
-  });
-}
 
 /**
  * The shape rule, asserted directly because it is not idempotent: naming the
@@ -94,86 +48,7 @@ for (const lane of SERVICE_LANES) {
  * service's container set. The runner lane has always named it; the other two
  * never have, and may only start when they gain a sidecar they never had.
  */
-test("the remaining lanes stay flat without a database", () => {
-  // WAS: "runner stays container-scoped without a database; the others stay
-  // flat". The runner lane always NAMED its container — it had deployed
-  // `--container app` from the start — so it was the one lane whose shape did not
-  // depend on a live read. It is deleted, and what is left is the half that was
-  // always the interesting one: a lane only names a container when it gains a
-  // sidecar it never had.
-  assert.ok(!deployArgs(request("container")).includes("--container"));
-});
 
-test("a service that already has an unnamed container keeps the flat shape", () => {
-  // `port` used to arrive from the helper's `lane === "runner" ? { port: 8080 }`
-  // — the runner was the one lane that always exposed one. It is stated here
-  // instead, because the fact under test is that a live unnamed container keeps
-  // BOTH its flat shape and the port it already exposes.
-  const argv = deployArgs(request("container", { existingScoped: false, port: 8080 }));
-  assert.ok(!argv.includes("--container"), "a lane must not name a container the live service left unnamed");
-  assert.ok(argv.includes("--port"), "the port survives — it is what the live container already exposes");
-});
-
-test("a service that already has named containers keeps the scoped shape", () => {
-  for (const lane of SERVICE_LANES) {
-    assert.ok(
-      deployArgs(request(lane, { existingScoped: true })).includes("--container"),
-      `${lane}: un-naming a live service's container rewrites its container set`,
-    );
-  }
-});
-
-test("a service that does not exist yet takes the lane's own default", () => {
-  assert.ok(deployArgs(request("container", { existingScoped: null, cloudsql: "p:r:i" })).includes("--container"));
-});
-
-test("a sidecar forces the scoped shape whatever the live service looks like", () => {
-  // Not a free choice: Cloud Run requires it once more than one container exists,
-  // so an app gaining a database has to migrate however it looked before.
-  const argv = deployArgs(request("container", { existingScoped: false, cloudsql: "p:r:i" }));
-  assert.ok(argv.includes("--container"));
-  assert.ok(argv.includes("--depends-on"));
-});
-
-test("a lane names its code the way that lane builds", () => {
-  // The `--source` half went with the buildpack lane: that flag WAS the lane —
-  // `gcloud run deploy --source` handing the build to Cloud Run. One way left to
-  // name code, and it is a built image.
-  assert.ok(deployArgs(request("container")).includes("--image"));
-  assert.ok(!deployArgs(request("container")).includes("--source"));
-});
-
-test("lane-specific container flags survive to the argv", () => {
-  // Appended to the CONTAINER, not the service: they describe how this code is
-  // built. The flag that motivated this — `--clear-base-image`, the buildpack
-  // retry gcloud asks for — went with that lane; the plumbing is still what
-  // carries any per-container flag to the argv.
-  const argv = deployArgs(request("container", { containerFlags: ["--clear-base-image"] }));
-  assert.ok(argv.includes("--clear-base-image"));
-});
-
-test("the static lane deploys no service at all", () => {
-  assert.throws(() => deployArgs(request("static" as Lane)), /publishes to GCS/);
-});
-
-test("a lane with neither an image nor a source is refused, naming the lane", () => {
-  assert.throws(
-    () => deployArgs({ ...request("container"), image: undefined }),
-    /lane "container" needs an image or a source/,
-  );
-});
-
-test("a declared scale overrides the defaults and leaves the rest alone", () => {
-  const scale = withScale({ memory: "4Gi", timeout: 3600 });
-  const argv = deployArgs(request("container", { scale }));
-  assert.equal(argv[argv.indexOf("--memory") + 1], "4Gi");
-  assert.ok(argv.includes("--timeout=3600"));
-  assert.ok(argv.includes(`--concurrency=${DEFAULT_SCALE.concurrency}`));
-});
-
-test("cpu-boost is expressed either way, never omitted", () => {
-  assert.ok(deployArgs(request("container", { scale: withScale({ cpuBoost: false }) })).includes("--no-cpu-boost"));
-});
 
 /**
  * The protected-name set in Phase 2 is derived from this list rather than typed
@@ -216,10 +91,7 @@ test("the proxy carries a startup probe, without which Cloud Run refuses the rev
 });
 
 for (const lane of SERVICE_LANES) {
-  test(`${lane} lane's proxy is probed, so --depends-on is a promise it can keep`, () => {
-    const argv = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
-    assert.ok(argv.some((a) => a.startsWith("--startup-probe=")), `${lane} would be rejected by Cloud Run`);
-  });
+
 
   /**
    * The other thing Cloud Run refuses a multi-container revision for, and the one
@@ -234,23 +106,8 @@ for (const lane of SERVICE_LANES) {
    * and buildpack lanes reached the scoped shape for the first time the day they
    * gained a sidecar, and every app that took them was undeployable.
    */
-  test(`${lane} lane names exactly one ingress port once a sidecar is beside it`, () => {
-    const argv = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
-    assert.equal(argv.filter((a) => a === "--port").length, 1, `${lane} would be rejected: exactly one container must specify --port`);
-    // On the app's container, not the proxy's — the port marks which one serves.
-    assert.ok(argv.indexOf("--port") > argv.indexOf("--container"));
-    assert.ok(argv.indexOf("--port") < argv.lastIndexOf("--container"));
-  });
 
-  test(`${lane} lane's port does not move when the sidecar arrives`, () => {
-    // The sidecar is a database connection, not a change of address. An app that
-    // came up on Cloud Run's default 8080 without a database has to come up on
-    // 8080 with one.
-    const withDb = deployArgs(request(lane, { cloudsql: "proj:region:inst" }));
-    const flat = deployArgs(request(lane));
-    const portOf = (argv: string[]) => (argv.includes("--port") ? argv[argv.indexOf("--port") + 1] : String(DEFAULT_PORT));
-    assert.equal(portOf(withDb), portOf(flat), `${lane} moves the app's port when it gains a database`);
-  });
+
 }
 
 test("the probe's timeout is shorter than its period, which Cloud Run enforces", () => {
