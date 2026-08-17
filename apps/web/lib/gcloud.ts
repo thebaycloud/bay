@@ -91,20 +91,6 @@ async function serviceResource(slug: string): Promise<any> {
   return JSON.parse(await capture(["run", "services", "describe", slug, "--region", REGION, "--project", PROJECT, "--format=json"]));
 }
 
-export async function listServices(ownerId?: string): Promise<AppSummary[]> {
-  const arr = await serviceList();
-  return arr
-    .filter((s) => !ownerId || s.metadata?.labels?.[OWNER_LABEL] === ownerId)
-    .map((s) => ({
-      slug: s.metadata?.name ?? "",
-      name: s.metadata?.labels?.[NAME_LABEL] || s.metadata?.name || "",
-      url: s.status?.url ?? "",
-      ready: (s.status?.conditions ?? []).find((c: any) => c.type === "Ready")?.status === "True",
-      region: REGION,
-      image: s.spec?.template?.spec?.containers?.[0]?.image ?? "",
-      owner: s.metadata?.labels?.[OWNER_LABEL] ?? "",
-    }));
-}
 
 export async function ownsApp(slug: string, ownerId: string): Promise<boolean> {
   if (!ownerId) return false;
@@ -408,18 +394,6 @@ export async function setEnv(slug: string, set: Record<string, string>, unset: s
 /** `ready` is whether the revision ever started — a failed deploy leaves one that never did. */
 export interface Revision { name: string; created: string; active: boolean; ready: boolean; }
 
-export async function listRevisions(slug: string): Promise<Revision[]> {
-  const out = await capture(["run", "revisions", "list", "--service", slug, "--region", REGION, "--project", PROJECT, "--format=json"]);
-  const arr = JSON.parse(out) as any[];
-  return arr
-    .map((r) => ({
-      name: r.metadata?.name ?? "",
-      created: r.metadata?.creationTimestamp ?? "",
-      active: (r.status?.conditions ?? []).some((c: any) => c.type === "Active" && c.status === "True"),
-      ready: (r.status?.conditions ?? []).some((c: any) => c.type === "Ready" && c.status === "True"),
-    }))
-    .sort((a, b) => (a.created < b.created ? 1 : -1));
-}
 
 /*
  * WAS: `rollback` — `gcloud run revisions list` and a traffic split back to the
@@ -507,72 +481,24 @@ async function otherAppSlugs(slug: string): Promise<Set<string>> {
   }
 }
 
-/**
- * Delete ONLY the Cloud Run service, leaving everything else the app owns.
- *
- * Not `deleteApp`: the database, the secrets, the images, the buckets and the
- * fleet placement all stay. This exists for one transition Cloud Run does not
- * otherwise offer — a live service whose container is unnamed cannot be
- * redeployed with named containers, which a Cloud SQL sidecar requires — so the
- * service is recreated by the very next command. See `needsServiceRecreate`.
- */
-export async function deleteRunService(slug: string): Promise<void> {
-  await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]);
-}
 
 export async function deleteApp(slug: string): Promise<void> {
-  // Two serving lanes, either of which may be absent:
-  //  - container: its own Cloud Run service + optional per-app bucket
-  //  - static: no service — its bytes live under <slug>/ in the shared assets
-  //    bucket. `run services delete` MUST be optional here, or deleting a static
-  //    app throws "service not found" and fails the whole delete.
-  try { await capture(["run", "services", "delete", slug, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* static: no per-app service */ }
-  // Sibling services from a multi-service app (`<slug>-api`, `<slug>-worker`).
-  // Deleting only the primary would leave them running and billing under the name
-  // of an app that no longer exists, reachable by nothing.
+  // WAS: four sweeps of Cloud Run — the app's own service, its siblings, its
+  // worker pools and its jobs — each a list call plus deletes, on every delete.
   //
-  // Filtered through `ownedResourceNames`, and that is not tidiness. A bare
-  // `startsWith(slug + "-")` also matches the resources of any app whose SLUG
-  // begins with this one plus a hyphen, and that is not hypothetical: on 5 Aug
-  // the platform held both `subio` and `subio-2`, live, and deleting the first
-  // would have taken the second's Cloud Run service with it — a different app,
-  // no warning, no record.
-  const others = await otherAppSlugs(slug);
-  try {
-    const all = await capture(["run", "services", "list", "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
-    for (const name of ownedResourceNames(slug, all.split("\n"), others)) {
-      await capture(["run", "services", "delete", name, "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
-    }
-  } catch { /* listing failed — the primary is already gone */ }
-
-  // Cloud Run WORKER POOLS. Nothing deleted these, ever.
+  // Nothing creates any of them. No app deploys to a per-app Cloud Run service;
+  // siblings are placed on the primary's node; worker pools and per-app jobs
+  // went with `deployProcesses`. A static app never had a service of its own
+  // either — its bytes live under `<slug>/` in the shared assets bucket, which
+  // is swept below.
   //
-  // A worker-only app — a bot, a queue consumer — has no service and no job: its
-  // process runs in a worker pool named `<slug>-<process>`, which neither
-  // `run services list` nor `run jobs list` shows. So deleting such an app left
-  // a container RUNNING and billing, permanently, with no row anywhere to
-  // explain it and no surface that would ever show it again. Measured: deleting
-  // a worker-only test app left `lleb7-bot` alive.
-  try {
-    const pools = await capture(["beta", "run", "worker-pools", "list", "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
-    for (const name of ownedResourceNames(slug, pools.split("\n"), others)) {
-      await capture(["beta", "run", "worker-pools", "delete", name, "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
-    }
-  } catch { /* no worker pools, or the command is unavailable */ }
-
-  // Cloud Run JOBS: the release job, each cron's job, and the one-off `exec`
-  // job. Left behind they hold configuration and image references for an app
-  // that no longer exists, and the slug space is small enough that the name is
-  // eventually handed to somebody else.
-  try {
-    const jobs = await capture(["run", "jobs", "list", "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
-    const mine = ownedResourceNames(slug, jobs.split("\n"), others).concat(
-      jobs.split("\n").map((l) => l.trim()).filter((n) => n === `ss-exec-${slug}`),
-    );
-    for (const name of new Set(mine)) {
-      await capture(["run", "jobs", "delete", name, "--region", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
-    }
-  } catch { /* no jobs */ }
+  // The reason to remove rather than keep-just-in-case is that the sweeps were
+  // never free: four remote round trips on the path a person waits on, to find
+  // nothing. And the fear they answered — "deleting an app left a container
+  // running and billing, with no row anywhere to explain it" — is now answered
+  // better by `npm run drift`, which asks every resource type at once, by a
+  // different path than the one that wrote the belief, and can be run when
+  // there is a reason to rather than on every delete.
 
   // Cloud SCHEDULER jobs — the ones that actually keep firing.
   //
@@ -580,6 +506,13 @@ export async function deleteApp(slug: string): Promise<void> {
   // waking up on its schedule forever, against a URL that answers 404, writing
   // a failure into the project's logs every time. Measured: deleting an app
   // with a `*/10 * * * *` cron left `<slug>-nightly` scheduled and armed.
+  // Filtered through `ownedResourceNames`, and that is not tidiness. A bare
+  // `startsWith(slug + "-")` also matches the resources of any app whose SLUG
+  // begins with this one plus a hyphen, and that is not hypothetical: on 5 Aug
+  // the platform held both `subio` and `subio-2`, live, and deleting the first
+  // would have taken the second's schedules with it — a different app, no
+  // warning, no record.
+  const others = await otherAppSlugs(slug);
   try {
     const sched = await capture(["scheduler", "jobs", "list", "--location", REGION, "--project", PROJECT, "--format=value(name)"]);
     // `jobs list` prints fully-qualified names; the last path element is the id.

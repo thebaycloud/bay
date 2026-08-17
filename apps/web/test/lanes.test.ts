@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  dbContainerArgs, databaseEnv, databaseEnvNames,
+  databaseEnv, databaseEnvNames,
   DEFAULT_SCALE, DEFAULT_PORT, withScale, SERVICE_LANES,
   needsServiceRecreate,
   type Lane, type LaneDeploy, type Scale } from "../lib/lanes";
@@ -66,29 +66,6 @@ test("every database variable the platform writes is reported as a name", () => 
   assert.ok(names.every((n) => n === n.toUpperCase() && !n.includes("=")));
 });
 
-test("the proxy args stay one token, because a value starting with a dash reads as a flag", () => {
-  const args = dbContainerArgs("proj:region:inst");
-  const arg = args.find((a) => a.startsWith("--args="));
-  assert.ok(arg, "the proxy must receive its --args");
-  assert.ok(arg!.includes("--port=5432"), "passed as two tokens gcloud refuses with 'expected one argument'");
-  assert.ok(arg!.endsWith("proj:region:inst"));
-});
-
-test("the proxy carries a startup probe, without which Cloud Run refuses the revision", () => {
-  // "Dependent container 'cloudsql-proxy' must have startup probe specified" —
-  // so every --depends-on that lacked one was a revision that never existed.
-  const args = dbContainerArgs("proj:region:inst");
-  const probe = args.find((a) => a.startsWith("--startup-probe="));
-  assert.ok(probe, "a --depends-on target without a startup probe is rejected outright");
-  // NOT a TCP probe on 5432: the proxy binds that to loopback and the prober
-  // connects to the container address, so it fails 30 times against a proxy that
-  // is running perfectly.
-  assert.match(probe!, /httpGet\.path=\/startup/);
-  assert.ok(!probe!.includes("tcpSocket"));
-  assert.ok(args.some((a) => a.includes("--health-check")), "the health server has to be switched on");
-  assert.ok(args.some((a) => a.includes("--http-address=0.0.0.0")), "the prober cannot reach a loopback-only health port");
-  assert.ok(args.every((a) => !a.includes("--address=0.0.0.0")), "the DATABASE port must stay on loopback");
-});
 
 for (const lane of SERVICE_LANES) {
 
@@ -110,15 +87,6 @@ for (const lane of SERVICE_LANES) {
 
 }
 
-test("the probe's timeout is shorter than its period, which Cloud Run enforces", () => {
-  // `startup_probe.timeout_seconds: must be less than period_seconds` — rejected
-  // outright, not clamped, so the arithmetic is part of the contract.
-  const probe = dbContainerArgs("proj:region:inst").find((a) => a.startsWith("--startup-probe="))!;
-  const n = (k: string) => Number(probe.match(new RegExp(`${k}=(\\d+)`))![1]);
-  assert.ok(n("timeoutSeconds") < n("periodSeconds"), `${probe} would be refused`);
-  // And enough total time for the proxy to authorise against Cloud SQL.
-  assert.ok(n("periodSeconds") * n("failureThreshold") >= 60);
-});
 
 test("a service that gained a database is recreated, and nothing else is", () => {
   // Cloud Run cannot rename the container of a live service. A sidecar requires

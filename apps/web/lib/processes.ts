@@ -1,5 +1,4 @@
 import { DEFAULT_SCALE, withScale, type Scale } from "./lanes";
-import { RELEASE_TIMEOUT } from "./release-job";
 import type { ProcfileEntry } from "./procfile";
 
 /**
@@ -206,7 +205,14 @@ export function unemittable(p: ResolvedProcess): string[] {
 }
 
 /** Cloud Run's own default for a job task that says nothing. */
-export const DEFAULT_TASK_TIMEOUT = RELEASE_TIMEOUT;
+/**
+ * How long a task-shaped process may run: thirty minutes.
+ *
+ * Was `RELEASE_TIMEOUT` in the deleted lib/release-job.ts, where it bounded a Cloud Run job.
+ * Releases run on the node now; the number is the same and the reason it is a
+ * task rather than a service is what it was always about.
+ */
+export const DEFAULT_TASK_TIMEOUT = 1800;
 
 /**
  * Retries default to none, for both task kinds.
@@ -416,4 +422,31 @@ export function resolveProcesses(configs: Record<string, ProcessConfig>): Resolv
  */
 export function isServiceless(declared: ResolvedProcess[]): boolean {
   return declared.length > 0 && !declared.some((p) => p.kind === "web");
+}
+
+/**
+ * The one-shot command a plan carries, for any lane it could possibly run on.
+ *
+ * It exists as a function because the pipeline read it inside the branch that
+ * handles Node and Python, and nowhere else. So `language: "other"` — which is
+ * the schema's own spelling for tier 3, "I committed a Dockerfile, build that" —
+ * reached the container lane with `releaseCmd` still `""`, and `runRelease`
+ * returns early on an empty command. A container-lane app that declared
+ * `release: "prisma migrate deploy"`, passed `supersonic check`, and watched the
+ * check print the command back, deployed with no release job created at all and
+ * no line of output saying so. Observed on umami: the deploy reported success,
+ * the health path answered 200, and every page that read a table was an error.
+ *
+ * Which lane runs the release is a LANE question, and the lane is derived from
+ * whether the author committed a Dockerfile — never from the language. The
+ * database provisioning two lines below it already knew that, with a comment
+ * saying so; the release was the last thing here still asking the language.
+ *
+ * Static is the one real exception, and it is not a language exception either: a
+ * static site has nothing to run before traffic, which `LANE_CONSUMES` and
+ * `releaseJobArgs` both already refuse.
+ */
+export function releaseFromPlan(plan: { static?: boolean; preRun?: string[] }): string {
+  if (plan.static) return "";
+  return (plan.preRun ?? []).filter(Boolean).join(" && ");
 }

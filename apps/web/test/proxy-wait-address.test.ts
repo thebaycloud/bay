@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { proxyWait } from "../lib/release-job";
-import { CLOUD_RUN_DB, FLEET_DB } from "../lib/db-address";
+import { proxyWait, CLOUD_RUN_DB, FLEET_DB } from "../lib/db-address";
 
 /**
  * Which address an app waits on before it starts.

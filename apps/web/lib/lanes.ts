@@ -101,13 +101,6 @@ export function choosePort(planPort: unknown, exposed: number | null): number {
  */
 export const DB_HOST = CLOUD_RUN_DB.host;
 export const DB_PORT = CLOUD_RUN_DB.port;
-/**
- * Where the proxy answers health checks, as opposed to database traffic.
- *
- * A separate port because it is the only thing bound beyond loopback — Cloud
- * Run's prober has to reach it, and the database port must stay unreachable.
- */
-export const DB_HEALTH_PORT = "9801";
 
 const CLOUD_SQL_PROXY_IMAGE = process.env.CLOUD_SQL_PROXY_IMAGE
   ?? "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1";
@@ -150,78 +143,7 @@ export function databaseEnvNames(): string[] {
     .map((pair) => pair.slice(0, pair.indexOf("=")));
 }
 
-/**
- * The proxy container itself, WITHOUT the startup probe.
- *
- * The proxy authenticates as the service's own identity, which therefore needs
- * roles/cloudsql.client.
- *
- * Split out because a Cloud Run worker pool has no probes: `gcloud beta run
- * worker-pools deploy` exposes `--container` and `--depends-on` and no probe flag
- * of any kind (verified against SDK 539.0.0). So a worker that needs a database
- * needs this container and cannot have the probe below — and copying the image
- * name and the arg string into a second module to get that is the drifting-second-
- * copy defect this file's own comments are about. One source for the image, one
- * for the args; the probe is what the service and job paths add on top.
- */
-export function dbProxyContainer(connectionName: string): string[] {
-  return [
-    "--container", "cloudsql-proxy",
-    "--image", CLOUD_SQL_PROXY_IMAGE,
-    // `--args=…` as ONE token. Passed as two, gcloud reads the value's leading
-    // `--port=` as a flag of its own and refuses with "expected one argument".
-    // Identical to the mistake already fixed in startDeployJob — the value
-    // beginning with a dash is what makes it look like a flag, and the fix is
-    // never to let it be a separate argv entry.
-    // The database port stays on loopback; the HEALTH port is what Cloud Run is
-    // allowed to reach. See the probe below for why they cannot be the same one.
-    `--args=--port=${DB_PORT},--address=${DB_HOST},--health-check,--http-address=0.0.0.0,--http-port=${DB_HEALTH_PORT},${connectionName}`,
-  ];
-}
 
-/**
- * The proxy container plus its startup probe, for primitives that have probes.
- *
- * `--depends-on` makes Cloud Run start it first, so the app is not racing a port
- * that is not listening yet — and the probe below is what makes `--depends-on`
- * legal at all. A worker pool has neither, and uses `dbProxyContainer` with
- * `proxyWait()` in front of the command instead; see lib/process-deploy.ts.
- */
-export function dbContainerArgs(connectionName: string): string[] {
-  return [
-    ...dbProxyContainer(connectionName),
-    // Required, not optional. Cloud Run refuses any revision whose `--depends-on`
-    // names a container without one:
-    //
-    //   spec.template.spec.containers[0].depends_on: Dependent container
-    //   'cloudsql-proxy' must have startup probe specified
-    //
-    // Which means no app with a database had ever deployed on a lane that
-    // attaches this sidecar — the flag pair was written, the revision was
-    // rejected, and the failure went to a repair agent that correctly reported
-    // it could not fix the platform from inside the repository.
-    //
-    // NOT a TCP probe on 5432, which was the obvious first answer and is wrong.
-    // The proxy binds the database port to 127.0.0.1 deliberately, and Cloud
-    // Run's prober connects to the container's address rather than its loopback,
-    // so it cannot see a loopback-only listener. The proxy logs "ready for new
-    // connections" and the probe fails 30 times against the same port:
-    //
-    //   STARTUP TCP probe failed 30 times consecutively ... DEADLINE_EXCEEDED
-    //
-    // Binding 5432 to 0.0.0.0 would satisfy the probe by widening what listens
-    // for the database — the wrong half to move. The proxy's own health server
-    // is the right one: it answers /startup only once the instance is genuinely
-    // ready, and it is the only thing exposed beyond loopback.
-    //
-    // periodSeconds > timeoutSeconds is enforced by Cloud Run, which rejects the
-    // revision outright rather than clamping:
-    //   startup_probe.timeout_seconds: must be less than period_seconds
-    // 3s apart, 20 attempts, so the proxy has a full minute to authorise against
-    // Cloud SQL before the instance is called dead.
-    `--startup-probe=httpGet.path=/startup,httpGet.port=${DB_HEALTH_PORT},periodSeconds=3,timeoutSeconds=2,failureThreshold=20`,
-  ];
-}
 
 /**
  * What the service is allowed to consume. Only the runner lane set any of this

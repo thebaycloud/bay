@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { generateDockerfile, baseImage, dockerMirror, dockerignore, manifestPaths, DockerfileError } from "../lib/dockerfile";
-import { proxyWait } from "../lib/release-job";
+import { proxyWait } from "../lib/db-address";
 
 const base = { language: "python", command: "gunicorn app:app --bind 0.0.0.0:$PORT" };
 

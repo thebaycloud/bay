@@ -47,13 +47,12 @@ import { type Limits } from "@/lib/entitlements";
 import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
 import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
-import { CLOUD_RUN_DB, databaseUrlFor, type DbAddress } from "@/lib/db-address";
+import { CLOUD_RUN_DB, databaseUrlFor, proxyWait, type DbAddress } from "@/lib/db-address";
 import { databaseEnv, databaseEnvNames, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
 import { causeOf, failureSentence, FailureRecorder } from "@/lib/deploy-failures";
-import { releaseExecuteArgs, releaseLogsArgs, releaseFromPlan, proxyWait } from "@/lib/release-job";
 // frameworkBuildEnv is deliberately not wired here yet: build-time variables
 // have to reach the Cloud Build config, not the revision, and that is Phase 7d.
 import { deploymentEnv } from "@/lib/framework-env";
@@ -66,7 +65,7 @@ import { redeployableRepo } from "@/lib/repo-source";
 import { railpackConfig, railpackPrepareArgs } from "@/lib/railpack";
 import { detectRelease, RELEASE_FILES } from "@/lib/release-detect";
 import { readProcfile } from "@/lib/procfile";
-import { mergeProcfile, resolveProcess, resolveProcesses, isServiceless, type ResolvedProcess } from "@/lib/processes";
+import { mergeProcfile, resolveProcess, resolveProcesses, isServiceless, releaseFromPlan, type ResolvedProcess } from "@/lib/processes";
 import { buildEnvelope, assertReached } from "@/lib/envelope";
 import { planResources, type Declared } from "@/lib/resources";
 
@@ -1123,7 +1122,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
   // Rebound because the pipeline reassigns them as it learns more: the run
   // command can come from the plan, and `url` becomes the live URL.
   let runCmd = input.runCmd;
-  /** The one-shot pre-traffic command, held out of `start`. See lib/release-job.ts. */
+  /** The one-shot pre-traffic command, held out of `start`. See `releaseFromPlan` in lib/processes.ts. */
   let releaseCmd = "";
   const url = input.repoUrl;
   const send = emit;
@@ -1458,7 +1457,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // then three call sites did it anyway.
         //
         // It runs once now, in its own Cloud Run job, before the pointer moves.
-        // See lib/release-job.ts.
+        // See `releaseFromPlan` in lib/processes.ts.
         releaseCmd = releaseFromPlan(plan);
         // needsDB is language-independent: a Go app with migrations needs its
         // database provisioned exactly as much as a Node one does. So is the
@@ -1965,7 +1964,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     }
 
     // A release declared in config rather than a Procfile has always been run by
-    // lib/release-job.ts as a Cloud Run Job. On the fleet a release is an
+    // a Cloud Run Job. On the fleet a release is an
     // ordinary process, so it has to arrive as one. Appended after `serviceless`
     // is decided: a release process has no `web` kind, and folding it in earlier
     // would make an app with only a config release — and no Procfile at all —
