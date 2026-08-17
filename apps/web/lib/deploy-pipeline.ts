@@ -34,6 +34,7 @@ import { pgConfig, TENANT_PG_INSTANCE } from "@/lib/pg-config";
 import { dbNameForSlug, getPool } from "@/lib/db";
 import { fetchSource, pruneBrokenSymlinks } from "@/lib/source";
 import { detectStack, describeDetection } from "@/lib/detect-stack";
+import { publishStatic } from "@/lib/publish-static";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -2533,98 +2534,34 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
      * reason rather than only printing them.
      */
     const runStatic = async (out: { outputDir: string }): Promise<{ ok: boolean; url?: string; error?: string }> => {
-      const release = releaseId();
-      const prefix = releasePrefix(slug, release);
-      const destination = `gs://${ASSETS_BUCKET}/${prefix}`;
-      const needsBuild = Boolean(s.installCommand || s.buildCommand);
-
-      try {
-        if (needsBuild) {
-          await stages.around("build", async () => {
-            log("Building assets…");
+      // Build, upload, PROVE it arrived, then name it — the order is the module's
+      // whole point and the reason it is one. See lib/publish-static.ts.
+      const got = await publishStatic(
+        { slug, ownerId, workspaceId: ownerWorkspace },
+        {
+          dir, outputDir: out.outputDir,
+          installCommand: s.installCommand, buildCommand: s.buildCommand,
+          installVerbatim: installFromPlan,
+        },
+        {
+          log,
+          around: (stage, fn) => stages.around(stage, fn),
+          submitBuild: async (buildDir, configPath) => {
             const hb = setInterval(() => log("building…"), 8000);
-            writeFileSync(join(dir, "cloudbuild.yaml"), staticBuildConfig({
-              // A command the plan supplied is run exactly as written.
-              //
-              // These flags are a convenience for the command the DETECTOR
-              // generates, and appending them to somebody else's is wrong twice
-              // over: `pip install -r requirements.txt --no-audit` is not a
-              // command, and `(cd frontend && npm ci) --prefer-offline` is a
-              // syntax error — a subdirectory command is a subshell, and nothing
-              // can be appended after its closing paren. Both were produced by
-              // trying to be helpful with a string we did not write.
-              installCommand: !s.installCommand
-                ? null
-                : installFromPlan
-                  ? s.installCommand
-                  : `${s.installCommand} --prefer-offline --no-audit --no-fund`,
-              buildCommand: s.buildCommand,
-              outputDir: out.outputDir,
-              destination,
-              // The dependency tarball a build writes may only ever be read
-              // back by the tenant that produced it: it is not a dependency
-              // graph, it is one project's node_modules including whatever
-              // its postinstall scripts left in there.
-              namespace: ownerWorkspace ?? ownerId,
-              slug,
-            }));
             builds.reset();
             try {
-              await run("gcloud", ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()], buildLine);
+              await run("gcloud", ["builds", "submit", buildDir, "--region", REGION, "--project", PROJECT, "--config", configPath, ...buildIdentityArgs()], buildLine);
             } finally { clearInterval(hb); }
-          });
-        } else {
-          // Nothing to build — the directory already is the site, so it goes
-          // straight up from here and skips Cloud Build entirely.
-          await stages.around("upload", async () => {
-            log("Uploading…");
-            const source = join(dir, out.outputDir);
-            // Checked before the copy, because `rsync` from a directory that is
-            // not there fails in a way nothing downstream can explain: this lane
-            // runs no Cloud Build, so there is no build log to fall back on and
-            // the deploy reports `gcloud exited 1` with no cause anywhere. Saying
-            // which directory was expected is the whole diagnosis.
-            if (!existsSync(source)) {
-              throw new Error(
-                `this site has no \`${out.outputDir}\` directory to publish.\n` +
-                `The files to serve should be at the repository root, or in the directory the build writes.`
-              );
-            }
-            await runOrExplain("gcloud", ["storage", "rsync", "-r", source, destination, "--project", PROJECT]);
-          });
-        }
-      } catch (e) {
-        const buildLog = await builds.error();
-        const reason = buildLog || (e instanceof Error ? e.message : String(e));
-        return { ok: false, error: failureSentence("Build failed", reason) };
-      }
-
-      // A green Cloud Build is not evidence that anything was uploaded — the
-      // step that copies the assets can exit 0 having copied nothing, which
-      // is exactly how a pointer came to name a release that does not exist.
-      // Read the release back before it is allowed to go live.
-      try {
-        await stages.around("verify", async () => {
-          log("Checking the build…");
-          await assertReleaseUploaded(prefix, destination, log);
-        });
-      } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
-      }
-
-      // Last, and only now: the release is complete, so it may be named. A
-      // failure above leaves the previous release live and untouched.
-      await writePointer(slug, release);
-      log(`Published release ${release}`);
-      // The proxy routes by looking up apps.run_url, so a static app points
-      // at the shared static server. The proxy tells that server which app a
-      // request is for via x-supersonic-slug, because it drops Host on the
-      // way through and every static app shares this one upstream.
-      const upstream = await staticServiceUrl();
-      if (!upstream) {
-        return { ok: false, error: `${STATIC_SERVICE} has no URL — is the static server deployed?` };
-      }
-      return { ok: true, url: upstream };
+          },
+          uploadDir: (from, to) => runOrExplain("gcloud", ["storage", "rsync", "-r", from, to, "--project", PROJECT]),
+          assertUploaded: (prefix, destination) => assertReleaseUploaded(prefix, destination, log),
+          writePointer,
+          buildError: () => builds.error(),
+          upstreamUrl: staticServiceUrl,
+          failureSentence,
+        },
+      );
+      return got.ok ? { ok: true, url: got.url } : { ok: false, error: got.error };
     };
 
     /**
