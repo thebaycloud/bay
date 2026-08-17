@@ -20,7 +20,7 @@ import { snapshotSources, repairPatch } from "@/lib/repair-diff";
 import { putAppSecrets, setSecretsFlag, grantBuildAccess, readAppSecret, allAppSecrets, type SecretRef } from "@/lib/app-secrets";
 import { cloudRunName } from "@/lib/slug";
 import { SCHEDULER_SA } from "@/lib/identities";
-import { nodeFaultFor, placementFor, runningOnNode, runtimeOf, setRuntime } from "@/lib/fleet";
+import { nodeFaultFor, placementFor, placementEnvKeys, runningOnNode, runtimeOf, setRuntime } from "@/lib/fleet";
 import { FLEET_TARGET, STATIC_TARGET } from "@/lib/deploy-target";
 import { appLogFilter } from "@/lib/log-filter";
 import { buildAppSpec, memoryBytes, cpuShares, type AppSpec, type AgentProcess } from "@/lib/fleet-spec";
@@ -31,7 +31,7 @@ import { readAppConfig, planFromConfig, ConfigError, CONFIG_FILENAME, primarySer
 import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv, restateDatabaseAt } from "@/lib/env-merge";
 import { pgConfig, TENANT_PG_INSTANCE } from "@/lib/pg-config";
-import { dbNameForSlug } from "@/lib/db";
+import { dbNameForSlug, getPool } from "@/lib/db";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -334,12 +334,29 @@ function fixPrompt(slug: string, error: string): string {
  * code path for no gain. A first deploy has no service and answers with an empty
  * list, which is correct rather than an error.
  */
+/**
+ * Every variable name this app ALREADY has, set out of band.
+ *
+ * The case it exists for: `supersonic env set` writes a value neither this
+ * deploy's upload nor Secret Manager knows about, and a check that asks only
+ * those two would refuse the deploy of an app whose DATABASE_URL is set and
+ * working. That is stated at the call site and it is still the point.
+ *
+ * WHERE those values live changed, and this did not follow. `env set` used to be
+ * `gcloud run services update --update-env-vars` on the app's own Cloud Run
+ * service, so reading the live service was reading the place it wrote. Fleet
+ * apps have no service: the env route branches on `target.kind === "fleet"` and
+ * calls `setPlacementEnv`, which writes the app's PLACEMENT SPEC. Reading the
+ * service for those apps returns nothing every time — so a user who set the
+ * variable exactly as documented was told nothing had set it, and the deploy
+ * stopped before provisioning or building anything.
+ *
+ * `placementEnvKeys` returns null for an app with no placement, which is not the
+ * same as an app with no variables — an empty list here means "asked, and there
+ * are none", and null has to read as "could not ask".
+ */
 async function liveEnvNames(slug: string): Promise<string[]> {
-  const s = await describeServiceRest(slug).catch(() => null);
-  const containers = s?.spec?.template?.spec?.containers ?? [];
-  return containers.flatMap((c: { env?: { name?: string }[] }) =>
-    (c.env ?? []).map((e) => e.name).filter((n): n is string => Boolean(n)),
-  );
+  return (await placementEnvKeys(slug).catch(() => null)) ?? [];
 }
 
 /*
@@ -368,9 +385,31 @@ async function liveEnvNames(slug: string): Promise<string[]> {
  *
  * Telemetry must never be the reason a deploy fails, so this cannot throw.
  */
-async function isFirstDeploy(service: string): Promise<boolean | null> {
+/**
+ * Whether this app has ever been built before — the `cold` fact on every stage
+ * row, meaning "could a build cache have been hit at all".
+ *
+ * It used to ask whether a CLOUD RUN SERVICE named `slug` existed. That was the
+ * right question while every app had one. No app has one now: the fleet places
+ * a container on a node and creates no service, so the lookup returned "no
+ * service" for every deploy and every fleet deploy was recorded cold. A column
+ * that answers the same way for every row measures nothing, and this one exists
+ * specifically to separate cache hits from misses.
+ *
+ * `releases` is the honest source. A prior release for this slug is a prior
+ * build of this app's image, which is exactly what a cache could hit — and it is
+ * a local query rather than a remote describe on the deploy's critical path.
+ *
+ * Null on failure, unchanged: "we could not tell" and "this is the first" are
+ * different facts, and recording the second for the first is how a measurement
+ * quietly becomes a guess.
+ */
+async function isFirstDeploy(slug: string): Promise<boolean | null> {
   try {
-    return (await describeServiceRest(service)) ? false : true;
+    const r = await getPool("supersonic_platform").query(
+      `SELECT 1 FROM releases WHERE slug = $1 LIMIT 1`, [slug],
+    );
+    return r.rows.length === 0;
   } catch {
     return null;
   }

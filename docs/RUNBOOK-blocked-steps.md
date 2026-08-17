@@ -8,6 +8,42 @@ Everything here was verified on 12 Aug rather than assumed.
 
 ---
 
+## Read this before trusting any claim about what is running — 16 Aug
+
+Three statements handed forward on 14 Aug were false, and all three failed the
+same way: **the check reached the thing it was checking through the same broken
+path as the work.** Corrected here because the document that carried them no
+longer exists, and the next session will otherwise repeat them.
+
+**"Cloud SQL's shared instance has no tenant databases left" — false.** All
+fifteen were still on it. `deleteApp` ran its `DROP DATABASE` against the
+PLATFORM instance, where those databases do not exist; the failure was tolerated
+by design; and then the verification — `SELECT 1 FROM pg_database` — ran on that
+same wrong connection, found nothing, and returned `dropped: true`. Root cause:
+one `PG_CONN` for two Postgres instances after the 12 Aug split. Fixed, deployed
+and verified against production on 16 Aug. The fifteen are now genuinely gone.
+
+**"`apps` … at zero" — false.** One app exists: `l3sgp`, created 14 Aug 11:36,
+owned by `arsenfounder@gmail.com`. It is LIVE — fleet-lab-2 reports its `web`
+process running and healthy, all three nodes sync every few seconds, and the
+reconciler has no failures. A 403 on its address is its `visibility: private`,
+not a fault. **Do not treat it as leftover.**
+
+**"the sandboxes stopped" — unfounded, whichever way it points.** It was answered
+with `runc list`. The fleet runs sandboxes under gVisor, whose runtime binary is
+`runsc`. Every conclusion drawn from `runc` on these nodes is about a program the
+apps do not run under — including a "nothing is running" reading that the nodes'
+own reports contradict.
+
+**The tool for questions of this shape is `npm run drift`** (added 16 Aug). It
+compares what the platform believes against what exists, and reaches each
+resource by a DIFFERENT path than the one that wrote the belief — `gcloud` for
+cloud resources, a tenant-instance connection for roles. That asymmetry is the
+whole point; a check sharing a connection with what it checks will agree with it
+and prove nothing.
+
+---
+
 ## Done
 
 ### The node's project-wide secret access — removed
