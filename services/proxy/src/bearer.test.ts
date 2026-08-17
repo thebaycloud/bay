@@ -8,7 +8,7 @@ import type { IncomingMessage } from "node:http";
 // process, so the env has to be set before the import, which means a dynamic
 // one, exactly as forward.test.ts and config.test.ts do.
 process.env.AUTH_SECRET ??= "test-only-config-secret-do-not-log";
-const { bearerFrom, platformTokenFrom, hashToken, readVisitor, viewerOnce, oneVisitor, setPlatformTokenResolver } = await import("./session");
+const { bearerFrom, platformTokenFrom, hashToken, readVisitor, viewerOnce, oneVisitor, setPlatformTokenResolver, hasCredential } = await import("./session");
 const { config } = await import("./config");
 const { encode } = await import("@auth/core/jwt");
 
@@ -128,4 +128,26 @@ test("this file's token hash agrees with apps/web/lib/cli-tokens.ts's", async ()
   // functions ever drift, no CLI token resolves anywhere, and nothing says why.
   const { hash: hashFromWeb } = await import("../../../apps/web/lib/cli-tokens");
   assert.equal(hashToken("fixed-test-token"), hashFromWeb("fixed-test-token"));
+});
+
+/**
+ * The cheap half of "who is looking", for the one caller that must not spend
+ * anything on a stranger.
+ *
+ * A public app still wants to know whether the person looking at it is its
+ * owner — it used to answer `false` unconditionally, which meant publishing an
+ * app deleted the owner's own dashboard from it. Asking properly means resolving
+ * a session, and doing that on every request to every public app charges the
+ * anonymous visitor, who is most of them. This is the half that costs a header
+ * lookup and a cookie parse, so the decode only runs for somebody signed in.
+ */
+test("a request with no credential is recognised as such without decoding anything", () => {
+  const req = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
+  assert.equal(hasCredential(req({})), false, "a stranger carries nothing");
+  assert.equal(hasCredential(req({ cookie: "theme=dark; lang=en" })), false, "and unrelated cookies are not a session");
+  assert.equal(hasCredential(req({ cookie: `${config.sessionCookieName}=abc` })), true);
+  // Only a platform-minted token counts — ss_ is the prefix platformTokenFrom
+  // insists on, so somebody else's Authorization header is not a credential here.
+  assert.equal(hasCredential(req({ authorization: "Bearer ss_abc123" })), true, "an agent's token counts too");
+  assert.equal(hasCredential(req({ authorization: "Bearer sk_live_someone_elses" })), false);
 });

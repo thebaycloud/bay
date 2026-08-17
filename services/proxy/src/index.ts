@@ -7,7 +7,7 @@ import { serveRoomEvents } from "./room";
 import { xrayPage } from "./xray-page";
 import { assembleReading, liveDeps } from "./reading";
 import { wantsHtml } from "./negotiate";
-import { viewerOnce, authUrls } from "./session";
+import { viewerOnce, authUrls, hasCredential } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
 import { pickRoute, pickPrefix } from "./routes";
@@ -174,9 +174,26 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     forward(req, res, target as string, visitorCtx, wd, { slug, owner, badge, websiteId: site?.websiteId ?? null }, prefix);
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
+  //
+  // Skipping the WALL is not the same as refusing to know who is there, and this
+  // used to pass `false` for ownership unconditionally. The effect was that
+  // making an app public deleted the owner's own dashboard from it: they kept
+  // full access, saw no toolbar, no badge and no panel, and nothing anywhere
+  // said why. It is a quiet way to lose a feature, because the person it
+  // happens to has just been changing settings and will blame the settings.
+  //
+  // The anonymous visitor still pays nothing. `hasCredential` is a header lookup
+  // and a cookie parse; the decode only happens for somebody who is actually
+  // signed in, so a stranger's request does exactly what it did before.
   if (app.visibility === "public") {
     const wd = (await workspaceDomainOf(app.workspace_id)) ?? "";
-    await serve({ userId: "", email: "", name: "" }, wd, false);
+    const me = hasCredential(req) ? await viewer() : null;
+    const isOwner = !!me && me.userId === app.owner_id;
+    // Ownership is learned; identity is not. A signed-in STRANGER on a public
+    // app stays anonymous in the x-ray exactly as before — see the note in
+    // forward.ts on why the panel must not name people who never signed in here.
+    // The owner is the one exception, and only ever to themselves.
+    await serve(isOwner ? me : { userId: "", email: "", name: "" }, wd, isOwner);
     return;
   }
 

@@ -137,6 +137,21 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
+/**
+ * Whether this request carries anything that could name a viewer.
+ *
+ * For the one caller that must not spend anything on a stranger: a public app
+ * still wants to know whether the person looking at it is its owner, and asking
+ * that of every request to every public app is work charged to the anonymous
+ * visitor, who is most of them. This is the cheap half of that question — a
+ * header lookup and a cookie parse, no decode, no database — so the expensive
+ * half only runs for somebody who is actually signed in.
+ */
+export function hasCredential(req: IncomingMessage): boolean {
+  if (platformTokenFrom(req.headers.authorization as string | undefined)) return true;
+  return Boolean(parseCookies(req.headers.cookie)[config.sessionCookieName]);
+}
+
 export async function readVisitor(req: IncomingMessage): Promise<Visitor | null> {
   const token = platformTokenFrom(req.headers.authorization as string | undefined);
   if (token) return resolvePlatformToken(token);
