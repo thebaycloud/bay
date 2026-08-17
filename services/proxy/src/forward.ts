@@ -130,14 +130,52 @@ export async function forward(
       (upRes) => {
         const headers = stripHopByHop(scrubSetCookie({ ...upRes.headers }));
 
+        // Whether the overlay reached the page, said out loud.
+        //
+        // Four deploys were spent arguing about this from response sizes and
+        // guesses, and every one of those arguments was wrong. The decision has
+        // three inputs and one outcome, all cheap, none of them secret — an
+        // owner flag, a badge flag, a content type — so it says what it decided
+        // and there is nothing left to infer.
+        if (inject) {
+          console.log(
+            JSON.stringify({
+              ev: "overlay",
+              slug: inject.slug,
+              url: req.url ?? "/",
+              status: upRes.statusCode ?? 0,
+              owner: inject.owner,
+              badge: inject.badge,
+              site: Boolean(inject.websiteId),
+              ct: upRes.headers["content-type"] ?? null,
+              needsBody: needsBody(inject.owner, inject.badge, inject.websiteId),
+              isHtml: isHtmlDocument(upRes.headers["content-type"]),
+            }),
+          );
+        }
+
         // HTML documents are buffered so we can inject the Supersonic overlay
         // before </body>. Everything else (assets, JSON, SSE) streams untouched.
         if (inject && needsBody(inject.owner, inject.badge, inject.websiteId) && isHtmlDocument(upRes.headers["content-type"])) {
           const chunks: Buffer[] = [];
           upRes.on("data", (c: Buffer) => chunks.push(c));
           upRes.on("end", () => {
-            const body = injectOverlay(Buffer.concat(chunks).toString("utf8"), inject.slug, inject.owner, inject.badge, inject.websiteId);
+            const raw = Buffer.concat(chunks).toString("utf8");
+            const body = injectOverlay(raw, inject.slug, inject.owner, inject.badge, inject.websiteId);
             const buf = Buffer.from(body, "utf8");
+            // How much of what the browser received is ours. The only number that
+            // settles "did the overlay ship" without reading the page by hand.
+            console.log(
+              JSON.stringify({
+                ev: "injected",
+                slug: inject.slug,
+                url: req.url ?? "/",
+                app: raw.length,
+                sent: buf.length,
+                added: buf.length - raw.length,
+                closedBody: raw.toLowerCase().includes("</body>"),
+              }),
+            );
             delete headers["content-encoding"];
             headers["content-length"] = String(buf.length);
             // The validators upstream sent describe the body BEFORE the overlay,
