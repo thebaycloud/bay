@@ -33,6 +33,7 @@ import { mergeDatabaseEnv, configEnv, restateDatabaseAt } from "@/lib/env-merge"
 import { pgConfig, TENANT_PG_INSTANCE } from "@/lib/pg-config";
 import { dbNameForSlug, getPool } from "@/lib/db";
 import { fetchSource, pruneBrokenSymlinks } from "@/lib/source";
+import { detectStack, describeDetection } from "@/lib/detect-stack";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -223,8 +224,7 @@ function capture(cmd: string, args: string[]) {
  * two cannot drift into disagreeing about what a Vite project is.
  */
 async function detectStackIn(absoluteDir: string): Promise<DetectedStack> {
-  const raw = await capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", absoluteDir, "--api"]);
-  return JSON.parse(raw.slice(raw.indexOf("{"))).stack as DetectedStack;
+  return (await detectStack(absoluteDir, (cmd, args) => capture(cmd, args), AGENT)).stack;
 }
 /**
  * The container's ACTUAL startup crash, from Cloud Run's logs.
@@ -1160,17 +1160,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       { run: (cmd, args) => run(cmd, args, () => {}), log, stages },
     );
 
-    const raw = await stages.around("detect", async () => {
+    const det = await stages.around("detect", async () => {
       log("Detecting stack…");
-      return capture("npm", ["--prefix", AGENT, "run", "detect", "--silent", "--", dir, "--api"]);
+      return detectStack(dir, (cmd, args) => capture(cmd, args), AGENT);
     });
-    const det = JSON.parse(raw.slice(raw.indexOf("{")));
     const s = det.stack;
     send({ type: "detected", stack: s, plan: det.provisionPlan });
-    log(`Detected ${s.framework} · ${s.language} (${Math.round(s.confidence * 100)}%)`);
-    if (s.database?.engine) log(`Provision ${s.database.engine} (via ${s.database.via})`);
-    if (s.cache) log(`Provision ${s.cache} cache`);
-    if (s.secretsNeeded?.length) log(`Will ask for secrets: ${s.secretsNeeded.join(", ")}`);
+    // Returned as lines rather than logged inside, so which promises the platform
+    // makes is a pure function of what was found — see lib/detect-stack.ts.
+    for (const line of describeDetection(det)) log(line);
 
     // Agent-native plan. Instead of trusting the detector's hardcoded per-stack
     // recipes, let opencode READ the repo and decide the judgment calls: which
