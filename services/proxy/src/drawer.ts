@@ -1,111 +1,1035 @@
 import { XRAY_CSS, XRAY_JS } from "./xray-panel";
 
 /**
- * The drawer: everything an owner can do to their app, inside the app.
+ * The panel: everything an owner can do to their app, inside the app.
  *
  * WHAT THIS REPLACES
  *
- * The X-ray was a small card floating in the corner, and it could only ever
- * show — who is here, what is slow, what broke, who visited, what shipped. Every
- * verb lived somewhere else: to look at your database, your files, your
- * scheduled jobs or your secrets you left the app and went to a page ABOUT the
- * app on another hostname. That is the split this removes. The app is the
- * dashboard, so the dashboard has to be able to do things.
+ * A dark 460px drawer with a row of tabs — X-ray, Data, Files, Jobs, Secrets,
+ * Address, Share — each of which fetched only once you clicked it. It worked and
+ * it read as a developer tool bolted to the side of somebody's app.
  *
- * The X-ray is now one section of this rather than a surface of its own, which
- * is why `xray-panel.ts` is imported rather than reimplemented. Its drawXray
- * renders into whatever element the variable `xr` points at, so the drawer
- * simply points it at a section body. Two copies of that rendering would drift
- * within a week and the one that drifted would be the one nobody was looking at.
+ * This is the recovered `bay-panel` prototype instead: white cells on a grey
+ * ground, one fact per cell, and a tap pushes into the screen behind it. The
+ * difference that matters is not the colour. Tabs make you find the thing that
+ * is wrong; cells tell you. Home says how many tables, how many keys, who is
+ * here and what shipped, before you have clicked anything — which is only
+ * possible because everything is fetched at once, up front (`dwLoad`).
+ *
+ * WHERE IT CAME FROM
+ *
+ * `site/index.html` in the 12 Aug session, recovered from that session's
+ * transcript after the scratchpad it lived in was wiped. The component
+ * functions below — cell, li, pad, btn, bars, screen — are that file's own code,
+ * not a reimplementation, so the design cannot drift from what was approved.
+ * What is new here is the data layer: the prototype ran on four hardcoded demo
+ * apps, and every one of those has been replaced by a real route.
  *
  * NATIVE, NOT AN IFRAME
  *
- * Every panel here is drawn by this file against the control plane's existing
- * JSON APIs. An iframe of the dashboard would have been a day's work instead of
- * this, and it would have shipped a second scrollbar, a second font stack, a
- * second loading spinner and a visible seam down the middle of the owner's own
- * app. It also could not live in the shadow root, which is the thing that keeps
- * a tenant's CSS from reaching in and ours from leaking out.
+ * Every screen is drawn here against the control plane's existing JSON APIs. An
+ * iframe would have been a day's work instead of this and would have shipped a
+ * second scrollbar, a second font stack and a visible seam down the middle of
+ * the owner's own app. It also could not live in the shadow root, which is what
+ * keeps a tenant's CSS from reaching in and ours from leaking out.
  *
  * OWNER ONLY, AS SOURCE
  *
  * This whole file is emitted only inside the `owner ? OWNER_JS : ""` branch in
  * inject.ts. A visitor is not served it and cannot read it out of the page —
- * the same rule the toolbar already keeps, and the reason the analytics tracker
- * is deliberately OUTSIDE that branch while all of this is inside it.
+ * the same rule the toolbar keeps, and the reason the analytics tracker is
+ * deliberately OUTSIDE that branch while all of this is inside it.
+ *
+ * FONTS
+ *
+ * The tokens ask for Geist and fall back to system-ui. @font-face cannot be
+ * declared inside a shadow root, so on a tenant origin the fallback is what
+ * renders. That is deliberate for now: the alternative is injecting a font-face
+ * into the tenant's own document, which is exactly the leaking-out this design
+ * avoids.
  */
 
 export const DRAWER_CSS = String.raw`
-.dw{position:fixed;top:0;right:0;height:100vh;width:min(460px,100vw);z-index:2147483001;
-    background:#15140f;color:#eae8df;border-left:1px solid #2a2925;
-    box-shadow:-24px 0 60px rgba(0,0,0,.45);display:flex;flex-direction:column;
-    transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1)}
-.dw.on{transform:translateX(0)}
-/* On its own page the drawer IS the page: no sliding over anything, no shadow
-   against an empty backdrop, and it scrolls with the document. */
-.dw.flat{position:static;height:auto;width:100%;box-shadow:none;border-left:0;transform:none;background:transparent}
-.dw-scrim{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.35);
-          opacity:0;transition:opacity .22s;pointer-events:none}
-.dw-scrim.on{opacity:1;pointer-events:auto}
-.dw-head{display:flex;align-items:center;gap:10px;padding:14px 16px 12px;border-bottom:1px solid #2a2925;flex:none}
-.dw-head .t{font:600 13px/1.2 sans-serif;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dw-head .t a{color:#eae8df;text-decoration:none}
-.dw-head .t a:hover{color:#2ea86a}
-.dw-x{background:none;border:0;color:#7a786f;cursor:pointer;font:400 18px/1 sans-serif;padding:0 2px}
-.dw-x:hover{color:#eae8df}
-.dw-nav{display:flex;gap:2px;padding:8px 10px;border-bottom:1px solid #2a2925;flex:none;overflow-x:auto}
-.dw-nav button{background:none;border:0;cursor:pointer;color:#9c9a8f;white-space:nowrap;
-               font:600 11.5px/1 sans-serif;padding:7px 10px;border-radius:7px}
-.dw-nav button:hover{color:#eae8df;background:#1f1e1a}
-.dw-nav button.on{background:#20301f;color:#2ea86a}
-.dw-body{flex:1;overflow:auto;padding:14px 16px 28px}
-.dw h5.danger{color:#d1615d;margin-top:22px;padding-top:16px;border-top:1px solid #2a2925}
-.dw h5{margin:0 0 8px;font:600 10.5px sans-serif;letter-spacing:.06em;text-transform:uppercase;color:#2ea86a}
-.dw .muted{font:400 12px/1.6 sans-serif;color:#9c9a8f}
-.dw .warn{font:400 12px/1.5 sans-serif;color:#d1615d;margin:6px 0}
-.dw .row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #232219;font:400 12px sans-serif}
-.dw .row:last-child{border-bottom:0}
-.dw .row .g{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dw .row .s{color:#7a786f;font:400 11px ui-monospace,Menlo,monospace;flex:none}
-.dw .mono{font-family:ui-monospace,Menlo,monospace}
-.dw input{background:#0f0f0c;border:1px solid #35342e;color:#eae8df;border-radius:6px;
-          padding:6px 8px;font:400 12px ui-monospace,Menlo,monospace;outline:none;min-width:0;flex:1}
-.dw input:focus{border-color:#2ea86a}
-.dw .b{background:#2b2a26;color:#eae8df;border:0;border-radius:6px;padding:6px 10px;
-       font:600 11.5px sans-serif;cursor:pointer;flex:none}
-.dw .b:hover{background:#39382f}
-.dw .b.go{background:#2ea86a;color:#05130b}
-.dw .b.bad{background:#3a1f1e;color:#e8938f}
-.dw .b.bad:hover{background:#512928}
-.dw .form{display:flex;gap:6px;margin:8px 0}
-.dw .tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
-.dw .tabs button{background:#1f1e1a;border:0;color:#9c9a8f;cursor:pointer;border-radius:6px;
-                 padding:5px 8px;font:400 11px ui-monospace,Menlo,monospace}
-.dw .tabs button.on{background:#20301f;color:#2ea86a}
-.dw .grid{overflow:auto;border:1px solid #2a2925;border-radius:8px;max-height:46vh}
-.dw table.dg{border-collapse:collapse;font:400 11px ui-monospace,Menlo,monospace;width:100%}
-.dw .dg th{position:sticky;top:0;background:#1c1b18;color:#9c9a8f;text-align:left;padding:6px 8px;
-           border-bottom:1px solid #2a2925;font-weight:600;white-space:nowrap}
-.dw .dg td{padding:5px 8px;border-bottom:1px solid #232219;color:#eae8df;white-space:nowrap;
-           max-width:220px;overflow:hidden;text-overflow:ellipsis}
-/* The X-ray, drawn by xray-panel.ts, loses the framing it needs as a floating
-   card: in here the drawer is the frame. */
-.dw .xr{position:static;width:100%;max-height:none;border:0;border-radius:0;box-shadow:none;background:transparent}
-.dw .xr h4{padding:0 0 10px}
-.dw .xr sec{padding:10px 0}
+
+/* ===========================================================================
+   Tokens implied by components/ds/*. The merge brought the components and not
+   the theme, so they are written out here until the real @theme block lands.
+   Icons are lucide v0.454 path data, lifted from the installed package.
+   Buttons are the real two-surface component: metal plates from
+   apps/web/public/metal, a lit top edge, and a label that rolls.
+   =========================================================================== */
+:host{
+  --white:#FFFFFF; --ground:#E5E5E2; --tile:#F1F1EE;
+  --tint:#FCEEEA;         /* machine values sit on this and nothing else does */
+  --ink:#1A1A19; --ink-2:#5A5A58; --ink-3:#8A8A86;
+  --line:#E5E5E2;
+  --red:#E63F2C; --red-deep:#B32C1A;
+  --red-ink:#B32C1A;      /* brand red is 3.58:1 on tint — text uses this */
+  --green:#158043;
+  --sans:'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --r-xl:12px; --r-lg:8px; --r-sm:3px;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --w:640px;
+  font-family:var(--sans);font-size:15px;line-height:1.4;color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+}
+*{box-sizing:border-box}
+
+.t-section{font-size:18px;font-weight:500;letter-spacing:-.02em;line-height:1.25}
+.t-sub{font-size:13.5px;color:var(--ink-2);line-height:1.45}
+.t-micro{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.t-label{font-family:var(--mono);font-size:11px;letter-spacing:.09em;
+         text-transform:uppercase;color:var(--ink-3)}
+svg{display:block;flex:none}
+
+
+/* =============================== the drawer ============================== */
+.drawer{position:fixed;top:0;right:0;bottom:0;width:var(--w);z-index:61;
+        background:var(--ground);border-left:1px solid var(--line);
+        display:flex;flex-direction:column;overflow:hidden}
+.drawer[hidden]{display:none}
+.grip{position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:3}
+.grip:hover::after,.grip.on::after{content:'';position:absolute;left:2px;top:0;bottom:0;
+                                   width:2px;background:var(--red)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+      padding:0 12px 0 16px;height:56px;flex:none;background:var(--white);z-index:2}
+.head-l,.head-r{display:flex;align-items:center;gap:10px;min-width:0}
+.slug{font-size:16px;font-weight:600;letter-spacing:-.03em}
+.nav{display:inline-flex;align-items:center;gap:6px;background:none;border:0;cursor:pointer;
+     color:var(--ink);font-family:var(--sans);font-size:16px;font-weight:600;
+     letter-spacing:-.03em;padding:8px 10px 8px 4px;margin-left:-6px;border-radius:var(--r-lg)}
+.nav:hover{background:var(--tile)}
+.nav:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
+.nav svg{color:var(--red)}
+.state{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);
+       font-size:12px;color:var(--ink-2);white-space:nowrap}
+.state b{width:6px;height:6px;border-radius:50%;display:block;background:var(--ink-3)}
+.state.ok b{background:var(--green)}
+.state.warn b{background:var(--red)}
+.state.load b{background:var(--red);animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+.scroll{flex:1;overflow-y:auto;overscroll-behavior:contain;background:var(--ground);
+        container-type:inline-size}
+.scroll.push{animation:push .17s ease}
+.scroll.pop{animation:pop .17s ease}
+@keyframes push{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+
+/* ====================== squared cells, rounded parts ===================== */
+/* Two across, because a crossing needs four cells to meet. A single column
+   only ever pinches along an edge — half the detail, and the wrong half. */
+/* The grid cannot grow a row to fill leftover height without knowing the row
+   count, so the page is a flex column: the fixed cells, then one that takes
+   whatever is left. Both sit on the same ground, so the hairline rule holds. */
+.home{display:flex;flex-direction:column;gap:1px;background:var(--ground);
+      padding:1px 1px 0;min-height:100%}
+.cells{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--ground);
+       align-content:start}
+.cell.grow{flex:1;display:flex;flex-direction:column;min-height:190px}
+.cell.wide{grid-column:1 / -1}
+/* The drawer is resizable, so this has to answer to the drawer and not the
+   viewport: below the width where a pair still reads, everything goes full. */
+@container (max-width: 392px){ .cells{grid-template-columns:1fr} }
+.cell{position:relative;display:flex;flex-direction:column;gap:4px;
+      border-radius:var(--r-xl);background:var(--white);padding:18px 18px 20px;
+      text-align:left;border:0;font-family:inherit;color:inherit;width:100%}
+button.cell{cursor:pointer}
+button.cell:hover{background:#FCFCFB}
+button.cell:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
+.cell .go{position:absolute;top:19px;right:18px;color:var(--ink-3)}
+button.cell:hover .go{color:var(--red)}
+.cell .part{margin-top:14px}
+.cell:not(.wide){padding:16px 16px 18px}
+.cell:not(.wide) .part{margin-top:auto;padding-top:14px}
+.cell.tinted{background:var(--tint)}
+.cell.tinted .t-section{color:var(--red-ink)}
+
+/* the value row: machine strings live here and nowhere else */
+.tint{display:flex;align-items:center;gap:6px;height:48px;border-radius:var(--r-xl);
+      background:var(--tint);padding:0 6px 0 12px}
+.tint .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+         font-family:var(--mono);font-size:13px;color:var(--red-ink);padding-right:6px}
+.icon{width:32px;height:32px;flex:none;display:grid;place-items:center;border-radius:var(--r-lg);
+      border:0;background:none;color:var(--ink-2);cursor:pointer;
+      transition:background-color .15s var(--ease)}
+.icon:hover{background:rgba(26,26,25,.05)}
+.icon:focus-visible{outline:2px solid var(--red);outline-offset:1px}
+
+/* ---------------------------- the real button --------------------------- */
+/* Two surfaces that cross-fade: what it is at rest, and what it is under the
+   cursor. Metal is a plate image, magnified on X only so the vertical grain
+   fattens while the top-to-bottom ramp stays inside the box — that ramp is what
+   puts the lit edge on top and the shadow underneath. The label rolls rather
+   than fading: two copies share a cell, the live one leaves through the top and
+   its duplicate arrives from below. */
+.btn{position:relative;isolation:isolate;display:inline-flex;align-items:center;
+     justify-content:center;overflow:hidden;border:0;cursor:pointer;
+     font-family:var(--sans);font-weight:500;letter-spacing:-.01em;
+     transition:color .2s,box-shadow .2s,background-color .2s}
+.btn:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.btn.sm{height:32px;padding:0 12px;font-size:13.5px;border-radius:var(--r-lg)}
+.btn.md{height:40px;padding:0 16px;font-size:13.5px;border-radius:var(--r-lg)}
+.btn.lg{height:48px;padding:0 24px;font-size:15px;border-radius:var(--r-xl)}
+.btn .ghost{visibility:hidden;display:inline-flex;align-items:center;white-space:nowrap}
+.btn .roll{position:absolute;inset:0;z-index:10;display:flex;align-items:center;
+           justify-content:center;white-space:nowrap;
+           transition:transform .3s var(--ease)}
+.btn .roll.b{transform:translateY(100%)}
+.btn:hover .roll.a{transform:translateY(-100%)}
+.btn:hover .roll.b{transform:translateY(0)}
+.btn.sm .ghost,.btn.sm .roll{gap:6px}
+.btn.md .ghost,.btn.md .roll{gap:8px}
+.btn.lg .ghost,.btn.lg .roll{gap:10px}
+
+/* a hairline edge belongs to white only; metal draws its own */
+.btn.r-white{background:var(--white);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+.btn.r-steel{background:var(--white);color:var(--ink);box-shadow:inset 0 0 0 1px rgba(26,26,25,.2)}
+.btn.r-red{background:var(--white);color:#fff;box-shadow:inset 0 0 0 1px var(--red-deep)}
+.btn.h-white:hover{color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+.btn.h-steel:hover{color:var(--ink);box-shadow:inset 0 0 0 1px rgba(26,26,25,.2)}
+.btn.h-red:hover{color:#fff;box-shadow:inset 0 0 0 1px var(--red-deep)}
+
+.plate{position:absolute;inset:0;background-position:center;background-repeat:no-repeat;
+       background-size:300% 100%;pointer-events:none;transition:opacity .2s}
+.plate.steel{filter:brightness(1.2)}
+.plate.rest{opacity:1}
+.btn.fades:hover .plate.rest{opacity:0}
+.plate.to{opacity:0}
+.btn:hover .plate.to{opacity:1}
+/* the lit top edge sells metal as a pressable object; it fades with the surface */
+.lit{position:absolute;left:0;right:0;top:0;height:1px;background:rgba(255,255,255,.45);
+     pointer-events:none;transition:opacity .2s}
+.lit.off{opacity:0}
+.btn:hover .lit.on-hover{opacity:1}
+.btn:hover .lit.off-hover{opacity:0}
+
+.avs{display:flex}
+.av{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:50%;
+    border:1.5px solid var(--white);background:var(--tile);font-family:var(--mono);
+    font-size:10px;color:var(--ink-2)}
+.av + .av{margin-left:-8px}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block;flex:none}
+.dot.red{background:var(--red)} .dot.green{background:var(--green)}
+.chips{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px}
+
+/* ------------------------------- a screen -------------------------------- */
+/* A screen is the same ruled surface as home — cells on the ground — rather
+   than a bare table dropped under a heading. Uppercase mono headings are gone:
+   at 11px with letter-spacing they read as chrome, and mono belongs to machine
+   values, not to the word "People". */
+.screen{background:var(--ground);min-height:100%;display:flex;flex-direction:column;
+        gap:1px;padding:1px 1px 0}
+.pad{background:var(--white);border-radius:var(--r-xl);padding:18px}
+.pad.grow{flex:1}
+.pad + .pad{margin-top:0}
+.sec-h{font-size:13.5px;font-weight:500;color:var(--ink-2);margin:0 0 2px}
+.sec-n{font-size:12.5px;color:var(--ink-3);margin:0 0 14px;line-height:1.45}
+
+/* one row: something to look at on the left, the fact on the right */
+.list{display:flex;flex-direction:column}
+.li{position:relative;display:grid;grid-template-columns:auto 1fr auto auto;gap:12px;
+    align-items:center;padding:11px 10px;margin:0 -10px;border-radius:var(--r-lg);
+    background:none;border:0;width:calc(100% + 20px);text-align:left;color:inherit;
+    font-family:inherit;transition:background-color .13s var(--ease)}
+button.li{cursor:pointer}
+button.li:hover{background:var(--tile)}
+button.li:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
+.li + .li::before{content:'';position:absolute;left:10px;right:10px;top:0;height:1px;
+                  background:var(--line)}
+.li:hover::before,.li:hover + .li::before{background:transparent}
+.li .lead{width:30px;height:30px;flex:none;display:grid;place-items:center;border-radius:8px;
+          background:var(--tile);color:var(--ink-2);font-family:var(--mono);font-size:10.5px}
+.li .lead.round{border-radius:50%}
+.li .lead.warm{background:var(--tint);color:var(--red-ink)}
+.li .tt{min-width:0}
+.li .n1{font-size:14px;font-weight:500;letter-spacing:-.01em;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap}
+.li .n2{font-size:12px;color:var(--ink-3);margin-top:1px;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap}
+.li .val{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);text-align:right;
+         white-space:nowrap;font-variant-numeric:tabular-nums}
+.li .val.bad{color:var(--red-ink)} .li .val.good{color:var(--green)}
+.li .caret{color:var(--ink-3);display:flex}
+button.li:hover .caret{color:var(--red)}
+/* how big this row is against the biggest — a proportion, not a chart */
+.li .prop{position:absolute;left:10px;right:10px;bottom:6px;height:2px;border-radius:2px;
+          background:var(--line);overflow:hidden}
+.li .prop i{position:absolute;inset:0 auto 0 0;background:var(--red);opacity:.5;display:block}
+.li.has-prop{padding-bottom:16px}
+
+/* a pill that carries an outcome */
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;
+      border-radius:999px;font-family:var(--mono);font-size:11px;background:var(--tile);
+      color:var(--ink-2)}
+.pill.good{background:#EAF4EE;color:var(--green)}
+.pill.bad{background:var(--tint);color:var(--red-ink)}
+.pill.live{background:var(--tint);color:var(--red-ink)}
+.pill.live i{width:5px;height:5px;border-radius:50%;background:var(--red);
+             animation:pulse 1.5s ease-in-out infinite}
+
+/* a real control, not a row of text */
+.seg{display:flex;gap:1px;background:var(--line);padding:1px;border-radius:10px;margin-top:4px}
+.seg button{flex:1;height:34px;border:0;background:var(--white);cursor:pointer;
+            font-family:var(--sans);font-size:13px;font-weight:500;color:var(--ink-2)}
+.seg button:first-child{border-radius:9px 0 0 9px}
+.seg button:last-child{border-radius:0 9px 9px 0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--white)}
+.seg button:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
+.seg-n{font-size:12px;color:var(--ink-3);margin:8px 0 0;line-height:1.5}
+
+.none{font-size:13.5px;color:var(--ink-2);margin:6px 0 0;line-height:1.55}
+.block{border-radius:var(--r-xl);background:var(--tint);padding:16px;margin-top:14px;
+       display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.block p{margin:0;font-size:16px;font-weight:500;letter-spacing:-.02em;line-height:1.35;
+         color:var(--red-ink)}
+.block small{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);line-height:1.6}
+.brief{width:100%;height:150px;background:var(--white);border:0;
+       box-shadow:inset 0 0 0 1px rgba(26,26,25,.12);border-radius:var(--r-lg);padding:11px;
+       font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--ink);resize:vertical}
+/* the merged stream */
+.filters{display:flex;gap:5px;flex-wrap:wrap;margin-top:12px}
+.filters button{font-family:var(--mono);font-size:11.5px;background:none;border:0;
+                box-shadow:inset 0 0 0 1px var(--line);color:var(--ink-3);
+                padding:4px 11px;border-radius:999px;cursor:pointer;
+                transition:box-shadow .15s,color .15s,background-color .15s}
+.filters button:hover{color:var(--ink)}
+.filters button[aria-pressed="true"]{background:var(--ink);color:var(--white);box-shadow:none}
+.filters button:focus-visible{outline:2px solid var(--red);outline-offset:1px}
+
+.feed{margin-top:14px;flex:1;overflow:hidden;display:flex;flex-direction:column}
+.feed .f{display:grid;grid-template-columns:50px 1fr auto;gap:12px;align-items:baseline;
+         padding:8px 0;border-bottom:1px solid var(--line);font-family:var(--mono);
+         font-size:12.5px;color:var(--ink-2);font-variant-numeric:tabular-nums;
+         animation:arrive .3s var(--ease)}
+.feed .f:last-child{border-bottom:0}
+/* Lower case on purpose: five source tags set in spaced capitals turn a log
+   into chrome, and these are meant to be read past, not announced. */
+.feed .src{font-size:11.5px;color:var(--ink-3)}
+.feed .f.edge  .src{color:#4A6FA5}
+.feed .f.web   .src{color:#4F8A62}
+.feed .f.api   .src{color:#8060A0}
+.feed .f.db    .src{color:#A0713F}
+.feed .f.redis .src{color:#A05252}
+.feed .msg{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feed .meta{text-align:right;white-space:nowrap}
+.feed .f.bad .msg,.feed .f.bad .meta{color:var(--red-ink)}
+.feed .f.cont .msg{color:var(--ink-2);padding-left:14px}
+@keyframes arrive{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+
+/* analytics: numbers a person can have an opinion about */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:20px 20px}
+.stat .n{font-size:26px;font-weight:500;letter-spacing:-.035em;font-variant-numeric:tabular-nums;
+         line-height:1.1}
+.stat .l{font-size:12.5px;color:var(--ink-2);margin-top:3px}
+.stat .d{font-family:var(--mono);font-size:11.5px;margin-top:5px;color:var(--green)}
+.stat .d.down{color:var(--red-ink)}
+.bars{display:flex;flex-direction:column;gap:6px}
+.bars .r{display:grid;grid-template-columns:1fr 52px;gap:12px;align-items:center;font-size:13px}
+.bars .track{position:relative;height:30px;border-radius:var(--r-lg);overflow:hidden;
+             background:var(--tile);display:flex;align-items:center}
+.bars .fill{position:absolute;inset:0 auto 0 0;background:var(--tint)}
+.bars .t{position:relative;padding-left:10px;color:var(--ink);overflow:hidden;
+         text-overflow:ellipsis;white-space:nowrap}
+.bars .c{text-align:right;color:var(--ink-2);font-family:var(--mono);font-size:12.5px;
+         font-variant-numeric:tabular-nums}
+
+.dock{border-radius:var(--r-xl);background:var(--tile);padding:15px;font-family:var(--mono);
+      font-size:12.5px;color:var(--ink-2)}
+.dock .now{color:var(--ink);display:flex;align-items:center;gap:9px}
+.dock .past{opacity:.55;margin-top:7px}
+
+/* ------------------- the panel as an overlay, not a page ------------------ */
+/* v5 was a page that toggled [hidden]; injected into someone else's app it has
+   to arrive from the edge it lives on, over a scrim that takes the click. */
+/* The base type lives HERE and not on :host, because inject.ts sets
+   all:initial INLINE on the host element and an inline declaration beats an
+   author rule — a :host font-family rule is silently discarded. On .drawer it is a
+   normal class rule that inherits down the panel, and a mono ancestor still
+   wins for its own children. This is what was missing when every heading came
+   out in the browser's default serif. */
+.drawer{font-family:var(--sans);font-size:15px;line-height:1.4;color:var(--ink);
+        -webkit-font-smoothing:antialiased}
+.drawer{transform:translateX(100%);transition:transform .24s var(--ease);
+        z-index:2147483001;box-shadow:-24px 0 60px -30px rgba(0,0,0,.35)}
+.drawer.on{transform:none}
+.drawer.flat{position:static;width:100%;height:100%;transform:none;box-shadow:none;border-left:0}
+.dw-scrim{position:fixed;inset:0;background:rgba(26,26,25,.28);opacity:0;
+          transition:opacity .24s var(--ease);z-index:2147483000}
+.dw-scrim.on{opacity:1}
+@media (prefers-reduced-motion:reduce){
+  .drawer,.dw-scrim{transition:none}
+  .scroll.push,.scroll.pop{animation:none}
+}
+
 ${XRAY_CSS}
 `;
 
 export const DRAWER_JS = String.raw`
-${XRAY_JS}
-// ---- the drawer ----
-//
-// Built against three things the host supplies: h(tag, class, text), C, and a
-// root to append into. Same contract the toolbar and the X-ray already use.
-var dw=null,dwScrim=null,dwBody=null,dwTab='xray',dwFlat=false;
+var ICONS = {"eye":"<path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","copy":"<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/>","arrow-right":"<path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/>","plus":"<path d=\"M5 12h14\"/><path d=\"M12 5v14\"/>","refresh-cw":"<path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/><path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\"/><path d=\"M8 16H3v5\"/>","chevron-right":"<path d=\"m9 18 6-6-6-6\"/>","chevron-left":"<path d=\"m15 18-6-6 6-6\"/>","x":"<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>","trash-2":"<path d=\"M3 6h18\"/><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"/><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"/><line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\"/><line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\"/>","link":"<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/>"};
 
-function api(path,opts){
-  // credentials:'include' because this is a DIFFERENT ORIGIN — the drawer runs
+var SVGNS='http://www.w3.org/2000/svg';
+function icon(name,size){
+  var s=document.createElementNS(SVGNS,'svg');
+  s.setAttribute('width',size||16); s.setAttribute('height',size||16);
+  s.setAttribute('viewBox','0 0 24 24'); s.setAttribute('fill','none');
+  s.setAttribute('stroke','currentColor'); s.setAttribute('stroke-width','2');
+  s.setAttribute('stroke-linecap','round'); s.setAttribute('stroke-linejoin','round');
+  s.setAttribute('aria-hidden','true');
+  s.innerHTML=ICONS[name];
+  return s;
+}
+
+/* Which finish each tone takes: steel gets panoramic (broad irregular banding
+   gives a grey button something to look at), red gets the quieter brushed. */
+var PLATE={steel:C.app+'/metal/panoramic-steel.webp', red:C.app+'/metal/brushed-red.webp'};
+
+var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'People', jobs:'Jobs'};
+
+function dwTop(){ return dwStack.length ? dwStack[dwStack.length-1] : null; }
+function dwPush(v){ dwStack.push(v); dwDir='push'; dwRender(); }
+function dwPop(){ dwStack.pop(); dwDir='dwPop'; dwRender(); }
+
+function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e;}
+var isMetal=function(s){ return s==='steel' || s==='red'; };
+
+/**
+ * The button, as the component builds it: a rest surface and a hover surface
+ * that cross-fade, a lit top edge belonging to whichever end is metal, an
+ * invisible in-flow copy of the label to give the button its width, and two
+ * absolutely-placed copies that roll.
+ */
+function btn(label,iconName,opts){
+  opts = opts || {};
+  var rest = opts.rest || 'white', to = opts.hover || rest, size = opts.size || 'md';
+  var b = el('button','btn '+size+' r-'+rest+(to!==rest ? ' h-'+to+' fades' : ''));
+
+  if(isMetal(rest)){
+    var p=el('span','plate rest '+rest);
+    p.style.backgroundImage='url('+PLATE[rest]+')';
+    b.appendChild(p);
+  }
+  if(isMetal(to) && to!==rest){
+    var p2=el('span','plate to '+to);
+    p2.style.backgroundImage='url('+PLATE[to]+')';
+    b.appendChild(p2);
+  }
+  if(isMetal(rest) || isMetal(to)){
+    var lit=el('span','lit'+(isMetal(rest)?'':' off')+(isMetal(to)?' on-hover':' off-hover'));
+    b.appendChild(lit);
+  }
+
+  var ico = size==='sm' ? 15 : 16;
+  function content(cls,hide){
+    var s=el('span',cls);
+    if(hide) s.setAttribute('aria-hidden','true');
+    if(iconName) s.appendChild(icon(iconName,ico));
+    s.appendChild(el('span',null,label));
+    return s;
+  }
+  b.appendChild(content('ghost',true));
+  b.appendChild(content('roll a'));
+  b.appendChild(content('roll b',true));
+  return b;
+}
+
+function kv(rows,onTap){
+  var t=el('table','kv');
+  rows.forEach(function(r,i){
+    var tr=el('tr');
+    if(onTap){ tr.className='tap'; tr.addEventListener('click',function(){onTap(i);}); }
+    tr.appendChild(el('td','k',r[0]));
+    tr.appendChild(el('td','v'+(r[2]?' '+r[2]:''),r[1]));
+    if(onTap){ var g=el('td','go'); g.appendChild(icon('chevron-right',14)); tr.appendChild(g); }
+    t.appendChild(tr);
+  });
+  return t;
+}
+
+/** Machine values live here and nowhere else — addresses, keys, commands. */
+function tintRow(value){
+  var w=el('div','tint');
+  w.appendChild(el('div','v',value));
+  [['Reveal','eye'],['Copy','copy']].forEach(function(p){
+    var b=el('button','icon');
+    b.setAttribute('aria-label',p[0]);
+    b.appendChild(icon(p[1],16));
+    w.appendChild(b);
+  });
+  return w;
+}
+
+function avatars(list){
+  var w=el('div','avs');
+  list.forEach(function(s){ w.appendChild(el('span','av',s)); });
+  return w;
+}
+function statusChip(text,tone){
+  var s=el('span','chip t-micro');
+  s.appendChild(el('span','dot '+tone));
+  s.appendChild(el('span',null,text));
+  return s;
+}
+
+
+function bars(rows){
+  var w=el('div','bars');
+  var max=rows.reduce(function(m,r){ return Math.max(m,r[1]); },1);
+  rows.forEach(function(r){
+    var line=el('div','r');
+    var track=el('div','track');
+    var fill=el('span','fill');
+    fill.style.width=Math.round(r[1]/max*100)+'%';
+    track.appendChild(fill);
+    track.appendChild(el('span','t',r[0]));
+    line.appendChild(track);
+    line.appendChild(el('span','c', r[1].toLocaleString()));
+    w.appendChild(line);
+  });
+  return w;
+}
+
+function stat(n,l,delta,up){
+  var s=el('div','stat');
+  s.appendChild(el('div','n',n));
+  s.appendChild(el('div','l',l));
+  if(delta) s.appendChild(el('div','d'+(up?'':' down'), delta+' vs last week'));
+  return s;
+}
+
+/** A section of a screen: a white cell on the ground, with a heading it owns. */
+function pad(title,note,grow){
+  var w=el('div','pad'+(grow?' grow':''));
+  if(title) w.appendChild(el('div','sec-h',title));
+  if(note)  w.appendChild(el('div','sec-n',note));
+  return w;
+}
+
+/**
+ * One row. Something to look at, the thing it is, the fact about it.
+ *
+ * Everything used to be a two-column mono table, which made a person's name and
+ * a row count the same kind of object. Mono is for machine values; a name, a
+ * table and a page title are read, not parsed.
+ */
+function li(o){
+  var r=el(o.onTap?'button':'div','li'+(o.prop!=null?' has-prop':''));
+  if(o.lead!=null){
+    var L=el('div','lead'+(o.round?' round':'')+(o.warm?' warm':''));
+    if(typeof o.lead==='string') L.textContent=o.lead; else L.appendChild(o.lead);
+    r.appendChild(L);
+  } else r.appendChild(el('span'));
+
+  var tt=el('div','tt');
+  tt.appendChild(el('div','n1',o.title));
+  if(o.meta) tt.appendChild(el('div','n2',o.meta));
+  r.appendChild(tt);
+
+  if(o.pill) r.appendChild(o.pill);
+  else if(o.val!=null) r.appendChild(el('div','val'+(o.tone?' '+o.tone:''),o.val));
+  else r.appendChild(el('span'));
+
+  if(o.onTap){
+    var c=el('span','caret'); c.appendChild(icon('chevron-right',15));
+    r.appendChild(c);
+    r.addEventListener('click',o.onTap);
+  } else r.appendChild(el('span'));
+
+  if(o.prop!=null){
+    var pr=el('div','prop'); var f=el('i'); f.style.width=Math.round(o.prop*100)+'%';
+    pr.appendChild(f); r.appendChild(pr);
+  }
+  return r;
+}
+
+function pill(text,kind){
+  var s=el('span','pill'+(kind?' '+kind:''));
+  if(kind==='live') s.appendChild(el('i'));
+  s.appendChild(el('span',null,text));
+  return s;
+}
+
+function listOf(rows){
+  var w=el('div','list');
+  rows.forEach(function(r){ w.appendChild(r); });
+  return w;
+}
+
+/** Initials from an address, so a row has something to look at. */
+function ini(x){
+  var n=x.split('@')[0].replace(/[^a-z]/gi,'');
+  return (n.slice(0,2) || '··').toUpperCase();
+}
+
+function cell(title,sub,part,onOpen,wide){
+  var c=el(onOpen?'button':'div','cell'+(wide?' wide':''));
+  c.appendChild(el('div','t-section',title));
+  c.appendChild(el('div','t-sub',sub));
+  if(part){ var p=el('div','part'); p.appendChild(part); c.appendChild(p); }
+  if(onOpen){
+    var g=el('span','go'); g.appendChild(icon('chevron-right',16));
+    c.appendChild(g);
+    c.addEventListener('click',onOpen);
+  }
+  return c;
+}
+
+function alertCell(d){
+  var c=el('div','cell tinted');
+  c.appendChild(el('div','t-section',d.alert.title));
+  c.appendChild(el('div','t-micro',d.alert.sub));
+  var p=el('div','part');
+  var b=btn(d.alert.act, d.alert.icon, {rest:'red', hover:'white'});
+  b.addEventListener('click',function(){
+    var lbl=b.querySelectorAll('.roll span:last-child, .ghost span:last-child');
+    if(d.alert.kind!=='brief'){
+      Array.prototype.forEach.call(lbl,function(n){n.textContent='Copied';});
+      return;
+    }
+    if(c.querySelector('.brief')) return;
+    var ta=el('textarea','brief'); ta.value=briefText(d); ta.readOnly=true;
+    c.appendChild(ta); ta.select();
+    Array.prototype.forEach.call(lbl,function(n){n.textContent='Copied — paste it to your agent';});
+  });
+  p.appendChild(b);
+  c.appendChild(p);
+  return c;
+}
+
+// ------------------------------------------------------------------- home
+function homeScreen(d){
+  var g=el('div','cells');
+  if(d.alert) g.appendChild(alertCell(d));   // always the full width
+
+  // Analytics | Ships — who is using it, and what changed
+  var anPart=null;
+  if(d.an){
+    anPart=el('div','chips');
+    anPart.appendChild(statusChip(d.an.visitors.toLocaleString()+' visitors',
+                                  d.an.dvUp?'green':'red'));
+    if(d.here.length) anPart.appendChild(avatars(d.initials));
+  }
+  g.appendChild(cell('Analytics',
+    d.an ? d.an.dv+' this week - '+d.here.length+' here now'
+         : (d.here.length ? d.here.length+' here now' : 'Not counting yet'),
+    anPart, function(){ dwPush({v:'analytics'}); }));
+
+  var shipPart=el('div','chips');
+  shipPart.appendChild(btn(d.shipping?'Shipping':'Ship again','refresh-cw',{rest:'red',hover:'white'}));
+  shipPart.appendChild(statusChip(d.shipping?'Loading':'Running', d.shipping?'red':'green'));
+  g.appendChild(cell('Ships','Last shipped '+d.ships[0].when, shipPart,
+    function(){ dwPush({v:'ships'}); }));
+
+  // Data | Keys — what it keeps, what it reaches for
+  g.appendChild(cell('Data',"Its data and files",
+    btn('Open','arrow-right',{rest:'white',hover:'steel'}), function(){ dwPush({v:'data'}); }));
+
+  var keyPart=el('div','chips');
+  d.keys.slice(0,3).forEach(function(k){
+    keyPart.appendChild(statusChip(k.name, k.tone==='bad'?'red':'green'));
+  });
+  g.appendChild(cell('Keys',
+    d.keys.length ? 'What it connects to' : 'Nothing connected yet',
+    d.keys.length?keyPart:null, function(){ dwPush({v:'keys'}); }));
+
+  var pPart=el('div','chips');
+  if(d.pInitials.length) pPart.appendChild(avatars(d.pInitials));
+  pPart.appendChild(btn('Invite','plus',{rest:'white',hover:'steel',size:'sm'}));
+  g.appendChild(cell('Jobs', d.jobs.length ? d.jobs.length+(d.jobs.length===1?' job':' jobs')+' on a schedule' : 'Nothing runs on its own',
+    null, function(){ dwPush({v:'jobs'}); }));
+
+  g.appendChild(cell('People','Who can open this', pPart, function(){ dwPush({v:'access'}); }, true));
+
+  g.appendChild(cell('Address','Where it lives', tintRow(d.addr), null, true));
+
+  var wrap=el('div','home');
+  wrap.appendChild(g);
+  wrap.appendChild(rightNowCell(d));
+  return wrap;
+}
+
+/**
+ * The cell that takes the leftover height.
+ *
+ * Deliberately the live feed and not a chart: the edge keeps nothing older than
+ * this process, so any graph drawn here would be inventing a past it does not
+ * have. What it does have is every request as it lands.
+ */
+/**
+ * One stream, five sources.
+ *
+ * The edge line and the lines the app itself printed are the same story told at
+ * two depths — the edge knows WHAT failed and when, the app's own output knows
+ * WHY. Every competitor puts those on separate screens, which is why finding a
+ * cause there means holding two timestamps in your head. Here they interleave,
+ * so the request and the dwStack it produced are adjacent by construction.
+ */
+
+var SOURCES=['edge','web','api','db','redis'];
+var feedOn=null;
+
+function feedRow(r,when){
+  var f=el('div','f '+r[0]+(r[3]?' '+r[3]:''));
+  f.appendChild(el('span','src',r[0]));
+  var m=el('span','msg',r[1]);
+  m.title=r[1];
+  f.appendChild(m);
+  f.appendChild(el('span','meta', r[2] ? r[2] : when));
+  return f;
+}
+
+/**
+ * The cell that takes the leftover height.
+ *
+ * Deliberately a stream and not a chart: the edge keeps nothing older than this
+ * process, so a graph here would be inventing a past it does not have. Trends
+ * live in Analytics, which has a database behind it.
+ */
+function rightNowCell(d){
+  var all=d.feed||[];
+  var c=el('div','cell wide grow');
+  c.appendChild(el('div','t-section','Right now'));
+  c.appendChild(el('div','t-sub', all.length
+    ? 'Everything your app is saying, as it says it'
+    : 'Nothing has been asked of it yet'));
+  if(!all.length) return c;
+
+  if(feedOn===null) feedOn={edge:1,web:1,api:1,db:1,redis:1};
+
+  var present=SOURCES.filter(function(s){ return all.some(function(r){ return r[0]===s; }); });
+  var bar=el('div','filters');
+  if(present.length>1) present.forEach(function(src){
+    var b=el('button',null,src);
+    b.setAttribute('aria-pressed', feedOn[src] ? 'true':'false');
+    b.addEventListener('click',function(ev){
+      ev.stopPropagation();
+      feedOn[src]=!feedOn[src];
+      dwRender();
+    });
+    bar.appendChild(b);
+  });
+  if(present.length>1) c.appendChild(bar);
+
+  var rows=all.filter(function(r){ return feedOn[r[0]]; });
+  var feed=el('div','feed');
+  c.appendChild(feed);
+  if(!rows.length){
+    feed.appendChild(el('p','none','Nothing from those. Turn one back on.'));
+    return c;
+  }
+
+  function paint(list){
+    feed.innerHTML='';
+    if(!list.length){ feed.appendChild(el('p','none','Nothing yet.')); return; }
+    list.slice(0,9).forEach(function(r){ feed.appendChild(feedRow(r,ago(0))); });
+  }
+  paint(rows);
+  clearInterval(dwFeedTimer);
+  dwFeedTimer=setInterval(function(){
+    dwLive().then(function(live){
+      if(!live||!live.live||!dw) return;
+      var next=(live.live.paths||[]).slice(0,40).map(function(p){
+        return ['edge',p.path,(p.hits+' - '+p.p50+'ms - '+ago(p.ago)),p.brokenFor?'bad':''];
+      });
+      if(dwD) dwD.feed=next;
+      paint(next.filter(function(r){ return feedOn[r[0]]; }));
+    });
+  },3000);
+  return c;
+}
+
+/** A labelled bar row — the only chart shape here, and it needs no time axis. */
+
+function screen(view,d){
+  var w=el('div','screen'), key=view.v;
+
+  // ------------------------------------------------------------- analytics
+  if(key==='analytics'){
+    if(!d.an){
+      var ph=pad(null,null);
+      var pst=el('div','stats');
+      pst.appendChild(stat('\u2014','visitors this week'));
+      pst.appendChild(stat('\u2014','pages opened'));
+      pst.appendChild(stat('\u2014','average visit'));
+      pst.appendChild(stat('\u2014','came back'));
+      ph.appendChild(pst);
+      w.appendChild(ph);
+      var hp0=pad('In it right now', d.here.length ? null : 'Nobody this second.');
+      if(d.here.length){
+        hp0.appendChild(listOf(d.here.map(function(x){
+          var signed=x[0].indexOf('@')>0;
+          return li({lead:signed?ini(x[0]):'\u00b7\u00b7', round:true,
+                     title:signed?x[0].split('@')[0]:x[0],
+                     meta:signed?x[0]:'no account', val:x[1]});
+        })));
+      }
+      w.appendChild(hp0);
+      w.appendChild(pad('Most opened', dwWhyNoNumbers(d)));
+      w.appendChild(pad('How they got here', dwWhyNoNumbers(d)));
+      return w;
+    }
+    var top=pad(null,null);
+    var st=el('div','stats');
+    st.appendChild(stat(d.an.visitors.toLocaleString(),'visitors this week',d.an.dv,d.an.dvUp));
+    st.appendChild(stat(d.an.views.toLocaleString(),'pages opened'));
+    st.appendChild(stat(d.an.mins,'average visit'));
+    st.appendChild(stat(d.an.returning,'came back'));
+    top.appendChild(st);
+    w.appendChild(top);
+
+    var hp=pad('In it right now', d.here.length ? null : 'Nobody this second.');
+    if(d.here.length){
+      hp.appendChild(listOf(d.here.map(function(h){
+        var signed=h[0].indexOf('@')>0;
+        return li({lead:signed?ini(h[0]):'··', round:true,
+                   title:signed?h[0].split('@')[0]:h[0],
+                   meta:signed?h[0]:'no account', val:h[1]});
+      })));
+    }
+    w.appendChild(hp);
+
+    var pp=pad('Most opened','Which pages people actually reach.');
+    pp.appendChild(bars(d.an.pages)); w.appendChild(pp);
+    var fp=pad('How they got here');
+    fp.appendChild(bars(d.an.from)); w.appendChild(fp);
+    var op=pad('What they are on', d.missing || null);
+    op.appendChild(bars(d.an.on)); w.appendChild(op);
+  }
+
+  // ----------------------------------------------------------------- ships
+  if(key==='ships'){
+    if(view.i != null){
+      var s1=d.ships[view.i];
+      var dp=pad(s1.did, s1.when+' · by '+s1.who);
+      dp.appendChild(listOf([
+        li({lead:ini(s1.who),round:true,title:s1.who,meta:'made this change',
+            pill:pill(s1.out, s1.out==='shipped'?'good':s1.out==='never left'?'bad':'live')})
+      ]));
+      w.appendChild(dp);
+      w.appendChild(pad('What changed','Files are not kept after a ship — the source leaves with the build.'));
+      return w;
+    }
+    if(d.dock){
+      var lp=pad('At the dock','Every movement here is one real line from the build.');
+      var dk=el('div','dock');
+      var now=el('div','now');
+      now.appendChild(el('span','dot red'));
+      now.appendChild(el('span',null,d.dock.now));
+      dk.appendChild(now);
+      d.dock.past.forEach(function(x){ dk.appendChild(el('div','past',x)); });
+      lp.appendChild(dk);
+      w.appendChild(lp);
+    }
+    var sp=pad(d.dock?'Before this':'Every change', 'Newest first.');
+    sp.appendChild(listOf(d.ships.map(function(x,i){
+      return li({lead:ini(x.who), round:true, title:x.did, meta:x.when+' · '+x.who,
+                 pill:pill(x.out, x.out==='shipped'?'good':x.out==='never left'?'bad':'live'),
+                 onTap:function(){ dwPush({v:'ships',i:i}); }});
+    })));
+    w.appendChild(sp);
+  }
+
+  // ------------------------------------------------------------------ data
+  if(key==='data'){
+    if(view.t){
+      var rp=pad(view.t,'The newest rows.');
+      var host=el('div'); rp.appendChild(host); w.appendChild(rp);
+      host.appendChild(el('div','sec-n','Reading…'));
+      dwApi('/db?table='+encodeURIComponent(view.t)).then(function(j){
+        host.innerHTML='';
+        if(j.error||!j.rows){ host.appendChild(el('div','sec-n',j.error||'Nothing to read.')); return; }
+        if(!j.rows.length){ host.appendChild(el('div','sec-n','This table is empty.')); return; }
+        host.appendChild(listOf(j.rows.slice(0,25).map(function(row){
+          var ks=j.columns||Object.keys(row);
+          return li({lead:'#',title:String(row[ks[0]]),
+                     meta:ks.slice(1,3).map(function(k){return k+': '+row[k]}).join(' · '),
+                     val:''});
+        })));
+      });
+      return w;
+    }
+    if(!d.tables.length){
+      w.appendChild(pad('Nothing stored yet','Your app has not written anything down.'));
+      return w;
+    }
+    var max=d.tables.reduce(function(m,t){return Math.max(m,t[1]);},1);
+    var tp=pad('Your data', d.tables.length+' tables. The bar is how much of your data each one is.');
+    tp.appendChild(listOf(d.tables.map(function(t){
+      return li({lead:'\u25A6', title:t[0],
+                 meta:t[1] ? 'has rows' : 'never written to',
+                 val:t[1] ? t[1].toLocaleString()+' rows' : 'empty',
+                 prop:t[1]/max,
+                 onTap:function(){ dwPush({v:'data',t:t[0]}); }});
+    })));
+    w.appendChild(tp);
+    var fp2=pad('Your files','Anything your app has uploaded.');
+    fp2.appendChild(listOf([li({lead:'\u2751',title:'uploads/',meta:'images and attachments',val:d.files})]));
+    w.appendChild(fp2);
+  }
+
+  // ------------------------------------------------------------------ keys
+  if(key==='keys'){
+    if(view.i != null){
+      var k=d.keys[view.i];
+      // Reachable only from a stale stack: the list below makes a row tappable
+      // only when it has a detail to show, and nothing builds one yet.
+      if(!k||!k.detail){ w.appendChild(pad('Nothing more','We have no reading on this key yet.')); return w; }
+      var kp=pad(null,null);
+      var box=el('div','block'); box.style.marginTop='0';
+      box.appendChild(el('p',null,k.detail.title));
+      box.appendChild(el('small',null,k.detail.sub));
+      box.appendChild(btn(k.detail.act,k.detail.icon,{rest:'red',hover:'white'}));
+      kp.appendChild(box);
+      w.appendChild(kp);
+      w.appendChild(pad('Why we know','Your app calls Stripe through us, so we see the answer it gets back. Nobody had to add anything to your code.'));
+      return w;
+    }
+    if(!d.keys.length){
+      w.appendChild(pad('Nothing connected','Your app does not talk to anything outside itself yet.'));
+      return w;
+    }
+    var kp2=pad('Connected','We can tell you whether a key works, because we watch your app use it.');
+    kp2.appendChild(listOf(d.keys.map(function(k,i){
+      var bad=k.tone==='bad', never=!k.tone;
+      return li({lead:k.name.slice(0,2), warm:bad, title:k.name,
+                 meta:bad?'your app cannot reach it':never?'no call has been made yet':'answering normally',
+                 pill:pill(k.st, bad?'bad':never?'':'good'),
+                 onTap:k.detail?function(){ dwPush({v:'keys',i:i}); }:null});
+    })));
+    w.appendChild(kp2);
+  }
+
+  // ---------------------------------------------------------------- people
+  if(key==='access'){
+    var vp=pad('Who can open it', null);
+    var seg=el('div','seg');
+    [['private','Only me'],['shared','People I add'],['public','Anyone']].forEach(function(o){
+      var b=el('button',null,o[1]);
+      b.setAttribute('aria-pressed', d.who===o[0] ? 'true':'false');
+      b.addEventListener('click',function(){
+        var was=d.who; d.who=o[0]; dwRender();
+        dwPost('/share',{visibility:o[0]}).then(function(j){
+          if(j&&j.visibility){ d.who=j.visibility; d.people=j.grants||[]; }
+          else d.who=was;
+          dwRender();
+        });
+      });
+      seg.appendChild(b);
+    });
+    vp.appendChild(seg);
+    vp.appendChild(el('p','seg-n', d.who==='public'
+      ? 'Anyone with the address sees your app. They never see this panel.'
+      : d.who==='shared' ? 'Only the people below, after they sign in.'
+      : 'Nobody but you, on any device you sign in from.'));
+    w.appendChild(vp);
+
+    var pp2=pad('People', d.people.length ? null : 'You have not added anyone.');
+    if(d.people.length){
+      pp2.appendChild(listOf(d.people.map(function(x){
+        return li({lead:ini(x), round:true, title:x.split('@')[0], meta:x, val:'can open'});
+      })));
+    }
+    var inv=btn('Invite','plus',{rest:'white',hover:'steel',size:'sm'});
+    inv.addEventListener('click',function(){
+      var em=prompt('Email of the person who may open this app');
+      if(!em) return;
+      dwPost('/share',{addEmail:em}).then(function(j){
+        if(j&&j.grants){ d.people=j.grants; d.pInitials=j.grants.map(ini); d.who=j.visibility||d.who; }
+        dwRender();
+      });
+    });
+    inv.style.marginTop=d.people.length?'14px':'4px';
+    pp2.appendChild(inv);
+    w.appendChild(pp2);
+
+    var ap=pad('Address','Where it lives. Send this to anyone.');
+    ap.appendChild(tintRow(d.addr));
+    w.appendChild(ap);
+
+    var dp2=pad('Delete','The app, its data and its files. There is no undo.');
+    var del=btn('Delete this app','trash-2',{rest:'white',hover:'red',size:'md'});
+    del.addEventListener('click',function(){
+      if(prompt('Type the app name to delete it. This cannot be undone.')!==d.slug) return;
+      dwPost('/delete',{}).then(function(){ location.href=C.app; });
+    });
+    dp2.appendChild(del);
+    w.appendChild(dp2);
+  }
+
+  if(key==='jobs') return jobsScreen(w,d);
+
+  return w;
+}
+
+function jobsScreen(w,d){
+  if(!d.jobs.length){ w.appendChild(pad('No jobs','Nothing is scheduled to run on its own.')); return w; }
+  var jp=pad('Scheduled','What runs without anyone asking.');
+  jp.appendChild(listOf(d.jobs.map(function(j){
+    var name=j.name||j.id||'job', bad=j.state&&j.state!=='ENABLED';
+    return li({lead:'\u25F4',warm:bad,title:name,meta:j.schedule||'no schedule',
+               pill:pill(bad?(j.state||'paused'):'on', bad?'bad':'good')});
+  })));
+  w.appendChild(jp); return w;
+}
+
+function headingFor(view,d){
+  if(view.v==='ships' && view.i!=null) return d.ships[view.i].when;
+  if(view.v==='data'  && view.t)       return view.t;
+  if(view.v==='keys'  && view.i!=null) return d.keys[view.i].name;
+  return TITLES[view.v];
+}
+
+
+/** Why a block is showing dashes. One sentence, and it never guesses a number. */
+function dwWhyNoNumbers(d){
+  if(!d.anOn)   return 'Analytics is off, so nobody is being counted.';
+  if(!d.anReady) return 'Analytics is still being set up for this app.';
+  return 'Visits are being counted. This panel cannot read them back yet.';
+}
+
+/**
+ * Geist, registered on the document rather than in here.
+ *
+ * A shadow root cannot carry an @font-face: font faces are resolved against the
+ * document, and one declared inside a shadow tree is simply ignored. So the
+ * face is added to document.fonts and nothing else is - no rule, no class, no
+ * stylesheet on the tenant's page. That keeps the one-way promise the shadow
+ * root exists for: our styles still cannot reach their app.
+ *
+ * Cross-origin, and fonts are always fetched in CORS mode, so this depends on
+ * the Access-Control-Allow-Origin header on /fonts/* (see apps/web/next.config.mjs).
+ * If any of it fails the tokens already name system-ui next, so the panel is
+ * merely less pretty, never unstyled.
+ */
+(function(){
+  if(!window.FontFace||!document.fonts) return;
+  [['Geist','/fonts/Geist-Variable.woff2'],['Geist Mono','/fonts/GeistMono-Variable.woff2']]
+  .forEach(function(f){
+    try{
+      if(document.fonts.check('12px "'+f[0]+'"')) return;
+      var face=new FontFace(f[0],'url("'+C.app+f[1]+'") format("woff2")',
+                            {weight:'100 900',display:'swap'});
+      face.load().then(function(loaded){ document.fonts.add(loaded); })
+                 .catch(function(e){ console.error('panel font:',e); });
+    }catch(e){ console.error('panel font:',e); }
+  });
+})();
+
+// ---- the panel: state ----
+//
+// 'dwOpen' rather than 'open', 'dwPop' rather than 'pop', 'dwApi' rather than
+// 'api': this file is interpolated into OWNER_JS *after* the toolbar, and a
+// second 'function api(...)' in that scope silently rebinds the toolbar's own.
+// (It did, until this rewrite — Share was posting to '/api/apps/<slug>[object
+// Object]' and swallowing the 404.) Names here are prefixed for that reason.
+var dw=null,dwScrim=null,dwScroll=null,dwHeadEl=null,dwGrip=null,dwFlat=false;
+var dwOpen=false,dwStack=[],dwDir='push',dwFeedTimer=null;
+var dwD=null,dwPending=null,dwErr=null;
+
+function dwApi(path,opts){
+  // credentials:'include' because this is a DIFFERENT ORIGIN — the panel runs
   // on the app's own hostname and the control plane answers on app.*. The route
   // allows exactly this app's origin and no other subdomain; see lib/cors.ts for
   // the cross-tenant attack that a wider allowlist would open.
@@ -113,305 +1037,216 @@ function api(path,opts){
     .then(function(r){return r.json()})
     .catch(function(e){return {error:String(e)}});
 }
-function jpost(path,body){
-  return api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+function dwPost(path,body){
+  return dwApi(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 }
-function loading(){ var d=h('div','muted','Reading...'); dwBody.appendChild(d); return d; }
-function fail(msg){ dwBody.appendChild(h('div','warn','⚠ '+String(msg).slice(0,160))); }
-function fmtSize(n){ if(n<1024)return n+' B'; if(n<1048576)return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
-function cell(v){ if(v===null||v===undefined)return '—'; if(typeof v==='object')return JSON.stringify(v); return String(v); }
-
-// ---- sections ----
-
-function drawXraySection(){
-  // The X-ray is not reimplemented here. drawXray renders into whatever xr
-  // points at, so point it at this section and let the existing poll drive it.
-  var box=h('div','xr'); dwBody.appendChild(box);
-  xr=box;
-  drawXray({since:{live:Date.now()},live:{here:{count:0,names:[]},paths:[],dropped:0}});
-  pullXray();
-  if(!xrTimer) xrTimer=setInterval(pullXray,3000);
+function dwLive(){
+  // The live half is the app's own origin, not the control plane: /_xray is
+  // served by the proxy in front of this very app, so it is same-origin and
+  // needs no CORS at all.
+  return fetch('/_xray',{credentials:'include',headers:{Accept:'application/json'}})
+    .then(function(r){return r.json()}).catch(function(){return null});
 }
 
-function drawData(){
-  var head=h('h5',null,'Database'); dwBody.appendChild(head);
-  var tabs=h('div','tabs'); dwBody.appendChild(tabs);
-  var qform=h('div','form');
-  var q=document.createElement('input'); q.placeholder='SELECT * FROM … (read-only)';
-  var run=h('button','b go','Run');
-  qform.appendChild(q); qform.appendChild(run); dwBody.appendChild(qform);
-  var out=h('div'); dwBody.appendChild(out);
-
-  function grid(d){
-    out.innerHTML='';
-    if(d.error){ out.appendChild(h('div','warn','⚠ '+String(d.error).slice(0,160))); return; }
-    if(!d.rows||!d.rows.length){ out.appendChild(h('div','muted','0 rows')); return; }
-    var wrap=h('div','grid'); var t=document.createElement('table'); t.className='dg';
-    var thead=document.createElement('thead'); var htr=document.createElement('tr');
-    d.columns.forEach(function(c){ var th=document.createElement('th'); th.textContent=c; htr.appendChild(th); });
-    thead.appendChild(htr); t.appendChild(thead);
-    var tb=document.createElement('tbody');
-    d.rows.slice(0,200).forEach(function(r){
-      var tr=document.createElement('tr');
-      d.columns.forEach(function(c){ var td=document.createElement('td'); td.textContent=cell(r[c]); tr.appendChild(td); });
-      tb.appendChild(tr);
-    });
-    t.appendChild(tb); wrap.appendChild(t); out.appendChild(wrap);
-    if(d.rows.length>200) out.appendChild(h('div','muted',d.rows.length+' rows, first 200 shown'));
-  }
-  function open(name,btn){
-    Array.prototype.forEach.call(tabs.children,function(b){ b.className=''; });
-    if(btn) btn.className='on';
-    out.innerHTML=''; out.appendChild(h('div','muted','Reading...'));
-    api('/db?table='+encodeURIComponent(name)).then(grid);
-  }
-  run.onclick=function(){ if(!q.value.trim())return; out.innerHTML=''; out.appendChild(h('div','muted','Running...')); jpost('/db',{sql:q.value}).then(grid); };
-  q.onkeydown=function(e){ if(e.key==='Enter') run.onclick(); };
-
-  var l=loading();
-  api('/db').then(function(d){
-    l.remove();
-    if(d.error){ fail(d.error); return; }
-    if(!d.tables||!d.tables.length){ dwBody.appendChild(h('div','muted','No tables yet.')); return; }
-    head.textContent='Database · '+(d.database||'');
-    d.tables.forEach(function(t,i){
-      var b=h('button',null,t.name+' ('+t.rows+')');
-      b.onclick=function(){ open(t.name,b); };
-      tabs.appendChild(b);
-      if(i===0) open(t.name,b);
-    });
-  });
+/** Rows out of information_schema come back under names that have changed once
+ *  already; read them defensively rather than pinning one spelling. */
+function dwTableRow(t){
+  var name=t.table_name||t.tablename||t.name||String(t);
+  var n=t.n_live_tup!=null?t.n_live_tup:(t.rows!=null?t.rows:0);
+  return [name,Number(n)||0];
 }
+function dwKeyName(k){ return typeof k==='string'?k:(k.key||k.name||String(k)); }
 
-function drawFiles(){
-  dwBody.appendChild(h('h5',null,'Files'));
-  var l=loading();
-  api('/storage').then(function(d){
-    l.remove();
-    if(d.error) fail(d.error);
-    if(d.bucket) dwBody.appendChild(h('div','muted',d.bucket));
-    var objs=d.objects||[];
-    if(!objs.length){ dwBody.appendChild(h('div','muted','No files yet. Your app reads and writes this bucket through the STORAGE_BUCKET variable.')); return; }
-    objs.forEach(function(o){
-      var r=h('div','row');
-      r.appendChild(h('span','g mono',o.name));
-      r.appendChild(h('span','s',fmtSize(o.size)));
-      dwBody.appendChild(r);
-    });
-  });
-}
-
-function drawJobs(){
-  dwBody.appendChild(h('h5',null,'Jobs'));
-  var form=h('div','form');
-  var nm=document.createElement('input'); nm.placeholder='name';
-  var sc=document.createElement('input'); sc.placeholder='0 9 * * *';
-  var pa=document.createElement('input'); pa.placeholder='/cron';
-  var add=h('button','b go','Add');
-  form.appendChild(nm); form.appendChild(sc); form.appendChild(pa); form.appendChild(add);
-  dwBody.appendChild(form);
-  var list=h('div'); dwBody.appendChild(list);
-
-  function load(){
-    list.innerHTML=''; list.appendChild(h('div','muted','Reading...'));
-    api('/jobs').then(function(d){
-      list.innerHTML='';
-      if(d.error) list.appendChild(h('div','warn','⚠ '+String(d.error).slice(0,160)));
-      var jobs=d.jobs||[];
-      if(!jobs.length){ list.appendChild(h('div','muted','Nothing is scheduled. A job POSTs to a path in your app on a cron.')); return; }
-      jobs.forEach(function(j){
-        var r=h('div','row');
-        r.appendChild(h('span','g',j.label));
-        r.appendChild(h('span','s',j.schedule));
-        var go=h('button','b','Run'); go.onclick=function(){ go.textContent='...'; jpost('/jobs',{run:j.id}).then(function(){ go.textContent='Ran'; }); };
-        var rm=h('button','b bad','Remove'); rm.onclick=function(){ api('/jobs?id='+encodeURIComponent(j.id),{method:'DELETE'}).then(load); };
-        r.appendChild(go); r.appendChild(rm);
-        list.appendChild(r);
-      });
-    });
-  }
-  add.onclick=function(){
-    if(!sc.value.trim())return;
-    add.textContent='...';
-    jpost('/jobs',{name:nm.value||'job',schedule:sc.value,path:pa.value||'/cron'}).then(function(d){
-      add.textContent='Add';
-      if(d.error){ fail(d.error); return; }
-      nm.value=''; load();
-    });
-  };
-  load();
-}
-
-function drawSecrets(){
-  dwBody.appendChild(h('h5',null,'Secrets'));
-  // Keys only, values never. The API returns no values and this asks for none —
-  // the point of a secret is that the platform is the only thing that has read
-  // it, and a panel that could show one would make that untrue.
-  dwBody.appendChild(h('div','muted','The only thing that cannot be written in your code. Values are never shown, here or anywhere.'));
-  var form=h('div','form');
-  var k=document.createElement('input'); k.placeholder='NAME';
-  var v=document.createElement('input'); v.placeholder='value'; v.type='password';
-  var save=h('button','b go','Save');
-  form.appendChild(k); form.appendChild(v); form.appendChild(save);
-  dwBody.appendChild(form);
-  var list=h('div'); dwBody.appendChild(list);
-
-  function paint(keys){
-    list.innerHTML='';
-    if(!keys||!keys.length){ list.appendChild(h('div','muted','None set.')); return; }
-    keys.forEach(function(key){
-      var r=h('div','row');
-      r.appendChild(h('span','g mono',key));
-      var rm=h('button','b bad','Remove');
-      rm.onclick=function(){ rm.textContent='...'; jpost('/env',{unset:[key]}).then(function(d){ if(d.error){fail(d.error);rm.textContent='Remove';return;} paint(d.keys); }); };
-      r.appendChild(rm); list.appendChild(r);
-    });
-  }
-  save.onclick=function(){
-    if(!k.value.trim()||!v.value)return;
-    save.textContent='...';
-    var body={set:{}}; body.set[k.value.trim()]=v.value;
-    jpost('/env',body).then(function(d){
-      save.textContent='Save';
-      if(d.error){ fail(d.error); return; }
-      k.value=''; v.value=''; paint(d.keys);
-      // Saying so matters: a secret is applied by rolling a new version, so the
-      // app the owner is looking at is not yet the app that has it.
-      list.appendChild(h('div','muted','Saved. A new version is rolling out with it.'));
-    });
-  };
-  var l=loading();
-  api('/env').then(function(d){ l.remove(); if(d.error) fail(d.error); paint(d.keys); });
-}
-
-function drawAddress(){
-  dwBody.appendChild(h('h5',null,'Address'));
-  var r=h('div','row');
-  var a=document.createElement('a'); a.href='https://'+C.slug+'.supersonic.cv'; a.target='_blank';
-  a.className='g mono'; a.style.color='#eae8df'; a.style.textDecoration='none';
-  a.textContent=C.slug+'.supersonic.cv';
-  r.appendChild(a); r.appendChild(h('span','s','HTTPS is on'));
-  dwBody.appendChild(r);
-  dwBody.appendChild(h('div','muted','Your own domain is not connected yet — that is still being built.'));
-}
-
-function drawShare(){
-  dwBody.appendChild(h('h5',null,'Who can open this'));
-  var list=h('div'); dwBody.appendChild(list);
-  var OPTS=[['private','Only me'],['shared','Specific people'],['public','Anyone with the link']];
-  function paint(j){
-    vis=j.visibility||vis; grants=j.grants||[]; reqs=j.requests||[];
-    list.innerHTML='';
-    OPTS.forEach(function(o){
-      var r=h('div','row');
-      r.appendChild(h('span','g',o[1]));
-      var b=h('button','b'+(vis===o[0]?' go':''),vis===o[0]?'On':'Choose');
-      b.onclick=function(){ b.textContent='...'; api('/share',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visibility:o[0]})}).then(paint); };
-      r.appendChild(b); list.appendChild(r);
-    });
-    if(vis==='shared'){
-      var f=h('div','form');
-      var em=document.createElement('input'); em.type='email'; em.placeholder='colleague@company.com';
-      var inv=h('button','b go','Invite');
-      inv.onclick=function(){ if(!em.value)return; inv.textContent='...'; api('/share',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addEmail:em.value})}).then(function(j){ inv.textContent='Invite'; em.value=''; paint(j); }); };
-      f.appendChild(em); f.appendChild(inv); list.appendChild(f);
-      grants.forEach(function(g){
-        var r=h('div','row'); r.appendChild(h('span','g',g));
-        var rm=h('button','b bad','Remove');
-        rm.onclick=function(){ api('/share',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({removeEmail:g})}).then(paint); };
-        r.appendChild(rm); list.appendChild(r);
+/**
+ * Everything the panel shows, fetched at once.
+ *
+ * Seven requests in parallel and not seven screens each fetching on arrival:
+ * home shows a live fact on every cell — how many tables, how many keys, who is
+ * here — so a panel that fetched per-screen would open onto six spinners and
+ * then still be wrong, because the facts it summarises live behind six
+ * different routes. Kicked off before the panel is opened (see the idle call at
+ * the end of this file), so the common case is that it is already here.
+ */
+function dwLoad(force){
+  if(dwPending && !force) return dwPending;
+  if(dwD && !force) return Promise.resolve(dwD);
+  dwPending=Promise.all([
+    dwApi('/share'),dwApi('/env'),dwApi('/db'),dwApi('/storage'),
+    dwApi('/jobs'),dwApi('/deploy-status'),dwApi('/analytics'),dwLive()
+  ]).then(function(r){
+    var share=r[0]||{},env=r[1]||{},db=r[2]||{},store=r[3]||{},jobs=r[4]||{},
+        dep=r[5]||{},an=r[6]||{},live=r[7];
+    var grants=share.grants||[];
+    var here=[],feed=[];
+    if(live&&live.live){
+      var L=live.live;
+      (L.here.names||[]).forEach(function(n){ here.push([n,'here now']); });
+      var anon=(L.here.count||0)-(L.here.names||[]).length;
+      if(anon>0) here.push([anon+(anon===1?' person':' people')+' not signed in','']);
+      // One source, honestly. The prototype interleaved edge/web/api/db/redis;
+      // the edge is the only one of those the proxy actually hears, so the rest
+      // are not drawn rather than drawn empty.
+      feed=(L.paths||[]).slice(0,40).map(function(p){
+        var tone=p.brokenFor?'bad':'';
+        return ['edge',p.path,(p.hits+' · '+p.p50+'ms · '+ago(p.ago)),tone];
       });
     }
-    reqs.forEach(function(e){
-      var r=h('div','row'); r.appendChild(h('span','g',e+' asked for access'));
-      var ok=h('button','b go','Approve');
-      ok.onclick=function(){ api('/share',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addEmail:e})}).then(paint); };
-      r.appendChild(ok); list.appendChild(r);
-    });
-  }
-  var l=loading();
-  api('/share').then(function(j){ l.remove(); if(j.error){fail(j.error);return;} paint(j); });
-
-  // Deleting lives at the bottom of the last section rather than in a tab of its
-  // own: it is not a setting, it is an ending, and it should be somewhere you
-  // arrive at deliberately.
-  dwBody.appendChild(h('h5','danger','Delete this app'));
-  dwBody.appendChild(h('div','muted','Its address, its database and its files go too. This cannot be undone.'));
-  var df=h('div','form');
-  var typed=document.createElement('input'); typed.placeholder='type '+C.slug+' to confirm';
-  var del=h('button','b bad','Delete');
-  del.onclick=function(){
-    if(typed.value!==C.slug){ fail('Type the app\'s name to confirm.'); return; }
-    del.textContent='...';
-    api('/delete',{method:'POST'}).then(function(d){
-      if(d.error){ fail(d.error); del.textContent='Delete'; return; }
-      dwBody.innerHTML=''; dwBody.appendChild(h('div','muted',C.slug+' is gone.'));
-    });
-  };
-  df.appendChild(typed); df.appendChild(del); dwBody.appendChild(df);
-}
-
-var DW_TABS=[
-  ['xray','X-ray',drawXraySection],
-  ['data','Data',drawData],
-  ['files','Files',drawFiles],
-  ['jobs','Jobs',drawJobs],
-  ['secrets','Secrets',drawSecrets],
-  ['address','Address',drawAddress],
-  ['share','Share',drawShare]
-];
-
-function dwSelect(id){
-  dwTab=id;
-  Array.prototype.forEach.call(dw.querySelectorAll('.dw-nav button'),function(b){
-    b.className = b.getAttribute('data-id')===id ? 'on' : '';
+    var broken=(live&&live.live?(live.live.paths||[]):[]).filter(function(p){return p.brokenFor});
+    var d={
+      slug:C.slug,
+      addr:C.slug+'.supersonic.cv',
+      // No numbers here yet: /analytics answers whether analytics is on, not
+      // how many people came. Those live in Umami and want an endpoint of their
+      // own; until it exists this says so rather than inventing a figure.
+      an:null,
+      anOn:an.enabled!==false, anReady:Boolean(an.provisioned),
+      here:here, initials:here.map(function(x){return ini(x[0])}),
+      feed:feed,
+      who:share.visibility||'private',
+      people:grants, pInitials:grants.map(ini),
+      requests:share.requests||[],
+      tables:(db.tables||[]).map(dwTableRow),
+      files:(store.objects||[]).length,
+      missing:db.error||null,
+      keys:(env.keys||[]).map(function(k){ return {name:dwKeyName(k),tone:'',st:'set'}; }),
+      jobs:jobs.jobs||[],
+      // deploys.ts: status is live | building | deploying | pending | failed |
+      // canceled, and there is no 'done'. Reading stage for doneness would have
+      // left every finished app saying "Shipping" forever, because stage holds
+      // the last step it ran (deploy, verify, fleet-boot), not whether it ended.
+      shipping:['building','deploying','pending'].indexOf(String(dep.deploy&&dep.deploy.status))>=0,
+      ships:[],dock:null,
+      alert:null
+    };
+    if(dep.deploy){
+      var dd=dep.deploy, st=String(dd.status||'');
+      var stamp=dd.finishedAt||dd.updatedAt;
+      d.ships=[{
+        did:dd.name||dd.stage||'a change',
+        when:stamp?ago(Math.round((Date.now()-new Date(stamp).getTime())/1000)):'just now',
+        // The row records no actor. An owner is the only person who can see this
+        // panel, so naming them is honest; inventing a name would not be.
+        who:'you',
+        out:st==='live'?'shipped':(st==='failed'||st==='canceled')?'never left':'live'
+      }];
+      if(dd.error) d.alert=d.alert||{kind:'bad',icon:'refresh-cw',
+        title:'The last ship did not land',sub:String(dd.error).slice(0,160),act:'Look at it'};
+    }
+    if(!d.ships.length) d.ships=[{did:'first ship',when:'not yet',who:'you',out:'live'}];
+    if(broken.length){
+      var b=broken[0];
+      d.alert={kind:'bad',icon:'refresh-cw',title:b.path+' has been failing for '+dur(b.brokenFor),
+               sub:'The edge has seen no success there since.',act:'Look at it'};
+    }
+    dwD=d; dwErr=null; dwPending=null;
+    return d;
   });
-  // The X-ray poll is stopped whenever its section is not on screen. Left
-  // running it would keep asking /_xray every three seconds while the owner
-  // reads their database, for a panel nothing is drawing.
-  if(id!=='xray' && xrTimer){ clearInterval(xrTimer); xrTimer=null; xr=null; }
-  dwBody.innerHTML='';
-  for(var i=0;i<DW_TABS.length;i++) if(DW_TABS[i][0]===id){ DW_TABS[i][2](); return; }
+  return dwPending;
 }
 
+function dwHeading(){
+  var v=dwTop(); if(!v) return null;
+  return headingFor(v,dwD);
+}
+
+/** Paint the whole panel from 'dwD'. Cheap enough to do on every navigation. */
+function dwRender(){
+  if(!dw) return;
+  clearInterval(dwFeedTimer);
+  if(!dwD){
+    dwScroll.innerHTML='';
+    dwScroll.appendChild(pad('Reading…','Fetching what your app is doing.'));
+    return;
+  }
+  var d=dwD,view=dwTop();
+
+  dwHeadEl.innerHTML='';
+  var Lft=el('div','head-l');
+  if(!view){
+    Lft.appendChild(el('span','slug',d.slug));
+  } else {
+    var back=el('button','nav');
+    back.appendChild(icon('chevron-left',20));
+    back.appendChild(el('span',null,dwHeading()));
+    back.addEventListener('click',dwPop);
+    Lft.appendChild(back);
+  }
+  dwHeadEl.appendChild(Lft);
+
+  var R=el('div','head-r');
+  var tone=d.alert?'warn':d.shipping?'load':'ok';
+  var st=el('span','state '+tone);
+  st.appendChild(el('b'));
+  st.appendChild(el('span',null,d.alert?'broken':d.shipping?'shipping':'afloat'));
+  R.appendChild(st);
+  if(!dwFlat){
+    var x=el('button','icon');
+    x.setAttribute('aria-label','Close');
+    x.appendChild(icon('x',18));
+    x.addEventListener('click',closeDrawer);
+    R.appendChild(x);
+  }
+  dwHeadEl.appendChild(R);
+
+  dwScroll.innerHTML='';
+  dwScroll.appendChild(view ? screen(view,d) : homeScreen(d));
+  dwScroll.scrollTop=0;
+  dwScroll.classList.remove('push','pop');
+  void dwScroll.offsetWidth;
+  dwScroll.classList.add(dwDir);
+}
+
+/** The panel's shell. 'flat' is the /_xray page, where it IS the page. */
 function buildDrawer(flat){
   dwFlat=!!flat;
-  dw=h('aside','dw'+(flat?' flat':''));
-  // No header in flat mode: the page it sits on already names the app directly
-  // above, and a drawer that repeats it reads as two panels stacked.
+  dw=el('aside','drawer'+(flat?' flat':''));
   if(!flat){
-    var head=h('div','dw-head');
-    var t=h('div','t');
-    var link=document.createElement('a'); link.href='https://'+C.slug+'.supersonic.cv'; link.textContent=C.slug+'.supersonic.cv';
-    t.appendChild(link); head.appendChild(t);
-    var x=h('button','dw-x','×'); x.onclick=closeDrawer; head.appendChild(x);
-    dw.appendChild(head);
+    dwGrip=el('div','grip');
+    dw.appendChild(dwGrip);
+    dwGrip.addEventListener('pointerdown',function(e){
+      dwGrip.classList.add('on'); dwGrip.setPointerCapture(e.pointerId);
+      var move=function(ev){
+        var w=Math.min(Math.max(window.innerWidth-ev.clientX,340),Math.min(1040,window.innerWidth-200));
+        dw.style.setProperty('--w',w+'px');
+      };
+      var up=function(){ dwGrip.classList.remove('on');
+        dw.removeEventListener('pointermove',move); dw.removeEventListener('pointerup',up); };
+      dw.addEventListener('pointermove',move); dw.addEventListener('pointerup',up);
+    });
   }
-  var nav=h('div','dw-nav');
-  DW_TABS.forEach(function(tab){
-    var b=h('button',null,tab[1]); b.setAttribute('data-id',tab[0]);
-    b.onclick=function(){ dwSelect(tab[0]); };
-    nav.appendChild(b);
-  });
-  dw.appendChild(nav);
-  dwBody=h('div','dw-body'); dw.appendChild(dwBody);
+  dwHeadEl=el('div','head'); dw.appendChild(dwHeadEl);
+  dwScroll=el('div','scroll'); dw.appendChild(dwScroll);
+  dwLoad().then(function(){ dwRender(); });
+  dwRender();
   return dw;
 }
 
 function openDrawer(){
   if(dw){ closeDrawer(); return; }
-  if(pop){ pop.remove(); pop=null; }
-  dwScrim=h('div','dw-scrim'); dwScrim.onclick=closeDrawer; root.appendChild(dwScrim);
+  if(typeof pop!=='undefined' && pop){ pop.remove(); pop=null; }
+  dwOpen=true; dwStack=[]; dwDir='push';
+  dwScrim=el('div','dw-scrim'); dwScrim.addEventListener('click',closeDrawer);
+  root.appendChild(dwScrim);
   root.appendChild(buildDrawer(false));
-  dwSelect(dwTab);
-  // One frame before adding .on, or the browser has nothing to animate from.
-  requestAnimationFrame(function(){ dw.className='dw on'; dwScrim.className='dw-scrim on'; });
+  requestAnimationFrame(function(){ dw.classList.add('on'); dwScrim.classList.add('on'); });
 }
 function closeDrawer(){
-  if(!dw)return;
-  if(xrTimer){ clearInterval(xrTimer); xrTimer=null; xr=null; }
-  var d=dw,s=dwScrim; dw=null; dwScrim=null; dwBody=null;
-  d.className='dw'; if(s) s.className='dw-scrim';
-  setTimeout(function(){ d.remove(); if(s) s.remove(); },240);
+  if(!dw) return;
+  clearInterval(dwFeedTimer); dwFeedTimer=null;
+  var a=dw,s=dwScrim;
+  dw=null; dwScrim=null; dwScroll=null; dwHeadEl=null; dwOpen=false; dwStack=[];
+  a.classList.remove('on'); if(s) s.classList.remove('on');
+  setTimeout(function(){ a.remove(); if(s) s.remove(); },240);
 }
+
+/** Compatibility seam for the /_xray page, which asked for a tab by name back
+ *  when this had tabs. Home is the whole panel now, so anything lands there. */
+function dwSelect(){ dwStack=[]; dwDir='push'; dwRender(); }
+
+// Warm before it is wanted. requestIdleCallback so it never competes with the
+// tenant app's own load; owner-only, so this costs a visitor nothing.
+if(window.requestIdleCallback) requestIdleCallback(function(){ dwLoad(); });
+else setTimeout(function(){ dwLoad(); },2000);
+
+${XRAY_JS}
 `;

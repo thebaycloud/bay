@@ -115,8 +115,13 @@ var host=document.createElement('div'); host.id='ss-overlay';
 host.style.cssText='all:initial'; (document.body||document.documentElement).appendChild(host);
 var root=host.attachShadow({mode:'open'});
 var css=\`
-:host{all:initial}
-*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+/* The base font sits on :host so it INHERITS. It used to sit on \`*\`, which
+   reaches every element directly — and a direct rule beats an inherited one, so
+   a child of something mono (the state dot's label, a value in a tint row) was
+   silently pulled back to the sans face no matter what its parent asked for.
+   The panel is built out of exactly that kind of nesting. */
+:host{all:initial;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+*{box-sizing:border-box}
 .badge{position:fixed;bottom:16px;right:16px;display:inline-flex;align-items:center;gap:6px;background:#0b5e38;color:#fff;font:600 12px/1 sans-serif;padding:9px 13px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.18);z-index:2147483000}
 ${owner ? OWNER_CSS : ""}\`;
 // Supersonic mark — the knockout drawing, since it is always light-on-dark here.

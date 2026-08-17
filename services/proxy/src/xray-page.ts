@@ -19,21 +19,23 @@ export function xrayPage(slug: string): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(slug)} — x-ray</title>
 <style>
-  body{margin:0;min-height:100vh;background:#15140f;color:#eae8df;
-       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  body{margin:0;min-height:100vh;background:#E5E5E2;color:#1A1A19;
+       font-family:'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
        display:flex;align-items:flex-start;justify-content:center;padding:28px 16px}
   ${DRAWER_CSS}
-  /* On a page of its own the panel is the content, not something floating over
-     an app, so it drops the fixed position it needs inside the overlay. */
-  /* Full width of the column rather than its own 560px: the column already is
-     560px, and two independent width rules is how one of them ends up wrong. */
-  .xr{position:static;width:100%;max-height:none}
-  .col{width:min(560px,100%);margin:0 auto}
-  .top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 12px}
-  .top .door{color:#eae8df;font:400 13px/1 ui-monospace,Menlo,monospace;text-decoration:none}
-  .top .door:hover{color:#2ea86a}
-  .top .out{color:#7a786f;font:400 11.5px/1 sans-serif;text-decoration:none;flex:none}
-  .top .out:hover{color:#eae8df}
+  /* On a page of its own the panel is the content, not something sliding over
+     an app, so the flat modifier drops the fixed position, the transform and the
+     shadow it needs inside the overlay. Height comes from the column, because
+     the panel is a flex column whose scroller expects a bounded parent. */
+  .col{width:min(720px,100%);margin:0 auto;height:calc(100vh - 56px);
+       display:flex;flex-direction:column;gap:12px}
+  #root{flex:1;min-height:0;border-radius:12px;overflow:hidden;
+        box-shadow:0 1px 2px rgba(38,38,38,.06),0 18px 50px -24px rgba(38,38,38,.3)}
+  .top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex:none}
+  .top .door{color:#1A1A19;font:400 13px/1 ui-monospace,Menlo,monospace;text-decoration:none}
+  .top .door:hover{color:#B32C1A}
+  .top .out{color:#8A8A86;font:400 11.5px/1 sans-serif;text-decoration:none;flex:none}
+  .top .out:hover{color:#1A1A19}
 </style>
 <div class="col">
   <div class="top">
@@ -54,9 +56,13 @@ var root=document.getElementById('root');
 var pop=null;
 function h(t,c,txt){var e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;}
 ${DRAWER_JS}
-// Flat: on a page of its own the drawer is the content, not something sliding
+// Flat: on a page of its own the panel is the content, not something sliding
 // over an app, so it neither slides nor needs a way to be dismissed.
+//
+// No tab is selected any more. This used to ask for 'xray' by name, back when
+// the panel opened onto a row of tabs; it opens onto home now, and home is the
+// whole thing — the live feed included, as the cell that takes the leftover
+// height. buildDrawer already renders and then re-renders when the data lands.
 root.appendChild(buildDrawer(true));
-dwSelect('xray');
 })();</script>`;
 }
