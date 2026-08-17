@@ -146,3 +146,59 @@ test("the overlay puts itself back when the app's hydration removes it", () => {
   assert.equal((body.children as unknown[]).length, 1, "and the overlay comes straight back");
   assert.equal((body.children as Record<string, unknown>[])[0].id, "ss-overlay");
 });
+
+/**
+ * The stylesheet has to survive being carried through a template literal.
+ *
+ * THE BUG THIS PINS. The CSS is emitted inside a JS template literal in the
+ * overlay script, so a stray backtick anywhere in it closes the string early. A
+ * comment in inject.ts once contained two, wrapped around the universal
+ * selector, and the browser then evaluated "...sit on " * ", which..." — string
+ * times string — assigned NaN to the stylesheet, and rendered the whole overlay
+ * unstyled: position static, display block, sitting as plain text six thousand
+ * pixels down a long page. It parsed. It ran. It threw nothing. The console was
+ * clean and the toolbar was simply not where anyone would look.
+ *
+ * Asserting the script parses is not enough — it did, every time. This evaluates
+ * it and reads the stylesheet back off the shadow root.
+ */
+test("the overlay's stylesheet arrives whole, not as the string NaN", () => {
+  const noop = () => {};
+  const styles: string[] = [];
+  const mk = (tag?: string): Record<string, unknown> => ({
+    tagName: tag, id: "", className: "", style: { cssText: "" }, children: [] as unknown[],
+    appendChild(c: Record<string, unknown>) { (this.children as unknown[]).push(c); return c; },
+    attachShadow() { return mk("#shadow"); },
+    addEventListener: noop, removeEventListener: noop, setAttribute: noop,
+    getAttribute: () => null, querySelector: () => null, querySelectorAll: () => [],
+    classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+    removeChild: noop, remove: noop, insertBefore: noop, setPointerCapture: noop,
+    set innerHTML(_v: string) {}, get innerHTML() { return ""; },
+    set textContent(v: unknown) { if (this.tagName === "style") styles.push(String(v)); },
+    get textContent() { return null; },
+  });
+  const g = globalThis as Record<string, unknown>;
+  g.document = {
+    createElement: (t: string) => mk(t), createElementNS: (_n: string, t: string) => mk(t),
+    body: mk("body"), documentElement: mk("html"), addEventListener: noop,
+    fonts: { check: () => false, add: noop },
+  };
+  g.window = { innerWidth: 1400, addEventListener: noop, MutationObserver: class { observe() {} }, FontFace: function () {} };
+  g.MutationObserver = (g.window as Record<string, unknown>).MutationObserver;
+  g.setInterval = () => 0; g.clearInterval = noop; g.setTimeout = () => 0; g.clearTimeout = noop;
+  g.requestAnimationFrame = (f: () => void) => f();
+  g.fetch = () => Promise.resolve({ json: () => Promise.resolve({}) });
+
+  const page = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true, "w1");
+  const chunks = page.split("<script>");
+  new Function(chunks[chunks.length - 1].split("</scr" + "ipt>")[0])();
+
+  assert.equal(styles.length, 1, "exactly one stylesheet goes into the shadow root");
+  const css = styles[0];
+  assert.notEqual(css, "NaN", "a stray backtick turns the whole stylesheet into a multiplication");
+  assert.ok(css.length > 5000, `the stylesheet is ${css.length} chars, far too short to be the real one`);
+  // The rules the panel cannot be seen without.
+  assert.match(css, /\.bar\{position:fixed/, "the toolbar must be pinned, not left in the page flow");
+  assert.match(css, /\.drawer\{font-family:var\(--sans\)/);
+  assert.match(css, /:host\{all:initial/);
+});

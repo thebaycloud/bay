@@ -141,11 +141,18 @@ document.addEventListener('DOMContentLoaded',ssAttach);
 window.addEventListener('load',ssAttach);
 var root=host.attachShadow({mode:'open'});
 var css=\`
-/* The base font sits on :host so it INHERITS. It used to sit on \`*\`, which
-   reaches every element directly — and a direct rule beats an inherited one, so
-   a child of something mono (the state dot's label, a value in a tint row) was
-   silently pulled back to the sans face no matter what its parent asked for.
-   The panel is built out of exactly that kind of nesting. */
+/* The base font sits on :host so it INHERITS. It used to sit on the universal
+   selector, which reaches every element directly — and a direct rule beats an
+   inherited one, so a child of something mono (the state dot's label, a value in
+   a tint row) was silently pulled back to the sans face no matter what its
+   parent asked for. The panel is built out of exactly that kind of nesting.
+
+   NOTHING IN THIS BLOCK MAY CONTAIN A BACKTICK. It is emitted inside a JS
+   template literal, so one closes the string early: this comment did, and the
+   browser then evaluated "...sit on " * ", which..." — string times string —
+   assigned NaN to the stylesheet, and rendered the whole overlay unstyled as
+   plain text six thousand pixels down the page. No syntax error, no warning,
+   nothing in the console. There is a test below that keeps this honest. */
 :host{all:initial;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
 *{box-sizing:border-box}
 .badge{position:fixed;bottom:16px;right:16px;display:inline-flex;align-items:center;gap:6px;background:#0b5e38;color:#fff;font:600 12px/1 sans-serif;padding:9px 13px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.18);z-index:2147483000}
