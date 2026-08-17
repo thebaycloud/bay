@@ -1028,6 +1028,26 @@ var dw=null,dwScrim=null,dwScroll=null,dwHeadEl=null,dwGrip=null,dwFlat=false;
 var dwOpen=false,dwStack=[],dwDir='push',dwFeedTimer=null;
 var dwD=null,dwPending=null,dwErr=null;
 
+/**
+ * A request that cannot hang the panel.
+ *
+ * Everything here is fetched at once so home can show a fact per cell, and the
+ * first version waited on Promise.all with no deadline anywhere. One of the
+ * eight is /_xray, which assembles its reading from Umami - a service
+ * reading.ts itself says can be off or unreachable - so one slow answer left
+ * the whole panel reading "Reading..." forever, with nothing on screen and
+ * nothing in the console. A cell holding a dash is worth more than seven cells
+ * that never arrive.
+ */
+function dwSoon(p,ms,fallback){
+  return new Promise(function(resolve){
+    var done=false;
+    var t=setTimeout(function(){ if(!done){ done=true; resolve(fallback); } },ms||6000);
+    p.then(function(v){ if(!done){ done=true; clearTimeout(t); resolve(v); } },
+           function(){ if(!done){ done=true; clearTimeout(t); resolve(fallback); } });
+  });
+}
+
 function dwApi(path,opts){
   // credentials:'include' because this is a DIFFERENT ORIGIN — the panel runs
   // on the app's own hostname and the control plane answers on app.*. The route
@@ -1071,8 +1091,12 @@ function dwLoad(force){
   if(dwPending && !force) return dwPending;
   if(dwD && !force) return Promise.resolve(dwD);
   dwPending=Promise.all([
-    dwApi('/share'),dwApi('/env'),dwApi('/db'),dwApi('/storage'),
-    dwApi('/jobs'),dwApi('/deploy-status'),dwApi('/analytics'),dwLive()
+    dwSoon(dwApi('/share'),6000,{}),   dwSoon(dwApi('/env'),6000,{}),
+    dwSoon(dwApi('/db'),6000,{}),      dwSoon(dwApi('/storage'),6000,{}),
+    dwSoon(dwApi('/jobs'),6000,{}),    dwSoon(dwApi('/deploy-status'),6000,{}),
+    dwSoon(dwApi('/analytics'),6000,{}),
+    // Shorter, and first to be given up on: this is the one that reaches Umami.
+    dwSoon(dwLive(),4000,null)
   ]).then(function(r){
     var share=r[0]||{},env=r[1]||{},db=r[2]||{},store=r[3]||{},jobs=r[4]||{},
         dep=r[5]||{},an=r[6]||{},live=r[7];
@@ -1140,6 +1164,12 @@ function dwLoad(force){
     }
     dwD=d; dwErr=null; dwPending=null;
     return d;
+  }).catch(function(e){
+    // Never swallowed, and never left spinning: the panel says so and
+    // offers the retry, which is the only useful thing left to do.
+    console.error('panel:',e);
+    dwErr=String(e&&e.message||e); dwPending=null; dwD=null;
+    return null;
   });
   return dwPending;
 }
@@ -1155,7 +1185,19 @@ function dwRender(){
   clearInterval(dwFeedTimer);
   if(!dwD){
     dwScroll.innerHTML='';
-    dwScroll.appendChild(pad('Reading…','Fetching what your app is doing.'));
+    if(dwErr){
+      // Never left spinning. A panel that says "Reading..." forever is
+      // indistinguishable from one that is broken, which is what this was.
+      var ep=pad('That did not come back','Nothing could be read about this app just now.');
+      var again=btn('Try again','refresh-cw',{rest:'white',hover:'steel',size:'sm'});
+      again.addEventListener('click',function(){
+        dwErr=null; dwRender(); dwLoad(true).then(function(){ dwRender(); });
+      });
+      ep.appendChild(again);
+      dwScroll.appendChild(ep);
+    } else {
+      dwScroll.appendChild(pad('Reading…','Fetching what your app is doing.'));
+    }
     return;
   }
   var d=dwD,view=dwTop();

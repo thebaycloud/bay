@@ -81,7 +81,14 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // including with its own /_xray, if it has one. That check is unchanged; only
   // WHEN it is made moved. The session is read for this URL and no other, so an
   // ordinary request to a public app acquires nothing it did not have.
-  const wantsXray = (req.url ?? "/") === "/_xray";
+  // Two addresses, one page. `/_dashboard` is what it is called now — the panel
+  // stopped being an x-ray the moment it could do things rather than only show
+  // them, and the owner reads this name in their address bar and their tab
+  // title. `/_xray` stays because it is the address already injected into every
+  // served page and typed into agents' scripts; a rename that 404s the old one
+  // is a rename that breaks whatever was pointed at it.
+  const url0 = req.url ?? "/";
+  const wantsXray = url0 === "/_dashboard" || url0 === "/_xray";
   const xrayViewer = wantsXray ? await viewer() : null;
 
   // What this URL should answer with, argued from the deploy's own record rather

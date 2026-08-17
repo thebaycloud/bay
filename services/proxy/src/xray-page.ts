@@ -17,7 +17,7 @@ import { DRAWER_CSS, DRAWER_JS } from "./drawer";
 export function xrayPage(slug: string): string {
   return `<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(slug)} — x-ray</title>
+<title>${escapeHtml(slug)} — dashboard</title>
 <style>
   body{margin:0;min-height:100vh;background:#E5E5E2;color:#1A1A19;
        font-family:'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;

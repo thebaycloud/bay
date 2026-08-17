@@ -49,7 +49,7 @@ const OWNER_JS = String.raw`
 var bar=h('div','bar');
 var brand=h('div','brand');brand.innerHTML=MARK(12,'#2ea86a')+'Supersonic';
 var share=h('button','share','Share');
-var xrayBtn=h('button','xray','X-ray');
+var xrayBtn=h('button','xray','Dashboard');
 var open=document.createElement('a');open.className='open';open.href=C.app+'/apps/'+C.slug;open.target='_blank';open.textContent='Open in Supersonic';
 bar.appendChild(brand);bar.appendChild(xrayBtn);bar.appendChild(share);bar.appendChild(open);root.appendChild(bar);
 
