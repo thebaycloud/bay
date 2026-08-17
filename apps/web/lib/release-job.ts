@@ -1,4 +1,5 @@
-import { dbContainerArgs, DB_HOST, DB_PORT, type Lane, type Scale } from "./lanes";
+import { type Lane, type Scale } from "./lanes";
+import { FLEET_DB } from "./db-address";
 import { cloudRunName } from "./slug";
 
 /**
@@ -195,11 +196,24 @@ function withEnv(pairs: string[], name: string, value: string): string[] {
  * is now checked once, before the loop, so an image with no probe waits zero
  * seconds instead of thirty and the app's own connect error arrives immediately.
  *
- * The runner lane does not use this: services/runner/entrypoint.sh waits for the
- * same port before it execs anything, which covers the runner's release job too
- * because the release job runs that same image through that same entrypoint.
+ * Third, and this one cost the whole timeout on every start: the DEFAULT ADDRESS
+ * was Cloud Run's — 127.0.0.1:5432, a Cloud SQL Auth Proxy sidecar in the same
+ * service. There are no such sidecars. Nothing deploys to a per-app Cloud Run
+ * service, and an app with a database is a fleet app by construction: the static
+ * lane does not implement `uses`, so it cannot declare one.
+ *
+ * On a node the proxy is one per machine on the sandbox bridge gateway, and
+ * db-address.ts states why it could not have been loopback — gVisor runs its own
+ * network stack, so 127.0.0.1 inside a sandbox never leaves the sandbox. The
+ * probe was unreachable BY CONSTRUCTION, ran its full count, and let the app
+ * start anyway. Thirty seconds of silence on every start of every
+ * database-backed app: deploys, restarts, rehoming after a node dies, rollbacks.
+ * Never an error, because falling through is what the loop is supposed to do.
+ *
+ * The default is `FLEET_DB` now. A caller with a different address still passes
+ * one; there is simply no longer a runtime whose address is the old default.
  */
-export function proxyWait(host = DB_HOST, port = DB_PORT, seconds = 30): string {
+export function proxyWait(host = FLEET_DB.host, port = FLEET_DB.port, seconds = 30): string {
   const tools = ["nc", "python3", "node", "bash"];
   const probe = [
     `command -v nc >/dev/null 2>&1 && nc -z ${host} ${port} >/dev/null 2>&1`,
