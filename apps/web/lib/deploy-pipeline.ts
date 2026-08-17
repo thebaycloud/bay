@@ -32,6 +32,7 @@ import { inferAppConfig, type DetectedStack } from "@/lib/infer-services";
 import { mergeDatabaseEnv, configEnv, restateDatabaseAt } from "@/lib/env-merge";
 import { pgConfig, TENANT_PG_INSTANCE } from "@/lib/pg-config";
 import { dbNameForSlug, getPool } from "@/lib/db";
+import { fetchSource, pruneBrokenSymlinks } from "@/lib/source";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -706,47 +707,6 @@ function buildWatcher(slug: string) {
   };
 }
 
-/**
- * Delete symlinks whose target is not there.
- *
- * `gcloud builds submit` CRASHES on a dangling symlink — not "fails", crashes:
- * `gcloud crashed (FileNotFoundError): [Errno 2] No such file or directory` while
- * it packs the source, with no indication which file or that a symlink is
- * involved. A repair agent handed that error has nothing to work with and cannot
- * fix it anyway; one spent 626k tokens editing package.json and tsconfig before
- * giving up.
- *
- * And the dangling links are usually OURS. The CLI excludes `.venv`,
- * `node_modules` and friends from the upload, so any symlink pointing INTO one of
- * them arrives with its target removed — links that resolve perfectly on the
- * developer's machine. Found on fastapi/full-stack-fastapi-template, whose
- * `.agents/skills/*` point into `.venv`.
- *
- * Removed rather than followed: the target was deliberately excluded, so
- * dereferencing would drag a whole virtualenv into the build.
- */
-function pruneBrokenSymlinks(root: string, log: (l: string) => void): void {
-  const removed: string[] = [];
-  const walk = (d: string, depth: number) => {
-    if (depth > 12) return;
-    let entries;
-    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const full = join(d, e.name);
-      if (e.isSymbolicLink()) {
-        if (!existsSync(full)) {                 // existsSync follows the link
-          try { unlinkSync(full); removed.push(full.slice(root.length + 1)); } catch { /* nothing to do */ }
-        }
-        continue;                                 // never descend through a link
-      }
-      if (e.isDirectory() && e.name !== ".git") walk(full, depth + 1);
-    }
-  };
-  walk(root, 0);
-  if (removed.length) {
-    log(`Ignoring ${removed.length} broken symlink${removed.length > 1 ? "s" : ""} (${removed.slice(0, 3).join(", ")}${removed.length > 3 ? "…" : ""}) — their targets are not part of a deploy`);
-  }
-}
 
 /**
  * Make sure the program the plan says to run will be there when it runs.
@@ -1189,40 +1149,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       return;
     }
 
-    if (isUpload && archive) {
-      await stages.around("unpack", async () => {
-        log("Unpacking your project…");
-        const tgz = `${dir}.tgz`;
-        writeFileSync(tgz, archive);
-        await run("tar", ["-xzf", tgz, "-C", dir], () => {});
-      });
-    } else if (reused) {
-      log(`Using the copy of ${url} we already fetched`);
-      // Recorded so the saving from reusing a clone is visible in the data
-      // rather than only claimed in a design document.
-      await stages.skipped("clone");
-    } else {
-      await stages.around("clone", async () => {
-        log(`Pulling ${url}`);
-        await run("git", ["clone", "--depth", "1", url, dir], () => {});
-      });
-    }
-
-    // Here, where the three ways of getting the source meet — not inside the
-    // upload branch, which is where this used to live.
-    //
-    // The reasoning written down for `pruneBrokenSymlinks` is about the CLI
-    // excluding `.venv` from an upload and thereby stranding the links that point
-    // into it. True, and it made the fix look like a property of uploads. It is
-    // not: a `git clone` of a repo that COMMITTED those symlinks produces exactly
-    // the same dangling links, because `.venv` is not in the repository either.
-    // `fastapi/full-stack-fastapi-template` — the very repo that prompted the
-    // original fix — commits `.agents/skills/fastapi` and `.agents/skills/sqlmodel`
-    // as symlinks into `.venv`, so deploying it from a URL crashed
-    // `gcloud builds submit` on 10 Aug with the same unattributable
-    // `gcloud crashed (FileNotFoundError)` the fix was written to prevent, twice,
-    // while the fix sat three branches away.
-    pruneBrokenSymlinks(dir, log);
+    // Three ways in, one populated directory out — see lib/source.ts, which also
+    // owns the symlink pruning all three need and that used to live inside one
+    // of them.
+    await fetchSource(
+      dir,
+      isUpload && archive ? { kind: "upload", archive }
+        : reused ? { kind: "cached-clone" }
+        : { kind: "clone", url },
+      { run: (cmd, args) => run(cmd, args, () => {}), log, stages },
+    );
 
     const raw = await stages.around("detect", async () => {
       log("Detecting stack…");

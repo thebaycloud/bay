@@ -37,16 +37,16 @@ function clock(startMs: number, stepMs: number) {
  */
 const EMITTERS = [
   "lib/deploy-pipeline.ts", "app/api/deploy/route.ts", "scripts/deploy-job.ts",
-  // `lib/deploy-execute.ts` belongs in this list and is not in it, because the
-  // file does not exist: it was referenced here and never committed, and the
-  // three tests below failed on ENOENT while `main`'s build was already failing
-  // on a second missing file in the same push. Reconstructing an extraction out
-  // of a four-thousand-line pipeline from a test's file list would be guessing
-  // at its shape, and a wrong guess is worse than an absent file.
+  // Added when `unpack` and `clone` left the pipeline for lib/source.ts, which
+  // is exactly what the note that used to sit here predicted would happen: the
+  // stages an extracted module carries read as written by nothing the moment
+  // they leave deploy-pipeline.ts, and this test is what says so. It failed on
+  // `"clone" is in the vocabulary but nothing writes it` within a minute of the
+  // extraction landing.
   //
-  // Whoever lands that extraction adds the line back, and this test tells them
-  // to: the stages it carries will read as written by nothing the moment they
-  // leave deploy-pipeline.ts, which is exactly the failure this list exists for.
+  // The earlier note named `lib/deploy-execute.ts`, a file that was referenced
+  // here and never committed. That extraction was never made; this one was.
+  "lib/source.ts",
   "lib/fleet.ts",
 ];
 
