@@ -81,3 +81,68 @@ test("the standalone page is self-contained and reads its own origin", async () 
   assert.ok(page.includes("fetch('/_xray'"), "reads its own origin");
   assert.doesNotThrow(() => new Function(/<script>([\s\S]*)<\/script>/.exec(page)![1]));
 });
+
+/**
+ * Run the emitted overlay against a body that behaves like a hydrating app.
+ *
+ * THE BUG THIS PINS. The overlay is injected before </body> and runs at parse
+ * time, so its host div is in the body before the tenant's own JavaScript
+ * starts. A Next.js App Router app then calls hydrateRoot(document, ...) —
+ * React owns the whole document, body's children included — finds a node it did
+ * not render and reconciles it away. The toolbar and the badge vanish together,
+ * nothing errors, and the analytics tag beside them keeps working because a
+ * script that has already fired its request does not care. It reached
+ * production and was found by looking at a real app.
+ */
+test("the overlay puts itself back when the app's hydration removes it", () => {
+  const observers: (() => void)[] = [];
+  const noop = () => {};
+  const mk = (): Record<string, unknown> => ({
+    id: "", className: "", style: { cssText: "" }, children: [] as unknown[], parentNode: null,
+    appendChild(c: Record<string, unknown>) { (this.children as unknown[]).push(c); c.parentNode = this; return c; },
+    removeChild(c: Record<string, unknown>) {
+      this.children = (this.children as unknown[]).filter((x) => x !== c);
+      c.parentNode = null;
+      observers.forEach((f) => f()); // a real MutationObserver would fire here
+      return c;
+    },
+    attachShadow() { return mk(); },
+    addEventListener: noop, removeEventListener: noop, setAttribute: noop,
+    getAttribute: () => null, querySelector: () => null, querySelectorAll: () => [],
+    classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+    remove: noop, insertBefore: noop, setPointerCapture: noop,
+    set innerHTML(_v: string) {}, get innerHTML() { return ""; },
+    set textContent(_v: unknown) {}, get textContent() { return null; },
+  });
+
+  const body = mk();
+  const g = globalThis as Record<string, unknown>;
+  g.document = {
+    createElement: mk, createElementNS: mk, body, documentElement: mk(),
+    addEventListener: noop, fonts: { check: () => false, add: noop },
+  };
+  g.window = {
+    innerWidth: 1400, addEventListener: noop,
+    MutationObserver: class { constructor(cb: () => void) { observers.push(cb); } observe() {} },
+    FontFace: function () { /* not exercised here */ },
+  };
+  g.MutationObserver = (g.window as Record<string, unknown>).MutationObserver;
+  g.setInterval = () => 0; g.clearInterval = noop; g.setTimeout = () => 0; g.clearTimeout = noop;
+  g.requestAnimationFrame = (f: () => void) => f();
+  g.fetch = () => Promise.resolve({ json: () => Promise.resolve({}) });
+
+  const page = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true, "w1");
+  const chunks = page.split("<script>");
+  const js = chunks[chunks.length - 1].split("</scr" + "ipt>")[0];
+  new Function(js)();
+
+  assert.equal((body.children as unknown[]).length, 1, "the overlay attaches on first run");
+  const host = (body.children as Record<string, unknown>[])[0];
+  assert.equal(host.id, "ss-overlay");
+
+  // React, hydrating, throws away the child it did not render.
+  (body.removeChild as (c: unknown) => unknown)(host);
+
+  assert.equal((body.children as unknown[]).length, 1, "and the overlay comes straight back");
+  assert.equal((body.children as Record<string, unknown>[])[0].id, "ss-overlay");
+});

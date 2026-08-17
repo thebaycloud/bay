@@ -112,7 +112,33 @@ function overlayScript(slug: string, owner: boolean, badge: boolean): string {
 var C=${cfg};
 if(window.__ssOverlay)return; window.__ssOverlay=1;
 var host=document.createElement('div'); host.id='ss-overlay';
-host.style.cssText='all:initial'; (document.body||document.documentElement).appendChild(host);
+host.style.cssText='all:initial';
+// THE OVERLAY HAS TO SURVIVE THE APP HYDRATING.
+//
+// This is injected before </body> and runs at parse time, so the node is in the
+// body before the tenant's own JavaScript starts. A Next.js App Router app then
+// calls hydrateRoot(document, ...) — React owns the WHOLE document, body's
+// children included — finds a child it did not render, and reconciles it away.
+// The toolbar and the badge go with it. Nothing errors; the overlay is simply
+// gone a moment after it appeared, and the analytics tag beside it survives
+// because a script that has already fired its request does not care.
+//
+// So attaching once is not enough: put it back whenever it leaves. The observer
+// watches body's own child list only — not the subtree — because the removal we
+// care about is exactly one mutation of exactly that list, and a subtree
+// observer on somebody else's app is a cost we would be charging them forever.
+function ssAttach(){
+  var p=document.body||document.documentElement;
+  if(p && host.parentNode!==p) p.appendChild(host);
+}
+ssAttach();
+if(window.MutationObserver&&document.body){
+  new MutationObserver(function(){ ssAttach(); }).observe(document.body,{childList:true});
+}
+// Belt and braces for the frameworks that swap the body wholesale rather than
+// mutate it, which no observer bound to the old body would ever hear about.
+document.addEventListener('DOMContentLoaded',ssAttach);
+window.addEventListener('load',ssAttach);
 var root=host.attachShadow({mode:'open'});
 var css=\`
 /* The base font sits on :host so it INHERITS. It used to sit on \`*\`, which
