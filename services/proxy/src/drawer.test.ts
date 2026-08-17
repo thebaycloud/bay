@@ -112,3 +112,58 @@ test("the panel never defines a global that would silently kill the script", () 
   const unforgeable = ["window", "document", "location", "top", "self", "parent", "frames", "closed", "length"];
   assert.deepEqual(globals.filter((n) => unforgeable.includes(n)), []);
 });
+
+/** A reading with a people-half in it, as /_xray actually answers. */
+const readingWith = (audience: unknown, window: string) => ({
+  since: { live: Date.now(), audience: window },
+  audience,
+  live: { here: { count: 0, names: [] }, paths: [], dropped: 0 },
+});
+
+test("the people half is read from the reading, not from a second round trip", async () => {
+  // /api/apps/<slug>/analytics answers whether analytics is ON. The COUNTING is
+  // already read out of umami by the proxy and carried in the reading, so the
+  // panel needs no endpoint of its own and no extra request — it arrives on the
+  // same fetch as the live half.
+  const p = panel((url) =>
+    String(url).endsWith("/_xray")
+      ? json(readingWith(
+          { visitors: 1284, views: 3910, bounce: 38, avgSeconds: 134, change: 12,
+            pages: [["/", 900]], from: [["google", 300]], on: [["Mac", 700]] },
+          "read"))
+      : json({ enabled: true, provisioned: true }),
+  );
+  const d = await p.dwLoad();
+  const an = d!.an as Record<string, unknown>;
+  assert.equal(an.visitors, 1284);
+  assert.equal(an.views, 3910);
+  assert.equal(an.mins, "2m 14s", "a mean session length said the way a person says it");
+  assert.equal(an.dv, "+12%");
+  assert.equal(an.dvUp, true);
+  // Umami reports a bounce rate; the prototype wanted a returning count. The
+  // tile shows what the number is rather than what it was wished to be.
+  assert.equal(an.returning, "38%");
+  assert.deepEqual(an.pages, [["/", 900]]);
+  assert.equal(d!.anWindow, "read");
+});
+
+test("an unreadable window is not an app nobody visited", async () => {
+  // The distinction analytics.ts keeps at the source: off is the owner's
+  // decision, unreadable is ours, and neither is "nobody came". Collapsing them
+  // would render a umami that is down as an app with no visitors.
+  for (const [window, audience] of [["off", undefined], ["unreadable", null]] as const) {
+    const p = panel((url) =>
+      String(url).endsWith("/_xray") ? json(readingWith(audience, window)) : json({ enabled: true, provisioned: true }),
+    );
+    const d = await p.dwLoad(true);
+    assert.equal(d!.an, null, `${window} leaves the tiles empty rather than showing zeros`);
+    assert.equal(d!.anWindow, window);
+  }
+});
+
+test("no reading at all still leaves a whole model", async () => {
+  const p = panel(() => new Promise(() => {}));
+  const d = await p.dwLoad();
+  assert.equal(d!.an, null);
+  assert.equal(d!.anWindow, "off");
+});

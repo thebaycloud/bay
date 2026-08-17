@@ -130,14 +130,18 @@ export async function forward(
       (upRes) => {
         const headers = stripHopByHop(scrubSetCookie({ ...upRes.headers }));
 
-        // Whether the overlay reached the page, said out loud.
+        // Whether the overlay reached the page, said out loud — for documents,
+        // and only documents.
         //
-        // Four deploys were spent arguing about this from response sizes and
-        // guesses, and every one of those arguments was wrong. The decision has
-        // three inputs and one outcome, all cheap, none of them secret — an
-        // owner flag, a badge flag, a content type — so it says what it decided
-        // and there is nothing left to infer.
-        if (inject) {
+        // Several deploys were spent arguing about this from response sizes and
+        // guesses, and every one of those arguments was wrong, so the decision
+        // now states itself: an owner flag, a badge flag, a content type. But it
+        // first said so for EVERY response, which on one page load of a Next.js
+        // app is a dozen lines about stylesheets and woff2 files and one line
+        // that matters. This proxy fronts every tenant, so a log line per
+        // subresource is a bill and a haystack. Only the document can carry an
+        // overlay; only the document is worth a line.
+        if (inject && isHtmlDocument(upRes.headers["content-type"])) {
           console.log(
             JSON.stringify({
               ev: "overlay",
@@ -147,14 +151,12 @@ export async function forward(
               owner: inject.owner,
               badge: inject.badge,
               site: Boolean(inject.websiteId),
-              ct: upRes.headers["content-type"] ?? null,
               needsBody: needsBody(inject.owner, inject.badge, inject.websiteId),
-              isHtml: isHtmlDocument(upRes.headers["content-type"]),
-              // The app's policy, which we forward unchanged and which therefore
-              // governs the script we just added to their page. `script-src
-              // 'self'` permits the tracker — an external, same-origin file —
-              // and forbids our inline overlay, which is one page behaving in
-              // two ways and looks from outside like injection half-working.
+              // Forwarded unchanged, and it governs the script we just added to
+              // their page: script-src 'self' would permit the tracker, an
+              // external same-origin file, while forbidding our inline overlay.
+              // Worth one field, because that failure looks from outside exactly
+              // like injection half-working.
               csp: upRes.headers["content-security-policy"] ?? null,
             }),
           );

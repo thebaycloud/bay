@@ -612,7 +612,7 @@ function homeScreen(d){
     if(d.here.length) anPart.appendChild(avatars(d.initials));
   }
   g.appendChild(cell('Analytics',
-    d.an ? d.an.dv+' this week - '+d.here.length+' here now'
+    d.an ? (d.an.visitors+' today'+(d.an.dv?' '+d.an.dv:'')+' - '+d.here.length+' here now')
          : (d.here.length ? d.here.length+' here now' : 'Not counting yet'),
     anPart, function(){ dwPush({v:'analytics'}); }));
 
@@ -750,10 +750,10 @@ function screen(view,d){
     if(!d.an){
       var ph=pad(null,null);
       var pst=el('div','stats');
-      pst.appendChild(stat('\u2014','visitors this week'));
+      pst.appendChild(stat('\u2014','visitors today'));
       pst.appendChild(stat('\u2014','pages opened'));
       pst.appendChild(stat('\u2014','average visit'));
-      pst.appendChild(stat('\u2014','came back'));
+      pst.appendChild(stat('\u2014','bounced'));
       ph.appendChild(pst);
       w.appendChild(ph);
       var hp0=pad('In it right now', d.here.length ? null : 'Nobody this second.');
@@ -772,10 +772,10 @@ function screen(view,d){
     }
     var top=pad(null,null);
     var st=el('div','stats');
-    st.appendChild(stat(d.an.visitors.toLocaleString(),'visitors this week',d.an.dv,d.an.dvUp));
+    st.appendChild(stat(d.an.visitors.toLocaleString(),'visitors today',d.an.dv,d.an.dvUp));
     st.appendChild(stat(d.an.views.toLocaleString(),'pages opened'));
     st.appendChild(stat(d.an.mins,'average visit'));
-    st.appendChild(stat(d.an.returning,'came back'));
+    st.appendChild(stat(d.an.returning,'bounced'));
     top.appendChild(st);
     w.appendChild(top);
 
@@ -982,11 +982,20 @@ function headingFor(view,d){
 }
 
 
+/** A mean session length, said the way a person would say it. */
+function dwMins(sec){
+  sec=Math.round(Number(sec)||0);
+  if(sec<60) return sec+'s';
+  var m=Math.floor(sec/60), r=sec%60;
+  return r ? m+'m '+r+'s' : m+'m';
+}
+
 /** Why a block is showing dashes. One sentence, and it never guesses a number. */
 function dwWhyNoNumbers(d){
-  if(!d.anOn)   return 'Analytics is off, so nobody is being counted.';
+  if(d.anWindow==='off' || !d.anOn) return 'Analytics is off, so nobody is being counted.';
   if(!d.anReady) return 'Analytics is still being set up for this app.';
-  return 'Visits are being counted. This panel cannot read them back yet.';
+  if(d.anWindow==='unreadable') return 'The analytics service could not be reached just now.';
+  return 'Nobody has opened it in the last day.';
 }
 
 /**
@@ -1115,14 +1124,31 @@ function dwLoad(force){
         return ['edge',p.path,(p.hits+' · '+p.p50+'ms · '+ago(p.ago)),tone];
       });
     }
+    var aud = live && live.audience ? live.audience : null;
     var broken=(live&&live.live?(live.live.paths||[]):[]).filter(function(p){return p.brokenFor});
     var d={
       slug:C.slug,
       addr:C.slug+'.supersonic.cv',
-      // No numbers here yet: /analytics answers whether analytics is on, not
-      // how many people came. Those live in Umami and want an endpoint of their
-      // own; until it exists this says so rather than inventing a figure.
-      an:null,
+      // The people half. /analytics answers whether analytics is ON; the
+      // COUNTING is already read from umami by the proxy and carried in the
+      // reading, so this needs no endpoint of its own and no second round trip
+      // — it arrives on the same fetch as the live half.
+      //
+      // Never added to or compared with the live numbers beside it: the edge
+      // counts requests and umami counts people, and one page view with eleven
+      // assets on it is eleven requests and one visitor. analytics.ts keeps that
+      // line at the source and this keeps it here.
+      an: aud ? {
+        visitors: aud.visitors, views: aud.views,
+        mins: dwMins(aud.avgSeconds),
+        // Umami gives a bounce rate, not a returning count. The tile says what
+        // the number is rather than what the prototype wished it were.
+        returning: (Math.round(Number(aud.bounce)||0))+'%',
+        dv: aud.change==null ? '' : (aud.change>0?'+':'')+Math.round(aud.change)+'%',
+        dvUp: (Number(aud.change)||0) >= 0,
+        pages: aud.pages||[], from: aud.from||[], on: aud.on||[]
+      } : null,
+      anWindow: (live&&live.since) ? live.since.audience : 'off',
       anOn:an.enabled!==false, anReady:Boolean(an.provisioned),
       here:here, initials:here.map(function(x){return ini(x[0])}),
       feed:feed,
