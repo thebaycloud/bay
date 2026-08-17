@@ -21,6 +21,32 @@ export async function forward(
   const headers = buildUpstreamHeaders(req.headers, visitor, config.sessionCookieName, inject?.slug, prefix);
   headers["x-supersonic-workspace"] = workspaceDomain;
 
+  /**
+   * A page we are going to change cannot be answered with "unchanged".
+   *
+   * The overlay is added AFTER the app has produced its HTML, so the app's ETag
+   * describes a body the browser never receives. Left alone the sequence is:
+   * the browser caches the injected page, revalidates with If-None-Match, the
+   * app — which knows nothing of any overlay — says 304, and a 304 carries no
+   * content-type, so the injection branch below never runs and the 304 goes
+   * straight through. The browser then keeps showing the body it already had,
+   * for as long as the app's own HTML is unchanged. Which is forever, for a
+   * landing page.
+   *
+   * That is why a deploy could appear to do nothing at all: the panel shipped,
+   * the proxy served it, and the only page anyone looked at was one the browser
+   * had decided it already knew.
+   *
+   * So if there is any chance we will inject, ask for the whole thing. The cost
+   * is one uncached document on the one request that was going to be buffered
+   * anyway; every asset beside it still revalidates normally.
+   */
+  const mayInject = Boolean(inject) && needsBody(!!inject?.owner, !!inject?.badge, inject?.websiteId);
+  if (mayInject) {
+    delete headers["if-none-match"];
+    delete headers["if-modified-since"];
+  }
+
   // Cloud Run rejects unauthenticated calls; we are the only allowed invoker.
   //
   // In X-Serverless-Authorization, NOT Authorization. There is one Authorization
@@ -114,6 +140,16 @@ export async function forward(
             const buf = Buffer.from(body, "utf8");
             delete headers["content-encoding"];
             headers["content-length"] = String(buf.length);
+            // The validators upstream sent describe the body BEFORE the overlay,
+            // so keeping them would let the browser revalidate its way back to a
+            // page we never served. They have to go with the body they describe.
+            delete headers["etag"];
+            delete headers["last-modified"];
+            // And `private`, because what is in here depends on who asked: the
+            // owner gets a toolbar and a panel that a visitor must never receive.
+            // A shared cache holding one answer for both is the same bug with a
+            // worse blast radius.
+            headers["cache-control"] = "private, no-cache";
             res.writeHead(upRes.statusCode ?? 502, headers);
             res.end(buf);
             measure(upRes.statusCode ?? 502);

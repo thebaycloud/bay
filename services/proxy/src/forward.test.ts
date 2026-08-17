@@ -194,3 +194,106 @@ test("a trailing-dot Cloud Run target receives no edge secret", { timeout: 5000 
     up.close();
   }
 });
+
+/**
+ * An upstream that behaves like a real app: it serves HTML, it validates with an
+ * ETag, and it answers a conditional request with 304 — which is exactly right
+ * of it, and exactly the thing that made the overlay invisible.
+ */
+function startHtmlUpstream(): Promise<{
+  port: number;
+  seen: Promise<IncomingHttpHeaders>;
+  close: () => void;
+}> {
+  return new Promise((resolveServer) => {
+    let resolveSeen!: (h: IncomingHttpHeaders) => void;
+    const seen = new Promise<IncomingHttpHeaders>((r) => (resolveSeen = r));
+    const server = http.createServer((req, res) => {
+      resolveSeen(req.headers);
+      if (req.headers["if-none-match"] === '"v1"') {
+        res.writeHead(304, { ETag: '"v1"' });
+        return res.end();
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        ETag: '"v1"',
+        "Last-Modified": "Wed, 21 Oct 2026 07:28:00 GMT",
+        "Cache-Control": "public, max-age=0, must-revalidate",
+      });
+      res.end("<html><body><h1>tenant</h1></body></html>");
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      resolveServer({ port, seen, close: () => server.close() });
+    });
+  });
+}
+
+function frontWithInject(targetBase: string): Promise<{ port: number; close: () => void }> {
+  return new Promise((resolveServer) => {
+    const server = http.createServer((req, res) => {
+      forward(req, res, targetBase, visitor, "acme.supersonic.cv", {
+        slug: "q6doa",
+        owner: true,
+        badge: false,
+        websiteId: null,
+      }).catch(() => {
+        if (!res.headersSent) res.writeHead(502);
+        res.end();
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      resolveServer({ port, close: () => server.close() });
+    });
+  });
+}
+
+function fetchPage(port: number, headers: Record<string, string>) {
+  return new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve) => {
+    const r = http.request({ host: "127.0.0.1", port, path: "/", headers }, (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+    });
+    r.end();
+  });
+}
+
+test("a page we are going to change is never requested conditionally", { timeout: 5000 }, async () => {
+  // THE BUG THIS PINS. The overlay is added after the app has produced its HTML,
+  // so the app's ETag describes a body the browser never receives. The browser
+  // cached the injected page, revalidated with If-None-Match, the app said 304 —
+  // and a 304 carries no content-type, so the injection branch never ran and the
+  // 304 went straight through. The browser then kept showing the body it already
+  // had, for as long as the app's own HTML was unchanged, which for a landing
+  // page is forever. Four deploys appeared to do nothing because of this.
+  const up = await startHtmlUpstream();
+  const front = await frontWithInject(`http://127.0.0.1:${up.port}`);
+  try {
+    const res = await fetchPage(front.port, { "If-None-Match": '"v1"' });
+    const seen = await up.seen;
+    assert.equal(seen["if-none-match"], undefined, "the conditional header must not reach the app");
+    assert.equal(res.status, 200, "so the app returns a whole body, not a 304");
+    assert.match(res.body, /ss-overlay/, "and there is something to inject into");
+  } finally {
+    front.close();
+    up.close();
+  }
+});
+
+test("an injected page does not carry the validators of the page it is not", { timeout: 5000 }, async () => {
+  const up = await startHtmlUpstream();
+  const front = await frontWithInject(`http://127.0.0.1:${up.port}`);
+  try {
+    const res = await fetchPage(front.port, {});
+    assert.equal(res.headers["etag"], undefined, "the upstream ETag described the body without the overlay");
+    assert.equal(res.headers["last-modified"], undefined, "and so did Last-Modified");
+    // Private, because what is in here depends on who asked: a visitor must
+    // never be handed the owner's toolbar out of a shared cache.
+    assert.match(String(res.headers["cache-control"]), /private/);
+  } finally {
+    front.close();
+    up.close();
+  }
+});
