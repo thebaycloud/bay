@@ -150,6 +150,12 @@ export async function forward(
               ct: upRes.headers["content-type"] ?? null,
               needsBody: needsBody(inject.owner, inject.badge, inject.websiteId),
               isHtml: isHtmlDocument(upRes.headers["content-type"]),
+              // The app's policy, which we forward unchanged and which therefore
+              // governs the script we just added to their page. `script-src
+              // 'self'` permits the tracker — an external, same-origin file —
+              // and forbids our inline overlay, which is one page behaving in
+              // two ways and looks from outside like injection half-working.
+              csp: upRes.headers["content-security-policy"] ?? null,
             }),
           );
         }
