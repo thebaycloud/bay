@@ -1222,3 +1222,69 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 @media (prefers-reduced-motion: reduce) {
   .sk-bar::after { animation: none; }
 }
+
+/* ============================================================
+   THE DEPLOY FILM
+   The chrome around components/film/ship-it.js: a 2.40:1 frame, a slate, a
+   grade and grain over the picture, and one line at the bottom saying which
+   stage the deploy is on. Everything inside the frame is drawn by WebGL; all
+   of this is the cinema it sits in.
+
+   The study this came from carried its own copy of the palette, and it was the
+   same palette — so nothing here declares a colour. The picture reads the
+   page's own data-theme and grades itself to match, which is why the frame can
+   be this plain.
+   ============================================================ */
+.dfilm { border: 1px solid var(--line); background: var(--card); }
+.dfilm-frame { position: relative; background: #0b0b0a; overflow: hidden; }
+/* The film makes its own canvas inside this holder, one per mount. 2.40:1,
+   which is the shape the picture is composed for. */
+.dfilm-canvas { display: block; }
+.dfilm-frame canvas { display: block; width: 100%; aspect-ratio: 960 / 400; }
+.dfilm-fallback { padding: 54px 20px; text-align: center; color: var(--faint); font-family: var(--mono); font-size: 12px; }
+
+/* the slate: which shot this is, flashed on the cut and then left to sit */
+.dfilm-slate { position: absolute; left: 14px; top: 12px; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .18em; color: rgba(255,255,255,.86); text-shadow: 0 1px 2px rgba(0,0,0,.5); pointer-events: none; }
+.dfilm-slate.flash { animation: dfilm-slate 2.4s var(--ease) forwards; }
+@keyframes dfilm-slate {
+  0% { opacity: 0; transform: translateX(-6px); } 12% { opacity: 1; transform: none; }
+  70% { opacity: 1; } 100% { opacity: .32; }
+}
+
+/* the endcard: the address, when there is one to give */
+.dfilm-endcard { position: absolute; left: 50%; bottom: 11%; transform: translate(-50%, 14px); opacity: 0;
+  text-align: center; pointer-events: none; font-family: var(--mono); color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,.45); }
+.dfilm-endcard b { display: block; font-size: clamp(15px, 2.2vw, 23px); font-weight: 600; letter-spacing: .02em; }
+.dfilm-endcard span { display: block; font-size: clamp(9px, 1.1vw, 11px); letter-spacing: .26em; text-transform: uppercase;
+  opacity: .82; margin-top: 7px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,.45); }
+
+/* what the deploy is doing, over the picture. `held` is the film waiting on the
+   deploy rather than on its own clock — which is most of a deploy. */
+.dfilm-stagebar { position: absolute; left: 14px; bottom: 12px; right: 14px; display: flex; align-items: baseline; gap: 10px;
+  font-family: var(--mono); font-size: 11px; color: rgba(255,255,255,.62); pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,.6); opacity: .62; transition: opacity .3s var(--ease); }
+.dfilm-stagebar b { font-size: 13.5px; font-weight: 600; color: #fff; letter-spacing: .01em; }
+.dfilm-stagebar .no { letter-spacing: .14em; font-variant-numeric: tabular-nums; }
+.dfilm-stagebar .note { opacity: 0; transition: opacity .3s var(--ease); }
+.dfilm-stagebar.held { opacity: 1; }
+.dfilm-stagebar.held .note { opacity: .8; }
+
+.dfilm-vig { position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(0,0,0,.28) 100%); }
+.dfilm-bang { position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: radial-gradient(60% 60% at 50% 55%, rgba(255,236,206,.95), rgba(226,84,32,.75) 45%, rgba(120,20,8,.35) 100%); }
+.dfilm-grade { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: soft-light; opacity: 0; }
+/* grain — the cheapest thing that stops a render looking like a render */
+.dfilm-grain { position: absolute; inset: 0; pointer-events: none; opacity: .16; mix-blend-mode: overlay; background-size: 140px 140px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/></filter><rect width='140' height='140' filter='url(%23n)' opacity='.5'/></svg>"); }
+
+.dfilm-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; font-family: var(--mono);
+  font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--faint);
+  background: var(--card); border-top: 1px solid var(--line); }
+.dfilm-bar.top { border-top: 0; border-bottom: 1px solid var(--line); }
+.dfilm-bar .sp { margin-left: auto; }
+.dfilm-bar .st { color: var(--ink); text-transform: none; letter-spacing: .02em; font-size: 11.5px; }
+.dfilm-bar .url { color: var(--live); opacity: 0; transition: opacity .4s var(--ease);
+  text-transform: none; letter-spacing: .02em; font-size: 11.5px; }
+.dfilm-bar .url.on { opacity: 1; }

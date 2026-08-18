@@ -59,7 +59,18 @@ export const HANDOFF_STAGES = [
  * moving an OLD one rewrites the past. That is the distinction, and it is why
  * `unpack` stays where it is despite belonging here on the merits.
  */
-export const PRE_LANE_STAGES = ["clone", "detect", "infer-services", "render"] as const;
+/*
+ * `plan` — the planner deciding how this repo gets built — is added on the same
+ * grounds `render` was: a name nothing has ever written, so no historical row
+ * changes meaning, and lane-blind because it runs before the lane is chosen.
+ *
+ * It is also the longest unmeasured step left in the pre-lane half. The planner
+ * spent 87 seconds on 1 Aug re-deriving `node index.js` for files that had not
+ * changed — the fix (a plan cache) shipped, and there was still no column that
+ * says whether it hit. `plan` with an `ok` outcome and a duration under a second
+ * is a cache hit; nine seconds is the model.
+ */
+export const PRE_LANE_STAGES = ["clone", "detect", "infer-services", "render", "plan"] as const;
 
 /**
  * Written by a recorder that knows the lane.

@@ -1090,7 +1090,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
   // "unknown", not "generic": no lane has been chosen yet, and `generic` used to
   // mean both that and the Dockerfile lane — one string for two facts, which is
   // what LANE_BLIND_STAGES in lib/analytics/attempts.ts exists to work around.
-  let stages = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId: input.runId });
+  // Every recorder in this function gets `send` as its observer, so a stage
+  // boundary reaches the deploy's own event stream — stored, replayed on
+  // reconnect, and read by anything watching a deploy happen rather than
+  // reading it afterwards. The recorder is replaced twice below; each
+  // replacement passes the same emitter, or the watcher goes deaf halfway
+  // through the deploy it is watching.
+  let stages = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId: input.runId }, send);
   let lastStage = 0;
   const log = (line: string) => {
     send({ type: "log", line });
@@ -1120,7 +1126,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     const dir = reused ?? mkdtempSync(join(tmpdir(), "ss-deploy-"));
 
     if (isPrebuilt && archive) {
-      stages = new StageRecorder(slug, "static", undefined, undefined, undefined, { runId: input.runId });
+      stages = new StageRecorder(slug, "static", undefined, undefined, undefined, { runId: input.runId }, send);
       // Wrapped in the ACTIVATION stage, which this path has never emitted.
       //
       // `publishPrebuilt` writes `unpack`, `upload` and `verify` and then this
@@ -1310,6 +1316,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     if (pinned && runtimePinned) log(runtimeRouting(pinned));
 
     if (configured || PLANNER_ENABLED) {
+      // Recorded as a stage, at last. It is the longest step in the pre-lane
+      // half — the planner reading the repo — and the only one whose cost was
+      // visible in the log ("Planning the deploy…") and nowhere else. It is also
+      // the beat a person watching a deploy waits through with nothing to look
+      // at, which is the other half of why it is a stage now: a stage boundary
+      // is what the deploy tells its watchers, and this one had none.
+      const planStage = stages.start("plan");
+      let planned = false;
       try {
         let plan: DeployPlan;
         if (configured) {
@@ -1405,6 +1419,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         // plan. Caching it the moment the planner returned would serve the next
         // deploy of the same bytes a plan this one had already refused.
         if (worthCaching && cacheKey) await putCachedPlan(cacheKey, plan);
+        planned = true;
       } catch (e) {
         if (configWasWritten) throw e;   // a config error is the user's to fix, not ours to route around
         // An INFERRED config is our own reading, not the author's instruction,
@@ -1433,6 +1448,12 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         const why = `Planner produced no plan (${e instanceof Error ? e.message : String(e)}) — deploying with the built-in detector instead`;
         log(why);
         setDeploy(slug, { stage: why });
+      } finally {
+        // In a `finally` because the block above has a path that rethrows: a
+        // config error is the user's, and it leaves through here. A stage that
+        // is started and never ended is worse than one that was never started —
+        // it writes no row at all, and the watcher never leaves it.
+        await stages.end(planStage, planned ? "ok" : "failed");
       }
     }
 
@@ -1848,7 +1869,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // first deploy there. A wrong value in a column that exists to settle an
       // argument is worse than an absent one.
       cold: staticServe ? null : await isFirstDeploy(slug),
-    });
+    }, send);
 
     if (staticServe) {
       log(`${s.framework} builds to a directory — publishing it without a container`);

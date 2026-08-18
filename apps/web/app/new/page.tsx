@@ -7,6 +7,8 @@ import { Mark } from "@/components/Mark";
 import { Bracket } from "@/components/Bracket";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
+import { DeployFilm } from "@/components/DeployFilm";
+import { drive as advanceFilm, START as FILM_START, type FilmDrive } from "@/lib/deploy-film";
 
 // The 402 bodies carry a `reason`; anything unrecognised (an older server, a
 // proxy that ate the body) falls back to the generic plan comparison rather
@@ -63,6 +65,9 @@ export default function NewApp() {
   const [fixCopied, setFixCopied] = useState(false);
   const [paywall, setPaywall] = useState<PaywallReason | null>(null);
   const [isStatic, setIsStatic] = useState(false);
+  // What the film is being shown. Folded from the same events the terminal
+  // below prints, so the picture can never be ahead of, or behind, the log.
+  const [film, setFilm] = useState<FilmDrive>(FILM_START);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const cloneToken = useRef<string | null>(null);
 
@@ -77,6 +82,7 @@ export default function NewApp() {
     // Cleared with everything else, or the previous failure's fix is still on
     // screen underneath the next attempt's logs.
     setFixPrompt(""); setCanUpgrade(false); setFixCopied(false);
+    setFilm(FILM_START);
   }
 
   const repoArg = () => (door === "github" ? `github.com/${repo}` : repo);
@@ -115,6 +121,9 @@ export default function NewApp() {
     // A retry that keeps the last attempt's fix would show a fix for an error
     // the user is no longer looking at.
     setFixPrompt(""); setCanUpgrade(false);
+    // A retry is a new deploy and therefore a new film: back to the dark, the
+    // empty dock and the keel blocks.
+    setFilm(FILM_START);
     const t0 = performance.now();
     if (timer.current) clearInterval(timer.current);
     timer.current = setInterval(() => setElapsed(Math.floor((performance.now() - t0) / 1000)), 250);
@@ -148,6 +157,11 @@ export default function NewApp() {
           const raw = part.replace(/^data: /, "").trim();
           if (!raw) continue;
           const ev = JSON.parse(raw);
+          // Every event, including the ones this switch has no branch for:
+          // `stage` is what cuts the film, and it is deliberately not narrated
+          // in the terminal — a person reading logs does not need "stage: fleet
+          // started" and the picture is already saying it.
+          setFilm((f) => advanceFilm(f, ev));
           if (ev.type === "start") setSlug(ev.slug);
           else if (ev.type === "log") setLogs((l) => [...l, ev.line]);
           else if (ev.type === "detected") setDetected(ev.stack);
@@ -315,6 +329,8 @@ export default function NewApp() {
                   </span>
                   <span className="clock">{elapsed}s</span>
                 </div>
+
+                <DeployFilm drive={film} elapsed={elapsed} />
 
                 {detected && (
                   <div className="detected">

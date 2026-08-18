@@ -30,8 +30,13 @@ export interface DeployOneHooks {
    * the row was written and the app it is for. The Job uses it to record what
    * its own cold start cost; the slug is passed because stage rows are keyed by
    * it and the caller cannot know it before the claim.
+   *
+   * `emit` is the deploy's own event stream, handed over so the stages recorded
+   * here are ANNOUNCED as well as written: the handoff is the first half of the
+   * wait, and a watcher that only hears from the pipeline has nothing to show
+   * for it.
    */
-  onClaimed?: (createdAt: Date | null | undefined, slug: string) => Promise<void>;
+  onClaimed?: (createdAt: Date | null | undefined, slug: string, emit: (e: unknown) => void) => Promise<void>;
 }
 
 export async function deployOne(runId: string, hooks: DeployOneHooks = {}): Promise<DeployOneResult> {
@@ -40,8 +45,6 @@ export async function deployOne(runId: string, hooks: DeployOneHooks = {}): Prom
 
   const { request, archive, createdAt } = claimed;
   const sink = eventSink(runId, request.slug);
-
-  if (hooks.onClaimed) await hooks.onClaimed(createdAt, request.slug);
 
   const input: DeployInput = {
     runId,
@@ -66,6 +69,11 @@ export async function deployOne(runId: string, hooks: DeployOneHooks = {}): Prom
   // second reader of it would be a second answer to drift from the first.
   const watch = watchOutcome();
   const emit = (e: unknown) => { watch.saw(e); sink.emit(e); };
+
+  // After `emit` exists, because the hook records stages and those are events
+  // now — before it, the job's own cold start would be written to the table and
+  // said to nobody.
+  if (hooks.onClaimed) await hooks.onClaimed(createdAt, request.slug, emit);
 
   try {
     await runDeploy(input, emit);

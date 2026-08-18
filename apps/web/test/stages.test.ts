@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { STAGE_LANES, StageRecorder, durationMs, type StageRow, type StageSink } from "../lib/stages";
+import { STAGE_LANES, StageRecorder, durationMs, type StageEvent, type StageRow, type StageSink } from "../lib/stages";
 import {
   ACTIVATION_STAGE, ALL_STAGES, ATTEMPT_START_STAGE,
   HANDOFF_STAGES, LANE_KNOWN_STAGES, PRE_LANE_STAGES,
@@ -295,4 +295,53 @@ test("the recorded vocabulary is the executed one, and the database agrees", () 
   const allowed = check[1].split(",").map((s) => s.trim().replace(/^'|'$/g, ""));
 
   assert.deepEqual(allowed.slice().sort(), STAGE_LANES.slice().sort());
+});
+
+
+test("a stage is announced when it starts, not only when it is written", () => {
+  // `deploy_stages` is a record: a row exists once a stage has ENDED. `fleet`
+  // is 87 seconds at p50, so anything showing a person what their deploy is
+  // doing would be a minute and a half behind on the longest stage there is —
+  // which is the same as being wrong. The observer is the live half.
+  const seen: StageEvent[] = [];
+  const { sink } = recordingSink();
+  const stages = new StageRecorder("app", "container", sink, clock(1_000, 500), undefined, {}, (e) => seen.push(e));
+
+  const h = stages.start("build");
+  assert.deepEqual(seen.map((e) => [e.stage, e.phase, e.outcome]), [["build", "start", undefined]]);
+  return stages.end(h, "ok").then(() => {
+    assert.deepEqual(seen.map((e) => [e.stage, e.phase, e.outcome]), [
+      ["build", "start", undefined], ["build", "end", "ok"],
+    ]);
+    // The announced instants are the recorded ones, or the picture and the
+    // table would disagree about a duration anyone can compare.
+    assert.equal(seen[0].at, new Date(1_000).toISOString());
+    assert.equal(seen[1].at, new Date(1_500).toISOString());
+  });
+});
+
+test("an observer that throws does not fail the deploy", async () => {
+  // The same rule the sink already has, with more force: this one runs a
+  // caller-supplied function on the deploy's own thread. A broken UI must cost
+  // us the animation and nothing else.
+  const { sink, rows } = recordingSink();
+  const errors: unknown[] = [];
+  const stages = new StageRecorder("app", "container", sink, undefined, (e) => errors.push(e), {}, () => {
+    throw new Error("the screen fell over");
+  });
+
+  await stages.around("build", async () => "fine");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].outcome, "ok");
+  assert.equal(errors.length, 2, "both boundaries were reported and neither escaped");
+});
+
+test("a recorder with no observer is exactly what it was", async () => {
+  // Every existing construction site passes six arguments and must keep
+  // meaning what it meant.
+  const { sink, rows } = recordingSink();
+  const stages = new StageRecorder("app", "static", sink);
+  await stages.around("upload", async () => undefined);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].stage, "upload");
 });

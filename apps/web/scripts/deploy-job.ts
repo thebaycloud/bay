@@ -44,7 +44,7 @@ async function main() {
   // exactly the same thing and only starts differently. What stays here is what
   // is true of a JOB and of nothing else: what its own cold start cost.
   const result = await deployOne(runId, {
-    onClaimed: async (createdAt, slug) => {
+    onClaimed: async (createdAt, slug, emit) => {
       if (!createdAt) return;
 
       // The dark half of the handoff, finally on a clock.
@@ -56,7 +56,7 @@ async function main() {
       // fetching and decrypting the source — happened inside one unattributed
       // lump. Recorded as two stages here, it becomes four in total, and the
       // next person to look at this number will know which part to attack.
-      const cold = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId });
+      const cold = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId }, emit);
       // From the row being written to this process reaching this line:
       // scheduling, image pull, container start, and the archive round-trip
       // inside claimRun.
@@ -68,11 +68,11 @@ async function main() {
       // instant this process existed, which is before the line reporting it runs
       // — so it is written by a recorder whose clock is frozen there, rather
       // than by `cold`, whose `end` stamps the current time.
-      const atStart = new StageRecorder(slug, "unknown", undefined, () => startedAt, undefined, { runId });
+      const atStart = new StageRecorder(slug, "unknown", undefined, () => startedAt, undefined, { runId }, emit);
       await atStart.end({ stage: "job-launch", startedAt: createdAt }, "ok");
 
       // Our half: Node booting and tsx transpiling the import tree above.
-      const atEntry = new StageRecorder(slug, "unknown", undefined, () => enteredAt, undefined, { runId });
+      const atEntry = new StageRecorder(slug, "unknown", undefined, () => enteredAt, undefined, { runId }, emit);
       await atEntry.end({ stage: "job-import", startedAt }, "ok");
     },
   });

@@ -123,6 +123,33 @@ export interface StageHandle {
 }
 
 /**
+ * A stage boundary, as it happens, for anyone watching the deploy rather than
+ * reading it afterwards.
+ *
+ * `deploy_stages` is a record, not a signal: a row is written when a stage
+ * ENDS, so `fleet` — 87s at p50 — reaches the table a minute and a half after
+ * the thing it describes began. Anything that wants to show a person which
+ * part of the deploy is running right now needs the START, and needs it at the
+ * moment it happens. That is what this is, and it is deliberately the same
+ * vocabulary (lib/stage-names.ts) rather than a second one invented for the
+ * screen: a stage the pipeline records and a stage the picture shows must be
+ * the same stage, or one of them is lying.
+ */
+export interface StageEvent {
+  type: "stage";
+  /** A name from `ALL_STAGES`. */
+  stage: string;
+  phase: "start" | "end";
+  /** Only on `end`. */
+  outcome?: Outcome;
+  /** ISO 8601, from the recorder's own clock, so a replay keeps the timings. */
+  at: string;
+}
+
+/** Told about every stage boundary, live. Must never throw — see `announce`. */
+export type StageObserver = (e: StageEvent) => void;
+
+/**
  * Records how long each part of a deploy took.
  *
  * Telemetry must never be the reason a deploy fails, so every write is wrapped:
@@ -170,10 +197,32 @@ export class StageRecorder {
        */
       runId?: string | null;
     } = {},
+    /**
+     * Told when each stage starts and ends, for a reader watching live.
+     *
+     * Separate from `sink` because the two have opposite requirements: the sink
+     * is durable, batched and allowed to be slow, and this is immediate,
+     * in-process and allowed to be lost. The pipeline passes the deploy's own
+     * event emitter here, so a stage boundary lands in the same stream as the
+     * log lines around it and is stored and replayed with them.
+     */
+    private readonly observer: StageObserver = () => {},
   ) {}
 
+  /**
+   * Tell the observer, and never let it break a deploy.
+   *
+   * The same rule the sink already has, for the same reason and with more force:
+   * this one runs a caller-supplied function on the deploy's own thread.
+   */
+  private announce(e: StageEvent): void {
+    try { this.observer(e); } catch (err) { this.onError(err); }
+  }
+
   start(stage: string): StageHandle {
-    return { stage, startedAt: this.now() };
+    const startedAt = this.now();
+    this.announce({ type: "stage", stage, phase: "start", at: startedAt.toISOString() });
+    return { stage, startedAt };
   }
 
   /**
@@ -197,13 +246,15 @@ export class StageRecorder {
 
   async end(handle: StageHandle, outcome: Outcome): Promise<void> {
     if (outcome === "failed") this.lastFailure = handle.stage;
+    const endedAt = this.now();
+    this.announce({ type: "stage", stage: handle.stage, phase: "end", outcome, at: endedAt.toISOString() });
     try {
       await this.sink.write({
         slug: this.slug,
         lane: this.lane,
         stage: handle.stage,
         startedAt: handle.startedAt,
-        endedAt: this.now(),
+        endedAt,
         outcome,
         runtime: this.facts.runtime ?? null,
         cold: this.facts.cold ?? null,
