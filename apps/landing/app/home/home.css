@@ -1,0 +1,342 @@
+/* Bay — the landing page.
+ *
+ * Tokens are the panel's, from docs/HANDOFF-panel.md §4 (decided on a canvas,
+ * 18 Aug). Not re-picked here: a landing page that invents its own accent stops
+ * matching the product the moment either one moves.
+ *
+ *   ground #FAFAFA · white #FFFFFF · tile #F4F4F5
+ *   ink #0A0A0A · ink-2 #737373 · ink-3 #A1A1AA · line #E5E5E5
+ *   red #E63F2C — the single accent · green #16A34A — status only
+ *   Geist Sans + Geist Mono, and nothing else
+ *
+ * Rules carried over from that handoff, not to be casually undone:
+ *   - Green is NOT a second accent. Red = brand. Green = live.
+ *   - Ground is #FAFAFA, not white. Cards are #FFFFFF.
+ *   - Mono carries machine values and nothing else.
+ *
+ * The layout language is openwebui.com and cursor.com/home: left-aligned, small
+ * type, asymmetric two-column sections, and pictures that are their own blocks
+ * rather than something text is set on top of.
+ *
+ * Scoped under `.bay`, every class `b-` prefixed, because globals.css carries
+ * UNSCOPED `.sec` `.sec-head` `.btn` `.nav` `.plan` `.foot` rules for the
+ * Supersonic page which otherwise leak in for any property left undeclared.
+ */
+
+body:has(.bay) { background: #fafafa; }
+body:has(.bay)::before { display: none; }
+
+.bay {
+  --ground: #fafafa;
+  --white: #ffffff;
+  --tile: #f4f4f5;
+  --ink: #0a0a0a;
+  --ink-2: #737373;
+  --ink-3: #a1a1aa;
+  --line: #e5e5e5;
+  --red: #e63f2c;
+  --red-ink: #b32c1a;
+  --green: #16a34a;
+
+  --r-xl: 8px;
+  --r-lg: 6px;
+  --r-sm: 4px;
+
+  --sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  --mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --wrap: 1200px;
+  --gut: 40px;
+
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.55;
+  letter-spacing: -0.008em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.bay *, .bay *::before, .bay *::after { box-sizing: border-box; }
+.bay a { color: inherit; text-decoration: none; }
+.bay p { margin: 0; }
+.bay ::selection { background: var(--ink); color: var(--ground); }
+
+.bay .b-wrap {
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding-left: var(--gut);
+  padding-right: var(--gut);
+}
+
+/* ── type ──────────────────────────────────────────────────────────────── */
+
+/* Small and light. The references run their h1 at 26px/400 (cursor) and
+   36px/300 (openwebui). The size restraint IS the aesthetic — going big here is
+   the fastest way to stop looking like them. */
+.bay h1, .bay h2, .bay h3 {
+  font-family: var(--sans);
+  margin: 0;
+  font-weight: 400;
+  letter-spacing: -0.022em;
+  line-height: 1.16;
+  text-wrap: balance;
+}
+.bay h1 { font-size: clamp(30px, 3.1vw, 40px); }
+.bay h2 { font-size: clamp(25px, 2.4vw, 31px); }
+.bay h3 { font-size: 19px; letter-spacing: -0.016em; }
+
+.bay .b-eyebrow {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.bay .b-body {
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 54ch;
+  text-wrap: pretty;
+}
+.bay .b-small { font-size: 15px; color: var(--ink-2); }
+
+/* ── nav ───────────────────────────────────────────────────────────────── */
+
+.bay .b-nav {
+  position: sticky; top: 0; z-index: 50;
+  height: 64px;
+  background: color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter: saturate(150%) blur(10px);
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s var(--ease);
+}
+.bay .b-nav.b-stuck { border-bottom-color: var(--line); }
+.bay .b-nav .b-wrap { display: flex; align-items: center; height: 100%; gap: 34px; }
+
+.bay .b-brand { display: flex; align-items: center; gap: 9px; }
+/* The accent chip, per docs/BRAND.md: the glyph sits at ~64% of the chip. */
+.bay .b-chip {
+  width: 24px; height: 24px; flex: none;
+  border-radius: var(--r-lg);
+  background: var(--red); color: #fff;
+  display: grid; place-items: center;
+}
+.bay .b-word { font-size: 16px; font-weight: 500; letter-spacing: -0.02em; white-space: nowrap; }
+
+.bay .b-nav-links { display: flex; gap: 28px; }
+.bay .b-nav-links a { font-size: 15px; color: var(--ink-2); transition: color 0.14s var(--ease); }
+.bay .b-nav-links a:hover { color: var(--ink); }
+.bay .b-spacer { flex: 1; }
+.bay .b-nav-right { display: flex; align-items: center; gap: 10px; }
+
+/* ── buttons ───────────────────────────────────────────────────────────── */
+
+.bay .b-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; padding: 0 18px;
+  font-family: var(--sans); font-size: 15px; font-weight: 450;
+  letter-spacing: -0.01em;
+  border: 1px solid transparent; border-radius: var(--r-lg);
+  white-space: nowrap; cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+.bay .b-btn-fill { background: var(--ink); color: var(--white); }
+.bay .b-btn-fill:hover { background: #262626; }
+.bay .b-btn-line { background: var(--white); border-color: var(--line); color: var(--ink); }
+.bay .b-btn-line:hover { background: var(--tile); }
+.bay .b-btn-quiet { color: var(--ink-2); padding: 0 10px; }
+.bay .b-btn-quiet:hover { color: var(--ink); }
+.bay .b-btn-sm { height: 34px; font-size: 14px; padding: 0 14px; }
+
+/* The accent lives here and very nearly nowhere else. cursor.com puts its one
+   warm colour on exactly these — the secondary links that carry you deeper —
+   and nothing else on the page competes with them. */
+.bay .b-arrow {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 15px; color: var(--red-ink);
+  transition: color 0.14s var(--ease);
+}
+.bay .b-arrow svg { transition: transform 0.18s var(--ease); }
+.bay .b-arrow:hover { color: var(--red); }
+.bay .b-arrow:hover svg { transform: translateX(3px); }
+.bay .b-arrow-ink { color: var(--ink-2); }
+.bay .b-arrow-ink:hover { color: var(--ink); }
+
+/* ── hero ──────────────────────────────────────────────────────────────── */
+
+/* Roughly 380px of content and then air. Both references leave more than half
+   the fold empty; that is the whole trick. */
+.bay .b-hero { padding: clamp(68px, 8vw, 108px) 0 clamp(40px, 5vw, 60px); }
+.bay .b-hero h1 { margin: 20px 0 0; max-width: 17ch; }
+.bay .b-hero .b-body { margin-top: 18px; }
+.bay .b-hero-cta { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-top: 32px; }
+.bay .b-hero-note { margin-top: 24px; }
+
+/* ── the picture ───────────────────────────────────────────────────────── */
+
+/* Its own block, under the hero. Nothing is ever set on top of it. */
+.bay .b-plate { border-radius: var(--r-xl); overflow: hidden; background: var(--tile); line-height: 0; }
+.bay .b-plate img { display: block; width: 100%; height: auto; }
+.bay .b-caption { margin-top: 12px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+
+/* ── sections ──────────────────────────────────────────────────────────── */
+
+.bay .b-sec { padding: clamp(72px, 8.5vw, 120px) 0; }
+
+/* Heading left at ~40%, prose right. The asymmetry is the layout, not a grid
+   that happens to have two cells in it. */
+.bay .b-two {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  gap: clamp(32px, 6vw, 96px);
+  align-items: start;
+}
+.bay .b-two-links { display: flex; gap: 26px; flex-wrap: wrap; margin-top: 24px; }
+
+/* ── figures ───────────────────────────────────────────────────────────── */
+
+.bay .b-figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; margin-top: clamp(44px, 5vw, 72px); }
+.bay .b-fig-n { font-size: clamp(38px, 4.4vw, 54px); font-weight: 300; letter-spacing: -0.035em; line-height: 1; }
+.bay .b-fig-l { margin-top: 12px; font-size: 15px; color: var(--ink-2); }
+
+/* ── column pairs ──────────────────────────────────────────────────────── */
+
+.bay .b-cols { display: grid; grid-template-columns: repeat(2, 1fr); gap: clamp(32px, 6vw, 88px); margin-top: clamp(40px, 5vw, 62px); }
+.bay .b-cols .b-eyebrow { margin-bottom: 16px; }
+.bay .b-cols p { color: var(--ink-2); font-size: 16.5px; line-height: 1.6; }
+.bay .b-cols .b-arrow { margin-top: 20px; }
+
+/* ── cards ─────────────────────────────────────────────────────────────── */
+
+/* cursor.com puts every product shot in a soft grey rounded frame. It keeps a
+   screenshot from cutting a hole in a light page. */
+.bay .b-card { background: var(--tile); border-radius: var(--r-xl); padding: clamp(22px, 3vw, 38px); }
+.bay .b-card-plain { background: var(--tile); border-radius: var(--r-xl); overflow: hidden; line-height: 0; }
+.bay .b-card-plain img { display: block; width: 100%; height: auto; mix-blend-mode: multiply; }
+
+/* ── terminal ──────────────────────────────────────────────────────────── */
+
+/* globals.css draws a near-black terminal for the other page. On this palette a
+   dark slab reads as a different product, so this one is a white card. */
+.bay .terminal-frame {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: var(--white);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.bay .terminal-bar { height: 36px; border-bottom: 1px solid var(--line); padding: 0 14px; }
+.bay .terminal-dots span,
+.bay .terminal-dots span:first-child,
+.bay .terminal-dots span:nth-child(2),
+.bay .terminal-dots span:nth-child(3) { width: 8px; height: 8px; background: #dcdcdc; }
+.bay .terminal-title { font-family: var(--mono); font-size: 12px; color: var(--ink-3); letter-spacing: 0; }
+.bay .terminal-body {
+  min-height: 0;
+  padding: 18px 18px 20px;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.75;
+  color: var(--ink-2);
+}
+.bay .term-cmd, .bay .term-key, .bay .term-url { color: var(--ink); }
+.bay .term-ok { color: var(--green); }
+.bay .term-caret { color: var(--ink-3); }
+
+/* ── the command line ──────────────────────────────────────────────────── */
+
+.bay .b-cmd {
+  display: inline-flex; align-items: center; gap: 12px;
+  height: 40px; padding: 0 6px 0 14px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  font-family: var(--mono); font-size: 13.5px; color: var(--ink);
+  white-space: nowrap;
+}
+.bay .b-cmd .b-dollar { color: var(--ink-3); }
+.bay .b-cmd-copy {
+  width: 28px; height: 28px; flex: none;
+  display: grid; place-items: center;
+  border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--ink-3); cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.bay .b-cmd-copy:hover { background: var(--tile); color: var(--ink); }
+.bay .b-cmd-copy.b-done { color: var(--green); }
+
+/* ── pricing ───────────────────────────────────────────────────────────── */
+
+.bay .b-plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: clamp(40px, 5vw, 60px); }
+.bay .b-plan {
+  display: flex; flex-direction: column;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  padding: 28px 26px;
+}
+.bay .b-plan-name { font-size: 15px; font-weight: 500; }
+.bay .b-plan-price { margin: 18px 0 6px; font-size: 36px; font-weight: 300; letter-spacing: -0.03em; line-height: 1; }
+.bay .b-plan-price span { font-size: 14px; font-weight: 400; color: var(--ink-3); letter-spacing: -0.01em; }
+/* A worded price is not a numeral and must not be set like one — "Let's talk"
+   at 36px/300 outweighs $20 and reads as the expensive plan. */
+.bay .b-plan-price.b-plan-words { font-size: 24px; font-weight: 400; letter-spacing: -0.02em; }
+.bay .b-plan-desc { font-size: 14.5px; color: var(--ink-2); margin-bottom: 22px; }
+.bay .b-plan ul { list-style: none; margin: 0 0 26px; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.bay .b-plan li { display: flex; gap: 10px; align-items: baseline; font-size: 14.5px; color: var(--ink-2); }
+.bay .b-plan li svg { flex: none; color: var(--ink-3); transform: translateY(2px); }
+.bay .b-plan .b-btn { margin-top: auto; }
+
+/* ── closing ───────────────────────────────────────────────────────────── */
+
+.bay .b-close { padding: clamp(76px, 9vw, 130px) 0; border-top: 1px solid var(--line); }
+.bay .b-close .b-hero-cta { margin-top: 26px; }
+
+/* ── footer ────────────────────────────────────────────────────────────── */
+
+.bay .b-foot { border-top: 1px solid var(--line); padding: 48px 0 40px; }
+.bay .b-foot .b-wrap { display: flex; gap: 56px; flex-wrap: wrap; align-items: flex-start; }
+.bay .b-foot-brand { min-width: 200px; }
+.bay .b-foot-brand p { margin-top: 14px; font-size: 14px; color: var(--ink-3); max-width: 24ch; }
+.bay .b-fcol { display: flex; flex-direction: column; gap: 10px; min-width: 116px; }
+.bay .b-fcol .b-eyebrow { margin-bottom: 4px; font-size: 11px; }
+.bay .b-fcol a { font-size: 14.5px; color: var(--ink-2); }
+.bay .b-fcol a:hover { color: var(--ink); }
+.bay .b-foot-bar {
+  width: 100%; margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line);
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 12px; color: var(--ink-3);
+}
+
+/* ── reveal ────────────────────────────────────────────────────────────── */
+
+/* Visible by default; hidden only once script has armed it, so a page whose JS
+   never runs is a readable page rather than a blank one. */
+.bay .b-rise.b-armed { opacity: 0; transform: translateY(10px); transition: opacity 0.5s var(--ease), transform 0.5s var(--ease); }
+.bay .b-rise.b-armed.b-in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bay .b-rise, .bay .b-rise.b-armed { opacity: 1; transform: none; transition: none; }
+  .bay *, .bay *::before, .bay *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ── narrow ────────────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .bay { --gut: 22px; }
+  .bay .b-nav-links { display: none; }
+  .bay .b-two, .bay .b-cols, .bay .b-plans { grid-template-columns: 1fr; }
+  .bay .b-two { gap: 26px; }
+  .bay .b-figures { grid-template-columns: 1fr; gap: 26px; }
+  .bay .b-hero h1 { max-width: none; }
+}
+
+@media (max-width: 560px) {
+  .bay .b-hero-cta { flex-direction: column; align-items: stretch; gap: 14px; }
+  .bay .b-hero-cta .b-btn { width: 100%; }
+  .bay .b-cmd { width: 100%; justify-content: space-between; }
+  .bay .b-foot .b-wrap { gap: 30px; }
+}
