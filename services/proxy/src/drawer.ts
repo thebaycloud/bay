@@ -354,6 +354,24 @@ button.li:hover .caret{color:var(--red)}
         z-index:2147483001;box-shadow:-24px 0 60px -30px rgba(0,0,0,.35)}
 .drawer.on{transform:none}
 .drawer.flat{position:static;width:100%;height:100%;transform:none;box-shadow:none;border-left:0}
+/* --------------------------- one white sheet ----------------------------- */
+/* The panel was white cells floating on a grey ground, and the ground showed
+   through the 1px gaps as the lines between them. That reads well on a page of
+   its own and badly over somebody's app: a grey slab beside their white page
+   looks like a thing that failed to load, and the emptiness under a short home
+   was the largest grey in it.
+
+   So the sheet is white and the LINES stay. The gap is still one pixel; what is
+   behind it is now the line colour rather than a whole background, which is why
+   .cells keeps a background at all. Screens draw their separators as borders
+   instead, because a screen fills its height and would otherwise put the ground
+   back underneath the last section. */
+.drawer,.scroll{background:var(--white)}
+.cells{background:var(--line)}
+.screen{background:var(--white);gap:0}
+.pad + .pad{border-top:1px solid var(--line)}
+.head{border-bottom:1px solid var(--line)}
+
 /* ------------------------- the window's shape ---------------------------- */
 /* The only chart here. Columns and not a line, because a line between two hours
    claims a value for the minutes in between that nothing measured. */
