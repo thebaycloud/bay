@@ -1,0 +1,16 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html",      "title": "Home",      "x": 0,    "y": 0, "w": 660, "h": 940 },
+    { "file": "Analytics.dc.html", "title": "Analytics", "x": 720,  "y": 0, "w": 660, "h": 940 },
+    { "file": "Agent.dc.html",     "title": "Agent",     "x": 1440, "y": 0, "w": 660, "h": 940 }
+  ],
+  "annotations": [
+    { "id": "brief", "x": 0, "y": -160, "w": 470,
+      "text": "Direction C, built out — shadcn neutral, in Geist.\n\nThe faces are embedded, so this renders in the product's real type rather than falling back to system-ui like the first pass did. Toggle dark above any artboard." },
+    { "id": "type", "x": 720, "y": -160, "w": 420,
+      "text": "TYPE\nGeist Sans + Geist Mono, the same woff2 files apps/web serves at /fonts.\n\nMono carries every machine value — address, commands, counts, key names — and nothing else. That line is what keeps a value from reading as a label." },
+    { "id": "next", "x": 1440, "y": -160, "w": 420,
+      "text": "STILL OPEN\n· Your display serif is Bitter (loaded from Google), so it isn't embedded here — direction C doesn't use it.\n· The toolbar that opens this is still the old dark bar; it needs to become part of this system.\n· Anything on these three you want changed before I build it in code." }
+  ],
+  "launch": { "view": "canvas" }
+}

@@ -275,3 +275,25 @@ test("last_used_at is reported as what it is: the token, not this app", async ()
   assert.equal((d!.tokens as { last_used_at: string | null }[])[0].last_used_at, null);
   assert.match(DRAWER_JS, /never used/);
 });
+
+test("the panel wears one accent, and green is not a second one", () => {
+  // Direction C: shadcn neutral with the brand red as the only accent — primary
+  // action, the selected thing, and data. Green stays reserved for status, so
+  // that "live" means live and the alert state is the only thing wearing a
+  // warning. A panel with two accents has no accent.
+  assert.match(DRAWER_CSS, /--red:#E63F2C/);
+  assert.match(DRAWER_CSS, /--green:#16A34A/);
+  assert.match(DRAWER_CSS, /\.btn\.r-red\{background:var\(--red\)/, "primary is the brand red");
+  assert.match(DRAWER_CSS, /\.spark \.col \.f\{[^}]*background:var\(--red\)/, "the chart carries it too");
+  // The ground steps down one value so a card reads as a card. At #ffffff on
+  // #ffffff the border does all the work and the panel flattens.
+  assert.match(DRAWER_CSS, /--ground:#FAFAFA/);
+  assert.match(DRAWER_CSS, /--white:#FFFFFF/);
+});
+
+test("the metal plates are gone, and with them two image fetches per open", () => {
+  // The prototype's button was two plate images cross-fading under the cursor.
+  // Beautiful, and from a different product than this one — and it made every
+  // owner's page pull two webp files off the control plane to draw a button.
+  assert.match(DRAWER_CSS, /\.plate,\.lit\{display:none\}/);
+});

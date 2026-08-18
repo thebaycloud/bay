@@ -57,25 +57,35 @@ export const DRAWER_CSS = String.raw`
    apps/web/public/metal, a lit top edge, and a label that rolls.
    =========================================================================== */
 :host{
-  --white:#FFFFFF; --ground:#E5E5E2; --tile:#F1F1EE;
-  --tint:#FCEEEA;         /* machine values sit on this and nothing else does */
-  --ink:#1A1A19; --ink-2:#5A5A58; --ink-3:#8A8A86;
-  --line:#E5E5E2;
-  --red:#E63F2C; --red-deep:#B32C1A;
+  /* shadcn neutral, with the brand red as the one accent.
+     The prototype's palette was a warm grey ground (#E5E5E2) with white cards
+     floating on it and four reds. This is the defaults: #fafafa ground,
+     #ffffff cards, one hairline, one secondary ink — and #E63F2C used for the
+     things that are ours (primary action, the selected thing, data) rather
+     than sprayed across four tints.
+     Green is not a second accent. It is reserved for status, so that "live"
+     means live and the alert state stays the only thing wearing a warning. */
+  --white:#FFFFFF; --ground:#FAFAFA; --tile:#F4F4F5;
+  --tint:rgba(230,63,44,.10);   /* machine values sit on this and nothing else does */
+  --ink:#0A0A0A; --ink-2:#737373; --ink-3:#A1A1AA;
+  --line:#E5E5E5;
+  --red:#E63F2C; --red-deep:#FC8779;
   --red-ink:#B32C1A;      /* brand red is 3.58:1 on tint — text uses this */
-  --green:#158043;
+  --green:#16A34A;
   --sans:'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
   --mono:'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace;
-  --r-xl:12px; --r-lg:8px; --r-sm:3px;
+  /* 8/6/4, which is shadcn's ramp. The prototype's 12px read as a consumer app;
+     this reads as a tool, which is what it is. */
+  --r-xl:8px; --r-lg:6px; --r-sm:4px;
   --ease:cubic-bezier(.2,.8,.2,1);
   --w:640px;
-  font-family:var(--sans);font-size:15px;line-height:1.4;color:var(--ink);
+  font-family:var(--sans);font-size:14px;line-height:1.45;color:var(--ink);
   -webkit-font-smoothing:antialiased;
 }
 *{box-sizing:border-box}
 
-.t-section{font-size:18px;font-weight:500;letter-spacing:-.02em;line-height:1.25}
-.t-sub{font-size:13.5px;color:var(--ink-2);line-height:1.45}
+.t-section{font-size:14px;font-weight:400;letter-spacing:-.011em;line-height:1.3}
+.t-sub{font-size:12.5px;color:var(--ink-2);line-height:1.45}
 .t-micro{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
 .t-label{font-family:var(--mono);font-size:11px;letter-spacing:.09em;
          text-transform:uppercase;color:var(--ink-3)}
@@ -123,14 +133,15 @@ svg{display:block;flex:none}
    whatever is left. Both sit on the same ground, so the hairline rule holds. */
 .home{display:flex;flex-direction:column;gap:1px;background:var(--ground);
       padding:1px 1px 0;min-height:100%}
-.cells{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--ground);
-       align-content:start}
+.cells{display:grid;grid-template-columns:1fr 1fr;gap:12px;background:transparent;
+       align-content:start;padding:16px}
 .cell.grow{flex:1;display:flex;flex-direction:column;min-height:190px}
 .cell.wide{grid-column:1 / -1}
 /* The drawer is resizable, so this has to answer to the drawer and not the
    viewport: below the width where a pair still reads, everything goes full. */
 @container (max-width: 392px){ .cells{grid-template-columns:1fr} }
 .cell{position:relative;display:flex;flex-direction:column;gap:4px;
+      border:1px solid var(--line);border-radius:var(--r-xl);
       border-radius:var(--r-xl);background:var(--white);padding:18px 18px 20px;
       text-align:left;border:0;font-family:inherit;color:inherit;width:100%}
 button.cell{cursor:pointer}
@@ -181,27 +192,24 @@ button.cell:hover .go{color:var(--red)}
 .btn.md .ghost,.btn.md .roll{gap:8px}
 .btn.lg .ghost,.btn.lg .roll{gap:10px}
 
-/* a hairline edge belongs to white only; metal draws its own */
-.btn.r-white{background:var(--white);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
-.btn.r-steel{background:var(--white);color:var(--ink);box-shadow:inset 0 0 0 1px rgba(26,26,25,.2)}
-.btn.r-red{background:var(--white);color:#fff;box-shadow:inset 0 0 0 1px var(--red-deep)}
-.btn.h-white:hover{color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
-.btn.h-steel:hover{color:var(--ink);box-shadow:inset 0 0 0 1px rgba(26,26,25,.2)}
-.btn.h-red:hover{color:#fff;box-shadow:inset 0 0 0 1px var(--red-deep)}
-
-.plate{position:absolute;inset:0;background-position:center;background-repeat:no-repeat;
-       background-size:300% 100%;pointer-events:none;transition:opacity .2s}
-.plate.steel{filter:brightness(1.2)}
-.plate.rest{opacity:1}
-.btn.fades:hover .plate.rest{opacity:0}
-.plate.to{opacity:0}
-.btn:hover .plate.to{opacity:1}
-/* the lit top edge sells metal as a pressable object; it fades with the surface */
-.lit{position:absolute;left:0;right:0;top:0;height:1px;background:rgba(255,255,255,.45);
-     pointer-events:none;transition:opacity .2s}
-.lit.off{opacity:0}
-.btn:hover .lit.on-hover{opacity:1}
-.btn:hover .lit.off-hover{opacity:0}
+/* FLAT CONTROLS, AND THE PLATES ARE GONE.
+   The prototype's button was two metal plate images that cross-faded under the
+   cursor, with a lit top edge — beautiful, and from a different product than
+   this one. Direction C is shadcn: a surface, a hairline, and one filled
+   variant that is the brand red. It also stops the panel fetching two webp
+   plates from the control plane on every open. The plate/lit elements are still
+   built by btn(), and are display:none rather than removed, so nothing in the
+   JS has to know the design changed. */
+.btn.r-white,.btn.r-steel{background:var(--white);color:var(--ink);
+                          box-shadow:inset 0 0 0 1px var(--line)}
+.btn.r-white:hover,.btn.r-steel:hover{background:var(--tile)}
+.btn.r-red{background:var(--red);color:#fff;box-shadow:inset 0 0 0 1px var(--red-deep)}
+.btn.r-red:hover{background:var(--red);opacity:.92}
+/* The hover-target classes said what the OTHER plate was; with one surface each
+   they would only fight the rest state, so they inherit it instead. */
+.btn.h-white:hover,.btn.h-steel:hover{color:var(--ink)}
+.btn.h-red:hover{color:#fff}
+.plate,.lit{display:none}
 
 .avs{display:flex}
 .av{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:50%;
@@ -354,23 +362,21 @@ button.li:hover .caret{color:var(--red)}
         z-index:2147483001;box-shadow:-24px 0 60px -30px rgba(0,0,0,.35)}
 .drawer.on{transform:none}
 .drawer.flat{position:static;width:100%;height:100%;transform:none;box-shadow:none;border-left:0}
-/* --------------------------- one white sheet ----------------------------- */
-/* The panel was white cells floating on a grey ground, and the ground showed
-   through the 1px gaps as the lines between them. That reads well on a page of
-   its own and badly over somebody's app: a grey slab beside their white page
-   looks like a thing that failed to load, and the emptiness under a short home
-   was the largest grey in it.
-
-   So the sheet is white and the LINES stay. The gap is still one pixel; what is
-   behind it is now the line colour rather than a whole background, which is why
-   .cells keeps a background at all. Screens draw their separators as borders
-   instead, because a screen fills its height and would otherwise put the ground
-   back underneath the last section. */
-.drawer,.scroll{background:var(--white)}
-.cells{background:var(--line)}
-.screen{background:var(--white);gap:0}
-.pad + .pad{border-top:1px solid var(--line)}
-.head{border-bottom:1px solid var(--line)}
+/* ------------------------- cards on a quiet ground ----------------------- */
+/* The sheet was white with the ground showing through 1px gaps as the lines
+   between cells. Direction C separates them properly: each cell is a card with
+   its own hairline and radius, and the ground behind them steps down one value
+   to #fafafa so a card reads as a card. That step is the whole trick — at
+   #ffffff on #ffffff the border does all the work and the panel flattens.
+   Screens get the same treatment: pads become cards with gaps rather than
+   sections divided by rules. */
+.drawer,.scroll{background:var(--ground)}
+.head{background:var(--white);border-bottom:1px solid var(--line)}
+.cells{background:transparent}
+.screen{background:transparent;gap:12px;padding:16px}
+.pad{border:1px solid var(--line);border-radius:var(--r-xl)}
+/* The feed keeps its own frame for the same reason every other block has one. */
+.cell.grow{min-height:0}
 
 /* ------------------------- the window's shape ---------------------------- */
 /* The only chart here. Columns and not a line, because a line between two hours
