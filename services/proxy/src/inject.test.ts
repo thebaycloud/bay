@@ -11,21 +11,25 @@ const { injectOverlay, hasOverlay, isHtmlDocument } = await import("./inject");
 const asOwner = () => injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
 const asVisitor = () => injectOverlay("<html><body>hi</body></html>", "q6doa", false, true);
 
-test("a visitor is never told the x-ray exists", () => {
+test("a visitor is never told the dashboard exists", () => {
   const html = asVisitor();
-  // Not the button, not the endpoint, not the shortcut. The whole layer is the
-  // owner's private view of their own app, and a visitor should not be able to
-  // learn from the page that /_xray means anything at all.
-  assert.equal(html.includes("X-ray"), false);
-  assert.equal(html.includes("/_xray"), false);
-  assert.equal(html.includes("toggleXray"), false);
+  // Not the button, not the address, not the shortcut. The whole layer is the
+  // owner's private view of their own app, and a visitor must not be able to
+  // learn from the page that /_dashboard means anything at all.
+  for (const tell of ["Dashboard", "/_dashboard", "/_xray", "openDrawer", "homeScreen"]) {
+    assert.equal(html.includes(tell), false, `a visitor can see ${tell}`);
+  }
 });
 
-test("the owner gets the button, the shortcut and the feed", () => {
+test("the owner gets the button, the shortcut and the panel", () => {
   const html = asOwner();
-  assert.equal(html.includes("X-ray"), true);
-  assert.equal(html.includes("fetch('/_xray'"), true);
-  assert.equal(html.includes("keydown"), true);
+  // These asserted "X-ray" until the old module was deleted, and passed on a
+  // string inside it rather than on anything the toolbar actually renders. The
+  // button has said Dashboard since the rename; nothing was checking.
+  assert.ok(html.includes(">Dashboard<") || html.includes("'Dashboard'"), "the button is named");
+  assert.ok(html.includes("fetch('/_xray'"), "the panel reads its own origin");
+  assert.ok(html.includes("keydown"), "and the shortcut is wired");
+  assert.ok(html.includes("function homeScreen"), "the panel itself is here");
 });
 
 test("the x-ray asks the app's own origin, not the control plane", () => {
@@ -63,15 +67,28 @@ test("only real HTML documents are decorated", () => {
 
 test("the panel is defined once and used in both places", async () => {
   // It started inside the overlay, which covers every app that serves HTML and
-  // no app that does not. Now it is also a page at /_xray, and both import the
-  // same source — two copies would drift within a week, and the one that drifted
-  // would be the one nobody was looking at.
-  const { XRAY_JS } = await import("./xray-panel");
+  // no app that does not. Now it is also a page at /_dashboard, and both build
+  // from the same source — two copies would drift within a week, and the one
+  // that drifted would be the one nobody was looking at.
   const { xrayPage } = await import("./xray-page");
-  assert.ok(XRAY_JS.includes("function drawXray"), "the panel's code lives in the shared module");
   const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
-  assert.ok(overlay.includes("function drawXray"), "the overlay uses it");
-  assert.ok(xrayPage("q6doa").includes("function drawXray"), "the page uses it");
+  for (const marker of ["function homeScreen", "function dwLoad", "Right now"]) {
+    assert.ok(overlay.includes(marker), `the overlay is missing ${marker}`);
+    assert.ok(xrayPage("q6doa").includes(marker), `the page is missing ${marker}`);
+  }
+});
+
+test("nothing of the old x-ray panel is shipped any more", async () => {
+  // xray-panel.ts drew a dark floating card with a table in it. The panel
+  // replaced every part of that, but its module was still imported whole into
+  // drawer.ts — 2,358 bytes of CSS nothing rendered and 12,181 of JS the panel
+  // used two functions from, on every owner's page load. dur() and ago() live
+  // in the panel now and the module is deleted.
+  const { DRAWER_CSS, DRAWER_JS } = await import("./drawer");
+  assert.equal(DRAWER_CSS.includes(".xr{"), false, "the dark card's styles are gone");
+  assert.equal(DRAWER_JS.includes("function drawXray"), false, "and so is its renderer");
+  assert.match(DRAWER_JS, /function dur\(sec\)/, "the two helpers it was kept for are here");
+  assert.match(DRAWER_JS, /function ago\(sec\)/);
 });
 
 test("the standalone page is self-contained and reads its own origin", async () => {

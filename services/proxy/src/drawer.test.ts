@@ -167,3 +167,25 @@ test("no reading at all still leaves a whole model", async () => {
   assert.equal(d!.an, null);
   assert.equal(d!.anWindow, "off");
 });
+
+test("the schedule and the live feed sit behind one cell", () => {
+  // Neither is something an owner opens the panel FOR — one is a schedule that
+  // mostly does not change, the other a stream you watch only when something is
+  // wrong — and between them they took a cell and the whole leftover height of
+  // home. Home is a grid again and the feed's poll only runs while it is on
+  // screen, which is also why it no longer polls /_xray behind every screen.
+  assert.match(DRAWER_JS, /function infraScreen/);
+  assert.match(DRAWER_JS, /cell\('Infra'/);
+  assert.equal(DRAWER_JS.includes("function jobsScreen"), false, "Jobs is not its own screen any more");
+  // rightNowCell is defined once and called once — from infraScreen, not home.
+  assert.equal((DRAWER_JS.match(/rightNowCell\(d\)/g) || []).length, 2);
+});
+
+test("nothing offers to ship, because nothing can", () => {
+  // There is no deploy-trigger route. The button called one into existence on
+  // the one screen about shipping, did nothing, and said nothing about doing
+  // nothing.
+  assert.equal(DRAWER_JS.includes("Ship again"), false);
+  // And the screen shows what the deploy record actually holds instead.
+  assert.match(DRAWER_JS, /Why it did not land/);
+});

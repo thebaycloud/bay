@@ -1,5 +1,3 @@
-import { XRAY_CSS, XRAY_JS } from "./xray-panel";
-
 /**
  * The panel: everything an owner can do to their app, inside the app.
  *
@@ -364,7 +362,6 @@ button.li:hover .caret{color:var(--red)}
   .scroll.push,.scroll.pop{animation:none}
 }
 
-${XRAY_CSS}
 `;
 
 export const DRAWER_JS = String.raw`
@@ -386,7 +383,7 @@ function icon(name,size){
    gives a grey button something to look at), red gets the quieter brushed. */
 var PLATE={steel:C.app+'/metal/panoramic-steel.webp', red:C.app+'/metal/brushed-red.webp'};
 
-var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'People', jobs:'Jobs'};
+var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'People', infra:'Infra'};
 
 function dwTop(){ return dwStack.length ? dwStack[dwStack.length-1] : null; }
 function dwPush(v){ dwStack.push(v); dwDir='push'; dwRender(); }
@@ -617,8 +614,10 @@ function homeScreen(d){
     anPart, function(){ dwPush({v:'analytics'}); }));
 
   var shipPart=el('div','chips');
-  shipPart.appendChild(btn(d.shipping?'Shipping':'Ship again','refresh-cw',{rest:'red',hover:'white'}));
-  shipPart.appendChild(statusChip(d.shipping?'Loading':'Running', d.shipping?'red':'green'));
+  // The re-ship button is gone. There was no route behind it — it never did
+  // anything — and a dead control on the one screen about shipping is worse
+  // than no control. The chip still says which state this app is in.
+  shipPart.appendChild(statusChip(d.shipping?'Shipping':'Running', d.shipping?'red':'green'));
   g.appendChild(cell('Ships','Last shipped '+d.ships[0].when, shipPart,
     function(){ dwPush({v:'ships'}); }));
 
@@ -637,8 +636,12 @@ function homeScreen(d){
   var pPart=el('div','chips');
   if(d.pInitials.length) pPart.appendChild(avatars(d.pInitials));
   pPart.appendChild(btn('Invite','plus',{rest:'white',hover:'steel',size:'sm'}));
-  g.appendChild(cell('Jobs', d.jobs.length ? d.jobs.length+(d.jobs.length===1?' job':' jobs')+' on a schedule' : 'Nothing runs on its own',
-    null, function(){ dwPush({v:'jobs'}); }));
+  var infraPart=el('div','chips');
+  infraPart.appendChild(statusChip(d.feed.length ? d.feed.length+' live' : 'quiet',
+                                   d.alert ? 'red' : 'green'));
+  if(d.jobs.length) infraPart.appendChild(statusChip(d.jobs.length+(d.jobs.length===1?' job':' jobs'),'green'));
+  g.appendChild(cell('Infra','What it is doing, and what runs on its own',
+    infraPart, function(){ dwPush({v:'infra'}); }));
 
   g.appendChild(cell('People','Who can open this', pPart, function(){ dwPush({v:'access'}); }, true));
 
@@ -646,7 +649,6 @@ function homeScreen(d){
 
   var wrap=el('div','home');
   wrap.appendChild(g);
-  wrap.appendChild(rightNowCell(d));
   return wrap;
 }
 
@@ -800,35 +802,36 @@ function screen(view,d){
 
   // ----------------------------------------------------------------- ships
   if(key==='ships'){
-    if(view.i != null){
-      var s1=d.ships[view.i];
-      var dp=pad(s1.did, s1.when+' · by '+s1.who);
-      dp.appendChild(listOf([
-        li({lead:ini(s1.who),round:true,title:s1.who,meta:'made this change',
-            pill:pill(s1.out, s1.out==='shipped'?'good':s1.out==='never left'?'bad':'live')})
-      ]));
-      w.appendChild(dp);
-      w.appendChild(pad('What changed','Files are not kept after a ship — the source leaves with the build.'));
-      return w;
+    // One ship, said properly, rather than a list of one pretending to be
+    // history. deploy-status answers with the LATEST deploy and nothing else, so
+    // "Every change · Newest first" was a heading over a single row, and tapping
+    // it opened a detail screen that repeated the row and then admitted it had
+    // nothing else to show. There is no deploys-list route yet; when there is,
+    // this becomes the list it was drawn as.
+    var s1=d.ships[0];
+    var head=pad(s1.did, s1.when);
+    head.appendChild(listOf([
+      li({lead:ini(s1.who), round:true, title:s1.who, meta:'made this change',
+          pill:pill(s1.out, s1.out==='shipped'?'good':s1.out==='never left'?'bad':'live')})
+    ]));
+    w.appendChild(head);
+
+    if(s1.error){
+      // The reason it did not land, verbatim. This is the one thing an owner
+      // opens this screen to read, and it was not on it.
+      var ep=pad('Why it did not land', null);
+      ep.appendChild(el('p','t-micro', String(s1.error).slice(0,600)));
+      w.appendChild(ep);
     }
-    if(d.dock){
-      var lp=pad('At the dock','Every movement here is one real line from the build.');
-      var dk=el('div','dock');
-      var now=el('div','now');
-      now.appendChild(el('span','dot red'));
-      now.appendChild(el('span',null,d.dock.now));
-      dk.appendChild(now);
-      d.dock.past.forEach(function(x){ dk.appendChild(el('div','past',x)); });
-      lp.appendChild(dk);
-      w.appendChild(lp);
-    }
-    var sp=pad(d.dock?'Before this':'Every change', 'Newest first.');
-    sp.appendChild(listOf(d.ships.map(function(x,i){
-      return li({lead:ini(x.who), round:true, title:x.did, meta:x.when+' · '+x.who,
-                 pill:pill(x.out, x.out==='shipped'?'good':x.out==='never left'?'bad':'live'),
-                 onTap:function(){ dwPush({v:'ships',i:i}); }});
-    })));
-    w.appendChild(sp);
+
+    var facts=pad('The ship itself', null);
+    var rows=[li({lead:'\u25CF', title:'Outcome', meta:'what the platform recorded', val:s1.status||'unknown'})];
+    if(s1.stage) rows.push(li({lead:'\u25D4', title:'Last step', meta:'the furthest it got', val:s1.stage}));
+    rows.push(li({lead:'\u2751', title:'Address', meta:'where this release answers', val:d.addr}));
+    facts.appendChild(listOf(rows));
+    w.appendChild(facts);
+
+    w.appendChild(pad('Older ships', 'Only the most recent one is kept where this panel can read it.'));
   }
 
   // ------------------------------------------------------------------ data
@@ -958,14 +961,20 @@ function screen(view,d){
     w.appendChild(dp2);
   }
 
-  if(key==='jobs') return jobsScreen(w,d);
+  if(key==='infra') return infraScreen(w,d);
 
   return w;
 }
 
-function jobsScreen(w,d){
-  if(!d.jobs.length){ w.appendChild(pad('No jobs','Nothing is scheduled to run on its own.')); return w; }
-  var jp=pad('Scheduled','What runs without anyone asking.');
+function infraScreen(w,d){
+  // The feed first: it is the half that changes while you are looking at it.
+  // rightNowCell brings its own poll, and closing the panel clears it.
+  w.appendChild(rightNowCell(d));
+  if(!d.jobs.length){
+    w.appendChild(pad('Nothing scheduled','Nothing runs on its own yet.'));
+    return w;
+  }
+  var jp=pad('On a schedule','What runs without anyone asking.');
   jp.appendChild(listOf(d.jobs.map(function(j){
     var name=j.name||j.id||'job', bad=j.state&&j.state!=='ENABLED';
     return li({lead:'\u25F4',warm:bad,title:name,meta:j.schedule||'no schedule',
@@ -981,6 +990,18 @@ function headingFor(view,d){
   return TITLES[view.v];
 }
 
+
+/**
+ * How long ago, in the shortest true form.
+ *
+ * Lifted out of xray-panel.ts when that module was deleted. The panel used two
+ * functions from twelve kilobytes of dark-themed code it otherwise shipped to
+ * every owner on every page load and never rendered a pixel of; these are the
+ * two. ago() is defined through dur() rather than beside it so the two cannot
+ * disagree about where an hour ends.
+ */
+function dur(sec){ if(sec<60)return sec+'s'; if(sec<3600)return Math.round(sec/60)+'m'; if(sec<86400)return Math.round(sec/3600)+'h'; return Math.round(sec/86400)+'d'; }
+function ago(sec){ return dur(sec)+' ago'; }
 
 /** A mean session length, said the way a person would say it. */
 function dwMins(sec){
@@ -1177,7 +1198,8 @@ function dwLoad(force){
         // The row records no actor. An owner is the only person who can see this
         // panel, so naming them is honest; inventing a name would not be.
         who:'you',
-        out:st==='live'?'shipped':(st==='failed'||st==='canceled')?'never left':'live'
+        out:st==='live'?'shipped':(st==='failed'||st==='canceled')?'never left':'live',
+        status:st, stage:dd.stage||'', error:dd.error||null, url:dd.url||null
       }];
       if(dd.error) d.alert=d.alert||{kind:'bad',icon:'refresh-cw',
         title:'The last ship did not land',sub:String(dd.error).slice(0,160),act:'Look at it'};
@@ -1316,5 +1338,4 @@ function dwSelect(){ dwStack=[]; dwDir='push'; dwRender(); }
 if(window.requestIdleCallback) requestIdleCallback(function(){ dwLoad(); });
 else setTimeout(function(){ dwLoad(); },2000);
 
-${XRAY_JS}
 `;
