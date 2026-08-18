@@ -2,7 +2,6 @@ export const dynamic = "force-dynamic";
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { currentAdminEmail } from "@/lib/admin";
 import { buildReport, panelError, STALL_LABEL, type SourceName, type Stall } from "@/lib/analytics/report";
 import { formatRate, formatDuration } from "@/lib/analytics/metrics";
@@ -479,7 +478,6 @@ export default async function AnalyticsPage({
       </div>
       {/* Same control the rest of the product uses. The page is light by
           default; this is how an operator who wants dark asks for it. */}
-      <ThemeToggle />
     </div>
   );
 }

@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
 
 import { notFound } from "next/navigation";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { currentAdminEmail } from "@/lib/admin";
 import { formatDuration } from "@/lib/analytics/metrics";
 import { gib, readFleetStatus } from "@/lib/fleet-status";
@@ -296,7 +295,6 @@ export default async function FleetPage() {
         </div>
       </div>
       {/* Same control the rest of the product uses. */}
-      <ThemeToggle />
     </div>
   );
 }

@@ -216,9 +216,14 @@ const PC={}; KEYS.forEach(k=>PC[k]=C(0));
 /* GOLD — how far the sun has come up. NIGHT — how hard the artificial lights
    are working, which is the same thing running backwards. */
 let PN={amb:1,key:2}, GOLD=0, NIGHT=1, SUNEL=-.08;
-function theme(){return document.documentElement.dataset.theme||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");}
+/* The grade is pinned to light.
+   This read the page's own data-theme and graded itself to match, which is why
+   the frame around it could stay plain. The product is light-only now, so there
+   is no attribute to read and matchMedia would have put the picture in night
+   colours on a light page for anyone whose OS prefers dark. PALS.night is not
+   dead — it is the film's own dusk, driven by GOLD below, not by a theme. */
 function palette(t){
-  const P=PALS[theme()]||PALS.light;
+  const P=PALS.light;
   const blue=eio(seg(t,S("upload"),E("flood")));
   GOLD=eio(seg(t,S("place")+AT.place.d*.30,E("live")-2.5));
   NIGHT=1-seg(GOLD,.30,.86);

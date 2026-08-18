@@ -8,7 +8,6 @@ import {
   ArrowUpRight, Check, Lock, AlertTriangle, Settings2, Users, X, LogOut,
 } from "lucide-react";
 import { Mark } from "@/components/Mark";
-import { ThemeToggle } from "./ThemeToggle";
 import { DatabasePanel } from "./DatabasePanel";
 import { StoragePanel } from "./StoragePanel";
 import { JobsPanel } from "./JobsPanel";
@@ -295,7 +294,6 @@ export function Cockpit({ appName, data, children }: { appName: string; data: Se
         </div>
       </div>
 
-      <ThemeToggle />
       <div className={"toast" + (toast ? " show" : "")}><Check size={13} /><span>{toast ?? ""}</span></div>
     </div>
   );

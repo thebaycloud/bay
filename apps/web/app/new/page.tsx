@@ -5,7 +5,6 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { Bracket } from "@/components/Bracket";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 import { DeployFilm } from "@/components/DeployFilm";
 import { drive as advanceFilm, START as FILM_START, type FilmDrive } from "@/lib/deploy-film";
@@ -419,7 +418,6 @@ export default function NewApp() {
           only thing behind this modal is a locked account. Free is always
           behind it, with their apps still running. */}
       {paywall && <Paywall reason={paywall} onClose={() => setPaywall(null)} />}
-      <ThemeToggle />
     </div>
   );
 }

@@ -5,7 +5,6 @@ import { Suspense } from "react";
 import { Plus } from "lucide-react";
 import { Bracket } from "@/components/Bracket";
 import { CommandPalette } from "@/components/CommandPalette";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sidebar } from "@/components/Sidebar";
 import { AccountBanner } from "@/components/AccountBanner";
 import { AppsGrid, type App } from "@/components/AppsGrid";
@@ -105,7 +104,6 @@ export default function Home() {
       <Suspense fallback={<HomeShell />}>
         <AppsAndRail />
       </Suspense>
-      <ThemeToggle />
     </div>
   );
 }

@@ -3,50 +3,63 @@
 @tailwind utilities;
 
 /* ============================================================
-   SUPERSONIC — "blueprint" design system
-   squared · graph-paper grid · corner brackets · mono-forward
-   ============================================================ */
+   BAY — the panel's design system, as the house style
+   shadcn neutral · one accent, and the accent is the brand red
+   ============================================================
+
+   Lifted from services/proxy/panel/panel.css, where it was decided on a canvas
+   and argued over. It arrives here as the palette for everything, not just for
+   the app workbench, so navigating between pages has no seam.
+
+   The old names are ALIASED onto the new tokens rather than renamed across
+   every component. That keeps the swap reviewable in one diff: nothing else has
+   to change to receive it, and a component still asking for --paper gets the
+   new ground instead of breaking. See
+   docs/superpowers/specs/2026-08-19-app-workbench-design.md §6. */
 
 :root {
-  /* Light: a step darker, and neutral rather than cream.
-     The paper was #F5F4EF and the cards on it #FBFAF6 — six points apart on a
-     warm yellow cast, which is why a control drawn on --paper was invisible
-     against a --card row and every surface read as the same sheet. Grey at a
-     lower value separates them: cards still sit LIGHTER than the page, which is
-     what makes them read as cards, but now you can see which is which.
-     The greens are untouched. They are the only hue in the system and they were
-     mixed against ink, not against the paper. */
-  --paper: #E8E8E5; --card: #F1F1EE; --ink: #1A1A19; --ink-2: #5A5A58; --faint: #848481;
-  --line: #D3D3CF; --line-2: #BEBEB9; --grid: #DBDBD7;
-  --fill: #1A1A19; --fill-fg: #F4F4F2; --live: #158043; --accent: #0B5E38; --accent-fg: #F4F4F2;
-  /* Radius, in one place.
-     The system is squared on purpose — graph paper, registration brackets, mono
-     type — so this softens only what you PRESS and what floats above the page.
-     Containers, rules and the substrate stay at 90°. 3px is deliberate: against
-     a 1px hairline it reads as intent, and 6px would read as a different
-     product. Anything wrapped in <Bracket> keeps its corners, since the marks
-     around it are right angles by construction. */
-  --r: 5px; --r-sm: 3px; --r-pill: 999px;
+  /* The panel's own tokens, verbatim. */
+  --white: #FFFFFF; --ground: #FAFAFA; --tile: #F4F4F5;
+  --ink: #0A0A0A; --ink-2: #737373; --ink-3: #A1A1AA;
+  --line: #E5E5E5;
+  --red: #E63F2C; --red-deep: #FC8779;
+  /* Brand red is 3.58:1 on tint, so text on a tinted surface uses this. */
+  --red-ink: #B32C1A;
+  /* Machine values sit on this and nothing else does. */
+  --tint: rgba(230, 63, 44, .10);
+  /* Green is NOT a second accent. It is status, so that "live" means live and
+     the alert state stays the only thing wearing a warning. The control plane's
+     accent WAS green; this swap is that rule finally being applied. */
+  --green: #16A34A;
+  /* 8/6/4, which is shadcn's ramp. */
+  --r-xl: 8px; --r-lg: 6px; --r-sm: 4px;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+
+  /* ---- aliases: the blueprint system's names, pointed at the new palette ----
+     Two of these are new values rather than an alias, because the panel has no
+     token for them: --line-2 is a hairline one step stronger than --line, and
+     --grid is the graph-paper substrate, which has to be barely visible against
+     a #FAFAFA ground rather than the warm grey it was drawn for. */
+  --paper: var(--ground);
+  --card: var(--white);
+  --faint: var(--ink-3);
+  --line-2: #D4D4D8;
+  --grid: #EFEFF1;
+  --fill: var(--ink); --fill-fg: var(--white);
+  --live: var(--green);
+  --accent: var(--red); --accent-fg: var(--white);
+  --r: var(--r-lg); --r-pill: 999px;
+
   --mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
   --sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   --serif: var(--font-instrument-serif), "Times New Roman", Georgia, serif;
-  --ease: cubic-bezier(.4, 0, .2, 1);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #0C0C0B; --card: #111110; --ink: #EAE8DF; --ink-2: #9C9A8F; --faint: #66645C;
-    --line: #262521; --line-2: #35342E; --grid: #1B1A17;
-    --fill: #EAE8DF; --fill-fg: #0C0C0B; --live: #2FB56F; --accent: #2EA86A; --accent-fg: #0C0C0B;
-  }
-}
-:root[data-theme="light"] {
-  --paper: #E8E8E5; --card: #F1F1EE; --ink: #1A1A19; --ink-2: #5A5A58; --faint: #848481;
-  --line: #D3D3CF; --line-2: #BEBEB9; --grid: #DBDBD7; --fill: #1A1A19; --fill-fg: #F4F4F2; --live: #158043; --accent: #0B5E38; --accent-fg: #F4F4F2;
-}
-:root[data-theme="dark"] {
-  --paper: #0C0C0B; --card: #111110; --ink: #EAE8DF; --ink-2: #9C9A8F; --faint: #66645C;
-  --line: #262521; --line-2: #35342E; --grid: #1B1A17; --fill: #EAE8DF; --fill-fg: #0C0C0B; --live: #2FB56F; --accent: #2EA86A; --accent-fg: #0C0C0B;
-}
+
+/* No dark palette, and no toggle.
+   The panel design system was authored light-only. Inventing a dark ramp for it
+   to keep a control alive that nobody asked for is work that serves nothing, so
+   dark is dropped rather than carried half-done. If it comes back it comes back
+   as a designed palette, not as an inverted one. */
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -369,7 +382,6 @@ table.dg tr:hover td { background: var(--paper); }
    for "it worked". */
 .toast.bad { background: var(--down, #c33a2c); color: #fff; }
 
-.theme-toggle { position: fixed; bottom: 15px; right: 15px; z-index: 40; }
 
 @media (max-width: 1040px) {
   .batteries { grid-template-columns: repeat(2, 1fr); }
@@ -647,7 +659,6 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .share-wrap { position: relative; }
 .share-backdrop { position: fixed; inset: 0; z-index: 50; }
 .share-pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 51; width: 340px; background: var(--card); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0,0,0,.18); }
-:root[data-theme="dark"] .share-pop { box-shadow: 0 12px 40px rgba(0,0,0,.6); }
 .share-pop-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 14px; font-weight: 600; }
 .share-pop-head .ib { width: 26px; height: 26px; display: grid; place-items: center; color: var(--ink-2); }
 .share-pop-head .ib:hover { background: var(--paper); color: var(--ink); }
@@ -1014,19 +1025,15 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
    alone: failure fills are hatched as well as coloured, and every segment has a
    text label beside it. */
 .an-page {
-  /* Light by default, whatever the operating system prefers.
-     The values are the app's own :root light palette, not a second set — this
-     page pins them rather than redefining them, so a change to the product's
-     light theme still reaches here. Dark returns only when somebody asks for it
-     explicitly with the toggle, which sets :root[data-theme="dark"] and beats
-     this on specificity below.
-     The reason for pinning at all: the operator wants to read this in daylight,
-     and the app has no theme persistence — ThemeToggle sets an attribute that a
-     reload discards — so inheriting the OS preference meant a dark page with no
-     durable way to change it. */
-  --paper: #E8E8E5; --card: #F1F1EE; --ink: #1A1A19; --ink-2: #5A5A58;
-  --line: #D3D3CF; --line-2: #BEBEB9;
+  /* This page used to pin the light palette locally, because the product
+     followed the OS preference and an operator wanted to read a dashboard in
+     daylight. There is no dark theme any more, so there is nothing to pin
+     against, and pinning would have stranded this one page on the old warm
+     palette after the swap. It inherits :root like everything else now.
 
+     The --an-* tokens below stay as they were. Each was computed for contrast
+     against the old --card of #F1F1EE; cards are #FFFFFF now, which is lighter,
+     so every one of those ratios only improved. */
   --an-good: #158043;
   --an-bad: #C33A2C;
   --an-bar: var(--ink);
@@ -1041,18 +1048,6 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
   --an-mark: #8B897E;
 
   padding: 24px 28px 60px; max-width: 1080px; margin: 0 auto;
-}
-
-/* Dark, only when explicitly chosen. Same reasoning applied to the dark
-   surface: --faint is 3.19:1 there and --line-2 is 1.51:1, so both were failing
-   before this page was ever light. */
-:root[data-theme="dark"] .an-page {
-  --paper: #0C0C0B; --card: #111110; --ink: #EAE8DF; --ink-2: #9C9A8F;
-  --line: #262521; --line-2: #35342E;
-  --an-good: #2FB56F;
-  --an-bad: #E8705F;
-  --an-dim: #8F8C82;
-  --an-mark: #6F6C63;
 }
 
 .an-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; flex-wrap: wrap; }
@@ -1231,9 +1226,8 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
    of this is the cinema it sits in.
 
    The study this came from carried its own copy of the palette, and it was the
-   same palette — so nothing here declares a colour. The picture reads the
-   page's own data-theme and grades itself to match, which is why the frame can
-   be this plain.
+   same palette — so nothing here declares a colour. The picture is graded to the
+   light palette in ship-it.js, which is why the frame can be this plain.
    ============================================================ */
 .dfilm { border: 1px solid var(--line); background: var(--card); }
 .dfilm-frame { position: relative; background: #0b0b0a; overflow: hidden; }
