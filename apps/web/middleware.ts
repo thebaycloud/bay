@@ -19,7 +19,15 @@ export const config = {
   // nothing anywhere reports an error. Which is precisely what it did in
   // production, while /metal/*.webp beside it worked, because webp was listed
   // and woff2 was not.
+  // `/film/*` is the third case, and it is the font case again with a different
+  // extension. The ROOM — the waiting page the proxy serves at every app's own
+  // address — loads the deploy film from here with a plain <script src>. A
+  // script tag that receives a 307 to /login does not error, does not warn and
+  // does not run: the room would simply keep its own drawing forever and no
+  // signal would reach anyone. There is no session on that request and there
+  // cannot be one; it is a static file, built by `npm run film`, identical for
+  // every visitor.
   matcher: [
-    "/((?!_next/static|_next/image|.*\\.(?:ico|svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|otf)$).*)",
+    "/((?!_next/static|_next/image|film/|.*\\.(?:ico|svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|otf)$).*)",
   ],
 };
