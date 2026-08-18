@@ -1,6 +1,22 @@
 import { escapeHtml } from "./pages";
 
 /**
+ * Where the film comes from.
+ *
+ * The picture is built and served by the control plane (apps/web, `npm run
+ * film` → public/film/ship-it.js) because that is where its source lives and
+ * where it is already used, on the dashboard's own deploy screen. This service
+ * cannot build it: `gcloud run deploy --source services/proxy` sends this
+ * directory and nothing else, so a copy here would be a fork of 1,500 lines of
+ * camera moves that nobody would ever reconcile.
+ *
+ * A cross-origin `<script src>` needs no permission to run, and the film is
+ * mounted only if it actually arrives — see `filmBoot` below. If it does not,
+ * the room is exactly what it was.
+ */
+const FILM_ORIGIN = process.env.FILM_ORIGIN ?? "https://app.supersonic.cv";
+
+/**
  * The room.
  *
  * An app's address answers before the app does, and until now what it answered
@@ -41,11 +57,51 @@ export function pageRoom(slug: string, opts: { owner: boolean }): string {
   #name{color:var(--ink)}
   #hint{width:min(92vw,720px);color:var(--dim);font-size:12px;min-height:34px}
   code{background:#1d2621;padding:.1rem .35rem;border-radius:.25rem;color:var(--ink)}
+
+  /* the film, when it is the picture. Its own chrome, kept to what says
+     something: which shot this is, and which stage the deploy is on. */
+  #film{position:relative;width:min(92vw,720px);border-radius:14px;overflow:hidden;
+        background:#0a100e;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  #film canvas{display:block;width:100%;aspect-ratio:960/400}
+  .fslate{position:absolute;left:12px;top:10px;font-size:10px;letter-spacing:.18em;
+          color:rgba(255,255,255,.86);text-shadow:0 1px 2px rgba(0,0,0,.5);pointer-events:none}
+  .fstagebar{position:absolute;left:12px;bottom:10px;right:12px;display:flex;align-items:baseline;gap:9px;
+             font-size:11px;color:rgba(255,255,255,.62);pointer-events:none;
+             text-shadow:0 1px 3px rgba(0,0,0,.6);opacity:.62;transition:opacity .3s ease}
+  .fstagebar b{font-size:13px;color:#fff}
+  .fstagebar .no{font-variant-numeric:tabular-nums;letter-spacing:.14em}
+  .fstagebar .note{opacity:0;transition:opacity .3s ease}
+  .fstagebar.held{opacity:1}
+  .fstagebar.held .note{opacity:.8}
+  .fvig{position:absolute;inset:0;pointer-events:none;
+        background:radial-gradient(120% 90% at 50% 50%,transparent 55%,rgba(0,0,0,.28) 100%)}
+  .fbang{position:absolute;inset:0;pointer-events:none;opacity:0;
+         background:radial-gradient(60% 60% at 50% 55%,rgba(255,236,206,.95),rgba(226,84,32,.75) 45%,rgba(120,20,8,.35) 100%)}
+  .fgrade{position:absolute;inset:0;pointer-events:none;mix-blend-mode:soft-light;opacity:0}
 </style>
 <div class="bar"><span id="name">${escapeHtml(slug)}</span><span id="here"></span></div>
 <div id="stage"><canvas id="c" width="160" height="90"></canvas></div>
+<!-- The film. Empty and hidden until the script lands and WebGL says yes; the
+     room above is what stands there in the meantime and what stays there if it
+     never does. -->
+<div id="film" hidden>
+  <div class="fcanvas" data-el="cv" role="img"
+       aria-label="An animated cutaway of this build: a ship built in a dry dock, launched, and sailing under the Golden Gate as the app goes live."></div>
+  <div class="fslate" data-el="slate"></div>
+  <div class="fbang" data-el="bang"></div>
+  <div class="fgrade" data-el="grade"></div>
+  <div class="fvig"></div>
+  <div class="fstagebar" data-el="stagebar">
+    <span class="no" data-el="stageNo"></span>
+    <b data-el="stageName"></b>
+    <span class="note" data-el="stageNote"></span>
+  </div>
+</div>
 <div class="bar"><span id="line"></span></div>
 <div id="hint"></div>
+<script src="${FILM_ORIGIN}/film/ship-it.js" async
+        onload="window.__filmArrived&&window.__filmArrived()"
+        onerror="window.__filmGone&&window.__filmGone()"></script>
 <script>
 ${clientScript(slug, owner)}
 </script>`;
@@ -99,8 +155,92 @@ var world = {
   watching: 1
 };
 
+// ---- the film ----
+// A second picture of the same build, cut the other way round: the room walks
+// on every LINE, the film cuts on every STAGE and then holds — camera still
+// moving — until the deploy says otherwise. Whichever one is on screen, nothing
+// here invents motion; see the rule at the top of this file.
+var film = null, filmState = null, filmSeen = { scenario:'', rail:'', index:-1 };
+var filmDead = false, filmBuf = [];
+
+/**
+ * Fold one event into what the film should be showing.
+ *
+ * Buffered when the script has not landed yet, and that is the point: the tag
+ * is 'async', a room is often opened mid-build, and the first stages routinely
+ * arrive before 600 KB of picture does. Dropping them would leave the film
+ * holding on the first shot of a build that is already plating — a picture that
+ * is wrong rather than late, which is the one thing this page may not be.
+ */
+function filmFold(ev){
+  var api = window.SupersonicFilm;
+  if (!api){
+    filmBuf.push(ev);
+    if (filmBuf.length > 300) filmBuf.shift();
+    return;
+  }
+  for (var i=0;i<filmBuf.length;i++) filmState = api.drive(filmState || api.START, filmBuf[i]);
+  filmBuf = [];
+  filmState = api.drive(filmState || api.START, ev);
+}
+
+function filmReady(){
+  if (film || filmDead) return film;
+  var api = window.SupersonicFilm;
+  if (!api) return null;
+  // Reasons not to: no WebGL, a phone in portrait, or somebody who has asked
+  // their machine to stop moving things. Each of those keeps the room, which is
+  // 10 KB and draws in any browser that has a canvas.
+  try {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) { filmDead = true; return null; }
+    if (innerWidth < 560) { filmDead = true; return null; }
+    var probe = document.createElement('canvas');
+    if (!probe.getContext('webgl2') && !probe.getContext('webgl')) { filmDead = true; return null; }
+  } catch(e){ filmDead = true; return null; }
+
+  // Mounted on the cut the build is ALREADY on. A room opened after a build has
+  // failed wants the film with the break in it, not a rebuild of the container
+  // cut a moment later.
+  var scenario = (filmState && filmState.scenario) || 'container';
+  var host = document.getElementById('film');
+  film = api.mountFilm(host, { scenario: scenario });
+  if (!film || !film.stages().length) { film = null; filmDead = true; return null; }
+  filmSeen = { scenario: scenario, rail:'', index:-1 };
+  film.identity({ app: SLUG, url: location.host, release:'', node:'' });
+  // The room steps aside rather than being removed: if the film ever throws, a
+  // reload brings the room back with the same feed behind it.
+  document.getElementById('stage').hidden = true;
+  host.hidden = false;
+  return film;
+}
+
+/** One stage boundary: folded in, and shown if there is anything to show it on. */
+function filmStage(step){
+  filmFold({ type:'stage', stage: step.stage, phase: step.phase, outcome: step.outcome });
+  if (filmReady()) filmApply();
+}
+
+function filmApply(){
+  var api = window.SupersonicFilm;
+  if (!film || !filmState || !api) return;
+  if (filmState.scenario !== filmSeen.scenario){
+    film.scenario(filmState.scenario);
+    filmSeen = { scenario: filmState.scenario, rail:'', index:-1 };
+  }
+  if (filmState.rail && filmState.rail !== filmSeen.rail){
+    filmSeen.rail = filmState.rail;
+    var i = api.railIndex(film.stages(), filmState.rail, filmSeen.index + 1);
+    if (i >= 0){ film.setStage(i); filmSeen.index = i; }
+  }
+}
+
 function enqueue(steps){
-  for (var i=0;i<steps.length;i++) queue.push(steps[i]);
+  for (var i=0;i<steps.length;i++) {
+    // Stage boundaries are the film's business and not the room's: the room is
+    // drawn from lines, one movement per line, and a stage is not a line.
+    if (steps[i].kind === 'stage') { filmStage(steps[i]); continue; }
+    queue.push(steps[i]);
+  }
   // A room opened late has a backlog. Movements still map one-to-one onto real
   // lines — they are just performed faster, rather than the agent teleporting
   // through ten minutes of work or the room falling minutes behind the truth.
@@ -268,6 +408,19 @@ function here(n){
   hereEl.textContent = n > 1 ? (n + ' watching') : 'just you';
 }
 
+// The film script is 'async' and may land either side of this one. Both orders
+// are handled and neither polls: the tag calls these when it resolves, and the
+// line below covers the case where it had already resolved before this script
+// ran. Nothing is lost by arriving late — the stages are folded into filmState
+// whether or not a picture exists yet.
+window.__filmArrived = function(){
+  // Flush first: the cut to mount depends on what the build has already done.
+  filmFold({ type:'noop' });
+  if (filmReady()) filmApply();
+};
+window.__filmGone = function(){ filmDead = true; };
+if (window.SupersonicFilm) window.__filmArrived();
+
 var es = new EventSource('/_room/events');
 es.onmessage = function(ev){
   var m; try { m = JSON.parse(ev.data); } catch(e){ return; }
@@ -298,7 +451,15 @@ es.onmessage = function(ev){
     else say('This app is still being built. Nothing to see yet.');
     return;
   }
-  if (m.t === 'open'){ world.opening = 0.02; say(''); return; }
+  if (m.t === 'open'){
+    world.opening = 0.02; say('');
+    // The app answered, which is the film's last shot — the sun coming up
+    // through the span. It gets a moment before arrive() replaces this page
+    // with the app itself.
+    filmFold({ type:'done', slug: SLUG, url: location.origin });
+    if (filmReady()) filmApply();
+    return;
+  }
 };
 es.onerror = function(){
   // The stream can die without the build dying. Reconnecting is the browser's

@@ -35,7 +35,21 @@ export type StepKind =
   | "boot"      // "deploying…" (144), "Creating Revision…", "verifying the app responds…"
   | "repair"    // the repair agent takes over — `agent …` is the SECOND most common opener (368)
   | "work"      // something happened that none of the above describes
-  | "broke";
+  | "broke"
+  /**
+   * A stage of the deploy started or ended.
+   *
+   * NOT a movement, and it must never become one: the pixel room is drawn from
+   * LINES, one movement per line, and the note on `classify` explains why —
+   * seven stages over a 210-second deploy is a slideshow. This kind carries no
+   * motion for that renderer, which skips it.
+   *
+   * It is here for the film (the 3D one, loaded from app.supersonic.cv), which
+   * is cut the other way round: it plays a stage and then HOLDS, camera still
+   * moving, until the next stage arrives. Same events, two grains, and the
+   * grain is a property of the picture rather than of the feed.
+   */
+  | "stage";
 
 export interface RoomStep {
   /** The `deploy_events` id. Also the cursor to resume from. */
@@ -50,6 +64,16 @@ export interface RoomStep {
    * than in the renderer, so a bug in the page cannot turn into a disclosure.
    */
   text?: string;
+  /**
+   * On a `stage` step: which stage, and which end of it.
+   *
+   * Kept for guests, unlike `text`. These are the platform's own vocabulary —
+   * `clone`, `build`, `fleet` — fixed in lib/stage-names.ts and identical for
+   * every app that ever deploys. Nothing about them is anybody's repository.
+   */
+  stage?: string;
+  phase?: "start" | "end";
+  outcome?: string;
 }
 
 /**
@@ -108,6 +132,15 @@ export function stepOf(id: number, event: Record<string, unknown>): RoomStep | n
   }
   if (event.type === "error" && typeof event.message === "string") {
     return { id, kind: "broke", text: String(event.message) };
+  }
+  // The stage boundaries, straight through. The deploy started announcing these
+  // in 244a4db; before it, `deploy_stages` only learned a stage had happened
+  // once it was over — which is a minute and a half late on `fleet`, the longest
+  // one there is.
+  if (event.type === "stage" && typeof event.stage === "string") {
+    const phase = event.phase === "end" ? "end" : "start";
+    const outcome = typeof event.outcome === "string" ? event.outcome : undefined;
+    return { id, kind: "stage", stage: event.stage, phase, outcome };
   }
   // `done`, `detected`, `patch` and the rest carry structure, not motion. The room
   // does not open on `done` — it opens when the app actually answers. See room.ts.
@@ -195,7 +228,16 @@ export async function tailSteps(runId: string, limit = 30): Promise<StepPage> {
   }
 }
 
-/** Strip what a guest must not read. */
+/**
+ * Strip what a guest must not read.
+ *
+ * `text` goes and everything else stays. The stage fields are deliberately kept:
+ * they are one of fourteen fixed words, the same fourteen for every app on the
+ * platform, and without them a guest's room would have a picture that never
+ * cuts — which is the whole difference between watching a build and watching a
+ * screensaver.
+ */
 export function forGuest(steps: RoomStep[]): RoomStep[] {
-  return steps.map(({ id, kind }) => ({ id, kind }));
+  return steps.map(({ id, kind, stage, phase, outcome }) =>
+    kind === "stage" ? { id, kind, stage, phase, outcome } : { id, kind });
 }

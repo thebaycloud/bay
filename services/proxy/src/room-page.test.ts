@@ -2,13 +2,32 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pageRoom } from "./room-page";
 
-test("the room is one self-contained document", () => {
+test("the room asks nothing of a third party, and works without the one thing it does ask for", () => {
   const html = pageRoom("q6doa", { owner: true });
   // Served at a customer's own address by the edge. A request to any other host
   // would be a third party watching somebody's build, and a CSP-hostile page.
-  assert.equal(/src\s*=\s*["']https?:/.test(html), false);
+  //
+  // ONE exception, and it is the same exception the href rule below has always
+  // made: app.supersonic.cv, which is this platform and not a third party. It
+  // serves the film — the 3D cut of the same build — because that picture is
+  // built by the control plane and this service's deploy context (`gcloud run
+  // deploy --source services/proxy`) cannot see its source. The alternative was
+  // a copy of 1,500 lines of camera work that nobody would reconcile.
+  //
+  // What the "self-contained" rule was actually protecting is asserted below
+  // instead of being assumed: the room must be a whole page with nothing
+  // external. The film is additive — it is hidden until it arrives, the pixel
+  // room is what stands there in the meantime, and every reason it might not
+  // arrive (no WebGL, reduced motion, a small screen, a failed request) leaves
+  // the page exactly as it was.
+  for (const [, url] of html.matchAll(/src\s*=\s*["'](https?:[^"']+)/g)) {
+    assert.ok(url.startsWith("https://app.supersonic.cv/"), `the room asks ${url} for something`);
+  }
   assert.equal(/href\s*=\s*["']https?:\/\/(?!app\.supersonic\.cv)/.test(html), false);
   assert.equal(html.includes("<canvas"), true);
+  // The film's own container starts hidden, so a page whose script never lands
+  // shows the room rather than a hole where a picture would have been.
+  assert.match(html, /<div id="film" hidden>/);
 });
 
 test("the slug is escaped, not interpolated", () => {
@@ -56,4 +75,27 @@ test("the room draws every kind the feed can send", () => {
   for (const kind of ["unpack", "detect", "prepare", "build", "pull", "provision", "release", "boot", "repair", "work", "broke"]) {
     assert.ok(html.includes("'" + kind + "'"), `the renderer never mentions ${kind}`);
   }
+});
+
+
+test("a stage boundary drives the film and moves nothing in the room", () => {
+  // The two pictures are cut on different grains on purpose: the room walks on
+  // every line, the film cuts on every stage. A stage step that reached the
+  // room's queue would consume a movement slot and draw nothing, which is the
+  // one-line-one-movement promise broken in the quietest possible way.
+  const html = pageRoom("q6doa", { owner: true });
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? "";
+  assert.match(script, /if \(steps\[i\]\.kind === 'stage'\) \{ filmStage\(steps\[i\]\); continue; \}/);
+});
+
+test("the film is offered, never required", () => {
+  const html = pageRoom("q6doa", { owner: true });
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? "";
+  // Every one of these is a reason to stay with the room, and each has to be
+  // checked before a WebGL context is asked for — a page that throws while
+  // deciding whether to be pretty has taken the build away from someone.
+  assert.match(script, /prefers-reduced-motion/);
+  assert.match(script, /innerWidth < 560/);
+  assert.match(script, /getContext\('webgl2'\)/);
+  assert.match(script, /window\.SupersonicFilm/);
 });

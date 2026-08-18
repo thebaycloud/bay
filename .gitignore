@@ -37,3 +37,8 @@ services/fleet/agent/agent
 # Bench results are a staging file on the way to bench_runs, plus a live
 # status file the watcher reads. Neither is source.
 apps/web/bench/results/
+
+# The film, built from apps/web/components/film by `npm run film` (which
+# `prebuild` runs, so the image always has it). Generated, ~600 KB, and it moves
+# with every change to the picture — the source is the .js in components/film.
+apps/web/public/film/

@@ -18,7 +18,9 @@
     "bench:watch": "node --import tsx bench/watch.ts",
     "bench:cleanup": "node --import tsx bench/cleanup.ts",
     "drift": "node --import tsx scripts/drift.ts",
-    "deadcode": "knip"
+    "deadcode": "knip",
+    "film": "esbuild components/film/entry.ts --bundle --format=iife --minify --target=es2020 --outfile=public/film/ship-it.js",
+    "prebuild": "npm run film"
   },
   "dependencies": {
     "@paper-design/shaders-react": "^0.0.80",
@@ -45,6 +47,7 @@
     "knip": "^6.32.2",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "esbuild": "^0.25.0"
   }
 }

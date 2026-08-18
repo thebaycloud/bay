@@ -125,3 +125,36 @@ test("a database-backed deploy fills the room rather than the fallback", () => {
   ] as const;
   for (const [line, kind] of real) assert.equal(classify(line), kind, line);
 });
+
+
+test("a stage boundary comes through as a stage, not as a movement", () => {
+  // The film needs the START of a stage, at the moment it happens. Until the
+  // deploy began announcing these, the only record was deploy_stages — written
+  // when a stage ENDS, which on `fleet` is about ninety seconds after the thing
+  // it describes began.
+  assert.deepEqual(stepOf(11, { type: "stage", stage: "fleet", phase: "start" }), {
+    id: 11, kind: "stage", stage: "fleet", phase: "start", outcome: undefined,
+  });
+  assert.deepEqual(stepOf(12, { type: "stage", stage: "build", phase: "end", outcome: "failed" }), {
+    id: 12, kind: "stage", stage: "build", phase: "end", outcome: "failed",
+  });
+  // A malformed one is not a step. The feed is read from a jsonb column, and
+  // "some event that is nearly a stage" must not become a cut to nowhere.
+  assert.equal(stepOf(13, { type: "stage" }), null);
+});
+
+test("a guest keeps the stage and never the line", () => {
+  // The stage names are the platform's own vocabulary — fourteen fixed words,
+  // the same for every app — so a guest can be told which one is running. The
+  // line is the opposite: file paths, package names, stack frames out of
+  // somebody's repository.
+  const steps = [
+    { id: 1, kind: "build" as const, text: "next build — /Users/rakhat/secret-app/pages" },
+    { id: 2, kind: "stage" as const, stage: "build", phase: "start" as const, outcome: undefined },
+  ];
+  const guest = forGuest(steps);
+  assert.equal(guest[0].text, undefined);
+  assert.equal(guest[1].text, undefined);
+  assert.equal(guest[1].stage, "build");
+  assert.equal(guest[1].phase, "start");
+});
