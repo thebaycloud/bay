@@ -202,3 +202,30 @@ test("home reads in the order an owner needs it", () => {
   // named the avatars on the row rather than the question the row answers.
   assert.match(DRAWER_JS, /access:'Access'/);
 });
+
+test("Analytics offers every dimension umami answers for", async () => {
+  // The screen used to show the six figures carried in the reading, because
+  // those were the only ones anything fetched. Umami answers for seventeen
+  // ranked dimensions, a time series and who is on the site this second.
+  const { DIMENSION_LABELS } = await import("./analytics");
+  const keys = Object.keys(DIMENSION_LABELS);
+  assert.ok(keys.length >= 17, `only ${keys.length} dimensions defined`);
+  for (const k of keys) {
+    assert.ok(DRAWER_JS.includes("'" + k + "'"), `the panel never renders ${k}`);
+  }
+  // Every window the route accepts is offered, and the chart exists.
+  for (const r of ["1d", "7d", "30d", "1y"]) assert.ok(DRAWER_JS.includes("'" + r + "'"));
+  assert.match(DRAWER_JS, /function spark\(series\)/);
+  assert.match(DRAWER_CSS, /\.spark\{/);
+});
+
+test("the full read is not on the path that gets polled", () => {
+  // /_xray is assembled inline on a request somebody is waiting on and polled
+  // every three seconds. Twenty-odd admin queries there would be the failure
+  // analytics.ts's own cache comment warns about — the analytics falling over
+  // because somebody was looking at the analytics. So dwLoad must not touch it.
+  const load = DRAWER_JS.slice(DRAWER_JS.indexOf("function dwLoad"), DRAWER_JS.indexOf("function dwHeading"));
+  assert.equal(load.includes("_dashboard/analytics"), false, "dwLoad must not fetch the detail");
+  // It is fetched by the screen instead, and it is same-origin so it needs no CORS.
+  assert.match(DRAWER_JS, /fetch\('\/_dashboard\/analytics\?range='/);
+});

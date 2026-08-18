@@ -290,3 +290,172 @@ export async function audienceFor(websiteId: string, now: number = Date.now()): 
   cache.set(websiteId, { at: now, value });
   return value;
 }
+
+/* ==========================================================================
+   EVERYTHING UMAMI HAS, ON DEMAND
+   ==========================================================================
+
+   `audienceFor` above is the cheap read: six numbers and three lists, carried
+   in the reading so the home cell can say "1,284 today" without a second round
+   trip. It is deliberately small because it sits inline on /_xray, which the
+   panel polls every three seconds — and the cache below it exists because
+   thirty-two open panels would otherwise be six hundred admin queries a minute
+   against an instance sized for a 2KB tracker.
+
+   This is the other read: every dimension umami will answer for, its time
+   series, and who is on the site this second. It is NOT in the reading, and
+   that is the whole point — it happens once, when somebody opens the Analytics
+   screen, for the window they asked for. Twenty-odd queries on a path nobody
+   polls is fine; the same twenty on /_xray would be the failure the comment
+   above warns about.
+
+   WHAT UMAMI DOES NOT HAVE
+
+   Session replay. There is no recording and no playback in the product — that
+   is a different category of tool. `sessions` below is the nearest real thing:
+   who came, what they were on, and the order they hit things in.
+*/
+
+/** Every ranked dimension, and the names umami has called each one. */
+const DIMENSIONS: [string, string[]][] = [
+  ["pages", ["path", "url"]],
+  ["entry", ["entry", "entry_url"]],
+  ["exit", ["exit", "exit_url"]],
+  ["titles", ["title"]],
+  ["query", ["query"]],
+  ["from", ["referrer"]],
+  ["hosts", ["host"]],
+  ["browser", ["browser"]],
+  ["os", ["os"]],
+  ["on", ["device"]],
+  ["screen", ["screen"]],
+  ["language", ["language"]],
+  ["country", ["country"]],
+  ["region", ["region"]],
+  ["city", ["city"]],
+  ["event", ["event"]],
+  ["tag", ["tag"]],
+];
+
+/** What a dimension is called where a person reads it, and its empty label. */
+export const DIMENSION_LABELS: Record<string, [string, string]> = {
+  pages: ["Most opened", "/"],
+  entry: ["Where they came in", "/"],
+  exit: ["Where they left", "/"],
+  titles: ["By page title", "untitled"],
+  query: ["Search terms", "none"],
+  from: ["How they got here", "direct"],
+  hosts: ["Which address they used", "unknown"],
+  browser: ["Browser", "unknown"],
+  os: ["Operating system", "unknown"],
+  on: ["Device", "unknown"],
+  screen: ["Screen size", "unknown"],
+  language: ["Language", "unknown"],
+  country: ["Country", "unknown"],
+  region: ["Region", "unknown"],
+  city: ["City", "unknown"],
+  event: ["Events", "unnamed"],
+  tag: ["Tags", "untagged"],
+};
+
+export interface Detail {
+  startAt: number;
+  endAt: number;
+  unit: string;
+  visitors: number;
+  views: number;
+  visits: number;
+  bounce: number;
+  avgSeconds: number;
+  change: number | null;
+  /** On the site this second, from umami rather than from the edge. */
+  active: number;
+  /** The shape of the window: one point per unit. */
+  series: { t: string; views: number; sessions: number }[];
+  /** Every dimension umami answered for, keyed as in DIMENSIONS. */
+  dims: Record<string, [string, number][]>;
+}
+
+/** `/active` has been an array of one and an object, depending on the build. */
+function activeCount(a: unknown): number {
+  if (Array.isArray(a)) return Math.round(Number((a[0] as { x?: number; visitors?: number })?.x ?? (a[0] as { visitors?: number })?.visitors ?? 0));
+  if (a && typeof a === "object") return Math.round(Number((a as { visitors?: number }).visitors ?? 0));
+  return Math.round(Number(a) || 0);
+}
+
+type Series = { pageviews?: { x: string; y: number }[]; sessions?: { x: string; y: number }[] };
+
+/** Views and sessions per interval, zipped into one row per point. */
+function zipSeries(s: Series | null | undefined): Detail["series"] {
+  const views = Array.isArray(s?.pageviews) ? s!.pageviews! : [];
+  const sess = Array.isArray(s?.sessions) ? s!.sessions! : [];
+  const bySession = new Map(sess.map((p) => [p.x, Math.round(p.y) || 0]));
+  return views.map((p) => ({ t: p.x, views: Math.round(p.y) || 0, sessions: bySession.get(p.x) ?? 0 }));
+}
+
+const detailCache = new Map<string, { at: number; value: Detail | null }>();
+const DETAIL_CACHE_MS = 20_000;
+
+/** Test seam, beside resetAudience for the same reason. */
+export function resetDetail(): void {
+  detailCache.clear();
+}
+
+/**
+ * The whole picture for one app over one window.
+ *
+ * Every query goes out together, so the wall clock is the slowest one rather
+ * than the sum, and a dimension this umami has never heard of comes back empty
+ * instead of taking the read down with it — `metric` already tries each name and
+ * gives up quietly, because a missing column beside a true visitor count is a
+ * worse reading and not an unreadable one.
+ */
+export async function analyticsDetail(
+  websiteId: string,
+  startAt: number,
+  endAt: number,
+  unit: string,
+  now: number = Date.now(),
+): Promise<Detail | null> {
+  if (!umami().url || !websiteId) return null;
+  const key = `${websiteId}:${startAt}:${endAt}:${unit}`;
+  const hit = detailCache.get(key);
+  if (hit && now - hit.at < DETAIL_CACHE_MS) return hit.value;
+
+  const q = `startAt=${startAt}&endAt=${endAt}`;
+  let value: Detail | null = null;
+  try {
+    const [stats, series, active, ...ranked] = await Promise.all([
+      get<Stats>(`/api/websites/${websiteId}/stats?${q}`),
+      get<Series>(`/api/websites/${websiteId}/pageviews?${q}&unit=${encodeURIComponent(unit)}`).catch(() => null),
+      get<unknown>(`/api/websites/${websiteId}/active`).catch(() => null),
+      ...DIMENSIONS.map(([, names]) => metric(websiteId, q, names)),
+    ]);
+
+    const visitors = num(stats.visitors ?? stats.uniques);
+    const visits = num(stats.visits) || visitors;
+    const prev = before(stats.visitors ?? stats.uniques, stats.comparison, stats.visitors !== undefined ? "visitors" : "uniques");
+    const dims: Record<string, [string, number][]> = {};
+    DIMENSIONS.forEach(([key2], i) => {
+      dims[key2] = rank(ranked[i], DIMENSION_LABELS[key2]?.[1] ?? "unknown");
+    });
+
+    value = {
+      startAt, endAt, unit,
+      visitors,
+      views: num(stats.pageviews),
+      visits,
+      bounce: visits ? Math.round((num(stats.bounces) / visits) * 100) : 0,
+      avgSeconds: visits ? Math.round(num(stats.totaltime) / visits) : 0,
+      change: prev > 0 ? Math.round(((visitors - prev) / prev) * 100) : null,
+      active: activeCount(active),
+      series: zipSeries(series),
+      dims,
+    };
+  } catch (e) {
+    console.error(`analytics: could not read detail for ${websiteId} —`, e instanceof Error ? e.message : e);
+    value = null;
+  }
+  detailCache.set(key, { at: now, value });
+  return value;
+}

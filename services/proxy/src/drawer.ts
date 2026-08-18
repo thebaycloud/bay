@@ -354,6 +354,15 @@ button.li:hover .caret{color:var(--red)}
         z-index:2147483001;box-shadow:-24px 0 60px -30px rgba(0,0,0,.35)}
 .drawer.on{transform:none}
 .drawer.flat{position:static;width:100%;height:100%;transform:none;box-shadow:none;border-left:0}
+/* ------------------------- the window's shape ---------------------------- */
+/* The only chart here. Columns and not a line, because a line between two hours
+   claims a value for the minutes in between that nothing measured. */
+.spark{display:flex;align-items:flex-end;gap:2px;height:96px;margin-top:4px}
+.spark .col{flex:1;min-width:2px;height:100%;display:flex;align-items:flex-end;
+            border-radius:2px;background:var(--tile)}
+.spark .col .f{width:100%;background:var(--red);border-radius:2px;opacity:.85}
+.spark .col:hover .f{opacity:1}
+
 .dw-scrim{position:fixed;inset:0;background:rgba(26,26,25,.28);opacity:0;
           transition:opacity .24s var(--ease);z-index:2147483000}
 .dw-scrim.on{opacity:1}
@@ -382,6 +391,8 @@ function icon(name,size){
 /* Which finish each tone takes: steel gets panoramic (broad irregular banding
    gives a grey button something to look at), red gets the quieter brushed. */
 var PLATE={steel:C.app+'/metal/panoramic-steel.webp', red:C.app+'/metal/brushed-red.webp'};
+
+var DW_DIMS=[['pages','Most opened'],['entry','Where they came in'],['exit','Where they left'],['from','How they got here'],['country','Country'],['region','Region'],['city','City'],['browser','Browser'],['os','Operating system'],['on','Device'],['screen','Screen size'],['language','Language'],['titles','By page title'],['query','Search terms'],['hosts','Which address they used'],['event','Events'],['tag','Tags']];
 
 var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'Access', infra:'Infra'};
 
@@ -753,55 +764,71 @@ function screen(view,d){
 
   // ------------------------------------------------------------- analytics
   if(key==='analytics'){
-    if(!d.an){
-      var ph=pad(null,null);
-      var pst=el('div','stats');
-      pst.appendChild(stat('\u2014','visitors today'));
-      pst.appendChild(stat('\u2014','pages opened'));
-      pst.appendChild(stat('\u2014','average visit'));
-      pst.appendChild(stat('\u2014','bounced'));
-      ph.appendChild(pst);
-      w.appendChild(ph);
-      var hp0=pad('In it right now', d.here.length ? null : 'Nobody this second.');
-      if(d.here.length){
-        hp0.appendChild(listOf(d.here.map(function(x){
-          var signed=x[0].indexOf('@')>0;
-          return li({lead:signed?ini(x[0]):'\u00b7\u00b7', round:true,
-                     title:signed?x[0].split('@')[0]:x[0],
-                     meta:signed?x[0]:'no account', val:x[1]});
-        })));
-      }
-      w.appendChild(hp0);
-      w.appendChild(pad('Most opened', dwWhyNoNumbers(d)));
-      w.appendChild(pad('How they got here', dwWhyNoNumbers(d)));
+    // Which window. It is the first control because every number under it is a
+    // number ABOUT a window, and the old screen quietly meant "today" while
+    // saying "this week".
+    var rp0=pad('Analytics', null);
+    var seg=el('div','seg');
+    DW_RANGES.forEach(function(r){
+      var b=el('button',null,r[1]);
+      b.setAttribute('aria-pressed', dwRange===r[0] ? 'true':'false');
+      b.addEventListener('click',function(){
+        if(dwRange===r[0]) return;
+        dwRange=r[0]; dwDetail=null; dwDetailFor=null; dwRender();
+        dwStats(dwRange).then(function(){ dwRender(); });
+      });
+      seg.appendChild(b);
+    });
+    rp0.appendChild(seg);
+    w.appendChild(rp0);
+
+    var det=(dwDetailFor===dwRange) ? dwDetail : null;
+    if(!det){
+      // Asked for once, here, rather than on every panel open.
+      dwStats(dwRange).then(function(){ dwRender(); });
+      w.appendChild(pad(dwDetailFor===dwRange && !dwDetailOn ? 'Analytics is off'
+                        : dwDetailFor===dwRange ? 'That did not come back'
+                        : 'Reading…',
+                        dwDetailFor===dwRange && !dwDetailOn
+                          ? 'Nobody is being counted for this app.'
+                          : dwDetailFor===dwRange
+                          ? 'The analytics service could not be reached just now.'
+                          : 'Asking for every reading over this window.'));
       return w;
     }
+
     var top=pad(null,null);
     var st=el('div','stats');
-    st.appendChild(stat(d.an.visitors.toLocaleString(),'visitors today',d.an.dv,d.an.dvUp));
-    st.appendChild(stat(d.an.views.toLocaleString(),'pages opened'));
-    st.appendChild(stat(d.an.mins,'average visit'));
-    st.appendChild(stat(d.an.returning,'bounced'));
+    st.appendChild(stat(det.visitors.toLocaleString(),'visitors',
+                        det.change==null?'':(det.change>0?'+':'')+det.change+'%',
+                        (det.change||0)>=0));
+    st.appendChild(stat(det.views.toLocaleString(),'pages opened'));
+    st.appendChild(stat(dwMins(det.avgSeconds),'average visit'));
+    st.appendChild(stat(det.bounce+'%','bounced'));
     top.appendChild(st);
     w.appendChild(top);
 
-    var hp=pad('In it right now', d.here.length ? null : 'Nobody this second.');
-    if(d.here.length){
-      hp.appendChild(listOf(d.here.map(function(h){
-        var signed=h[0].indexOf('@')>0;
-        return li({lead:signed?ini(h[0]):'··', round:true,
-                   title:signed?h[0].split('@')[0]:h[0],
-                   meta:signed?h[0]:'no account', val:h[1]});
-      })));
+    if(det.active){
+      w.appendChild(pad('On it right now',
+        det.active+(det.active===1?' person, this second':' people, this second')));
     }
-    w.appendChild(hp);
 
-    var pp=pad('Most opened','Which pages people actually reach.');
-    pp.appendChild(bars(d.an.pages)); w.appendChild(pp);
-    var fp=pad('How they got here');
-    fp.appendChild(bars(d.an.from)); w.appendChild(fp);
-    var op=pad('What they are on', d.missing || null);
-    op.appendChild(bars(d.an.on)); w.appendChild(op);
+    if(det.series && det.series.length){
+      var sp0=pad('Over the window','Each column is one '+det.unit+'.');
+      sp0.appendChild(spark(det.series));
+      w.appendChild(sp0);
+    }
+
+    // Every dimension, in the order a person asks them, and only the ones this
+    // umami actually answered for. An empty list is not drawn: seventeen headings
+    // over seventeen blanks is a worse screen than the four numbers were.
+    DW_DIMS.forEach(function(dim){
+      var rows=det.dims[dim[0]];
+      if(!rows || !rows.length) return;
+      var q=pad(dim[1], null);
+      q.appendChild(bars(rows));
+      w.appendChild(q);
+    });
   }
 
   // ----------------------------------------------------------------- ships
@@ -1006,6 +1033,58 @@ function headingFor(view,d){
  */
 function dur(sec){ if(sec<60)return sec+'s'; if(sec<3600)return Math.round(sec/60)+'m'; if(sec<86400)return Math.round(sec/3600)+'h'; return Math.round(sec/86400)+'d'; }
 function ago(sec){ return dur(sec)+' ago'; }
+
+/* ---- the whole umami reading, fetched when the screen asks for it ---- */
+
+var DW_RANGES=[['1d','Today'],['7d','7 days'],['30d','30 days'],['1y','Year']];
+var dwRange='1d', dwDetail=null, dwDetailFor=null, dwDetailOn=true, dwDetailReq=null;
+
+/**
+ * Every dimension umami will answer for, over one window.
+ *
+ * Owner-only and same-origin, so no CORS and no bearer: /_dashboard/analytics is
+ * answered by the proxy in front of this very app. Deliberately NOT part of
+ * dwLoad — that fires on every panel open and this is twenty-odd admin queries
+ * against an instance sized for a 2KB tracker. It happens when somebody opens
+ * Analytics, once per window, and nothing polls it.
+ */
+function dwStats(range, force){
+  if(!force && dwDetailFor===range && dwDetail!==null) return Promise.resolve(dwDetail);
+  if(dwDetailReq && !force) return dwDetailReq;
+  dwDetailReq = dwSoon(
+    fetch('/_dashboard/analytics?range='+encodeURIComponent(range),
+          {credentials:'include',headers:{Accept:'application/json'}})
+      .then(function(r){ return r.json(); }),
+    9000, null
+  ).then(function(j){
+    dwDetailReq=null; dwDetailFor=range;
+    dwDetail = j ? j.detail : null;
+    dwDetailOn = j ? !!j.on : false;
+    return dwDetail;
+  });
+  return dwDetailReq;
+}
+
+/**
+ * The window's shape, as columns.
+ *
+ * The only chart in the panel, and it earns it: a series is the one reading here
+ * that means nothing as a list. Deliberately unlabelled on the x — the window
+ * says what the span is, and axis ticks at this size are chrome.
+ */
+function spark(series){
+  var w=el('div','spark');
+  var max=series.reduce(function(m,p){ return Math.max(m,p.views); },1);
+  series.forEach(function(p){
+    var col=el('div','col');
+    var fill=el('div','f');
+    fill.style.height=Math.max(2, Math.round((p.views/max)*100))+'%';
+    col.appendChild(fill);
+    col.title=p.t+' - '+p.views+(p.views===1?' view':' views')+', '+p.sessions+(p.sessions===1?' visit':' visits');
+    w.appendChild(col);
+  });
+  return w;
+}
 
 /** A mean session length, said the way a person would say it. */
 function dwMins(sec){

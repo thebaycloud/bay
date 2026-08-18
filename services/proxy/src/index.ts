@@ -14,6 +14,7 @@ import { pickRoute, pickPrefix } from "./routes";
 import { badgeRequired } from "./plan";
 import { forward } from "./forward";
 import { serveBay } from "./bay";
+import { analyticsDetail } from "./analytics";
 
 function slugFromHost(host: string | undefined): string | null {
   if (!host) return null;
@@ -90,6 +91,52 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   const url0 = req.url ?? "/";
   const wantsXray = url0 === "/_dashboard" || url0 === "/_xray";
   const xrayViewer = wantsXray ? await viewer() : null;
+
+  /**
+   * The whole analytics read, for the owner, on demand.
+   *
+   * Not in the reading, and that is the point. /_xray is polled every three
+   * seconds and assembled inline on a request somebody is waiting on, so the
+   * audience half carried there is deliberately six numbers and three lists.
+   * This is twenty-odd umami queries — every dimension it will answer for, the
+   * time series, and who is on the site this second — and it happens once, when
+   * the Analytics screen is opened, for the window that screen asked for.
+   *
+   * Owner-only, and answered here rather than forwarded, exactly as the panel
+   * page is: to anyone else this path is nothing and the app answers it however
+   * it likes. A visitor must not be able to learn from a 403 that it means
+   * something.
+   */
+  if (url0.split("?")[0] === "/_dashboard/analytics") {
+    const who = await viewer();
+    if (who && who.userId === app.owner_id) {
+      const url = new URL(url0, "http://x");
+      // Windows the panel offers, and nothing else: the range is a number that
+      // reaches umami, so it is chosen from a list here rather than parsed.
+      const RANGES: Record<string, { ms: number; unit: string }> = {
+        "1d": { ms: 24 * 60 * 60 * 1000, unit: "hour" },
+        "7d": { ms: 7 * 24 * 60 * 60 * 1000, unit: "day" },
+        "30d": { ms: 30 * 24 * 60 * 60 * 1000, unit: "day" },
+        "1y": { ms: 365 * 24 * 60 * 60 * 1000, unit: "month" },
+      };
+      const pick = RANGES[url.searchParams.get("range") ?? "1d"] ?? RANGES["1d"];
+      const endAt = Date.now();
+      const body = site?.websiteId
+        ? await analyticsDetail(site.websiteId, endAt - pick.ms, endAt, pick.unit)
+        : null;
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        // Same reason the injected page is private: this is one owner's reading
+        // of their own app and no shared cache has any business holding it.
+        "Cache-Control": "private, no-store",
+        Vary: "Cookie",
+      });
+      // `null` is a real answer — umami off, or unreachable — and the panel says
+      // different things about those. It is never flattened into zeroes.
+      res.end(JSON.stringify({ detail: body, on: Boolean(site?.websiteId) }));
+      return;
+    }
+  }
 
   // What this URL should answer with, argued from the deploy's own record rather
   // than from apps.status alone — which cannot tell a build in progress from one
