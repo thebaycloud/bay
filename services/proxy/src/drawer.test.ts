@@ -189,3 +189,16 @@ test("nothing offers to ship, because nothing can", () => {
   // And the screen shows what the deploy record actually holds instead.
   assert.match(DRAWER_JS, /Why it did not land/);
 });
+
+test("home reads in the order an owner needs it", () => {
+  // Address leads: the link to send someone is the thing most often wanted off
+  // this panel, and it was last, underneath everything it is the subject of. It
+  // takes the full row because a URL in a tint row wants the room. Everything
+  // after it pairs off, so Infra and Access share the last row.
+  const body = DRAWER_JS.slice(DRAWER_JS.indexOf("function homeScreen"), DRAWER_JS.indexOf("function rightNowCell"));
+  const order = [...body.matchAll(/cell\('([A-Za-z ]+)'/g)].map((m) => m[1]);
+  assert.deepEqual(order, ["Address", "Analytics", "Ships", "Data", "Keys", "Infra", "Access"]);
+  // The screen behind it was always /access; only the label said People, which
+  // named the avatars on the row rather than the question the row answers.
+  assert.match(DRAWER_JS, /access:'Access'/);
+});

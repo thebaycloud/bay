@@ -383,7 +383,7 @@ function icon(name,size){
    gives a grey button something to look at), red gets the quieter brushed. */
 var PLATE={steel:C.app+'/metal/panoramic-steel.webp', red:C.app+'/metal/brushed-red.webp'};
 
-var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'People', infra:'Infra'};
+var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'Access', infra:'Infra'};
 
 function dwTop(){ return dwStack.length ? dwStack[dwStack.length-1] : null; }
 function dwPush(v){ dwStack.push(v); dwDir='push'; dwRender(); }
@@ -608,6 +608,8 @@ function homeScreen(d){
                                   d.an.dvUp?'green':'red'));
     if(d.here.length) anPart.appendChild(avatars(d.initials));
   }
+  g.appendChild(cell('Address','Where it lives', tintRow(d.addr), null, true));
+
   g.appendChild(cell('Analytics',
     d.an ? (d.an.visitors+' today'+(d.an.dv?' '+d.an.dv:'')+' - '+d.here.length+' here now')
          : (d.here.length ? d.here.length+' here now' : 'Not counting yet'),
@@ -636,6 +638,9 @@ function homeScreen(d){
   var pPart=el('div','chips');
   if(d.pInitials.length) pPart.appendChild(avatars(d.pInitials));
   pPart.appendChild(btn('Invite','plus',{rest:'white',hover:'steel',size:'sm'}));
+  // Half width, not wide: Access pairs with Infra on one row. And it is Access,
+  // which is what the screen behind it has always been called and what the row
+  // is actually about — People named the avatars on it rather than the question.
   var infraPart=el('div','chips');
   infraPart.appendChild(statusChip(d.feed.length ? d.feed.length+' live' : 'quiet',
                                    d.alert ? 'red' : 'green'));
@@ -643,9 +648,8 @@ function homeScreen(d){
   g.appendChild(cell('Infra','What it is doing, and what runs on its own',
     infraPart, function(){ dwPush({v:'infra'}); }));
 
-  g.appendChild(cell('People','Who can open this', pPart, function(){ dwPush({v:'access'}); }, true));
+  g.appendChild(cell('Access','Who can open this', pPart, function(){ dwPush({v:'access'}); }));
 
-  g.appendChild(cell('Address','Where it lives', tintRow(d.addr), null, true));
 
   var wrap=el('div','home');
   wrap.appendChild(g);
