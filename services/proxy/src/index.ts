@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
-import { lookupApp, hasGrant, workspaceOfUser, workspaceDomainOf, registryStaleFor } from "./registry";
+import { lookupApp, lookupAppByHost, hasGrant, workspaceOfUser, workspaceDomainOf, registryStaleFor } from "./registry";
 import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "./pages";
 import { pageRoom } from "./room-page";
 import { serveRoomEvents } from "./room";
@@ -10,19 +10,12 @@ import { wantsHtml } from "./negotiate";
 import { viewerOnce, authUrls, hasCredential } from "./session";
 import { decideAccess } from "./access";
 import { decideEdge } from "./edge";
+import { doorFor, mustReturnToPlatform, platformUrl } from "./door";
 import { pickRoute, pickPrefix } from "./routes";
 import { badgeRequired } from "./plan";
 import { forward } from "./forward";
 import { serveBay } from "./bay";
 import { analyticsDetail } from "./analytics";
-
-function slugFromHost(host: string | undefined): string | null {
-  if (!host) return null;
-  const name = host.split(":")[0].toLowerCase();
-  if (!name.endsWith("." + config.rootDomain)) return null;
-  const slug = name.slice(0, -(config.rootDomain.length + 1));
-  return /^[a-z0-9-]+$/.test(slug) ? slug : null;
-}
 
 function html(res: ServerResponse, status: number, body: string) {
   res.writeHead(status, {
@@ -50,11 +43,27 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  const slug = slugFromHost(req.headers.host);
-  if (!slug) return html(res, 404, page404());
-
-  const app = await lookupApp(slug);
+  // Two ways a request can name an app, and only one of them is derivable. An
+  // address we issued carries its slug in the name; a domain its owner attached
+  // carries nothing and has to be looked up. See door.ts — nothing below this
+  // point cares which of the two it was, except the return immediately after it.
+  const door = doorFor(req.headers.host, config.rootDomain);
+  if (door.kind === "nowhere") return html(res, 404, page404());
+  const app = door.kind === "issued" ? await lookupApp(door.slug) : await lookupAppByHost(door.hostname);
   if (!app) return html(res, 404, page404());
+  const slug = app.slug;
+
+  // A non-public app cannot be opened on a domain the session cookie does not
+  // reach, so it is sent back to the address where it can be. door.ts carries
+  // the argument; this is the two lines that act on it.
+  if (mustReturnToPlatform(door, app.visibility)) {
+    res.writeHead(302, {
+      Location: platformUrl(slug, config.rootDomain, req.url),
+      "Cache-Control": "private, no-store",
+    });
+    res.end();
+    return;
+  }
 
   // The app's own analytics, on the app's own address. Answered here, before
   // anything else looks at this request, for two reasons that are both about

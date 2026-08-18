@@ -133,49 +133,71 @@ export function registryStaleFor(now: number = Date.now()): number | null {
 }
 
 export interface RegistryDeps {
-  /** One slug's row, or null when there is no such app. Throws when it cannot ask. */
-  fetchApp: (slug: string) => Promise<AppRow | null>;
+  /**
+   * The row for one lookup key, or null when nothing answers to it. Throws when
+   * it cannot ask.
+   *
+   * The key is a slug, or a hostname prefixed with `host:` — see `HOST_KEY`. One
+   * cache, two kinds of key, because everything this module exists for (the
+   * freshness window, the last-known state that outlives a database outage, the
+   * bound on how much of it a stranger can allocate) has to be true of a custom
+   * domain exactly as it is of a slug. A second copy of this machinery for
+   * hostnames would be a second thing to get right, and the one that got it
+   * wrong would be the one nobody was watching.
+   */
+  fetchApp: (key: string) => Promise<AppRow | null>;
   now: () => number;
   log: (line: string) => void;
 }
 
-function remember(slug: string, row: AppRow | null, at: number): void {
+/**
+ * How a hostname is spelled as a lookup key.
+ *
+ * Prefixed rather than stored bare so that a slug and a hostname can never
+ * collide in the cache. They are different name spaces — anyone can create the
+ * hostname `lilna` in their own zone — and a collision would serve one app at
+ * another app's address for the length of a cache window.
+ */
+export const HOST_KEY = "host:";
+export const hostKey = (hostname: string) => HOST_KEY + hostname;
+
+function remember(key: string, row: AppRow | null, at: number): void {
   // A Map iterates in insertion order, so the first key is the oldest.
   // Refreshing a key already present replaces it, so nothing needs evicting.
-  if (cache.size >= CACHE_MAX && !cache.has(slug)) {
+  if (cache.size >= CACHE_MAX && !cache.has(key)) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
   }
-  cache.set(slug, { row, at });
+  cache.set(key, { row, at });
   // Bounded for the same reason the cache is, and it is the same reason twice:
   // cache keys come from the Host header, so a stranger walking subdomains owns
   // the key space. Unbounded, the map that exists to survive an outage would be
   // the thing that causes one.
-  if (known.size >= CACHE_MAX && !known.has(slug)) {
+  if (known.size >= CACHE_MAX && !known.has(key)) {
     const oldest = known.keys().next().value;
     if (oldest !== undefined) known.delete(oldest);
   }
-  known.set(slug, row);
+  known.set(key, row);
 }
 
-export async function lookupWith(deps: RegistryDeps, slug: string): Promise<AppRow | null> {
+export async function lookupWith(deps: RegistryDeps, key: string): Promise<AppRow | null> {
   const now = deps.now();
-  const hit = cache.get(slug);
+  const hit = cache.get(key);
   if (hit && now - hit.at < ttlFor(hit.row)) return hit.row;
 
   // While the database is down, ask it only occasionally and answer from memory
-  // in between. `known.has` rather than a truthiness check: a slug we resolved to
+  // in between. `known.has` rather than a truthiness check: a name we resolved to
   // NOTHING is a fact we learned, and an app that did not exist a minute ago
   // still does not.
   if (staleSince !== null && now - lastAttempt < RETRY_WHILE_STALE_MS) {
-    if (known.has(slug)) return known.get(slug) ?? null;
+    if (known.has(key)) return known.get(key) ?? null;
     throw lastError ?? new Error("the app registry is unavailable");
   }
 
   lastAttempt = now;
   let row: AppRow | null;
   try {
-    row = await deps.fetchApp(slug);
+    row = await deps.fetchApp(key);
   } catch (e) {
     lastError = e instanceof Error ? e : new Error(String(e));
     if (staleSince === null) {
@@ -184,10 +206,10 @@ export async function lookupWith(deps: RegistryDeps, slug: string): Promise<AppR
       // flood is an outage nobody can read their way out of.
       deps.log(`registry: the database is not answering — serving from the last known state (${lastError.message})`);
     }
-    // Only for a slug we have actually resolved. Inventing an answer for one we
+    // Only for a name we have actually resolved. Inventing an answer for one we
     // have never seen would let a stranger walking subdomains decide what this
     // edge serves, and "we do not know" is the honest reply.
-    if (known.has(slug)) return known.get(slug) ?? null;
+    if (known.has(key)) return known.get(key) ?? null;
     throw lastError;
   }
 
@@ -195,15 +217,24 @@ export async function lookupWith(deps: RegistryDeps, slug: string): Promise<AppR
     deps.log(`registry: the database is answering again after ${now - staleSince}ms`);
     staleSince = null;
   }
-  remember(slug, row, now);
+  remember(key, row, now);
   return row;
 }
 
-async function fetchAppRow(slug: string): Promise<AppRow | null> {
-  // The deploys row rides along because apps.status alone cannot distinguish a
-  // deploy that is working from one whose process died: both read 'deploying'
-  // forever. `deploy_updated_at` is when that deploy last reported progress, and
-  // `deploy_error` is the reason a failed one gives.
+/**
+ * The one SELECT, with the one thing that varies left to the caller.
+ *
+ * The deploys row rides along because apps.status alone cannot distinguish a
+ * deploy that is working from one whose process died: both read 'deploying'
+ * forever. `deploy_updated_at` is when that deploy last reported progress, and
+ * `deploy_error` is the reason a failed one gives.
+ *
+ * `from` and `where` are literals written in this file and never anything that
+ * arrived in a request — the value is always a parameter. A hostname is the most
+ * attacker-controlled string the edge handles, and the moment it is concatenated
+ * into SQL every app on the platform is one Host header away from being read.
+ */
+async function fetchAppWhere(from: string, where: string, value: string): Promise<AppRow | null> {
   const r = await db().query(
     `SELECT a.*, u.email AS owner_email,
             u.plan   AS owner_plan,
@@ -211,11 +242,11 @@ async function fetchAppRow(slug: string): Promise<AppRow | null> {
             d.status AS deploy_status,
             d.error  AS deploy_error,
             d.updated_at AS deploy_updated_at
-     FROM apps a
+     FROM ${from}
      JOIN users u ON u.id = a.owner_id
      LEFT JOIN deploys d ON d.slug = a.slug
-     WHERE a.slug = $1`,
-    [slug]
+     WHERE ${where}`,
+    [value]
   );
   const raw = r.rows[0] as (AppRow & {
     deploy_status?: string | null;
@@ -253,15 +284,52 @@ async function fetchAppRow(slug: string): Promise<AppRow | null> {
   return row;
 }
 
+const fetchAppRow = (slug: string) => fetchAppWhere("apps a", "a.slug = $1", slug);
+
+/**
+ * The app a custom domain names, if that domain is far enough along to serve.
+ *
+ * `pending_dns` is excluded, and that is the whole security argument for this
+ * query. A row in that state is a claim nobody has proved: anyone can type
+ * `google.com` into their own app's settings, and until DNS actually points here
+ * the platform has learned nothing about who owns it. Serving it would let that
+ * claim decide what a request carrying `Host: google.com` — which anyone can
+ * send to our load balancer — is answered with. Every other state was reached by
+ * the domain resolving to us, which is the only proof of control DNS can offer.
+ *
+ * `failed` still serves. The certificate was refused, so HTTPS does not work,
+ * but the name resolves here and plain HTTP arrives; answering it with the app
+ * its owner attached is more honest than a 404 that says the app is gone.
+ */
+const fetchAppByHost = (hostname: string) =>
+  fetchAppWhere(
+    "app_domains dm JOIN apps a ON a.slug = dm.slug",
+    "dm.hostname = $1 AND dm.status <> 'pending_dns'",
+    hostname
+  );
+
 /** The real dependencies, for callers that are not tests. */
 const liveDeps: RegistryDeps = {
-  fetchApp: fetchAppRow,
+  fetchApp: (key: string) =>
+    key.startsWith(HOST_KEY) ? fetchAppByHost(key.slice(HOST_KEY.length)) : fetchAppRow(key),
   now: Date.now,
   log: (l: string) => console.error(l),
 };
 
 export function lookupApp(slug: string): Promise<AppRow | null> {
   return lookupWith(liveDeps, slug);
+}
+
+/**
+ * The app reachable at a hostname we did not issue, or null if there is none.
+ *
+ * Same cache, same freshness window, same last-known state when the database is
+ * unreachable — a custom domain is the only address some apps are ever visited
+ * at, and an outage that took those apps down while leaving `*.supersonic.cv`
+ * serving would be an outage only their owners could see.
+ */
+export function lookupAppByHost(hostname: string): Promise<AppRow | null> {
+  return lookupWith(liveDeps, hostKey(hostname));
 }
 
 /** Does this email have an explicit grant on this app? */

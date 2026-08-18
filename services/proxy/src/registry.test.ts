@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { lookupWith, resetRegistry, registryStaleFor, type AppRow, type RegistryDeps } from "./registry";
+import { lookupWith, resetRegistry, registryStaleFor, hostKey, type AppRow, type RegistryDeps } from "./registry";
 
 function row(slug: string, over: Partial<AppRow> = {}): AppRow {
   return {
@@ -140,4 +140,36 @@ test("the last-known map is bounded, so walking subdomains costs a stranger memo
   // The oldest entries were evicted; the newest survive.
   assert.equal((await lookupWith(broken, "s1199"))?.slug, "s1199");
   await assert.rejects(() => lookupWith(broken, "s0"), /ECONNREFUSED/);
+});
+
+// A slug and a hostname are different name spaces — anyone can create the host
+// `lilna` in a zone they own — so they must not share a cache entry. If they
+// did, one app would answer at another app's address for a whole cache window,
+// decided by whichever request arrived first.
+test("a hostname and a slug that read the same are two different lookups", async () => {
+  const asked: string[] = [];
+  const d = deps({
+    fetchApp: async (key: string) => { asked.push(key); return row(key.replace(/^host:/, "") + "-app"); },
+  });
+  await lookupWith(d, "lilna");
+  await lookupWith(d, hostKey("lilna"));
+  assert.deepEqual(asked, ["lilna", "host:lilna"], "the second lookup must not be answered from the first");
+});
+
+test("a hostname is cached and survives the database exactly as a slug does", async () => {
+  let t = 1_000_000;
+  let broken = false;
+  const d = deps({
+    fetchApp: async (key: string) => {
+      d.calls++;
+      if (broken) throw new Error("ECONNREFUSED");
+      return row("acme");
+    },
+    now: () => t,
+  });
+  assert.equal((await lookupWith(d, hostKey("acme.com")))?.slug, "acme");
+  broken = true;
+  t += 60_000;                       // past every freshness window
+  assert.equal((await lookupWith(d, hostKey("acme.com")))?.slug, "acme", "an attached domain must not go dark with the database");
+  assert.notEqual(registryStaleFor(t), null);
 });

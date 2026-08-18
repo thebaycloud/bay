@@ -73,6 +73,13 @@ _Avoid_: launch, go live, cut over, promote, handover.
 A way into an app from outside.
 _Avoid_: route, endpoint, path, ingress.
 
+**Attached domain**:
+A domain a person owns, pointed at their app. An additional **Door**, never a
+replacement one: the app keeps answering at `<slug>.supersonic.cv`, which is the
+address every share link, log line and rebuild is still built from. Product
+language says *your own domain*.
+_Avoid_: custom domain (in front of a person), vanity URL, CNAME, domain mapping.
+
 **Shadow**:
 A copy of an app that is given the same real traffic and answers nobody. Exists
 so a change can be watched before it is real.
@@ -143,6 +150,7 @@ it in the meantime.
 - An **App** has a **Timeline** of **Builds**
 - An **App** has one **Room**, until it **opens** for the first time
 - An **App** may have a **Shadow**
+- An **App** may have any number of **Attached domains**; each belongs to one app
 
 ## Resolved ambiguities
 

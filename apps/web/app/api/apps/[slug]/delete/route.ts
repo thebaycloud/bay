@@ -12,6 +12,7 @@ import { unplaceApp } from "@/lib/fleet";
 import { supersedeRunsFor } from "@/lib/deploy-runs";
 import { deleteWebsite } from "@/lib/umami";
 import { withCors, optionsHandler } from "@/lib/cors";
+import { detachAllDomains } from "@/lib/domains";
 
 async function postHandler(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -61,6 +62,21 @@ async function postHandler(_req: Request, { params }: { params: { slug: string }
     // from here. Best-effort like everything else below: a deploy that cannot be
     // cancelled must not turn "delete my app" into a 500.
     await supersedeRunsFor(slug).catch(() => {});
+
+    // Take every attached domain off the load balancer BEFORE the app row goes.
+    //
+    // `app_domains` cascades on that row, so deleting the app first would take
+    // the only record of which certificates and map entries belong to this app
+    // with it — and leave those resources on the load balancer, holding valid
+    // TLS for a hostname that now resolves to a 404. The person who deleted the
+    // app would see their own domain answering for nothing, with no way left in
+    // the product to detach it.
+    //
+    // Best-effort, like everything else here: a Certificate Manager that will
+    // not answer must not turn "delete my app" into a 500 for the eight other
+    // things this call already did.
+    await detachAllDomains(slug).catch(() => {});
+
     await deleteApp(slug);
     // Remove the row so the app is fully gone (grants + requests cascade). Static
     // apps are tracked only here, so without this they'd linger forever.

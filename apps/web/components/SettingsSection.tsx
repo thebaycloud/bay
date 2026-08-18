@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2, KeyRound, Globe, AlertTriangle, Loader2 } from "lucide-react";
+import { DomainsPanel } from "./DomainsPanel";
 
 export function SettingsSection({
   slug, name, liveHost, envKeys, onToast,
@@ -92,14 +93,7 @@ export function SettingsSection({
             <div className="dom-line"><span className="dom-val mono">{liveHost}</span><span className="dom-ok">✓ live</span></div>
           </div>
         </div>
-        <div className="dom-custom">
-          <span className="dom-lbl">Your own domain</span>
-          <div className="dom-add">
-            <input className="in mono" placeholder="yourapp.com" disabled />
-            <button className="btn" disabled>Connect</button>
-          </div>
-          <span className="dom-note">Custom domains are coming soon.</span>
-        </div>
+        <DomainsPanel slug={slug} onToast={onToast} />
       </div>
 
       {/* Danger zone */}
