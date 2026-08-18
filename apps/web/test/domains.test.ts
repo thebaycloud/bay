@@ -152,6 +152,7 @@ function attachDeps(over: Record<string, unknown> = {}) {
     calls,
     deps: {
       resolve4: async () => { calls.push("dns"); return ["8.233.7.157"]; },
+      servesTls: async () => { calls.push("tls"); return true; },
       ensureCertificate: async () => { calls.push("cert"); return { ok: true as const, value: "cert-id" }; },
       ensureMapEntry: async () => { calls.push("entry"); return { ok: true as const, value: "entry-id" }; },
       certificateState: async () => { calls.push("state"); return { ok: true as const, value: { state: "active" as const } }; },
@@ -201,7 +202,7 @@ test("the certificate is created, then put on the load balancer, then waited on"
   const out = await reconcileDomain(DOMAIN, deps as never);
   // The order is forced: authorization is Google asking our load balancer for
   // this hostname, and it can only answer for one that is in its map.
-  assert.deepEqual(calls, ["dns", "cert", "entry", "state"]);
+  assert.deepEqual(calls, ["dns", "cert", "entry", "state", "tls"]);
   assert.deepEqual(out, { status: "live", detail: null, certId: "cert-id", entryId: "entry-id" });
 });
 
@@ -275,4 +276,78 @@ test("the race the read cannot close is decided by the primary key", async () =>
     throw Object.assign(new Error("duplicate key"), { code: "23505" }); // ...until the INSERT
   });
   assert.deepEqual(await attachDomain("lilna", "shop.acme.com"), { ok: false, taken: true });
+});
+
+/* ------------------------------------------------- creating, in the right order */
+
+// The failure the first real domain hit. `POST /certificates` is a long-running
+// operation: it is accepted, and the resource appears afterwards. The map entry
+// created next names that certificate, so going straight there fails with
+// `certificate "..." doesn't exist` — and the whole attach stalls a cycle. It
+// did not show up in the first live test because the operation happened to
+// finish inside the same few seconds. A race that usually loses is still a race.
+test("the certificate is not reported ready until it can actually be read", async () => {
+  const { ensureCertificate, setCertTransport, setCertSleep, certIdFor } = await cert$;
+  setCertSleep(async () => {});
+  const id = certIdFor("acme.com");
+  const seen: string[] = [];
+  let exists = false;
+  setCertTransport(async (path, init) => {
+    seen.push(`${init.method ?? "GET"} ${path.split("?")[0]}`);
+    if (init.method === "POST") { return { status: 200, body: { name: "projects/p/locations/global/operations/op-1" } }; }
+    if (path.startsWith("/operations/")) { exists = true; return { status: 200, body: { done: true } }; }
+    return exists ? { status: 200, body: { managed: { state: "PROVISIONING" } } } : { status: 404, body: null };
+  });
+  try {
+    const out = await ensureCertificate("acme.com");
+    assert.equal(out.ok, true);
+    // The operation is waited on BETWEEN the create and the read, which is the
+    // whole of the fix.
+    assert.deepEqual(seen, [`GET /certificates/${id}`, "POST /certificates", "GET /operations/op-1", `GET /certificates/${id}`]);
+  } finally { setCertTransport(null); }
+});
+
+test("a certificate that never appears is retryable, not a failure", async () => {
+  const { ensureCertificate, setCertTransport, setCertSleep } = await cert$;
+  setCertSleep(async () => {});
+  setCertTransport(async (path, init) => {
+    if (init.method === "POST") return { status: 200, body: {} };
+    return { status: 404, body: null };   // never shows up
+  });
+  try {
+    const out = await ensureCertificate("acme.com");
+    assert.equal(out.ok, false);
+    // The reconcile turns this into `securing`, so the next look tries again —
+    // rather than `failed`, which is reserved for Google refusing.
+    assert.match(out.ok === false ? out.why : "", /keeps trying on its own/);
+  } finally { setCertTransport(null); }
+});
+
+/* --------------------------------------------------- live means a browser agrees */
+
+// What the first real domain taught: ACTIVE is Google saying the certificate
+// exists, not the load balancer saying it will offer it. In between, a browser
+// gets a dropped handshake, which to a person is indistinguishable from broken.
+test("a certificate Google calls ACTIVE is not live until the edge serves it", async () => {
+  const { reconcileDomain } = await attach$;
+  const { deps } = attachDeps({ servesTls: async () => false });
+  const out = await reconcileDomain(DOMAIN, deps as never);
+  assert.equal(out.status, "securing");
+  assert.match(out.detail ?? "", /still picking it up/);
+});
+
+test("a certificate covers a name, or it does not — never nearly", async () => {
+  const { certCovers } = await attach$;
+  assert.equal(certCovers("DNS:arsen.wtf", "arsen.wtf"), true);
+  // The substring match this function exists to not be.
+  assert.equal(certCovers("DNS:notarsen.wtf", "arsen.wtf"), false);
+  assert.equal(certCovers("DNS:arsen.wtf.evil.com", "arsen.wtf"), false);
+  // A wildcard covers one label under its own parent, and nothing else.
+  assert.equal(certCovers("DNS:*.acme.com", "shop.acme.com"), true);
+  assert.equal(certCovers("DNS:*.acme.com", "a.b.acme.com"), false);
+  assert.equal(certCovers("DNS:*.acme.com", "acme.com"), false);
+  assert.equal(certCovers("DNS:*.supersonic.cv", "arsen.wtf"), false);
+  assert.equal(certCovers(undefined, "arsen.wtf"), false);
+  // Several names, one of which matches, and case is not significant in DNS.
+  assert.equal(certCovers("DNS:www.acme.com, DNS:Acme.com", "acme.com"), true);
 });

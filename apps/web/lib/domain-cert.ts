@@ -69,10 +69,29 @@ export function certIdFor(hostname: string): string {
   return `d-${readable}-${hash}`;
 }
 
+export interface CertResponse { status: number; body: any }
+export type CertTransport = (path: string, init: { method?: string; body?: unknown }) => Promise<CertResponse | null>;
+
+/**
+ * Test seam, in the shape gcp-rest's `setFallbackTokenSource` already uses.
+ *
+ * The thing worth testing in this file is ORDER — a certificate that does not
+ * exist yet cannot be put on the load balancer — and order is invisible against
+ * a real API that usually happens to be fast enough. See domains.test.ts.
+ */
+let transport: CertTransport | null = null;
+export function setCertTransport(fn: CertTransport | null): void { transport = fn; }
+/** How long a create is waited on before the caller is told to come back. */
+export const CREATE_WAIT_MS = 8_000;
+let sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** Test seam for the same reason: a test must not spend eight real seconds. */
+export function setCertSleep(fn: (ms: number) => Promise<void>): void { sleep = fn; }
+
 async function api(
   path: string,
   init: { method?: string; body?: unknown } = {}
-): Promise<{ status: number; body: any } | null> {
+): Promise<CertResponse | null> {
+  if (transport) return transport(path, init);
   try {
     const token = await accessToken();
     if (!token) return null;
@@ -117,8 +136,24 @@ export async function ensureCertificate(hostname: string): Promise<CertOutcome<s
     // request for load-balancer authorization. See this file's header.
     body: { managed: { domains: [hostname] }, description: `supersonic custom domain ${hostname}` },
   });
-  if (created && (created.status === 200 || created.status === 409)) return ok(id);
-  return no(why(created, "creating the certificate"));
+  if (!created || (created.status !== 200 && created.status !== 409)) {
+    return no(why(created, "creating the certificate"));
+  }
+
+  // Creating a certificate is a long-running operation: the POST is accepted and
+  // the resource appears afterwards. The map entry that comes next REFERENCES
+  // this certificate by name, so calling it too early fails with
+  // `certificate "..." doesn't exist` — which is exactly what happened on the
+  // first real domain anybody attached. It did not happen when this was written
+  // because the operation finished inside the same few seconds; a race that
+  // usually loses is still a race.
+  if (typeof created.body?.name === "string") await waitOperation(created.body.name, CREATE_WAIT_MS);
+  const readable = await api(`/certificates/${id}`);
+  if (readable && readable.status === 200) return ok(id);
+
+  // Not an error: the certificate is on its way and the next reconcile will find
+  // it. Said in words a person can wait through rather than act on.
+  return no("the certificate is still being created — this keeps trying on its own");
 }
 
 /**
@@ -236,6 +271,6 @@ async function waitOperation(name: string, budgetMs = 10_000): Promise<void> {
     const r = await api(`/operations/${id}`);
     if (!r || r.status !== 200) return;
     if (r.body?.done) return;
-    await new Promise((res) => setTimeout(res, 500));
+    await sleep(500);
   }
 }

@@ -16,6 +16,7 @@
  * request would have been served; it is not saying anybody just tried.
  */
 import { promises as dns } from "node:dns";
+import { connect } from "node:tls";
 import type { AppDomain, DomainStatus } from "./domains";
 import { recordDomain } from "./domains";
 import {
@@ -40,6 +41,8 @@ export const RECHECK_MS = 10_000;
 export interface AttachDeps {
   /** The A records a hostname resolves to. Throws the way `dns.resolve4` throws. */
   resolve4: (hostname: string) => Promise<string[]>;
+  /** Does our load balancer actually present a certificate for this name yet? */
+  servesTls: (hostname: string) => Promise<boolean>;
   ensureCertificate: (hostname: string) => Promise<CertOutcome<string>>;
   ensureMapEntry: (hostname: string, certId: string) => Promise<CertOutcome<string>>;
   certificateState: (certId: string) => Promise<CertOutcome<CertState>>;
@@ -52,6 +55,7 @@ export interface AttachDeps {
 
 export const liveAttachDeps: AttachDeps = {
   resolve4: (hostname) => dns.resolve4(hostname),
+  servesTls: (hostname) => edgeServesTls(hostname, EDGE_IP),
   ensureCertificate,
   ensureMapEntry,
   certificateState,
@@ -113,7 +117,21 @@ export async function reconcileDomain(domain: AppDomain, deps: AttachDeps): Prom
   const ids = { certId: cert.value, entryId: entry.value };
   switch (state.value.state) {
     case "active":
-      return { status: "live", detail: null, ...ids };
+      // ACTIVE is Google saying the certificate exists, not the load balancer
+      // saying it will offer it. Between the two there are minutes of
+      // propagation, and during them a browser gets a dropped handshake — which
+      // is indistinguishable, to the person, from nothing working. Seen on the
+      // first real domain: certificate ACTIVE, map entry ACTIVE, `openssl
+      // s_client` still answering "no peer certificate available".
+      //
+      // So `live` is asked of the edge itself, in the same way a visitor asks
+      // it. This is the only version of the claim a browser will agree with.
+      if (await deps.servesTls(domain.hostname)) return { status: "live", detail: null, ...ids };
+      return {
+        status: "securing",
+        detail: "the certificate is issued — the load balancer is still picking it up",
+        ...ids,
+      };
     case "failed":
       return { status: "failed", detail: state.value.detail, ...ids };
     default:
@@ -184,4 +202,52 @@ export async function reconcileAll(
       };
     })
   );
+}
+
+/**
+ * Whether a certificate presented for a hostname actually covers it.
+ *
+ * Pure, because it is the half of the probe that can be wrong in a way no test
+ * environment would show: `subjectaltname` is a flat string, and a substring
+ * match on it would accept `notarsen.wtf` for `arsen.wtf`.
+ */
+export function certCovers(subjectAltName: string | undefined, hostname: string): boolean {
+  if (!subjectAltName) return false;
+  const names = subjectAltName.split(",").map((n) => n.trim()).filter((n) => n.startsWith("DNS:")).map((n) => n.slice(4).toLowerCase());
+  const host = hostname.toLowerCase();
+  return names.some((name) => {
+    if (name === host) return true;
+    // A wildcard covers exactly one label, and only its own parent domain.
+    if (!name.startsWith("*.")) return false;
+    const parent = name.slice(2);
+    if (!host.endsWith("." + parent)) return false;
+    return !host.slice(0, host.length - parent.length - 1).includes(".");
+  });
+}
+
+/**
+ * Ask our own edge, over TLS, whether it answers for this name yet.
+ *
+ * Addressed by IP with the hostname carried in SNI, so this asks OUR load
+ * balancer rather than wherever the name happens to resolve — the two are the
+ * same once DNS is right, and only the first is the question being asked.
+ *
+ * `rejectUnauthorized: false` and that is not a shortcut: chain validation is
+ * the browser's job and the certificate is Google's, valid either way. What is
+ * being asked here is narrower — is there a certificate for this name at this
+ * edge at all — and a failed handshake answers it just as well as a good one.
+ */
+export function edgeServesTls(hostname: string, ip: string, timeoutMs = 5_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (answer: boolean) => { if (!settled) { settled = true; resolve(answer); } };
+    const socket = connect({ host: ip, port: 443, servername: hostname, rejectUnauthorized: false }, () => {
+      const cert = socket.getPeerCertificate();
+      const covers = certCovers(cert?.subjectaltname, hostname);
+      socket.end();
+      done(covers);
+    });
+    socket.setTimeout(timeoutMs, () => { socket.destroy(); done(false); });
+    socket.on("error", () => { socket.destroy(); done(false); });
+  });
 }

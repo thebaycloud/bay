@@ -259,3 +259,24 @@ export async function detachAllDomains(slug: string): Promise<string[]> {
   }
   return stuck;
 }
+
+/**
+ * Every domain that has not settled, oldest look first.
+ *
+ * `live` is excluded because a live domain is done — see `dueForCheck`. The
+ * bound is not politeness: this list becomes one DNS query and up to two Google
+ * calls per row, on a minute-ly schedule, and an unbounded sweep would turn a
+ * hundred abandoned attachments into a permanent load. Rows past the limit are
+ * picked up by the next pass, because `checked_at NULLS FIRST` puts the
+ * longest-unlooked-at ones in front.
+ */
+export async function unsettledDomains(limit = 50): Promise<AppDomain[]> {
+  const r = await getPool(DB).query<Row>(
+    `SELECT * FROM app_domains
+      WHERE status <> 'live'
+      ORDER BY checked_at ASC NULLS FIRST
+      LIMIT $1`,
+    [limit]
+  );
+  return r.rows.map(toDomain);
+}
