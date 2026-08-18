@@ -1,3 +1,16 @@
+// GENERATED FILE — DO NOT EDIT BY HAND.
+//
+// Built by ../panel/compose.py from the sources beside it: panel.css for the
+// stylesheet, and the .js slices for the component code (icons, helpers, atoms,
+// cells, feed, screens) plus layer.js for the data layer this product added.
+// Most of the component code is the recovered 12 Aug prototype's own source,
+// sliced rather than retyped, so the design cannot drift from what was approved.
+//
+//   python3 services/proxy/panel/compose.py
+//
+// Editing drawer.ts directly works until the next person runs that, at which
+// point the edit is silently gone. Edit the source and re-run.
+
 /**
  * The panel: everything an owner can do to their app, inside the app.
  *

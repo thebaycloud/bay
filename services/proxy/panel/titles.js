@@ -1,0 +1,1 @@
+var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'People'};
