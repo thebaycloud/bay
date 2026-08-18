@@ -1055,7 +1055,9 @@ function dwStats(range, force){
     fetch('/_dashboard/analytics?range='+encodeURIComponent(range),
           {credentials:'include',headers:{Accept:'application/json'}})
       .then(function(r){ return r.json(); }),
-    9000, null
+    // Longer than the server's own 12s budget for this read. Giving up first
+    // would show 'that did not come back' about an answer already on its way.
+    20000, null
   ).then(function(j){
     dwDetailReq=null; dwDetailFor=range;
     dwDetail = j ? j.detail : null;

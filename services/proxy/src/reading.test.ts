@@ -84,3 +84,26 @@ test("an app that has never come up answers with a reading, not with the room pa
   });
   assert.equal(r.open, false);
 });
+
+/**
+ * The gaps in a time series are the reading.
+ *
+ * Umami returns only the buckets that had traffic. Drawn straight, five busy
+ * hours out of twenty-four become five columns side by side — a chart whose x
+ * axis is not time, under a caption promising each column is one hour. An app
+ * nobody visited between three and eleven should look like it.
+ */
+test("quiet hours are put back into the series", async () => {
+  process.env.AUTH_SECRET ??= "test-only-config-secret-do-not-log";
+  const { __test } = await import("./analytics");
+  const zip = __test.zipSeries;
+  const at = (h: number) => `2026-08-18 ${String(h).padStart(2, "0")}:00:00`;
+  const series = zip({ pageviews: [{ x: at(1), y: 5 }, { x: at(4), y: 2 }], sessions: [{ x: at(1), y: 3 }] }, "hour");
+  assert.deepEqual(series.map((p) => p.views), [5, 0, 0, 2], "the two silent hours are drawn as silence");
+  assert.equal(series[0].sessions, 3);
+  assert.equal(series[1].sessions, 0);
+
+  // Months are not a fixed number of milliseconds, so they are left alone.
+  const months = zip({ pageviews: [{ x: "2026-01-01 00:00:00", y: 1 }, { x: "2026-04-01 00:00:00", y: 2 }] }, "month");
+  assert.equal(months.length, 2);
+});

@@ -110,24 +110,48 @@ export function resetAudience(): void {
 
 let token: { value: string; until: number } | null = null;
 const TOKEN_MS = 6 * 60 * 60 * 1000;
+/**
+ * The login in flight, so that N callers cause ONE.
+ *
+ * The value was cached and the ATTEMPT was not, which is a distinction that
+ * costs nothing until something asks more than once at a time. The audience read
+ * made four concurrent calls and mostly got away with it. The detail read makes
+ * twenty in one Promise.all, so on a cold token all twenty missed the cache and
+ * all twenty posted to /api/auth/login together — and umami checks that password
+ * with bcrypt, which is slow on purpose. Twenty bcrypts at once on an instance
+ * sized for a 2KB tracker took longer than the five-second deadline on every one
+ * of the reads waiting behind them, and the screen said the analytics service
+ * could not be reached while the analytics service sat there hashing passwords.
+ */
+let logging: Promise<string> | null = null;
 
 async function authToken(): Promise<string | null> {
   if (token && Date.now() < token.until) return token.value;
+  if (logging) return logging;
   const u = umami();
-  const r = await fetch(`${u.url}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(await invoker(u.url)) },
-    body: JSON.stringify({ username: u.user, password: u.password }),
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!r.ok) throw new Error(`umami login ${r.status}`);
-  const j = (await r.json()) as { token?: string };
-  if (!j.token) throw new Error("umami login returned no token");
-  token = { value: j.token, until: Date.now() + TOKEN_MS };
-  return j.token;
+  logging = (async () => {
+    const r = await fetch(`${u.url}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await invoker(u.url)) },
+      body: JSON.stringify({ username: u.user, password: u.password }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!r.ok) throw new Error(`umami login ${r.status}`);
+    const j = (await r.json()) as { token?: string };
+    if (!j.token) throw new Error("umami login returned no token");
+    token = { value: j.token, until: Date.now() + TOKEN_MS };
+    return j.token;
+  })();
+  try {
+    return await logging;
+  } finally {
+    // Cleared either way: holding a rejected promise here would make one failed
+    // login the permanent answer for every caller after it.
+    logging = null;
+  }
 }
 
-async function get<T>(path: string): Promise<T> {
+async function get<T>(path: string, timeoutMs = 5000): Promise<T> {
   const t = await authToken();
   const base = umami().url;
   const r = await fetch(`${base}${path}`, {
@@ -135,12 +159,13 @@ async function get<T>(path: string): Promise<T> {
     // Short, and deliberately shorter than the panel's own poll interval. This
     // sits in the middle of a request the owner is waiting on; a hung umami must
     // degrade to "unreadable" quickly rather than hold /_xray open.
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (r.status === 401) {
     // The token expired earlier than we assumed. Throw it away so the next
     // attempt logs in again instead of failing forever with a stale JWT.
     token = null;
+    logging = null;
     throw new Error("umami rejected the token");
   }
   if (!r.ok) throw new Error(`umami ${path} ${r.status}`);
@@ -216,10 +241,10 @@ function rank(rows: Rank | null | undefined, blank: string): [string, number][] 
  * headline numbers is a worse reading, not an unreadable one: the visitor count
  * is still true and the panel should still show it.
  */
-async function metric(websiteId: string, q: string, types: string[]): Promise<Rank> {
+async function metric(websiteId: string, q: string, types: string[], timeoutMs?: number): Promise<Rank> {
   for (const type of types) {
     try {
-      return await get<Rank>(`/api/websites/${websiteId}/metrics?${q}&type=${type}&limit=10`);
+      return await get<Rank>(`/api/websites/${websiteId}/metrics?${q}&type=${type}&limit=10`, timeoutMs);
     } catch {
       continue;
     }
@@ -385,12 +410,51 @@ function activeCount(a: unknown): number {
 
 type Series = { pageviews?: { x: string; y: number }[]; sessions?: { x: string; y: number }[] };
 
-/** Views and sessions per interval, zipped into one row per point. */
-function zipSeries(s: Series | null | undefined): Detail["series"] {
+const STEP_MS: Record<string, number> = { hour: 3600_000, day: 86400_000 };
+
+/** Umami stamps a bucket as "2026-08-18 14:00:00", in UTC. */
+function bucketMs(x: string): number {
+  const t = Date.parse(/[TZ]/.test(x) ? x : x.replace(" ", "T") + "Z");
+  return Number.isFinite(t) ? t : NaN;
+}
+
+/**
+ * Views and sessions per interval, zipped, and with the quiet intervals put back.
+ *
+ * Umami returns only the buckets that had traffic. Drawn straight, five busy
+ * hours out of twenty-four become five columns side by side — a chart whose x
+ * axis is not time, under a caption promising each column is one hour. The gaps
+ * are the reading: an app nobody visited between three and eleven should look
+ * like it.
+ *
+ * Months are left alone. They are not a fixed number of milliseconds, and a
+ * calendar walk to save four columns on the year view is a bug waiting to be
+ * written.
+ */
+function zipSeries(s: Series | null | undefined, unit: string): Detail["series"] {
   const views = Array.isArray(s?.pageviews) ? s!.pageviews! : [];
   const sess = Array.isArray(s?.sessions) ? s!.sessions! : [];
   const bySession = new Map(sess.map((p) => [p.x, Math.round(p.y) || 0]));
-  return views.map((p) => ({ t: p.x, views: Math.round(p.y) || 0, sessions: bySession.get(p.x) ?? 0 }));
+  const rows = views
+    .map((p) => ({ t: p.x, ms: bucketMs(p.x), views: Math.round(p.y) || 0, sessions: bySession.get(p.x) ?? 0 }))
+    .filter((p) => Number.isFinite(p.ms))
+    .sort((a, b) => a.ms - b.ms);
+
+  const step = STEP_MS[unit];
+  if (!step || rows.length < 2) return rows.map(({ t, views: v, sessions }) => ({ t, views: v, sessions }));
+
+  const out: Detail["series"] = [];
+  for (let i = 0; i < rows.length; i++) {
+    out.push({ t: rows[i].t, views: rows[i].views, sessions: rows[i].sessions });
+    const next = rows[i + 1];
+    if (!next) break;
+    // Bounded: a window is at most a year of days, so this cannot run away even
+    // if umami hands back a bucket from the far future.
+    for (let ms = rows[i].ms + step; ms < next.ms && out.length < 400; ms += step) {
+      out.push({ t: new Date(ms).toISOString().replace("T", " ").slice(0, 19), views: 0, sessions: 0 });
+    }
+  }
+  return out;
 }
 
 const detailCache = new Map<string, { at: number; value: Detail | null }>();
@@ -423,13 +487,19 @@ export async function analyticsDetail(
   if (hit && now - hit.at < DETAIL_CACHE_MS) return hit.value;
 
   const q = `startAt=${startAt}&endAt=${endAt}`;
+  // Longer than the audience read's five seconds, and deliberately so. That one
+  // sits inline on /_xray, which is polled, so it must give up fast. This one is
+  // asked for by a person who has just opened a screen and is willing to wait a
+  // moment — and it may be waking a Cloud Run instance that scaled to zero, on
+  // top of twenty queries it has to answer.
+  const BUDGET = 12_000;
   let value: Detail | null = null;
   try {
     const [stats, series, active, ...ranked] = await Promise.all([
-      get<Stats>(`/api/websites/${websiteId}/stats?${q}`),
-      get<Series>(`/api/websites/${websiteId}/pageviews?${q}&unit=${encodeURIComponent(unit)}`).catch(() => null),
-      get<unknown>(`/api/websites/${websiteId}/active`).catch(() => null),
-      ...DIMENSIONS.map(([, names]) => metric(websiteId, q, names)),
+      get<Stats>(`/api/websites/${websiteId}/stats?${q}`, BUDGET),
+      get<Series>(`/api/websites/${websiteId}/pageviews?${q}&unit=${encodeURIComponent(unit)}`, BUDGET).catch(() => null),
+      get<unknown>(`/api/websites/${websiteId}/active`, BUDGET).catch(() => null),
+      ...DIMENSIONS.map(([, names]) => metric(websiteId, q, names, BUDGET)),
     ]);
 
     const visitors = num(stats.visitors ?? stats.uniques);
@@ -449,7 +519,7 @@ export async function analyticsDetail(
       avgSeconds: visits ? Math.round(num(stats.totaltime) / visits) : 0,
       change: prev > 0 ? Math.round(((visitors - prev) / prev) * 100) : null,
       active: activeCount(active),
-      series: zipSeries(series),
+      series: zipSeries(series, unit),
       dims,
     };
   } catch (e) {
@@ -459,3 +529,6 @@ export async function analyticsDetail(
   detailCache.set(key, { at: now, value });
   return value;
 }
+
+/** Test seam. zipSeries is pure and is the part with arithmetic in it. */
+export const __test = { zipSeries };
