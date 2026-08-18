@@ -277,12 +277,24 @@ button.li:hover .caret{color:var(--red)}
              animation:pulse 1.5s ease-in-out infinite}
 
 /* a real control, not a row of text */
-.seg{display:flex;gap:1px;background:var(--line);padding:1px;border-radius:10px;margin-top:4px}
-.seg button{flex:1;height:34px;border:0;background:var(--white);cursor:pointer;
-            font-family:var(--sans);font-size:13px;font-weight:500;color:var(--ink-2)}
-.seg button:first-child{border-radius:9px 0 0 9px}
-.seg button:last-child{border-radius:0 9px 9px 0}
-.seg button[aria-pressed="true"]{background:var(--ink);color:var(--white)}
+/* A RECESSED TRACK WITH A RAISED THUMB, which is what a segmented control is.
+   This used to be white buttons on a line-coloured background with a 1px gap,
+   so the gaps read as dividers between four equal buttons, and the selected one
+   was filled with ink — a black slab that outweighed the numbers it was there to
+   qualify. The control is not the reading.
+   The track is recessed instead and only the thumb is a surface: white, lifted
+   by one soft shadow, on the tile grey. Unselected labels are secondary ink and
+   nothing is divided from anything, because these are four states of one thing
+   rather than four buttons. */
+.seg{display:flex;gap:2px;background:var(--tile);padding:3px;border-radius:var(--r-lg);margin-top:4px}
+.seg button{flex:1;height:28px;border:0;border-radius:calc(var(--r-lg) - 2px);
+            background:transparent;cursor:pointer;
+            font-family:var(--sans);font-size:13px;font-weight:500;
+            letter-spacing:-.01em;color:var(--ink-2);
+            transition:background-color .15s var(--ease),color .15s var(--ease)}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--white);color:var(--ink);
+                                 box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .seg button:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
 .seg-n{font-size:12px;color:var(--ink-3);margin:8px 0 0;line-height:1.5}
 
