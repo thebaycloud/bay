@@ -197,7 +197,9 @@ test("home reads in the order an owner needs it", () => {
   // after it pairs off, so Infra and Access share the last row.
   const body = DRAWER_JS.slice(DRAWER_JS.indexOf("function homeScreen"), DRAWER_JS.indexOf("function rightNowCell"));
   const order = [...body.matchAll(/cell\('([A-Za-z ]+)'/g)].map((m) => m[1]);
-  assert.deepEqual(order, ["Address", "Analytics", "Ships", "Data", "Keys", "Infra", "Access"]);
+  // Address and Agent are the bookends — where it lives, and how you work on it
+  // — both full width, with six half-width readings between them.
+  assert.deepEqual(order, ["Address", "Analytics", "Ships", "Data", "Keys", "Infra", "Access", "Agent"]);
   // The screen behind it was always /access; only the label said People, which
   // named the avatars on the row rather than the question the row answers.
   assert.match(DRAWER_JS, /access:'Access'/);
@@ -228,4 +230,48 @@ test("the full read is not on the path that gets polled", () => {
   assert.equal(load.includes("_dashboard/analytics"), false, "dwLoad must not fetch the detail");
   // It is fetched by the screen instead, and it is same-origin so it needs no CORS.
   assert.match(DRAWER_JS, /fetch\('\/_dashboard\/analytics\?range='/);
+});
+
+test("Agent is one cell, because the CLI and MCP are layered and not alternatives", () => {
+  // Every coding agent needs the CLI to deploy; MCP is an extra surface on top
+  // for the chat-shaped tools. Two sibling cells would read as "pick one", which
+  // is the one thing that is not true — a Cursor user needs both. So it is one
+  // cell answering one question: how do I point my agent at this app.
+  assert.match(DRAWER_JS, /cell\('Agent'/);
+  assert.match(DRAWER_JS, /function agentScreen/);
+  assert.equal(DRAWER_JS.includes("cell('CLI'"), false);
+  assert.equal(DRAWER_JS.includes("cell('MCP'"), false);
+  // Every tool gets the CLI, and the deploy line names this app.
+  assert.match(DRAWER_JS, /npm i -g @supersonic\/cli/);
+  assert.match(DRAWER_JS, /supersonic deploy --app '\+d\.slug/);
+});
+
+test("a tool that speaks MCP is told it is not built, not handed a config", async () => {
+  // A config block would point a working tool at a server that does not exist,
+  // and the failure would look like our fault in their editor rather than a
+  // thing we have not made yet.
+  assert.match(DRAWER_JS, /Talking to us directly/);
+  assert.equal(/mcpServers|"?command"?\s*:\s*"npx"/.test(DRAWER_JS), false, "no MCP config is emitted yet");
+  const p = panel((url) =>
+    String(url).includes("/agent")
+      ? json({ tokens: [{ id: "t1", name: "macbook", last_used_at: new Date().toISOString() }], mcp: false })
+      : json({}),
+  );
+  const d = await p.dwLoad();
+  assert.equal((d!.tokens as unknown[]).length, 1);
+  assert.equal(d!.mcp, false, "mcp is false until there is a server");
+});
+
+test("last_used_at is reported as what it is: the token, not this app", async () => {
+  // A token belongs to a person and deploys everything they own, so there is no
+  // per-app usage to report. The copy says "used at all" rather than inventing
+  // a fact the schema does not hold.
+  assert.match(DRAWER_JS, /not on this app/);
+  const p = panel((url) =>
+    String(url).includes("/agent") ? json({ tokens: [{ id: "t1", name: "n", last_used_at: null }], mcp: false }) : json({}),
+  );
+  const d = await p.dwLoad();
+  // A token that exists but has never been used is a different state from none.
+  assert.equal((d!.tokens as { last_used_at: string | null }[])[0].last_used_at, null);
+  assert.match(DRAWER_JS, /never used/);
 });

@@ -412,7 +412,7 @@ var PLATE={steel:C.app+'/metal/panoramic-steel.webp', red:C.app+'/metal/brushed-
 
 var DW_DIMS=[['pages','Most opened'],['entry','Where they came in'],['exit','Where they left'],['from','How they got here'],['country','Country'],['region','Region'],['city','City'],['browser','Browser'],['os','Operating system'],['on','Device'],['screen','Screen size'],['language','Language'],['titles','By page title'],['query','Search terms'],['hosts','Which address they used'],['event','Events'],['tag','Tags']];
 
-var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'Access', infra:'Infra'};
+var TITLES = {analytics:'Analytics', ships:'Ships', data:'Data', keys:'Keys', access:'Access', infra:'Infra', agent:'Agent'};
 
 function dwTop(){ return dwStack.length ? dwStack[dwStack.length-1] : null; }
 function dwPush(v){ dwStack.push(v); dwDir='push'; dwRender(); }
@@ -679,6 +679,17 @@ function homeScreen(d){
 
   g.appendChild(cell('Access','Who can open this', pPart, function(){ dwPush({v:'access'}); }));
 
+
+  var agPart=el('div','chips');
+  var agLast=dwLastAgent(d);
+  agPart.appendChild(statusChip(
+    agLast!==null ? 'connected' : (d.tokens.length ? 'never used' : 'not connected'),
+    agLast!==null ? 'green' : 'red'));
+  g.appendChild(cell('Agent',
+    agLast!==null ? 'A token last reached us '+ago(Math.round((Date.now()-agLast)/1000))
+                  : d.tokens.length ? 'You have a token; nothing has used it yet'
+                  : 'Give your coding agent a way in',
+    agPart, function(){ dwPush({v:'agent'}); }, true));
 
   var wrap=el('div','home');
   wrap.appendChild(g);
@@ -1011,6 +1022,7 @@ function screen(view,d){
   }
 
   if(key==='infra') return infraScreen(w,d);
+  if(key==='agent') return agentScreen(w,d);
 
   return w;
 }
@@ -1030,6 +1042,61 @@ function infraScreen(w,d){
                pill:pill(bad?(j.state||'paused'):'on', bad?'bad':'good')});
   })));
   w.appendChild(jp); return w;
+}
+
+var DW_TOOLS=[['claude-code','Claude Code',false],['cursor','Cursor',true],['codex','Codex',false],['claude','Claude',true],['chatgpt','ChatGPT',true],['other','Other',false]];
+var dwTool='claude-code';
+
+function agentScreen(w,d){
+  var tp=pad('Which tool','It all goes through the CLI. Some can also talk to us directly.');
+  var seg=el('div','seg');
+  DW_TOOLS.forEach(function(t){
+    var b=el('button',null,t[1]);
+    b.setAttribute('aria-pressed', dwTool===t[0] ? 'true':'false');
+    b.addEventListener('click',function(){ dwTool=t[0]; dwRender(); });
+    seg.appendChild(b);
+  });
+  tp.appendChild(seg);
+  w.appendChild(tp);
+
+  var tool=DW_TOOLS.filter(function(t){ return t[0]===dwTool; })[0];
+
+  // Always the CLI: it is what ships, whatever is driving it.
+  var ip=pad('Install it','Once per machine.');
+  ip.appendChild(tintRow('npm i -g @supersonic/cli'));
+  w.appendChild(ip);
+  var lp=pad('Sign in','Opens a browser once, then the agent has a token.');
+  lp.appendChild(tintRow('supersonic login'));
+  w.appendChild(lp);
+  var dp=pad('Ship this app','From the folder the code is in.');
+  dp.appendChild(tintRow('supersonic deploy --app '+d.slug));
+  w.appendChild(dp);
+
+  if(tool && tool[2]){
+    // Said plainly rather than shipped half-built. A config block here would
+    // point a working tool at a server that does not exist.
+    w.appendChild(pad('Talking to us directly',
+      tool[1]+' can hold a connection to us as well as run the CLI. That is not\n built yet — when it is, the setup for it appears here.'));
+  }
+
+  var kp=pad('Tokens', d.tokens.length ? 'One token deploys everything you own, so this is the last time each was used at all — not on this app.' : 'You have not made one yet. Run the sign-in above and it appears here.');
+  if(d.tokens.length){
+    kp.appendChild(listOf(d.tokens.map(function(t){
+      var used=t.last_used_at ? Date.parse(t.last_used_at) : NaN;
+      var rm=btn('Revoke','trash-2',{rest:'white',hover:'red',size:'sm'});
+      rm.addEventListener('click',function(){
+        if(!confirm('Revoke this token? Any agent using it stops being able to ship.')) return;
+        dwPost('/agent',{revoke:t.id}).then(function(j){
+          if(j&&j.tokens){ d.tokens=j.tokens; dwRender(); }
+        });
+      });
+      return li({lead:'\u2691', title:t.name||'unnamed token',
+                 meta:isFinite(used) ? 'last used '+ago(Math.round((Date.now()-used)/1000)) : 'never used',
+                 pill:rm});
+    })));
+  }
+  w.appendChild(kp);
+  return w;
 }
 
 function headingFor(view,d){
@@ -1104,6 +1171,23 @@ function spark(series){
     w.appendChild(col);
   });
   return w;
+}
+
+/**
+ * The most recent moment any of this owner's tokens was used.
+ *
+ * Null when they have none, and null when they have some that have never been
+ * used — two states the screen says differently, because "no token" is something
+ * to fix and "never used" is something to try.
+ */
+function dwLastAgent(d){
+  var best=null;
+  (d.tokens||[]).forEach(function(t){
+    if(!t.last_used_at) return;
+    var ms=Date.parse(t.last_used_at);
+    if(isFinite(ms) && (best===null || ms>best)) best=ms;
+  });
+  return best;
 }
 
 /** A mean session length, said the way a person would say it. */
@@ -1227,12 +1311,12 @@ function dwLoad(force){
     dwSoon(dwApi('/share'),6000,{}),   dwSoon(dwApi('/env'),6000,{}),
     dwSoon(dwApi('/db'),6000,{}),      dwSoon(dwApi('/storage'),6000,{}),
     dwSoon(dwApi('/jobs'),6000,{}),    dwSoon(dwApi('/deploy-status'),6000,{}),
-    dwSoon(dwApi('/analytics'),6000,{}),
+    dwSoon(dwApi('/analytics'),6000,{}), dwSoon(dwApi('/agent'),6000,{}),
     // Shorter, and first to be given up on: this is the one that reaches Umami.
     dwSoon(dwLive(),4000,null)
   ]).then(function(r){
     var share=r[0]||{},env=r[1]||{},db=r[2]||{},store=r[3]||{},jobs=r[4]||{},
-        dep=r[5]||{},an=r[6]||{},live=r[7];
+        dep=r[5]||{},an=r[6]||{},agent=r[7]||{},live=r[8];
     var grants=share.grants||[];
     var here=[],feed=[];
     if(live&&live.live){
@@ -1284,6 +1368,12 @@ function dwLoad(force){
       missing:db.error||null,
       keys:(env.keys||[]).map(function(k){ return {name:dwKeyName(k),tone:'',st:'set'}; }),
       jobs:jobs.jobs||[],
+      // Tokens belong to a person, not to an app: one deploys everything they
+      // own. So this is the last time a token was used AT ALL, and the screen
+      // says it in those words rather than claiming a per-app fact we do not
+      // record.
+      tokens:(agent.tokens||[]),
+      mcp:Boolean(agent.mcp),
       // deploys.ts: status is live | building | deploying | pending | failed |
       // canceled, and there is no 'done'. Reading stage for doneness would have
       // left every finished app saying "Shipping" forever, because stage holds
