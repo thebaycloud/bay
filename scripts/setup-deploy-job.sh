@@ -96,6 +96,13 @@ echo "  cloud sql: ${CLOUDSQL:-<none>}"
 # with `Postgres config missing` until they were put back. cloudbuild.yaml
 # already carries a paragraph saying `--update-env-vars, never --set-env-vars`
 # for precisely this reason; the same is true of secrets and was learned twice.
+#
+# --execution-environment=gen2 for the reason setup-deploy-worker.sh spells out:
+# this job runs the planner and the repair agent, they run Codex, and Codex
+# sandboxes itself with bubblewrap, which gen1's gVisor cannot host. The live job
+# has been gen2 since it was set by hand — which is exactly the problem, and how
+# the worker came to be created without it. Written down here so a re-run of this
+# bootstrap cannot quietly take it away.
 gcloud run jobs deploy "$JOB" \
   --image "$IMAGE" \
   --region "$REGION" --project "$PROJECT" \
@@ -103,6 +110,7 @@ gcloud run jobs deploy "$JOB" \
   --command node \
   --args=--import,tsx,scripts/deploy-job.ts \
   --memory 4Gi --cpu 2 \
+  --execution-environment gen2 \
   --max-retries 0 \
   --task-timeout 60m \
   --env-vars-file "$WORK/env.yaml" \

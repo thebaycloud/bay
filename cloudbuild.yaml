@@ -109,9 +109,21 @@ steps:
           echo "no supersonic-deploy-worker yet — skipping (see scripts/setup-deploy-worker.sh)"
           exit 0
         fi
+        # gen2 for the same reason the control-plane step below carries it, and
+        # this service is why that note is not enough on its own: the worker runs
+        # the same image, so it runs the planner and the repair agent, so it runs
+        # Codex, so it needs the namespaces bubblewrap wants and gen1 does not
+        # have. It was created without the flag and every command its agent ran
+        # died on `bwrap: loopback: Failed RTM_NEWADDR: No child process`.
+        # Repeated here rather than inherited because nothing inherits it — the
+        # flag is set per service, by hand, in three unrelated places. Keep it
+        # even though `gcloud run deploy` preserves the live value: this file is
+        # what recreates the service after `setup-deploy-worker.sh` is rerun or
+        # the service is deleted. See docs/HANDOFF-deploy-agent-sandbox.md.
         gcloud run deploy supersonic-deploy-worker \
           --image=$_IMAGE:$_TAG \
           --region=us-central1 --project=$PROJECT_ID \
+          --execution-environment=gen2 \
           --update-env-vars=$_LANE_ENV \
           --update-env-vars=IMAGE_TAG=$_TAG \
           --quiet

@@ -105,6 +105,25 @@ echo "deploying ${WORKER} from ${IMAGE}…"
 # worker also enforces in-process. Two guards for one rule because they fail
 # differently: the in-process one refuses cleanly with 429, and this one is what
 # stops Cloud Run answering a refusal by starting a second container.
+#
+# --execution-environment=gen2 IS NOT OPTIONAL EITHER, and it is the flag this
+# service was created without (12 Aug). The worker runs the same image as the control
+# plane, so it runs the planner and the repair agent, so it runs Codex — and
+# Codex sandboxes itself with bubblewrap, which needs namespaces gen1's gVisor
+# does not have. On gen1 every command the agent issues dies with
+# `bwrap: loopback: Failed RTM_NEWADDR: No child process`, including `pwd`: the
+# agent still reads the repo and still diagnoses it correctly, and then cannot
+# write a file or start a rebuild. The control plane proved this on 19 Aug and
+# was moved to gen2 the same afternoon; the worker was added afterwards and the
+# flag did not travel. See docs/HANDOFF-deploy-agent-sandbox.md.
+#
+# This is the fix that KEEPS the sandbox. The alternative, --sandbox
+# danger-full-access in lib/agents/codex.ts, would also make the agent work, by
+# handing its shell the network back — which is the one thing standing between a
+# prompt injected through a deployed app's own database rows and an exfiltration.
+#
+# Cheap here: gen2's cost is a slower cold start, and this service is pinned
+# --min-instances 1, i.e. permanently warm.
 gcloud run deploy "$WORKER" \
   --image "$IMAGE" \
   --region "$REGION" --project "$PROJECT" \
@@ -112,6 +131,7 @@ gcloud run deploy "$WORKER" \
   --command node \
   --args=--import,tsx,scripts/deploy-worker.ts \
   --memory 4Gi --cpu 2 \
+  --execution-environment gen2 \
   --no-cpu-throttling \
   --min-instances 1 --max-instances 1 --concurrency 1 \
   --timeout 3600 \

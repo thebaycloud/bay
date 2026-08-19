@@ -1,5 +1,27 @@
 # Handoff — the repair agent cannot run anything (gen1 vs bubblewrap)
 
+> **RESOLVED 19 Aug 2026 (19:15Z).** `supersonic-deploy-worker` is gen2 in
+> production, and the flag is now in source at all three places that create these
+> resources — including `scripts/setup-deploy-job.sh`, which §2's table listed as
+> "set on the live job" and which would have dropped the job back to gen1 on its
+> next run. `apps/web/test/agent-sandbox-gen2.test.ts` is the invariant asked for
+> in Step 4.
+>
+> Step 2 was run: `2048-in-react` deployed as `uqjzy`, failed on `next/image` as
+> designed, and the repair agent added `images.unoptimized: true` to
+> `next.config.js` and redeployed it live — 3 steps, 1 redeploy, no `bwrap` line
+> anywhere in the log. The app was deleted afterwards.
+>
+> Two corrections to what follows:
+>
+> - **§5 is wrong.** The `/tmp` CODEX_HOME warning still appears on gen2 and
+>   `apply_patch` succeeded anyway. It is noise. Do not move `CODEX_HOME`.
+> - **One symptom in §1 was not gen1 and is still open.** The first
+>   `/bin/bash -lc 'bash redeploy.sh'` was rejected at spawn with
+>   `CreateProcess { message: "Rejected…" }`. The agent retried, the retry
+>   reached the bridge, and the deploy went through — so it costs one wasted
+>   step, not a deploy. Cause not established.
+
 Written 19 Aug 2026. Read this before touching `scripts/setup-deploy-worker.sh`,
 the `deploy-worker` step in `cloudbuild.yaml`, or `apps/web/lib/agents/codex.ts`.
 
