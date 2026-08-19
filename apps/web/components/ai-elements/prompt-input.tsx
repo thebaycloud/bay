@@ -65,6 +65,7 @@ import type {
 } from "react";
 import {
   Children,
+  forwardRef,
   createContext,
   useCallback,
   useContext,
@@ -1124,19 +1125,26 @@ export type PromptInputButtonProps = ComponentProps<typeof InputGroupButton> & {
   tooltip?: PromptInputButtonTooltip;
 };
 
-export const PromptInputButton = ({
-  variant = "ghost",
-  className,
-  size,
-  tooltip,
-  ...props
-}: PromptInputButtonProps) => {
+/**
+ * forwardRef, changed from the registry's version.
+ *
+ * `PromptInputActionMenuTrigger` renders this inside `<DropdownMenuTrigger asChild>`,
+ * which clones its child and attaches a ref to it. A plain function component
+ * cannot receive one, so React logged "Function components cannot be given refs"
+ * and the dropdown lost the anchor it positions against. Upstream bug; this is the
+ * one-line fix rather than a wrapper at the call site.
+ */
+export const PromptInputButton = forwardRef<
+  HTMLButtonElement,
+  PromptInputButtonProps
+>(({ variant = "ghost", className, size, tooltip, ...props }, ref) => {
   const newSize =
     size ?? (Children.count(props.children) > 1 ? "sm" : "icon-sm");
 
   const button = (
     <InputGroupButton
       className={cn(className)}
+      ref={ref}
       size={newSize}
       type="button"
       variant={variant}
@@ -1164,7 +1172,8 @@ export const PromptInputButton = ({
       </TooltipContent>
     </Tooltip>
   );
-};
+});
+PromptInputButton.displayName = "PromptInputButton";
 
 export type PromptInputActionMenuProps = ComponentProps<typeof DropdownMenu>;
 export const PromptInputActionMenu = (props: PromptInputActionMenuProps) => (

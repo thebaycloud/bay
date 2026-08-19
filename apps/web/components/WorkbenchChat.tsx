@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CircleDashedIcon, DatabaseIcon } from "lucide-react";
+import { ArrowUpIcon, CircleDashedIcon, DatabaseIcon } from "lucide-react";
 import {
   Message,
   MessageContent,
@@ -15,6 +15,10 @@ import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/componen
 import { MessageResponse } from "@/components/ai-elements/message";
 import {
   PromptInput,
+  PromptInputActionMenu,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuItem,
+  PromptInputActionMenuTrigger,
   PromptInputBody,
   PromptInputFooter,
   PromptInputSubmit,
@@ -46,6 +50,15 @@ import {
  */
 
 type Turn = { id: number; question: string };
+
+/** What the `+` offers. Every one of these is answerable from a read-only tool. */
+const STARTERS = [
+  "How many users signed up this week?",
+  "What has been failing, and for how long?",
+  "What did the last deploy change?",
+  "Which keys is this app using?",
+  "Who has access to this app?",
+];
 
 export function WorkbenchChat({ slug }: { slug: string }) {
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -149,25 +162,56 @@ export function WorkbenchChat({ slug }: { slug: string }) {
         )}
       </div>
 
-      <PromptInput
-        className="rounded-none border-0 border-t border-border shadow-none"
-        onSubmit={(_message, event) => {
-          event.preventDefault();
-          ask();
-        }}
-      >
-        <PromptInputBody>
-          <PromptInputTextarea
-            onChange={(e) => setText(e.currentTarget.value)}
-            placeholder={`Ask about ${slug}…`}
-            value={text}
-          />
-        </PromptInputBody>
-        <PromptInputFooter>
-          <PromptInputTools />
-          <PromptInputSubmit disabled={!text.trim()} status="ready" />
-        </PromptInputFooter>
-      </PromptInput>
+      {/* The composer, composed the way the registry intends it.
+          It was previously handed `rounded-none border-0 shadow-none`, which
+          stripped the card it draws for itself, and an empty PromptInputTools,
+          which is why there was no `+`. The submit also defaults to a bare ↵
+          glyph — the filled round button is a variant, not the default. */}
+      <div className="border-t border-border p-3">
+        <PromptInput
+          onSubmit={(_message, event) => {
+            event.preventDefault();
+            ask();
+          }}
+        >
+          <PromptInputBody>
+            <PromptInputTextarea
+              onChange={(e) => setText(e.currentTarget.value)}
+              placeholder={`Ask about ${slug}…`}
+              value={text}
+            />
+          </PromptInputBody>
+          <PromptInputFooter>
+            <PromptInputTools>
+              {/* The `+` opens starter questions, not attachments. A read-only
+                  agent has nothing to do with an uploaded file, and a `+` that
+                  opened an empty file dialog would be the dead control this
+                  codebase keeps refusing to ship. */}
+              <PromptInputActionMenu>
+                <PromptInputActionMenuTrigger />
+                <PromptInputActionMenuContent>
+                  {STARTERS.map((q) => (
+                    <PromptInputActionMenuItem key={q} onClick={() => setText(q)}>
+                      {q}
+                    </PromptInputActionMenuItem>
+                  ))}
+                </PromptInputActionMenuContent>
+              </PromptInputActionMenu>
+            </PromptInputTools>
+            {/* A filled circle, not the bare ↵ the default renders: the send
+                affordance is the one thing in this rail that should look like a
+                button you press. */}
+            <PromptInputSubmit
+              className="size-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-tile disabled:text-ink-3"
+              disabled={!text.trim()}
+              status="ready"
+              variant="default"
+            >
+              <ArrowUpIcon className="size-4" />
+            </PromptInputSubmit>
+          </PromptInputFooter>
+        </PromptInput>
+      </div>
     </div>
   );
 }

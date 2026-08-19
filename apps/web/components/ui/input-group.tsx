@@ -97,16 +97,24 @@ const inputGroupButtonVariants = cva(
   }
 )
 
-function InputGroupButton({
-  className,
-  type = "button",
-  variant = "ghost",
-  size = "xs",
-  ...props
-}: Omit<React.ComponentProps<typeof Button>, "size"> &
-  VariantProps<typeof inputGroupButtonVariants>) {
+/**
+ * forwardRef, changed from the registry's version.
+ *
+ * ai-elements' PromptInputActionMenuTrigger renders a PromptInputButton — which
+ * renders this — inside `<DropdownMenuTrigger asChild>`. asChild clones the child
+ * and attaches a ref, so every component in that chain has to forward one or React
+ * warns and the dropdown loses its positioning anchor. The chain is
+ * DropdownMenuTrigger → PromptInputButton → InputGroupButton → Button, and this was
+ * the second link still swallowing it.
+ */
+const InputGroupButton = React.forwardRef<
+  HTMLButtonElement,
+  Omit<React.ComponentProps<typeof Button>, "size"> &
+    VariantProps<typeof inputGroupButtonVariants>
+>(({ className, type = "button", variant = "ghost", size = "xs", ...props }, ref) => {
   return (
     <Button
+      ref={ref}
       type={type}
       data-size={size}
       variant={variant}
@@ -114,7 +122,8 @@ function InputGroupButton({
       {...props}
     />
   )
-}
+})
+InputGroupButton.displayName = "InputGroupButton"
 
 function InputGroupText({ className, ...props }: React.ComponentProps<"span">) {
   return (
