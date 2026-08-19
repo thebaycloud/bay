@@ -2657,12 +2657,13 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
        */
       const contextDir = join(dir, svc.dir && svc.dir !== "." ? svc.dir : ".");
       const image = `${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${name}`;
-      const release = `${label}-${releaseId()}`;
-      const key = randomBytes(32).toString("hex");
-      // A sibling gets its own release job, for the same reason and by the same
-      // route as the primary — its own image, its own bundle, its own command.
-      const startCmd = plan.run;
-      const siblingRelease = plan.preRun?.filter(Boolean).join(" && ") ?? "";
+      // WAS: `release`, `key`, `startCmd` and `siblingRelease` — a per-sibling
+      // release job, a per-sibling bundle key, and the command that job would
+      // run. All four were computed on every sibling deploy and read by nothing:
+      // a sibling's release is a process in the same placement now, run by the
+      // node before anything else starts, and its code is inside its image, so
+      // there is no bundle for a key to protect. `randomBytes(32)` was the most
+      // expensive of them and the most pointless.
 
       try {
         await stages.around("build", async () => {
@@ -2793,50 +2794,23 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // address it cannot reach" — arriving through the one door that gate does
       // not cover. Same database, same role, stated at the address THIS service
       // actually runs at.
-      // WAS: a sibling on Cloud Run beside a primary on a node inherited the
-      // primary's database address — 10.200.0.1, the host-side proxy — which
-      // nothing in Cloud Run could route to, so a "frontend + API" repo shipped
-      // its API an address it could never open. Restating it at the Cloud Run
-      // address was the fix. A sibling now runs on the same node as its primary
-      // and reaches the database at the same address it does, so restating it
-      // would be that bug in reverse.
-      const siblingDbRefs: SecretRef[] = [];
-      // Service-level flags only; the argv builder scopes the rest to the app
-      // container and appends the proxy. A sibling shares the app's database,
-      // so it needs its own proxy beside it.
-      const siblingFlags = [
-        "--region", REGION, SEAL_APPS ? "--no-allow-unauthenticated" : "--allow-unauthenticated",
-        "--project", PROJECT, "--format=json",
-      ];
-      if (APP_RUNTIME_SA) siblingFlags.push(`--service-account=${APP_RUNTIME_SA}`);
-      siblingFlags.push(`--update-labels=supersonic-name=${friendlyName},supersonic-parent=${slug}`);
-      // The sibling's bundle key goes to Secret Manager for the same reason the
-      // primary's does — it is the key to that sibling's source, and a revision
-      // spec is a place people read. Its own secret, because its own bundle:
-      // sharing the primary's would mean either key decrypts either bundle.
-      // Minted only when there is a bundle to encrypt. With a generated image the
-      // code is inside the image, so a per-bundle key protects nothing and would
-      // be one more secret to store, grant and eventually leak. What replaces it
-      // is registry scoping — which does not exist yet, and is Part 9's row 6.
-      // The runner's per-app bundle key. A generated image contains the code, so
-      // there is nothing to decrypt and no key to store.
-      const siblingKeySecret = { stored: [] as SecretRef[], skipped: [] as string[] };
-      // The primary's DATABASE_URL and password refs are dropped when this
-      // sibling minted its own above — they point at secrets holding the node's
-      // address, and two refs for one name is a revision gcloud refuses outright.
-      const rewritten = new Set(siblingDbRefs.map((r) => r.key));
-      const siblingRefs = [
-        ...secretRefs.filter((r) => r.key !== "SUPERSONIC_CODE_KEY" && !rewritten.has(r.key)),
-        ...siblingDbRefs,
-        ...siblingKeySecret.stored,
-      ];
-      // Anything Secret Manager refused falls back to a literal, which is the
-      // old behaviour and no worse — but it is said out loud rather than assumed.
-      if (siblingKeySecret.skipped.length) env.push(`SUPERSONIC_CODE_KEY=${key}`);
+      // WAS: everything that prepared a CLOUD RUN deploy for this sibling —
+      // `siblingDbRefs`, `siblingKeySecret`, `rewritten`, `siblingRefs`,
+      // `siblingFlags`, `siblingApp`. Siblings are placed on the primary's node
+      // now and this function returns an `AgentProcess`, so none of it was ever
+      // read: two arrays were filled with flags nobody passed to anything, and
+      // the chain feeding them started from a `siblingDbRefs` that was `[]` by
+      // construction.
+      //
+      // The database-address note that used to sit here is worth keeping, because
+      // it names a bug and its reversal. A sibling on Cloud Run beside a primary
+      // on a node inherited the primary's database address — 10.200.0.1, the
+      // host-side proxy — which nothing in Cloud Run could route to, so a
+      // "frontend + API" repo shipped its API an address it could never open.
+      // Restating it at the Cloud Run address was the fix THEN. A sibling now
+      // runs on the same node as its primary and reaches the database at the
+      // same address it does, so restating it would be that bug in reverse.
 
-      const siblingApp: string[] = [];
-      if (siblingRefs.length) siblingApp.push(`--update-secrets=${setSecretsFlag(siblingRefs)}`);
-      siblingApp.push(`--update-env-vars=^~~^${env.join("~~")}`);
 
       // On a node, the sibling stops here and becomes a process in the app's
       // placement. Everything above — its own image, its own directory, its own
