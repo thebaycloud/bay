@@ -36,6 +36,7 @@ import { fetchSource, pruneBrokenSymlinks } from "@/lib/source";
 import { detectStack, describeDetection } from "@/lib/detect-stack";
 import { publishStatic } from "@/lib/publish-static";
 import { buildImage as buildAppImage } from "@/lib/build-image";
+import { advise as rollbackAdvice } from "@/lib/rollback-advice";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -3425,56 +3426,18 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
        * the dedicated `/rollback` route (`rollback/route.ts:13-26`) already refuses
        * to commit for a manual rollback. This is the same refusal, automatic.
        */
-      const rollBackToLastGood = async (): Promise<string | null> => {
-        if (staticServe || serviceless) return null;
-        // The same capability question the domain-mapping branch asks below
-        // (`!deployTarget.supports("domainMapping")`, ~300 lines on) — routed
-        // through `supports(...)` rather than `toFleet` directly so the two
-        // places this function's job forks on "which target" ask it the same
-        // way. See lib/deploy-target.ts: this is the guard its own doc names
-        // as the reason `autoRollbackOnFailure` exists as a capability at all.
-        if (!deployTarget.supports("autoRollbackOnFailure")) {
-          // Guarded the same way the Cloud Run branch below guards `rollback()`:
-          // this runs on the failure path of every fleet deploy, with things
-          // already degraded, and a Postgres hiccup here must not escape —
-          // caught, it is a fact this function can report ("could not check");
-          // uncaught, it replaces the deploy's real error with a raw database
-          // message at the outer catch and skips the error event, the fix
-          // prompt, the non-Pro upgrade path and the failure record that catch
-          // has no way to produce for a thrown, unclassified error.
-          let stillPlaced: { node: string; spec: AppSpec } | null;
-          try {
-            stillPlaced = await placementFor(slug);
-          } catch (e) {
-            const why = e instanceof Error ? e.message : String(e);
-            log(`! could not check the fleet placement (${why})`);
-            return null;
-          }
-          if (stillPlaced) {
-            // Not phrased as "we rolled back": nothing here did. The version now
-            // placed is either the one `placeOnFleet` restored moments ago, on
-            // THIS attempt's own failed verify, or the one that was never touched
-            // because this attempt never got as far as placing anything. Either
-            // way it is the fact worth telling the user — not the mechanism.
-            log(`${slug} is on the version that was working before this deploy — the fleet has no revision history to roll back further than that.`);
-            return "The previous version is still (or already back) serving — the fleet keeps one spec per app, not a history, so this is as far back as an automatic rollback can go.";
-          }
-          // No placement at all: either this was the first deploy (nothing ever
-          // served, so there is nothing to fall back to) or the one placement
-          // attempt failed verify and, having no previous spec of its own to
-          // restore, correctly unplaced rather than leaving a broken address on
-          // the books. Both are the same user-facing fact: there is no previous
-          // version of this app on the fleet.
-          log(`No previous version of ${slug} exists on the fleet to roll back to — this looks like its first deploy. Fix the error above and redeploy.`);
-          return "Nothing to roll back to on the fleet: this app has no previous placement. Fix the error and redeploy.";
-        }
-        // WAS: `rollback(slug)` — `gcloud run revisions list` and a traffic
-        // split back to the last Ready one. The fleet keeps one spec per app
-        // rather than a history, so the branch above is the whole of what an
-        // automatic rollback can do, and the Cloud Run half is unreachable now
-        // that `deployTarget` is always the fleet.
-        return null;
-      };
+      const rollBackToLastGood = async (): Promise<string | null> =>
+        // There is no rollback to perform — the fleet keeps one spec per app, not
+        // a history, so the previous version is already back or was never
+        // disturbed. What to SAY about that, and why a database hiccup here must
+        // never escape, is lib/rollback-advice.ts.
+        rollbackAdvice(
+          {
+            slug, staticServe: Boolean(staticServe), serviceless,
+            canAutoRollback: deployTarget.supports("autoRollbackOnFailure"),
+          },
+          { log, placementFor },
+        );
 
       // Where it died, attached once, before the failure fans out.
       //
