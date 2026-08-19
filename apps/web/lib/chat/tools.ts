@@ -71,6 +71,30 @@ export function toolsFor(slug: string, cookie?: string): Handler {
     ...(cookie ? { Cookie: cookie } : {}),
   };
 
+  /**
+   * Whether the forwarded session can possibly be recognised.
+   *
+   * The proxy validates a `.supersonic.cv` session cookie against the AUTH_SECRET
+   * the control plane signed it with. Deployed, those are the same secret on the
+   * same domain and the forward works. From a developer machine they are not: a
+   * localhost session is a JWT signed with a local secret, so the PRODUCTION proxy
+   * cannot validate it and correctly treats the read as a stranger's.
+   *
+   * Detected and stated rather than left to fail, because the failure is
+   * indistinguishable from "analytics is broken" and costs whoever meets it an hour
+   * looking at umami. These two tools are the only ones that leave this process.
+   */
+  // NODE_ENV, not a URL variable. `next dev` sets "development" and a built image
+  // sets "production", which is exactly the distinction that matters and needs
+  // nothing configured. NEXTAUTH_URL was the first choice and was wrong: it is not
+  // set locally, and I could not verify it is set on the deployed control plane —
+  // guessing wrong there would have disabled these two tools in production, which is
+  // the only place they work.
+  const deployed = process.env.NODE_ENV === "production";
+  const localNote =
+    "this reading is owner-only and answered by the proxy in production; a local " +
+    "session cannot be validated there, so it is unavailable on a developer machine";
+
   return async (op: Op, arg: string): Promise<Answer> => {
     try {
       switch (op) {
@@ -97,6 +121,7 @@ export function toolsFor(slug: string, cookie?: string): Handler {
           if (!app?.umami_website_id || !app.analytics_enabled) {
             return { ok: true, data: { on: false, note: "analytics is off for this app, so nobody is being counted" } };
           }
+          if (!deployed) return { ok: false, error: localNote };
           // Read through the app's own proxy, which already assembles this and is
           // the only thing holding umami credentials.
           const r = await fetch(`https://${slug}.supersonic.cv/_dashboard/analytics?range=${range}`, {
@@ -159,6 +184,7 @@ export function toolsFor(slug: string, cookie?: string): Handler {
         }
 
         case "live": {
+          if (!deployed) return { ok: false, error: localNote };
           // The edge reading, from the proxy in front of this app. It counts
           // REQUESTS; analytics counts PEOPLE. Never add them together.
           const r = await fetch(`https://${slug}.supersonic.cv/_xray`, {
