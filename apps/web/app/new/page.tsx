@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound } from "lucide-react";
 import { Mark } from "@/components/Mark";
-import { Bracket } from "@/components/Bracket";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 import { DeployFilm } from "@/components/DeployFilm";
 import { drive as advanceFilm, START as FILM_START, type FilmDrive } from "@/lib/deploy-film";
@@ -258,9 +257,9 @@ export default function NewApp() {
                       />
                     </div>
                     <div className="deploy-cta">
-                      <Bracket>
+                      
                         <button className="btn primary big" onClick={begin}>Deploy<ArrowRight size={13} /></button>
-                      </Bracket>
+                      
                       <span className="hint">live in ~1–2 minutes</span>
                     </div>
                   </>
@@ -311,9 +310,9 @@ export default function NewApp() {
                   </div>
                 ))}
                 <div className="deploy-cta" style={{ marginTop: 4 }}>
-                  <Bracket>
+                  
                     <button className="btn primary big" onClick={() => runDeploy(secretVals)}>Deploy<ArrowRight size={13} /></button>
-                  </Bracket>
+                  
                   <button className="btn" onClick={() => runDeploy({})}>Skip &amp; deploy anyway</button>
                 </div>
               </div>
@@ -364,9 +363,9 @@ export default function NewApp() {
                 <div className="u muted">deployed in {elapsed}s · Cloud Run · us-central1</div>
                 <div className="acts">
                   <a className="btn" href={liveUrl} target="_blank" rel="noreferrer">Visit<ArrowRight size={13} /></a>
-                  <Bracket>
+                  
                     <Link href={`/apps/${slug}`} className="btn primary">Open cockpit<ArrowRight size={13} /></Link>
-                  </Bracket>
+                  
                 </div>
               </div>
             )}

@@ -3,7 +3,6 @@ export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { Suspense } from "react";
 import { Plus } from "lucide-react";
-import { Bracket } from "@/components/Bracket";
 import { CommandPalette } from "@/components/CommandPalette";
 import { Sidebar } from "@/components/Sidebar";
 import { AccountBanner } from "@/components/AccountBanner";
@@ -82,9 +81,9 @@ async function AppsAndRail() {
             <div className="topbar-row">
               <CommandPalette apps={apps} />
               <div className="spacer" />
-              <Bracket>
+              
                 <Link href="/new" className="btn primary"><Plus size={14} />New app</Link>
-              </Bracket>
+              
             </div>
           </div>
         </header>
@@ -121,7 +120,7 @@ function HomeShell() {
             <div className="topbar-row">
               <div className="kbar" style={{ minWidth: 156 }} />
               <div className="spacer" />
-              <Bracket><span className="btn primary" style={{ opacity: .55 }}>New app</span></Bracket>
+              <span className="btn primary" style={{ opacity: .55 }}>New app</span>
             </div>
           </div>
         </header>
