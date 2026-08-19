@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { Cockpit } from "@/components/Cockpit";
+import { Workbench, type AppState } from "@/components/Workbench";
 import SharePanel from "@/components/SharePanel";
 import { CockpitSkeleton, RailSkeleton } from "@/components/Skeleton";
 import { describeService, type ServiceInfo } from "@/lib/gcloud";
@@ -26,6 +27,21 @@ function ownsService(slug: string, runUrl: string | null): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The one state the pill shows.
+ *
+ * `status` is the field that answers doneness — deploys.ts spells it
+ * live | building | deploying | pending | failed | canceled, and there is no
+ * 'done'. `stage` holds the last step that RAN, so reading it for doneness left
+ * every finished app saying "shipping" forever.
+ */
+function stateOf(status: string | null | undefined, ready: boolean): AppState {
+  const s = String(status ?? "");
+  if (s === "failed" || s === "canceled") return "broken";
+  if (s === "building" || s === "deploying" || s === "pending") return "shipping";
+  return ready ? "live" : "shipping";
 }
 
 /** What the cockpit needs for an app whose facts live in our database, not in Cloud Run. */
@@ -69,9 +85,11 @@ async function AppData({ params }: { params: { slug: string } }) {
     try { data = await describeService(slug); } catch { data = null; }
     if (data && data.owner === uid) {
       return (
-        <Cockpit appName={slug} data={data}>
-          <SharePanel slug={slug} />
-        </Cockpit>
+        <Workbench slug={slug} address={`${slug}.supersonic.cv`} state={stateOf(app.status, data.ready)}>
+          <Cockpit appName={slug} data={data}>
+            <SharePanel slug={slug} />
+          </Cockpit>
+        </Workbench>
       );
     }
   }
@@ -82,10 +100,13 @@ async function AppData({ params }: { params: { slug: string } }) {
   const dep = await getDeploy(slug);
   if (app || dep) {
     const name = dep?.name || app?.slug || slug;
+    const ready = app?.status === "live";
     return (
-      <Cockpit appName={slug} data={fromRecord(slug, name, uid, app?.status === "live")}>
-        <SharePanel slug={slug} />
-      </Cockpit>
+      <Workbench slug={slug} address={`${slug}.supersonic.cv`} state={stateOf(app?.status ?? dep?.status, ready)}>
+        <Cockpit appName={slug} data={fromRecord(slug, name, uid, ready)}>
+          <SharePanel slug={slug} />
+        </Cockpit>
+      </Workbench>
     );
   }
 

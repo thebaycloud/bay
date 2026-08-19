@@ -1269,3 +1269,54 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .dfilm-bar .url { color: var(--live); opacity: 0; transition: opacity .4s var(--ease);
   text-transform: none; letter-spacing: .02em; font-size: 11.5px; }
 .dfilm-bar .url.on { opacity: 1; }
+
+/* ============================================================
+   THE WORKBENCH
+   ============================================================
+   A chat rail beside the running app, with `Chat | Dev` swapping the right pane.
+   Replaces the drawer that used to be injected into every hosted app's HTML.
+   See docs/superpowers/specs/2026-08-19-app-workbench-design.md.
+
+   `body { overflow: hidden }` is set for the cockpit shell, so this owns the
+   viewport and each pane scrolls on its own. Two panes, one bar, no page scroll.
+   ============================================================ */
+.wb { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr; background: var(--ground); }
+
+.wb-top { display: flex; align-items: center; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--white); }
+
+/* The status pill. Green is status and nothing else, which is why the accent
+   cannot also mean "running" — see the token block at the top of this file. */
+.wb-pill { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px; border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 13px; font-weight: 500; color: var(--ink); }
+.wb-pill > b { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.wb-pill-st { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; color: var(--ink-2); }
+.wb-live > b { background: var(--green); }
+.wb-shipping > b { background: var(--ink-3); }
+.wb-broken > b { background: var(--red); }
+
+/* A recessed track with a raised white thumb. Not two buttons with a divider and
+   an ink-filled selection — that reads as a toolbar, and this is one control
+   with two positions. */
+.wb-seg { position: relative; display: grid; grid-auto-flow: column; gap: 0; padding: 3px; border-radius: var(--r-lg); background: var(--tile); box-shadow: inset 0 1px 2px rgb(0 0 0 / .05); }
+.wb-seg > button { position: relative; z-index: 1; height: 26px; padding: 0 16px; border: none; background: none; font: inherit; font-size: 13px; color: var(--ink-2); transition: color .16s var(--ease); }
+.wb-seg > button.on { color: var(--ink); }
+.wb-thumb { position: absolute; top: 3px; bottom: 3px; width: calc(50% - 3px); border-radius: var(--r-sm); background: var(--white); box-shadow: 0 1px 2px rgb(0 0 0 / .08); transition: transform .18s var(--ease); }
+.wb-thumb-chat { transform: translateX(0); }
+.wb-thumb-dev { transform: translateX(100%); }
+
+.wb-addr { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; color: var(--ink-2); text-decoration: none; }
+.wb-addr:hover { color: var(--ink); }
+
+.wb-body { display: grid; grid-template-columns: 340px 1fr; min-height: 0; }
+
+.wb-rail { display: grid; grid-template-rows: 1fr auto; min-height: 0; border-right: 1px solid var(--line); background: var(--white); }
+.wb-thread { overflow-y: auto; padding: 16px; }
+.wb-rail-empty { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.wb-composer { padding: 12px; border-top: 1px solid var(--line); }
+.wb-composer input { width: 100%; height: 36px; padding: 0 11px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--ground); font: inherit; font-size: 13px; color: var(--ink); }
+.wb-composer input::placeholder { color: var(--ink-3); }
+
+/* The pane the segmented control swaps. Dev mode's child is the cockpit, which
+   brings its own scrolling, so the pane only scrolls when it is holding the
+   frame. */
+.wb-pane { position: relative; min-height: 0; overflow: hidden; }
+.wb-frame { width: 100%; height: 100%; border: 0; display: block; background: var(--white); }
