@@ -3,7 +3,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { lookupApp } from "./registry";
 import { decideEdge } from "./edge";
-import { latestRunId, stepsAfter, tailSteps, forGuest, type RoomStep } from "./room-feed";
+import { latestRunId, stepsAfter, tailSteps, type RoomStep } from "./room-feed";
 
 /**
  * The live side of the room: who is watching, what just happened, and when the
@@ -75,12 +75,22 @@ function broadcast(s: Session, payload: unknown): void {
   for (const w of [...s.watchers]) if (!send(w, payload)) drop(s, w);
 }
 
-/** Steps carry text for owners only, so the fan-out is per watcher. */
+/**
+ * Steps go to owners, and to nobody else.
+ *
+ * This was a per-watcher fan-out that sent a guest a redacted copy — the
+ * movements and the stage boundaries, with the words stripped. It no longer
+ * sends them anything, because the redacted copy was still a live account of
+ * somebody's build: its shape, its length, where it had got to and whether it
+ * had failed. `serveRoomEvents` now refuses a guest the stream outright, so in
+ * practice every watcher here is an owner; the filter stays because a fan-out
+ * that decides who may read a build should say so at the point of sending.
+ */
 function broadcastSteps(s: Session, steps: RoomStep[]): void {
   if (!steps.length) return;
-  const guestView = forGuest(steps);
   for (const w of [...s.watchers]) {
-    if (!send(w, { t: "steps", steps: w.owner ? steps : guestView })) drop(s, w);
+    if (!w.owner) continue;
+    if (!send(w, { t: "steps", steps })) drop(s, w);
   }
 }
 
@@ -208,6 +218,21 @@ export function watching(slug: string): number {
  */
 export function serveRoomEvents(req: IncomingMessage, res: ServerResponse, opts: { slug: string; owner: boolean }): void {
   const { slug, owner } = opts;
+  /**
+   * A guest is not given the stream.
+   *
+   * The guest page holds no script and opens no EventSource, so nothing reaches
+   * here by accident — but "the page does not ask for it" is not access
+   * control. Anyone with the link can request this URL directly, and until this
+   * returned early they got a running commentary on somebody else's deploy for
+   * the asking. 404 rather than 403: for a request that is not the owner's,
+   * this endpoint does not exist.
+   */
+  if (!owner) {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+    res.end("not found");
+    return;
+  }
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classify, stepOf, forGuest, type RoomStep } from "./room-feed";
+import { classify, stepOf, type RoomStep } from "./room-feed";
 
 // Every line below is a real one, taken from production `deploy_events`, with
 // its observed frequency. The first version of classify() was written against
@@ -60,18 +60,25 @@ test("a blank line is not a movement", () => {
   assert.equal(stepOf(2, { type: "log", line: "" }), null);
 });
 
-test("a guest gets the movement and never the words", () => {
-  const steps: RoomStep[] = [
-    { id: 1, kind: "prepare", text: "npm ERR! /Users/someone/secret-project/src/keys.ts" },
-    { id: 2, kind: "broke", text: "Error: ENOENT /home/build/app/.env.production" },
-  ];
-  const seen = forGuest(steps);
-  assert.deepEqual(seen, [{ id: 1, kind: "prepare" }, { id: 2, kind: "broke" }]);
-  // The count is preserved: a guest sees the same amount of work happening.
-  assert.equal(seen.length, steps.length);
-  // And nothing carries text through by another name.
-  assert.equal(JSON.stringify(seen).includes("secret-project"), false);
-  assert.equal(JSON.stringify(seen).includes(".env"), false);
+test("a guest is not sent a build, redacted or otherwise", async () => {
+  // This replaced `forGuest`, which handed a guest the movements and the stage
+  // boundaries with the words stripped out. The words were never the whole
+  // disclosure: the stages told anyone with the link how long this deploy was,
+  // which part of it was running, how long it had been stuck there and whether
+  // it had broken. Nothing goes to a guest now, and these are the two places
+  // that has to hold.
+  const { readFileSync } = await import("node:fs");
+  const room = readFileSync(new URL("./room.ts", import.meta.url), "utf8");
+  // The fan-out skips them...
+  assert.match(room, /function broadcastSteps[\s\S]*?if \(!w\.owner\) continue;/);
+  // ...and the stream is refused before a watcher is ever attached, so a guest
+  // who requests /_room/events by hand gets nothing either.
+  const serve = /export function serveRoomEvents[\s\S]*?\n}/.exec(room)?.[0] ?? "";
+  assert.ok(serve, "serveRoomEvents not found");
+  const gate = serve.indexOf("if (!owner)");
+  const attach = serve.indexOf("watchers.add");
+  assert.ok(gate >= 0, "serveRoomEvents does not check ownership");
+  assert.ok(gate < attach, "ownership is checked after the watcher is attached");
 });
 
 test("quiet is rarer than the ordinary gap between build lines", async () => {
@@ -143,18 +150,19 @@ test("a stage boundary comes through as a stage, not as a movement", () => {
   assert.equal(stepOf(13, { type: "stage" }), null);
 });
 
-test("a guest keeps the stage and never the line", () => {
-  // The stage names are the platform's own vocabulary — fourteen fixed words,
-  // the same for every app — so a guest can be told which one is running. The
-  // line is the opposite: file paths, package names, stack frames out of
-  // somebody's repository.
-  const steps = [
-    { id: 1, kind: "build" as const, text: "next build — /Users/rakhat/secret-app/pages" },
-    { id: 2, kind: "stage" as const, stage: "build", phase: "start" as const, outcome: undefined },
-  ];
-  const guest = forGuest(steps);
-  assert.equal(guest[0].text, undefined);
-  assert.equal(guest[1].text, undefined);
-  assert.equal(guest[1].stage, "build");
-  assert.equal(guest[1].phase, "start");
+test("the log's clock is the deploy's, not the reader's", async () => {
+  // A room is routinely opened at minute four of a build. If the gutter counted
+  // from when the tab did, the first line it showed would be captioned 0s — a
+  // build four minutes old, labelled as having just started. So the offset is
+  // computed against the run's own first event, in the query that reads it.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./room-feed.ts", import.meta.url), "utf8");
+  assert.match(src, /SELECT MIN\(at\) FROM deploy_events WHERE run_id = \$1/);
+  // Both readers label their rows: the tail a late arrival gets, and the pages
+  // that follow it.
+  for (const fn of ["stepsAfter", "tailSteps"]) {
+    const body = new RegExp("export async function " + fn + "[\\s\\S]*?\\n}").exec(src)?.[0] ?? "";
+    assert.ok(body, fn + " not found");
+    assert.match(body, /t: Number\(row\.t\) \|\| 0/);
+  }
 });

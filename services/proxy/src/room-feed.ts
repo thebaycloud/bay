@@ -74,6 +74,19 @@ export interface RoomStep {
   stage?: string;
   phase?: "start" | "end";
   outcome?: string;
+  /**
+   * Seconds from the start of THIS run to this event.
+   *
+   * The room's log prints it in the gutter, and it has to be the deploy's own
+   * clock rather than the page's: a room is routinely opened at minute four of
+   * a build, and a timer started when the tab did would label the first line it
+   * showed `0s` — a build that has been running for four minutes, captioned as
+   * having just begun.
+   *
+   * Measured against the run's earliest stored event rather than the run row's
+   * created_at, so it is the same number whichever of the two the reader has.
+   */
+  t?: number;
 }
 
 /**
@@ -147,6 +160,28 @@ export function stepOf(id: number, event: Record<string, unknown>): RoomStep | n
   return null;
 }
 
+/**
+ * Seconds since this run's first event, computed by the database.
+ *
+ * A scalar subquery over `(run_id, id)`, which is the index every other read
+ * here already uses, so it costs one extra index lookup per page rather than a
+ * second round trip — and it cannot drift from the rows it labels the way a
+ * value read separately and subtracted in Node could.
+ *
+ * `GREATEST(0, …)` because clocks are not required to be monotonic across the
+ * writers that append to this table, and a log line captioned `-1s` reads as a
+ * bug in the page rather than as a bug in a clock.
+ */
+const SECONDS_IN = `GREATEST(0, EXTRACT(EPOCH FROM (at - (
+  SELECT MIN(at) FROM deploy_events WHERE run_id = $1
+))))::int AS t`;
+
+interface EventRow {
+  id: string | number;
+  event: Record<string, unknown>;
+  t: string | number | null;
+}
+
 /** The run the room is narrating: the app's most recent one. */
 export async function latestRunId(slug: string): Promise<string | null> {
   try {
@@ -183,15 +218,16 @@ export interface StepPage {
 export async function stepsAfter(runId: string, afterId: number, limit = 40): Promise<StepPage> {
   try {
     const r = await db().query(
-      `SELECT id, event FROM deploy_events WHERE run_id = $1 AND id > $2 ORDER BY id LIMIT $3`,
+      `SELECT id, event, ${SECONDS_IN} FROM deploy_events
+        WHERE run_id = $1 AND id > $2 ORDER BY id LIMIT $3`,
       [runId, afterId, limit],
     );
     let cursor = afterId;
     const steps: RoomStep[] = [];
-    for (const row of r.rows as Array<{ id: string | number; event: Record<string, unknown> }>) {
+    for (const row of r.rows as EventRow[]) {
       cursor = Number(row.id);
       const step = stepOf(cursor, row.event ?? {});
-      if (step) steps.push(step);
+      if (step) steps.push({ ...step, t: Number(row.t) || 0 });
     }
     return { steps, cursor };
   } catch {
@@ -210,17 +246,18 @@ export async function stepsAfter(runId: string, afterId: number, limit = 40): Pr
 export async function tailSteps(runId: string, limit = 30): Promise<StepPage> {
   try {
     const r = await db().query(
-      `SELECT id, event FROM (
-         SELECT id, event FROM deploy_events WHERE run_id = $1 ORDER BY id DESC LIMIT $2
-       ) t ORDER BY id`,
+      `SELECT id, event, t FROM (
+         SELECT id, event, ${SECONDS_IN} FROM deploy_events
+          WHERE run_id = $1 ORDER BY id DESC LIMIT $2
+       ) s ORDER BY id`,
       [runId, limit],
     );
     let cursor = 0;
     const steps: RoomStep[] = [];
-    for (const row of r.rows as Array<{ id: string | number; event: Record<string, unknown> }>) {
+    for (const row of r.rows as EventRow[]) {
       cursor = Number(row.id);
       const step = stepOf(cursor, row.event ?? {});
-      if (step) steps.push(step);
+      if (step) steps.push({ ...step, t: Number(row.t) || 0 });
     }
     return { steps, cursor };
   } catch {
@@ -229,15 +266,17 @@ export async function tailSteps(runId: string, limit = 30): Promise<StepPage> {
 }
 
 /**
- * Strip what a guest must not read.
+ * There is no guest view of a build, and that is the whole rule.
  *
- * `text` goes and everything else stays. The stage fields are deliberately kept:
- * they are one of fourteen fixed words, the same fourteen for every app on the
- * platform, and without them a guest's room would have a picture that never
- * cuts — which is the whole difference between watching a build and watching a
- * screensaver.
+ * This module used to export `forGuest`, which dropped `text` and kept the
+ * stage fields on the argument that stage names are the platform's own
+ * vocabulary and disclose nothing about anybody's repository. That was true
+ * about the WORDS and false about the picture they drove: kept, they told
+ * whoever had the link how many stages this deploy had, which one it was
+ * sitting in, how long it had sat there, and whether it had broken and been
+ * rebuilt. A shared URL is not consent to any of that.
+ *
+ * So a guest is no longer sent steps in any form (see `broadcastSteps` in
+ * room.ts) and is not served the stream at all (see `serveRoomEvents`). The
+ * redaction has nothing left to redact.
  */
-export function forGuest(steps: RoomStep[]): RoomStep[] {
-  return steps.map(({ id, kind, stage, phase, outcome }) =>
-    kind === "stage" ? { id, kind, stage, phase, outcome } : { id, kind });
-}
