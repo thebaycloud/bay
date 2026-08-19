@@ -46,7 +46,7 @@ const EMITTERS = [
   //
   // The earlier note named `lib/deploy-execute.ts`, a file that was referenced
   // here and never committed. That extraction was never made; this one was.
-  "lib/source.ts", "lib/publish-static.ts",
+  "lib/source.ts", "lib/publish-static.ts", "lib/build-image.ts",
   "lib/fleet.ts",
 ];
 

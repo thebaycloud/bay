@@ -35,6 +35,7 @@ import { dbNameForSlug, getPool } from "@/lib/db";
 import { fetchSource, pruneBrokenSymlinks } from "@/lib/source";
 import { detectStack, describeDetection } from "@/lib/detect-stack";
 import { publishStatic } from "@/lib/publish-static";
+import { buildImage as buildAppImage } from "@/lib/build-image";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -2950,107 +2951,43 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       servePortMemo.set(builtImage, port);
       return port;
     };
-
     const buildImage = async (): Promise<{ ok: true; image: string } | { ok: false; error: string }> => {
-      if (!useDockerBuild && !serviceless) {
-        // Only the buildpack lane reaches here: its image is produced as a side
-        // effect of `run deploy --source` and named by Cloud Run, so there is
-        // nothing to build ahead of the delivery. `runDeploy` knows that and
-        // never asks; `fleetEligibility` refuses the lane outright for the same
-        // reason. This is the answer if a third caller ever appears, and it is a
-        // refusal rather than a shrug — placing an image nobody built is exactly
-        // what this function was extracted to prevent.
-        return { ok: false, error: "this lane has no image of its own to build before the deploy" };
-      }
-      // Kept for the error path. `gcloud builds submit` reports the failure in
-      // its own output long before the build log is fetchable, and the last
-      // lines of it are the only diagnosis available when the log read fails.
-      const btail: string[] = [];
-      const onBuild = (l: string) => { btail.push(l); if (btail.length > 60) btail.shift(); buildLine(l); };
-      try {
-        await stages.around("build", async () => {
-          const args = useDockerBuild
-            ? ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, "--config", join(dir, "cloudbuild.yaml"), ...buildIdentityArgs()]
-            // The one lane where skipping the Cloud Run deploy would skip the
-            // BUILD: buildpacks run inside `run deploy --source`, so with no
-            // service there is nothing to produce an image. `builds submit
-            // --pack` is the same builder without the deploy, which is exactly
-            // what a worker-only app needs.
+      // Which builder, the credential dance around our own daemon, the tail kept
+      // for a failure whose log is not fetchable yet, and the rule that a build
+      // which cannot be resolved to a DIGEST has failed — all in lib/build-image.ts.
+      return buildAppImage(
+        {
+          dir, image: IMAGE,
+          hasDockerfile: useDockerBuild,
+          serviceless,
+          builder,
+          plannedWithRailpack,
+        },
+        {
+          log,
+          around: (stage, fn) => stages.around(stage, fn),
+          run: (cmd, args, onLine) => run(cmd, args, onLine),
+          cloudBuildArgs: (t) => t.hasDockerfile
+            ? ["builds", "submit", t.dir, "--region", REGION, "--project", PROJECT, "--config", join(t.dir, "cloudbuild.yaml"), ...buildIdentityArgs()]
+            // The one shape where skipping the deploy would skip the BUILD:
+            // buildpacks run inside it. `builds submit --pack` is the same
+            // builder without the deploy, which is what a worker-only app needs.
             //
-            // NOT `--source` on the worker pool itself, though it accepts one:
-            // that would rebuild the app once per process, on a lane whose
-            // release job already pays for the build twice and says so.
-            //
-            // No `--service-account` here, and it is not an oversight. This is
-            // the one submit that writes no cloudbuild.yaml, so it has no
-            // `logging: CLOUD_LOGGING_ONLY` — and Cloud Build REFUSES a
-            // user-specified build account unless a logging destination is set,
-            // which would turn a scoped identity into a failed deploy. The
-            // buildpack lane is what step 4 deletes anyway; it keeps the default
-            // account until it goes.
-            : ["builds", "submit", dir, "--region", REGION, "--project", PROJECT, `--pack=image=${IMAGE}:latest`];
-          if (useDockerBuild) log(`Building with layer cache (${builder}) — the first build warms it, later ones are fast…`);
-          else log("Building with buildpacks — no service to deploy, so the image is built directly…");
-          const hb = setInterval(() => log("building…"), 8000);
-          builds.reset();
-          try {
-            // OUR OWN BUILDKIT, when there is one and there is a plan for it.
-            //
-            // Both conditions, not either: `buildctl` executes a Railpack plan
-            // through the frontend, so a Dockerfile app has nothing for it to
-            // run. Those apps keep Cloud Build until the plan covers them.
-            //
-            // This is the path that removes a scheduler rather than speeding one
-            // up — the source is already here, and Cloud Build was a second
-            // machine we shipped it to so it could do what this one was holding.
-            const planeAddr = plannedWithRailpack ? buildPlaneHost(process.env) : null;
-            if (planeAddr) {
-              // Registry credentials travel from HERE to the daemon, which is
-              // what keeps the build host free of standing push credentials.
-              // Written before the build and removed after: a token on disk for
-              // the length of one build is a smaller window than one in an
-              // image, and this file is the daemon's only way in.
-              const tok = await accessToken();
-              if (!tok) throw new Error("no credentials to push the built image with");
-              const dockerDir = join(homedir(), ".docker");
-              mkdirSync(dockerDir, { recursive: true });
-              writeFileSync(join(dockerDir, "config.json"),
-                dockerAuthConfig(IMAGE.split("/")[0], tok), { mode: 0o600 });
-              log(`Building on the fleet's own BuildKit — its cache is local and stays warm…`);
-              try {
-                // No build args here, and not because they are unavailable in
-                // this closure. On this lane they were already baked into the
-                // PLAN by `railpack prepare --env` — declared `buildEnv` and the
-                // app's public address both. Passing them a second time as
-                // `--opt build-arg:` would be a second source for one fact.
-                await run("buildctl", buildctlArgs({ dir, image: IMAGE, addr: planeAddr }), onBuild);
-              } finally {
-                try { unlinkSync(join(dockerDir, "config.json")); } catch { /* gone is fine */ }
-              }
-            } else {
-              await run("gcloud", args, onBuild);
-            }
-          } finally { clearInterval(hb); }
-        });
-      } catch (e) {
-        const buildLog = await builds.error();
-        const reason = buildLog
-          || btail.filter((l) => /error|invalid|denied|must|logging|permission|quota|not found/i.test(l)).slice(-6).join("\n")
-          || btail.slice(-6).join("\n")
-          || (e instanceof Error ? e.message : String(e));
-        return { ok: false, error: failureSentence("Build failed", reason) };
-      }
-      const digest = await resolveImageDigest(`${IMAGE}:latest`);
-      if (!digest) {
-        // Ours, not the repository's — the build succeeded and pushed. Worded to
-        // match deploy-errors.ts's registry rule so `classify` blames the
-        // platform: sending a repair agent to edit a customer's app over a
-        // registry that would not answer costs ~$12-15 and finds nothing.
-        return { ok: false, error: `the image digest could not be resolved: the build pushed ${IMAGE}:latest, `
-          + `and the registry did not say which image that now names. Deploying the tag instead would silently ship the previous version.` };
-      }
-      log(`Built ${digest.slice(0, 19)}… — deployed by digest, so "the new version" is a fact rather than a tag.`);
-      return { ok: true, image: `${IMAGE}@${digest}` };
+            // No `--service-account`, and it is not an oversight: this submit
+            // writes no cloudbuild.yaml, so it has no `logging:
+            // CLOUD_LOGGING_ONLY` — and Cloud Build REFUSES a user-specified
+            // build account without a logging destination, which would turn a
+            // scoped identity into a failed deploy.
+            : ["builds", "submit", t.dir, "--region", REGION, "--project", PROJECT, `--pack=image=${t.image}:latest`],
+          buildPlaneAddr: () => buildPlaneHost(process.env),
+          accessToken,
+          resolveDigest: resolveImageDigest,
+          resetBuildLog: () => builds.reset(),
+          buildLog: () => builds.error(),
+          noteBuildLine: buildLine,
+          failureSentence,
+        },
+      );
     };
 
     /**
