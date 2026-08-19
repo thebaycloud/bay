@@ -1,6 +1,5 @@
 import { ArrowRight, Copy } from "lucide-react";
 import { Button } from "@/components/ds/Button";
-import { Metal, type Finish } from "@/components/ds/Metal";
 import { DashboardBlocks, TintRow } from "@/components/ds/Blocks";
 
 export const metadata = { title: "Supersonic — Design blocks" };
@@ -11,8 +10,7 @@ export const metadata = { title: "Supersonic — Design blocks" };
  * is what ships.
  *
  * `globals.css` sets `body { overflow: hidden }` for the cockpit shell, so this
- * page owns a fixed layer with its own scroll. That also puts it above the
- * graph-paper substrate, which would otherwise show through.
+ * page owns a fixed layer with its own scroll.
  */
 
 function Section({ n, title, note, children }: { n: string; title: string; note?: string; children: React.ReactNode }) {
@@ -37,12 +35,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-const FINISHES: { f: Finish; note: string }[] = [
-  { f: "brushed", note: "Vertical grain. Tiles at any width." },
-  { f: "panoramic", note: "Horizontal grain + irregular bands. Never tiles." },
-  { f: "satin", note: "Matte, near-flat. The only one quiet enough to sit under content." },
-];
-
 export default function DesignPage() {
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-white font-sans text-ink antialiased">
@@ -60,37 +52,30 @@ export default function DesignPage() {
         {/* ---------------------------------------------------------------- */}
         <Section
           n="01 — Buttons"
-          title="Metal is the surface. Hover swaps it."
-          note="Every button is a pair: what it is at rest, and what it becomes under the cursor. Either end can be white, steel, or red metal, so both directions are the same component with the ends reversed. The label colour and the hairline edge travel with the surface — ink on white and steel, white on red, and no ring on metal because metal defines its own edge."
+          title="Two surfaces. Hover swaps them."
+          note="Every button is a pair: what it is at rest, and what it becomes under the cursor. Either end can be white or flat red, so both directions are the same component with the ends reversed. The label colour and the hairline edge travel with the surface — ink on white, white on red. Metal used to be a third and fourth surface, two .webp plates cross-fading under the cursor; it is gone, because it cost every page with a button two image fetches to draw one."
         >
           <p className="-mt-2 font-mono text-micro text-ink-3">Point at everything below.</p>
 
-          <Row label="White at rest → metal on hover">
-            <Button rest="white" hover="steel" size="md">Open console</Button>
-            <Button rest="white" hover="steel" size="md" finish="satin">Settings</Button>
-            <Button rest="white" hover="red" size="md">Deploy now</Button>
-            <Button rest="white" hover="red" size="lg">
+          <Row label="White at rest → red on hover">
+            <Button rest="white" hover="solid" size="sm">Open console</Button>
+            <Button rest="white" hover="solid" size="md">Deploy now</Button>
+            <Button rest="white" hover="solid" size="lg">
               Deploy now
               <ArrowRight size={18} strokeWidth={2} />
             </Button>
           </Row>
 
-          <Row label="Metal at rest → white on hover">
-            <Button rest="steel" hover="white" size="md">Open console</Button>
-            <Button rest="steel" hover="white" size="md" finish="satin">Settings</Button>
-            <Button rest="red" hover="white" size="md">Deploy now</Button>
-            <Button rest="red" hover="white" size="lg" finish="panoramic">
-              Deploy now
+          <Row label="Red at rest → white on hover">
+            <Button rest="solid" hover="white" size="sm">Ship again</Button>
+            <Button rest="solid" hover="white" size="md">Ship again</Button>
+            <Button rest="solid" hover="white" size="lg">
+              Ship again
               <ArrowRight size={18} strokeWidth={2} />
             </Button>
           </Row>
 
-          <Row label="Metal both ends — steel ⇄ red">
-            <Button rest="steel" hover="red" size="md">Ship again</Button>
-            <Button rest="red" hover="steel" size="md">Ship again</Button>
-          </Row>
-
-          <Row label="No change — flat red, and plain white">
+          <Row label="No change — the label still rolls">
             <Button rest="solid" size="sm">Ship</Button>
             <Button rest="solid" size="md">Ship</Button>
             <Button rest="white" size="md">
@@ -98,25 +83,6 @@ export default function DesignPage() {
               Copy
             </Button>
             <Button rest="solid" size="md" disabled>Disabled</Button>
-          </Row>
-
-          <Row label="Finish changes the character">
-            <Button rest="red" hover="white" size="md" finish="brushed">Brushed</Button>
-            <Button rest="red" hover="white" size="md" finish="panoramic">Panoramic</Button>
-            <Button rest="red" hover="white" size="md" finish="satin">Satin</Button>
-          </Row>
-
-          <Row label="Plate zoom — pick one">
-            {[1, 3, 5, 8, 12].map((z) => (
-              <div key={z} className="flex flex-col items-start gap-2">
-                <Button rest="red" size="md" zoom={z}>Deploy now</Button>
-                <Button rest="steel" size="md" zoom={z}>Open console</Button>
-                <span className="font-mono text-[11px] text-ink-3">
-                  zoom {z}
-                  {z === 1 ? " · fits whole plate" : ""}
-                </span>
-              </div>
-            ))}
           </Row>
         </Section>
 
@@ -162,7 +128,7 @@ export default function DesignPage() {
         {/* ---------------------------------------------------------------- */}
         <Section
           n="03 — Dashboard blocks"
-          title="Squared cells, rounded parts."
+          title="Cells share one hairline."
           note="Cells share one hairline instead of each drawing a border, so the screen is a single ruled surface. The mark at the crossing is four radial gradients — no image, no SVG."
         >
           <DashboardBlocks />
@@ -172,28 +138,6 @@ export default function DesignPage() {
               <TintRow value="https://mcp.supersonic.cv/v2/mcp-oauth" />
             </div>
           </Row>
-        </Section>
-
-        {/* ---------------------------------------------------------------- */}
-        <Section
-          n="04 — Metal"
-          title="Three finishes."
-          note="Grain is feTurbulence with deliberately unequal baseFrequency — that asymmetry is what turns noise into brushed metal. Every instance is a live filter pass, so these are for hero surfaces and buttons, not for behind every row of a list."
-        >
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-            {FINISHES.map(({ f, note }) => (
-              <div key={f} className="flex flex-col gap-3">
-                <div className="relative h-32 overflow-hidden shadow-plate">
-                  <Metal finish={f} tone="steel" />
-                </div>
-                <div className="relative h-32 overflow-hidden shadow-plate">
-                  <Metal finish={f} tone="red" />
-                </div>
-                <div className="font-mono text-label uppercase text-ink">{f}</div>
-                <div className="text-sub text-ink-2">{note}</div>
-              </div>
-            ))}
-          </div>
         </Section>
 
       </div>

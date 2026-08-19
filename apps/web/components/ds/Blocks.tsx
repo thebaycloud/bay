@@ -119,7 +119,7 @@ export function DashboardBlocks() {
               <Avatar key={s} initials={s} i={i} />
             ))}
           </div>
-          <Button rest="white" hover="steel" size="sm">
+          <Button rest="white" hover="white" size="sm">
             <Plus size={15} strokeWidth={2} />
             Invite
           </Button>
@@ -130,7 +130,7 @@ export function DashboardBlocks() {
         title="Database"
         sub="Your app's data and files"
       >
-        <Button rest="white" hover="steel" size="md">
+        <Button rest="white" hover="white" size="md">
           Open
           <ArrowRight size={16} strokeWidth={2} />
         </Button>
@@ -138,7 +138,7 @@ export function DashboardBlocks() {
 
       <Cell title="Updates" sub="Last shipped 2 hours ago">
         <div className="flex items-center gap-3">
-          <Button rest="red" hover="white" size="md">
+          <Button rest="solid" hover="white" size="md">
             <RefreshCw size={16} strokeWidth={2} />
             Ship again
           </Button>

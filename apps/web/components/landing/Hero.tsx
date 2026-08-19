@@ -157,10 +157,10 @@ export function Hero() {
         <PromptBox />
 
         <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
-          <Button rest="red" hover="white" size="lg">
+          <Button rest="solid" hover="solid" size="lg">
             Copy prompt for your agent
           </Button>
-          <Button rest="white" hover="steel" size="lg">
+          <Button rest="white" hover="white" size="lg">
             See a live app
           </Button>
         </div>
