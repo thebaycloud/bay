@@ -55,7 +55,12 @@ export function Cell({
     "relative flex flex-col gap-1 rounded-xl border-border bg-card p-4 pb-4.5 text-left shadow-none",
     wide && "col-span-full",
     !wide && "min-h-[132px]",
-    onOpen && "transition-colors hover:bg-ground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red",
+    // hover:bg-tile, NOT bg-ground. Tailwind's `ground` is #E4E4E4 — it is the
+    // hairline colour ds/Blocks draws its grid rules in, not the page ground —
+    // so hovering a cell turned it mid-grey. The page ground is the --ground
+    // VARIABLE at #FAFAFA, which is too close to white to register as a hover,
+    // so the filled-surface grey is the right step: visible, and one step.
+    onOpen && "transition-colors hover:bg-tile focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red",
   );
 
   if (!onOpen) return <Card className={shape}>{body}</Card>;
