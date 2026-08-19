@@ -48,8 +48,8 @@ export const OPS: Op[] = [
   "describe",
 ];
 
-/** One line per operation, written into the workspace as the agent's tool list. */
-const HELP: Record<Op, string> = {
+/** One line per operation. Inlined into the instructions AND written to disk. */
+export const HELP: Record<Op, string> = {
   db: "./db \"<single SELECT>\"   — query the app's database. Only SELECT is accepted.",
   logs: "./logs [n]              — the app's most recent log lines.",
   errors: "./errors [n]            — recent errors only.",

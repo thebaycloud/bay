@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OPS, seedTools, serveTools } from "../lib/chat/bridge";
-import { REPLAY, buildPrompt, chatSpec } from "../lib/chat/run";
+import { INSTRUCTIONS, REPLAY, buildPrompt, chatSpec } from "../lib/chat/run";
 
 const ws = () => mkdtempSync(join(tmpdir(), "chat-test-"));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -216,4 +216,21 @@ test("an argument with quotes or newlines survives the round trip", async () => 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("the tool list is in the instructions, not only in a file", async () => {
+  // A deployed run spent both its turns trying to READ the tool list — sed on
+  // TOOLS.md, then again with absolute paths — got nothing, and answered "the
+  // analytics tools are unavailable" without running one. The file was present and
+  // correct. Making tool DISCOVERY depend on a filesystem operation is the mistake:
+  // the agent cannot ask for help finding the thing that tells it how to ask.
+  const { OPS: ops } = await import("../lib/chat/bridge");
+  for (const op of ops) {
+    assert.ok(INSTRUCTIONS.includes(`./${op}`), `${op} is not named in the instructions`);
+  }
+  assert.equal(
+    /read TOOLS\.md/i.test(INSTRUCTIONS),
+    false,
+    "nothing may instruct the agent to go and find its own tool list",
+  );
 });

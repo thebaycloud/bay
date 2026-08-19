@@ -1,4 +1,5 @@
 import type { RunSpec } from "@/lib/agents/types";
+import { HELP, OPS } from "@/lib/chat/bridge";
 
 /**
  * What the chat agent is told, and what it is allowed.
@@ -13,12 +14,30 @@ export type Turn = { role: "you" | "agent"; text: string };
 /** Turns of history replayed into the prompt. Uncapped, this is an unbounded bill. */
 export const REPLAY = 10;
 
+/**
+ * The tool list is INLINE, not a file the agent has to find.
+ *
+ * It used to say "read TOOLS.md first". A deployed run then spent both of its turns
+ * doing exactly that — `sed -n '1,240p' TOOLS.md`, then again with absolute paths —
+ * got nothing, and answered "the analytics tools are unavailable" without ever running
+ * one. The file is present and 1,379 bytes; the workspace is correct. Whatever stopped
+ * that read, making tool DISCOVERY depend on a filesystem operation was the mistake:
+ * the agent cannot ask for help finding the thing that tells it how to ask for help.
+ *
+ * TOOLS.md is still written, as a reference to re-read mid-run. Nothing depends on it.
+ */
 export const INSTRUCTIONS = `You answer questions about ONE running web app, for the person who owns it.
 
-You have read-only tools and nothing else. Read TOOLS.md in your working directory
-first; it lists them. You have no network, no write tools, and no copy of the app's
-source code — most apps here were deployed as a folder upload, so there is usually no
-repo to read. Do not plan around any of that.
+Your tools are executable scripts in your working directory. Run them from there:
+
+${OPS.map((op) => `  ${HELP[op]}`).join("\n")}
+
+Each prints one line of JSON: {"ok":true,"data":…} or {"ok":false,"error":…}. Run them
+directly — do not look for a file listing them, you have just been given it.
+
+You have no network, no write tools, and no copy of the app's source code — most apps
+here were deployed as a folder upload, so there is usually no repo to read. Do not plan
+around any of that.
 
 How to answer:
 
