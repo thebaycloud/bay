@@ -19,7 +19,11 @@
 
 :root {
   /* The panel's own tokens, verbatim. */
-  --white: #FFFFFF; --ground: #FAFAFA; --tile: #F4F4F5;
+  /* --tile is the filled-surface grey: input grounds, segmented tracks, the
+     question bubble. It was #F4F4F5, four points off the #FAFAFA ground and
+     effectively invisible against a white card, which is why the whole product
+     read as white-on-white. */
+  --white: #FFFFFF; --ground: #FAFAFA; --tile: #F0F0F2;
   --ink: #0A0A0A; --ink-2: #737373; --ink-3: #A1A1AA;
   --line: #E5E5E5;
   --red: #E63F2C; --red-deep: #FC8779;
@@ -31,8 +35,11 @@
      the alert state stays the only thing wearing a warning. The control plane's
      accent WAS green; this swap is that rule finally being applied. */
   --green: #16A34A;
-  /* 8/6/4, which is shadcn's ramp. */
-  --r-xl: 8px; --r-lg: 6px; --r-sm: 4px;
+  /* Was 8/6/4, shadcn's ramp, ported straight from the panel. Too tight in use:
+     at 6px a card reads as a box with the corners filed off rather than a soft
+     surface, which is the whole difference between this and the tools it is being
+     measured against. Bumped one step up the scale. */
+  --r-xl: 14px; --r-lg: 10px; --r-sm: 6px;
   --ease: cubic-bezier(.2, .8, .2, 1);
 
   /* ---- aliases: the blueprint system's names, pointed at the new palette ----
@@ -77,8 +84,12 @@
   --sh-destructive-foreground: var(--white);
   --sh-border: var(--line);
   --sh-input: var(--line);
-  --sh-ring: var(--red);
-  --sh-radius: 6px;
+  /* NOT the brand red. shadcn's --ring is the focus halo on every input, textarea
+     and menu item, and pointing it at the accent drew a loud red outline around
+     anything focused — including the composer, which is focused most of the time.
+     Red stays for fills and marks; focus is neutral and still visible at 3px. */
+  --sh-ring: var(--ink-3);
+  --sh-radius: 10px;
 
   --mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
   --sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;

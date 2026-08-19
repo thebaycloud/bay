@@ -87,7 +87,10 @@ export default {
         // practically invisible.
         ground: "#E4E4E4",
         sunken: "#FBFBFB",
-        tile: "#F9F9F9",
+        // Points at the CSS variable rather than carrying a second value.
+        // `bg-tile` was resolving to #F9F9F9 here while --tile was #F4F4F5 in
+        // globals.css, so a filled input looked white and nobody could see why.
+        tile: "var(--tile)",
         // Wet steel at low tide — the metal ramp.
         steel: {
           50: "#C4CCD0",

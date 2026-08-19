@@ -97,7 +97,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                 <Message align="end">
                   <MessageContent>
                     <div
-                      className="max-w-[85%] rounded-lg bg-tile px-3 py-2 text-ink"
+                      className="max-w-[85%] rounded-xl bg-tile px-3.5 py-2 text-ink"
                       data-slot="message-surface"
                     >
                       {turn.question}
@@ -169,6 +169,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
           glyph — the filled round button is a variant, not the default. */}
       <div className="border-t border-border p-3">
         <PromptInput
+          className="rounded-xl border-transparent bg-tile shadow-none focus-within:border-line"
           onSubmit={(_message, event) => {
             event.preventDefault();
             ask();
@@ -176,6 +177,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
         >
           <PromptInputBody>
             <PromptInputTextarea
+              className="bg-transparent"
               onChange={(e) => setText(e.currentTarget.value)}
               placeholder={`Ask about ${slug}…`}
               value={text}
@@ -188,7 +190,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                   opened an empty file dialog would be the dead control this
                   codebase keeps refusing to ship. */}
               <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger />
+                <PromptInputActionMenuTrigger className="size-8 shrink-0 rounded-full border border-line bg-white hover:bg-tile" />
                 <PromptInputActionMenuContent>
                   {STARTERS.map((q) => (
                     <PromptInputActionMenuItem key={q} onClick={() => setText(q)}>
