@@ -29,6 +29,38 @@ test("arrival is preferred over change, and `updated_at` is never arrival", () =
   );
 });
 
+test("one clock is THE clock, whatever it is called", () => {
+  // The rule this started without, and the evidence that produced it: the
+  // platform's own `pgapp` example — deployed to production to check exactly
+  // this — has a `timestamptz` column called `at`. It was the table's only
+  // clock, and a name list said nothing about time, correctly by the old rule
+  // and uselessly. Adding "at" to the list would have fixed that one name and
+  // left the next to be discovered the same way.
+  //
+  // With one candidate there is nothing to disambiguate.
+  assert.equal(recencyColumn(table([["id", "integer"], ["at", "timestamp with time zone"]])), "at");
+  assert.equal(recencyColumn(table([["id", "integer"], ["happened", "timestamp"]])), "happened");
+  assert.equal(recencyColumn(table([["when_it_landed", "timestamp with time zone"]])), "when_it_landed");
+});
+
+test("a single clock whose NAME is not arrival is still refused", () => {
+  // What makes "one clock is the clock" safe. A table whose only temporal column
+  // is `expires_at` would otherwise report an expiry as the moment data landed —
+  // confidently, in the one screen whose job is telling the truth about data.
+  for (const name of ["expires_at", "deleted_at", "scheduled_at", "ends_at", "updated_at"]) {
+    assert.equal(recencyColumn(table([["id", "integer"], [name, "timestamp with time zone"]])), null, name);
+  }
+});
+
+test("two clocks nobody can rank leave the view silent", () => {
+  // Guessing between two is worse than admitting we cannot tell: the number
+  // would look as authoritative as a right one.
+  assert.equal(
+    recencyColumn(table([["seen_at", "timestamp with time zone"], ["heard_at", "timestamp with time zone"]])),
+    null,
+  );
+});
+
 test("the name is preferred in order, so a table with several is not a coin toss", () => {
   const t = table([
     ["ts", "timestamp with time zone"],

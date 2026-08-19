@@ -29,13 +29,32 @@ export interface TableShape {
 /**
  * Names that mean "when this row ARRIVED", best first.
  *
- * `updated_at` is deliberately absent. It answers "when did this row last
- * change", which reads as arrival and is not — a table whose rows are edited
- * would report freshness that has nothing to do with anything landing.
+ * This list DISAMBIGUATES; it does not admit. A table with several clocks needs
+ * to be told which one means arrival, and that is all this is for — see
+ * `recencyColumn`, where a table with exactly one clock does not consult it.
  */
 const RECENCY_NAMES = [
   "created_at", "inserted_at", "created", "inserted",
-  "added_at", "ts", "time", "timestamp",
+  "added_at", "at", "ts", "time", "timestamp",
+] as const;
+
+/**
+ * Names that are timestamps and are NOT arrival, whatever else is in the table.
+ *
+ * The deny list is what makes "one clock is the clock" safe. Without it, a table
+ * whose single temporal column is `expires_at` would report an expiry as the
+ * moment data landed — confidently, and in the one screen whose job is telling
+ * the truth about data.
+ *
+ * `updated_at` is the important one and the reason this list exists at all: it
+ * answers "when did this row last CHANGE", which reads as arrival and is not. A
+ * table whose rows are edited would otherwise report a freshness that has
+ * nothing to do with anything landing.
+ */
+const NOT_ARRIVAL = [
+  "updated_at", "modified_at", "changed_at", "edited_at",
+  "expires_at", "expired_at", "deleted_at", "removed_at", "archived_at",
+  "starts_at", "ends_at", "scheduled_at", "due_at", "published_at",
 ] as const;
 
 const isTemporal = (type: string): boolean =>
@@ -48,15 +67,29 @@ const isInteger = (type: string): boolean =>
  * The column that says when a row arrived, or null.
  *
  * Null is an answer, not a failure: a table without one gets NO freshness in the
- * view rather than an invented one. Matching on name and on type together —
- * a `created_at` holding text is not a clock, and a timestamp called `expires_at`
- * is not an arrival.
+ * view rather than an invented one.
+ *
+ * The TYPE does the admitting and the NAME only disambiguates, which is the
+ * opposite of how this started. It began as a name list, and the platform's own
+ * `pgapp` example — deployed to production to check this very thing — has a
+ * `timestamptz` column called `at`. It was the only clock in the table and the
+ * view stayed silent about time, correctly by the old rule and uselessly. Adding
+ * "at" to a list would have fixed that one case and left the next name to be
+ * discovered the same way.
+ *
+ * So: with exactly ONE temporal column there is nothing to disambiguate, and it
+ * is the clock — unless its name says otherwise, which is what `NOT_ARRIVAL` is
+ * for. With several, the name list picks; if none of them match, silence,
+ * because guessing between two clocks is worse than admitting we cannot tell.
  */
 export function recencyColumn(table: TableShape): string | null {
+  const temporal = table.columns.filter((c) => isTemporal(c.type));
+  const candidates = temporal.filter((c) => !NOT_ARRIVAL.includes(c.name.toLowerCase() as never));
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0].name;
+
   for (const wanted of RECENCY_NAMES) {
-    const hit = table.columns.find(
-      (c) => c.name.toLowerCase() === wanted && isTemporal(c.type),
-    );
+    const hit = candidates.find((c) => c.name.toLowerCase() === wanted);
     if (hit) return hit.name;
   }
   return null;
