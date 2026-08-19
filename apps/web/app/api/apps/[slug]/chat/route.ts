@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { currentUserId } from "@/lib/session";
@@ -77,6 +77,24 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
       try {
         const dir = seedTools(ws);
         bridge = serveTools(dir, toolsFor(slug, cookie));
+        /**
+         * What the workspace actually contains, said out loud.
+         *
+         * The first deployed run answered "the analytics tool listing (TOOLS.md)
+         * couldn't be read", and there was nothing in the container to check that
+         * against — because `log` was a no-op here, which threw away the only
+         * diagnostic the harness produces. Reading a log instead of arguing from
+         * inference is the one thing that has worked today.
+         */
+        console.log(
+          JSON.stringify({
+            ev: "chat-ws",
+            slug,
+            ws,
+            files: readdirSync(ws).sort(),
+            tools: statSync(join(ws, "TOOLS.md")).size,
+          }),
+        );
 
         const backend = backendFor(agentName());
         const spec = chatSpec({ ws, model: bareModel(CHAT_MODEL), prompt });
@@ -90,9 +108,10 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
           // is generous, and a chat turn that has made 25 is not converging.
           maxCalls: Number(process.env.CHAT_MAX_CALLS || 25),
           repeatsAllowed: 3,
-          log: () => {
-            /* the rail renders events, not log prose */
-          },
+          // The rail renders EVENTS; this log is for the container. Both are needed:
+          // one is what a person reads, the other is what is left behind when a run
+          // fails somewhere the rail cannot show.
+          log: (line: string) => console.log(JSON.stringify({ ev: "chat-log", slug, line })),
           onEvent: (e: AgentEvent) => {
             if (e.kind === "tool" && e.tool) {
               send("tool", { name: e.tool.name, detail: e.tool.detail });
@@ -120,6 +139,16 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
           outcome: run.ended === "timeout" ? "timeout" : run.error ? "error" : "ok",
         });
 
+        console.log(
+          JSON.stringify({
+            ev: "chat-done",
+            slug,
+            ended: run.ended,
+            steps: run.steps,
+            tokens: run.tokens.total,
+            error: run.error,
+          }),
+        );
         send("done", {
           text: run.text.trim(),
           steps: run.steps,
@@ -130,6 +159,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
           error: run.error,
         });
       } catch (e) {
+        console.error(JSON.stringify({ ev: "chat-threw", slug, error: e instanceof Error ? e.stack : String(e) }));
         send("error", { error: e instanceof Error ? e.message : String(e) });
         send("done", { text: "", steps: 0, tokens: 0, ended: "spawn-failed", error: null });
       } finally {
