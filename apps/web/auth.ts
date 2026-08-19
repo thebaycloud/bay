@@ -6,7 +6,6 @@ import bcrypt from "bcryptjs";
 import { authConfig } from "./auth.config";
 import { findUserByEmailAndProvider, createUser } from "@/lib/users";
 import { resolveWorkspaceForEmail } from "@/lib/workspace";
-import { isAllowed, listAllowEntries } from "@/lib/allowlist";
 import { getPool } from "@/lib/db";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -86,19 +85,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async signIn({ user, account }) {
       if (!user.email) return false;
 
-      // The gate. It sits in front of every provider, so it protects the
-      // password path too until that path is removed.
-      let entries;
-      try {
-        entries = await listAllowEntries();
-      } catch (e) {
-        // Fail closed. A database blip must not become an authentication bypass.
-        console.error("allowlist lookup failed", e);
-        return false;
-      }
-      if (!isAllowed(user.email, entries)) {
-        return `/login?error=not_invited&email=${encodeURIComponent(user.email.toLowerCase())}`;
-      }
+      // No invite gate. Sign-in used to be checked against `allowed_signins`,
+      // failing closed so a database blip could not become an auth bypass. The
+      // product is public now, so the gate is gone rather than left as a table
+      // somebody has to remember to add a row to. `lib/admin.ts` still uses
+      // isAllowed over its OWN table — that one grants operator access, not
+      // sign-in, and is unaffected.
 
       if (account && account.provider !== "credentials") {
         await createUser(user.email, user.name ?? "", null, account.provider);
