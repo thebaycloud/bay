@@ -1988,7 +1988,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       siblingUrls: {},
     };
     for (const [k, v] of Object.entries(deploymentEnv(s.framework, facts))) extraEnv.push(`${k}=${v}`);
-    let cloudsql: string | null = null;
     // The provisioned connection string. Held here rather than pushed straight
     // into the environment, so it can go to Secret Manager where the BUILD can
     // read it too — not only the running container.
@@ -2225,7 +2224,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           // DATABASE_URL" and then failing the build with "Cannot resolve
           // environment variable: DATABASE_URL" is precisely what this replaces.
           databaseUrl = r.pg.databaseUrl;
-          cloudsql = r.pg.connectionName;
           // Every spelling of the same endpoint. DATABASE_URL alone is not enough:
           // plenty of apps never read it and require POSTGRES_SERVER or PGHOST.
           dbEnv = databaseEnv(r.pg, deployTarget.databaseAddress);
@@ -2295,8 +2293,6 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // app-secrets.ts exists to keep values out of. The per-app bundle encryption
     // was defeated by the deploy that set it up: the encrypted bytes and the key
     // to decrypt them sat behind the same permission.
-    // Was the per-app bundle key for the runner lane, which no longer exists.
-    const runnerCodeKey = "";
 
     /**
      * The secrets the BUILD may mount, which is not the same set the RUNTIME gets.
@@ -2322,54 +2318,32 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       }
     }
 
-    // Runner lane: the code is uploaded to GCS and the runner image fetches it
-    // at start. Point the container at that object via env — it rides the same
-    // --set-env-vars below as DATABASE_URL, STORAGE_BUCKET and the secrets, so
-    // a runner app comes up with its full environment wired.
-    // The runner lane's encrypted code bundle. Both are gone with it.
-    const runnerObject: string | null = null;
-
-    // Flags shared by both build paths (applied on `gcloud run deploy`).
-    // SEAL_APPS switches the two routing models. Off (today): the app is
-    // public and reached through its own domain mapping. On (after the DNS
-    // cutover): only the proxy may invoke it, and *.supersonic.cv routes
-    // through the load balancer. Turning it on before DNS moves would make
-    // every app unreachable — see docs/CUTOVER.md.
-    const deployFlags = [
-      "--region", REGION, SEAL_APPS ? "--no-allow-unauthenticated" : "--allow-unauthenticated",
-      "--project", PROJECT, "--format=json",
-    ];
-    // Without this the app inherits the project's default compute service
-    // account, which here carries run.admin, storage.admin and
-    // artifactregistry.writer. That gives every customer's code — arbitrary
-    // code we agreed to run — the ability to delete the control plane, read
-    // every other customer's source out of the build bucket, and overwrite
-    // another app's image. Cloud Run hands any process in the container a
-    // token for its service account via the metadata server, so it takes one
-    // curl. Point apps at a runtime account that holds nothing instead.
-    // Unset today so this is a no-op until the account exists — see the
-    // rollout note in docs/CUTOVER.md.
-    if (APP_RUNTIME_SA) deployFlags.push(`--service-account=${APP_RUNTIME_SA}`);
-    // No --set-cloudsql-instances: that mounts the Unix socket, which is exactly
-    // the thing being replaced. The proxy container reaches the instance itself.
-    // `--update-env-vars`, never `--set-env-vars`: the latter replaces the whole
+    // WAS: `runnerObject`, `deployFlags`, `appFlags` and `labelPairs` — the
+    // `gcloud run deploy` argv for the PRIMARY app, assembled on every deploy and
+    // passed to nothing. The same shape found in `deploySibling` a commit ago,
+    // and left behind the same way: the code that DECIDES where an app runs moved
+    // to the fleet, and the code that PREPARES a Cloud Run revision stayed.
+    //
+    // Two of the notes that lived here are worth keeping, because they record
+    // rules rather than flags:
+    //
+    // `--update-env-vars`, never `--set-env-vars`. The latter replaces the whole
     // environment, so every redeploy silently deleted whatever the user had put
     // there with `supersonic env set` — their API keys and config — and the app
-    // came back up broken in a way that looked like its own fault. Caught in the
+    // came back up broken in a way that looked like its own fault. Caught in an
     // end-to-end run: RESEND_API_KEY was set, listed by `env`, and gone from the
     // next revision. Merging can leave a stale key behind after a deploy stops
-    // needing it; losing a customer's secret is the worse of the two.
-    // Environment and secrets belong to the APP container, not the service, now
-    // that a proxy container sits beside it — the proxy must not receive the
-    // app's credentials, and Cloud Run requires these after a --container flag.
-    const appFlags: string[] = [];
-    if (extraEnv.length) appFlags.push(`--update-env-vars=^~~^${extraEnv.join("~~")}`);
-    // Mounted by reference. `--update-secrets` merges, for the same reason
-    // `--update-env-vars` does: a redeploy must not drop a key the previous one set.
-    if (secretRefs.length) appFlags.push(`--update-secrets=${setSecretsFlag(secretRefs)}`);
-    const labelPairs: string[] = [`supersonic-name=${friendlyName}`];
-    if (ownerId) labelPairs.push(`supersonic-owner=${ownerId}`);
-    deployFlags.push(`--update-labels=${labelPairs.join(",")}`);
+    // needing it; losing a customer's secret is the worse of the two. The same
+    // reasoning governs `setPlacementEnv`, which is where an app's environment is
+    // written now.
+    //
+    // A runtime service account that holds nothing. Without one an app inherits
+    // the project's default compute account, which carries run.admin,
+    // storage.admin and artifactregistry.writer — so arbitrary code we agreed to
+    // run could delete the control plane, read every other customer's source out
+    // of the build bucket, and overwrite another app's image, with one curl
+    // against the metadata server. On a node that is `services/fleet`'s concern
+    // and §9 of the architecture spec; the flag that used to say it here is gone.
     // The resource envelope. Authored in schema v2, defaulted when it is not —
     // `withScale` merges a partial over DEFAULT_SCALE, so declaring `cpu` alone
     // does not silently drop the memory floor that four lanes depend on.
