@@ -97,7 +97,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                 <Message align="end">
                   <MessageContent>
                     <div
-                      className="max-w-[85%] rounded-xl bg-tile px-3.5 py-2 text-ink"
+                      className="max-w-[85%] rounded-2xl bg-tile px-3.5 py-2 text-ink"
                       data-slot="message-surface"
                     >
                       {turn.question}
@@ -169,7 +169,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
           glyph — the filled round button is a variant, not the default. */}
       <div className="border-t border-border p-3">
         <PromptInput
-          className="rounded-xl border-transparent bg-tile shadow-none focus-within:border-line"
+          className="rounded-3xl border-transparent bg-tile px-1 shadow-none focus-within:border-line"
           onSubmit={(_message, event) => {
             event.preventDefault();
             ask();

@@ -66,12 +66,12 @@ export function Workbench({
           <span className="font-mono text-[11px] tracking-[0.06em] text-ink-2">{word}</span>
         </Badge>
 
-        <TabsList className="h-8">
-          <TabsTrigger value="chat" className="gap-1.5 px-4 text-sub">
+        <TabsList className="h-8 rounded-full">
+          <TabsTrigger value="chat" className="gap-1.5 rounded-full px-4 text-sub">
             <MessageSquare size={13} strokeWidth={2} aria-hidden="true" />
             Chat
           </TabsTrigger>
-          <TabsTrigger value="dev" className="gap-1.5 px-4 text-sub">
+          <TabsTrigger value="dev" className="gap-1.5 rounded-full px-4 text-sub">
             <SquareTerminal size={13} strokeWidth={2} aria-hidden="true" />
             Dev
           </TabsTrigger>

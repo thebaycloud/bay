@@ -39,7 +39,7 @@
      at 6px a card reads as a box with the corners filed off rather than a soft
      surface, which is the whole difference between this and the tools it is being
      measured against. Bumped one step up the scale. */
-  --r-xl: 14px; --r-lg: 10px; --r-sm: 6px;
+  --r-xl: 20px; --r-lg: 16px; --r-sm: 10px;
   --ease: cubic-bezier(.2, .8, .2, 1);
 
   /* ---- aliases: the blueprint system's names, pointed at the new palette ----
@@ -89,7 +89,7 @@
      anything focused — including the composer, which is focused most of the time.
      Red stays for fills and marks; focus is neutral and still visible at 3px. */
   --sh-ring: var(--ink-3);
-  --sh-radius: 10px;
+  --sh-radius: 16px;
 
   --mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
   --sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
