@@ -343,6 +343,49 @@ The rules that were argued for and must survive the move:
   no dark theme it must be pinned to the light grade rather than left reading an
   attribute that no longer varies.
 
+### The motifs go too
+
+The token swap changes colour and nothing else, because the blueprint system's
+character is structural: mono-forward type, 90-degree corners, registration
+brackets and a graph-paper substrate. Recoloured, those still read as the old
+product. So they are in scope rather than deferred.
+
+What changes, and the counts that say how big it is:
+
+| Motif | Where | Scale |
+|---|---|---|
+| Mono type | `globals.css`, `styles/themes/blueprint.css` | 177 + 76 declarations |
+| Squared corners | the same two files | `--r` is already aliased to 6px |
+| Bracket corners | `components/Bracket.tsx`, `.bkt` rules | 5 uses, 19 rules |
+| Graph-paper grid | `body` background, `--grid` | 14 references |
+| Instrument Serif | `--serif` | 3 uses |
+| Metal | `ds/Metal.tsx`, `ds/Button.tsx` | 3 files |
+
+The rules that decide each case:
+
+- **Mono carries machine values and nothing else** — URLs, commands, counts, key
+  names, slugs, identifiers. Every other mono declaration becomes Geist Sans.
+  This is the panel's rule, and it is what makes the 253 declarations a triage
+  rather than a find-and-replace: roughly the `.mono`, `.eyebrow`, `.t-label` and
+  `.t-micro` families keep it, headings and body lose it.
+- **Headings are 14px/400.** The blueprint system's mono headings at 15px/600 are
+  the single loudest remaining signal of the old product.
+- **Corners are 8/6/4.** `--r` already aliases to `--r-lg`, so the squared look
+  now comes from rules that set `border-radius: 0` explicitly, plus `<Bracket>`.
+- **The grid goes.** A graph-paper substrate under `#FAFAFA` is either invisible
+  or noise; the panel's ground is plain.
+- **Brackets go.** `Bracket.tsx` is deleted, not restyled — its whole purpose is
+  drawing right-angle registration marks.
+- **Serif goes.** The panel system is one typeface family, Geist Sans and Geist
+  Mono, and a third face is the thing that makes a page look assembled.
+- **Metal goes, at last.** `ds/Metal.tsx` and `ds/Button.tsx` can only be deleted
+  once `components/landing/Hero.tsx` and `app/design/page.tsx` stop using them,
+  so those two move to a flat button first. `public/metal/*.webp` goes with them.
+
+`app/design/page.tsx` is the design system's own reference page and is largely
+about Metal and brackets. It is rewritten to show what the system actually is
+now, rather than deleted — a house style with no page describing it drifts.
+
 ### The cost of retiring the generator
 
 `compose.py`, `slice.py`, `drawer.ts` and the JS slices go; the components become
@@ -369,25 +412,31 @@ Each step lands green on its own.
 1. **Token swap + drop dark.** One CSS file, plus deleting `ThemeToggle` and its
    mounts and pinning the film's grade. Nothing structural, and nothing in
    `ds/` is deleted. The control plane turns neutral-and-red before any new
-   surface exists. Expect the landing page and `/design` to shift colour with
-   everything else while keeping their metal buttons; they will look
-   transitional until separately taken on.
-2. **The workbench shell.** `apps/web/app/apps/[slug]/page.tsx` becomes the
+   surface exists. `apps/web/app/landing` and `/design` shift colour with
+   everything else while keeping their metal buttons. `apps/landing` is a
+   SEPARATE Next app with its own `globals.css` and no cross-app imports, so
+   nothing here reaches it.
+2. **The motifs.** Mono triage across the two stylesheets, headings to 14px/400,
+   corners to the 8/6/4 ramp, and the grid, brackets, serif and Metal removed.
+   `Hero.tsx` and `app/design/page.tsx` move off Metal first so it can go. Lands
+   before the shell, so the new surface is built on the finished system rather
+   than being restyled underneath later.
+3. **The workbench shell.** `apps/web/app/apps/[slug]/page.tsx` becomes the
    two-pane layout with the `Chat │ Dev` control, the status pill, and the app
    iframe. Dev renders the existing Cockpit content unchanged at first, so the
    shell is reviewable before the screens are ported.
-3. **Proxy framing headers.** `frame-ancestors`, drop `X-Frame-Options`. Without
+4. **Proxy framing headers.** `frame-ancestors`, drop `X-Frame-Options`. Without
    this step 2's iframe is blank for any app that sets either.
-4. **Port the screens.** Cell grid and the eight screens in TSX, reading
+5. **Port the screens.** Cell grid and the eight screens in TSX, reading
    server-side. Cockpit and the six panels are deleted as their content lands.
-5. **Shrink the injection.** `inject.ts` emits the pill; `compose.py`,
+6. **Shrink the injection.** `inject.ts` emits the pill; `compose.py`,
    `drawer.ts`, `slice.py` and the slices are deleted; `/_dashboard` HTML 302s.
    `/_xray` JSON untouched.
-6. **The chat engine.** `onEvent` on `RunOptions`, the file-based tool bridge,
+7. **The chat engine.** `onEvent` on `RunOptions`, the file-based tool bridge,
    the chat route, `OpencodeBackend`, and the rail.
 
-Steps 1–3 are safe to ship independently. Step 5 is the point of no return for
-the injected panel and should follow step 4 being visibly correct.
+Steps 1–4 are safe to ship independently. Step 6 is the point of no return for
+the injected panel and should follow step 5 being visibly correct.
 
 ---
 
@@ -450,7 +499,5 @@ Seven `apps/web` tests were already failing at `origin/main` before this work
 - Element picking, visual editing, and comment pins on the preview.
 - Answers about source code. Needs repo retention, which does not exist.
 - A route dropdown, a Publish button, key health, ships history, MCP.
-- Restyling the rest of the control plane past the token swap: the serif, the
-  grid background, the bracket corners and the pages built on them keep their
-  structure until separately taken on.
+- Restyling `apps/landing`. It is a separate app and keeps its own styles.
 - Persisted chat threads.
