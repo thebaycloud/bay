@@ -15,8 +15,9 @@ export const dynamic = "force-dynamic";
 import { describeService, setEnv } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
-import { setPlacementEnv, placementEnvKeys } from "@/lib/fleet";
+import { setPlacementEnv } from "@/lib/fleet";
 import { deployTargetForApp } from "@/lib/deploy-target";
+import { envKeysFor } from "@/lib/env-keys";
 import { withCors, optionsHandler } from "@/lib/cors";
 
 // GET  -> list env var KEYS (values are never exposed)
@@ -25,16 +26,13 @@ async function getHandler(_req: Request, { params }: { params: { slug: string } 
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ keys: [], error: "forbidden" }, { status: 403 });
   try {
-    const target = await deployTargetForApp(slug);
-    if (target.kind === "fleet") {
-      const keys = await placementEnvKeys(slug);
-      // Not placed is not the same as having no variables, and answering `[]`
-      // to the first would read as an app that simply has none.
-      if (!keys) return Response.json({ keys: [], error: "this app is not placed on a node right now" });
-      return Response.json({ keys });
-    }
-    const svc = await describeService(slug);
-    return Response.json({ keys: svc.envKeys });
+    // Shared with chat's `keys` tool, which used to call describeService alone and
+    // therefore answered "no environment keys configured" about every fleet app.
+    const { keys, note } = await envKeysFor(slug);
+    // Not placed is not the same as having no variables, and answering `[]` to the
+    // first would read as an app that simply has none.
+    if (!keys) return Response.json({ keys: [], error: note });
+    return Response.json({ keys });
   } catch (e) {
     return Response.json({ keys: [], error: e instanceof Error ? e.message : String(e) });
   }

@@ -4,6 +4,7 @@ import { describeService, getErrors } from "@/lib/gcloud";
 import { getDeploy } from "@/lib/deploys";
 import { getAppBySlug, listGrants } from "@/lib/apps";
 import { listPending } from "@/lib/requests";
+import { envKeysFor } from "@/lib/env-keys";
 import type { Answer, Handler, Op } from "@/lib/chat/bridge";
 
 /**
@@ -105,11 +106,18 @@ export function toolsFor(slug: string): Handler {
         }
 
         case "keys": {
-          const svc = await describeService(slug).catch(() => null);
+          // envKeysFor, NOT describeService: a fleet app has no Cloud Run service and
+          // its variables come from its placement. Reading only the service made this
+          // answer "no environment keys configured" about an app with five, while the
+          // Dev screen beside it listed all five.
+          const { keys, note } = await envKeysFor(slug);
+          if (!keys) {
+            return { ok: true, data: { names: [], note: note ?? "could not be determined" } };
+          }
           return {
             ok: true,
             data: {
-              names: svc?.envKeys ?? [],
+              names: keys,
               note: "names only — values are never readable, and whether a key still works is not recorded anywhere",
             },
           };
@@ -139,15 +147,26 @@ export function toolsFor(slug: string): Handler {
         }
 
         case "describe": {
-          const svc = await describeService(slug).catch(() => null);
-          if (!svc) return { ok: true, data: { note: "this app has no Cloud Run service of its own" } };
+          const [svc, envs] = await Promise.all([
+            describeService(slug).catch(() => null),
+            envKeysFor(slug).catch(() => ({ keys: null as string[] | null })),
+          ]);
+          if (!svc) {
+            return {
+              ok: true,
+              data: {
+                note: "this app has no Cloud Run service of its own — it runs on a fleet node",
+                envKeys: envs.keys ?? [],
+              },
+            };
+          }
           return {
             ok: true,
             data: {
               url: svc.url,
               image: svc.image,
               region: svc.region,
-              envKeys: svc.envKeys,
+              envKeys: envs.keys ?? svc.envKeys,
               hasDatabase: Boolean(svc.cloudsql),
               // Deliberately included: most apps are folder uploads with no repo on
               // file, and an agent that knows that stops asking to read code.
