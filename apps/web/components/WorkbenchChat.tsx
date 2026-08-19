@@ -167,9 +167,15 @@ export function WorkbenchChat({ slug }: { slug: string }) {
           stripped the card it draws for itself, and an empty PromptInputTools,
           which is why there was no `+`. The submit also defaults to a bare ↵
           glyph — the filled round button is a variant, not the default. */}
-      <div className="border-t border-border p-3">
+      <div className="p-3">
         <PromptInput
-          className="rounded-3xl border-transparent bg-tile px-1 shadow-none focus-within:border-line"
+          // The radius and the fill have to land on the SAME element as the
+          // border. PromptInput's className goes on the <form>; the border lives
+          // on the InputGroup inside it, at its own rounded-md. Styling the form
+          // gave a 24px grey fill inside a 14px border — two different shapes,
+          // one control. Everything visual is therefore addressed at the
+          // input-group itself.
+          className="[&_[data-slot=input-group]]:rounded-3xl [&_[data-slot=input-group]]:border-transparent [&_[data-slot=input-group]]:bg-tile [&_[data-slot=input-group]]:shadow-none"
           onSubmit={(_message, event) => {
             event.preventDefault();
             ask();
@@ -204,7 +210,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                 affordance is the one thing in this rail that should look like a
                 button you press. */}
             <PromptInputSubmit
-              className="size-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-tile disabled:text-ink-3"
+              className="size-8 shrink-0 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-white disabled:text-ink-3 disabled:opacity-100"
               disabled={!text.trim()}
               status="ready"
               variant="default"
