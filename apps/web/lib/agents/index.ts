@@ -5,6 +5,7 @@ import { isSameFailure } from "../deploy-errors";
 import type { Runtime } from "../fleet";
 import { startBridge, redeployScript, type Redeploy } from "./bridge";
 import { CodexBackend } from "./codex";
+import { OpencodeBackend } from "./opencode";
 import { runAgent } from "./harness";
 import { PLAN_SCHEMA, fromStructured } from "./plan-schema";
 import { recordAgentRun } from "../agent-usage";
@@ -37,12 +38,32 @@ export function agentName(): AgentName {
   return process.env.DEPLOY_AGENT === "opencode" ? "opencode" : "codex";
 }
 
-function backendFor(name: AgentName): AgentBackend {
+/**
+ * The backend for a name. Exported, and it no longer throws for opencode.
+ *
+ * Both engines are behind the seam now, so anything built on `runAgent` gets the
+ * switch for free — and the loop detector, the deadline and the event stream stay
+ * written once. Chat is the first caller to need that; the deploy paths still branch
+ * on `agentName()` for their own reasons, which is a wart worth removing later.
+ */
+export function backendFor(name: AgentName): AgentBackend {
   if (name === "codex") return new CodexBackend();
+  if (name === "opencode") return new OpencodeBackend();
   throw new Error(`no AgentBackend for ${name}`);
 }
 
 const MODEL = process.env.DEPLOY_AGENT_MODEL || process.env.OPENCODE_MODEL || "gpt-5.6-sol";
+
+/**
+ * The model chat runs on, separately from the one deploys run on.
+ *
+ * Deliberately its own variable. A repair agent is worth the strongest model
+ * available because the alternative is a broken app; a question about how many users
+ * signed up is answered by reading one row, and paying repair rates for it is how a
+ * cheap feature becomes an expensive one. Defaults to the deploy model so nothing
+ * changes until somebody decides it should.
+ */
+export const CHAT_MODEL = process.env.CHAT_AGENT_MODEL || MODEL;
 
 /**
  * The model id, without any provider prefix.

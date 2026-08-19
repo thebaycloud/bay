@@ -105,7 +105,7 @@ export function providerConfig(model: string, creds: ProviderCreds) {
   return buildProviderConfig(providerId, modelId, creds);
 }
 
-function opencodeConfig(token: string) {
+export function opencodeConfig(token: string) {
   return buildProviderConfig(PROVIDER_ID, MODEL_ID, {
     geminiApiKey: GEMINI_API_KEY,
     openaiApiKey: OPENAI_API_KEY,
@@ -187,7 +187,7 @@ export interface RepairResult { ok: boolean; url?: string; changes: string[]; su
 
 type Redeploy = () => Promise<{ ok: boolean; url?: string; error?: string }>;
 
-function opencodeBin(): string {
+export function opencodeBin(): string {
   if (process.env.OPENCODE_BIN) return process.env.OPENCODE_BIN;
   const home = join(homedir(), ".opencode", "bin", "opencode");
   return existsSync(home) ? home : "opencode";
@@ -202,7 +202,7 @@ function opencodeBin(): string {
  * so the OpenAI path could not run anywhere the deploy service account was not
  * already working, including every developer machine.
  */
-async function providerToken(): Promise<string> {
+export async function providerToken(): Promise<string> {
   return PROVIDER_ID === "vertex" ? gcloudToken() : "";
 }
 

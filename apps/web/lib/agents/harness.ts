@@ -54,6 +54,20 @@ export interface RunOptions {
   maxCalls?: number;
   /** Identical calls before we assume it is stuck. */
   repeatsAllowed?: number;
+  /**
+   * Every normalised event, as it happens.
+   *
+   * `log` is a line of prose for a deploy log — it summarises, it dedupes, and it
+   * throws the structure away. A chat rail needs the structure: a tool call with
+   * its name and argument, prose separately, a token total. The harness already
+   * builds exactly that on the way to `log`, so this hands it over rather than
+   * asking a caller to parse the sentence back apart.
+   *
+   * Above the backend seam on purpose. types.ts says shared behaviour lives here,
+   * and an event stream that each backend exposed its own way would be the first
+   * crack in it.
+   */
+  onEvent?: (e: AgentEvent) => void;
 }
 
 export async function runAgent(o: RunOptions): Promise<RunResult> {
@@ -106,6 +120,9 @@ export async function runAgent(o: RunOptions): Promise<RunResult> {
     };
 
     const onEvent = (e: AgentEvent) => {
+      // Handed over before any of the harness's own bookkeeping, so a caller sees
+      // what the backend actually said — including the events `say` dedupes away.
+      o.onEvent?.(e);
       if (e.kind === "tool" && e.tool) {
         result.steps++;
         for (const path of e.tool.editedPaths ?? []) changes.add(path);

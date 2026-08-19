@@ -10,7 +10,6 @@ import {
   MessageHeader,
 } from "@/components/ui/message";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
-import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { MessageResponse } from "@/components/ai-elements/message";
 import {
@@ -36,9 +35,14 @@ import {
  * "chat is not connected" actually is: a status row in the thread, not a fake
  * assistant message dressed up as one.
  *
- * Three parts still come from components/ai-elements because the base registry has
- * no equivalent: Reasoning (the collapsed thinking block), Tool (a call with its
- * input, output and status), and PromptInput (the composer).
+ * Two parts still come from components/ai-elements because the base registry has no
+ * equivalent: Tool (a call with its input and status) and PromptInput (the composer).
+ *
+ * There is no thinking block, and that is a seam limitation rather than a choice.
+ * `AgentEvent` carries four kinds — tool, text, usage, error — so a model's reasoning
+ * never reaches this side to be rendered. Showing one would mean adding a `reasoning`
+ * kind at the seam and having both backends emit it, which is a change to the
+ * contract two deploy paths depend on, not a change to this component.
  *
  * MessageScroller is what should be holding this transcript — it anchors turn
  * boundaries and preserves reader position while content streams, which is exactly
@@ -49,7 +53,19 @@ import {
  * it does not follow a live edge, which is a real gap once step 7 streams tokens.
  */
 
-type Turn = { id: number; question: string };
+type Tool = { name: string; detail: string };
+type Turn = {
+  id: number;
+  question: string;
+  /** Tool calls as they land, so the rail shows work rather than a spinner. */
+  tools: Tool[];
+  /** Streamed prose. Empty until the agent says something. */
+  text: string;
+  tokens: number;
+  /** Set when the run failed or was cut short. Rendered as a marker, not prose. */
+  note: string | null;
+  running: boolean;
+};
 
 /** What the `+` offers. Every one of these is answerable from a read-only tool. */
 const STARTERS = [
@@ -63,12 +79,93 @@ const STARTERS = [
 export function WorkbenchChat({ slug }: { slug: string }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [text, setText] = useState("");
+  const busy = turns.some((t) => t.running);
 
-  function ask() {
+  /**
+   * Ask, and stream the answer.
+   *
+   * The transcript is sent with the question so a follow-up has context; the route
+   * caps how many turns it replays, because an uncapped thread is an unbounded bill.
+   */
+  async function ask() {
     const q = text.trim();
-    if (!q) return;
-    setTurns((t) => [...t, { id: t.length, question: q }]);
+    if (!q || busy) return;
+    const id = turns.length;
+    const history = turns.map((t) => [
+      { role: "you" as const, text: t.question },
+      { role: "agent" as const, text: t.text },
+    ]).flat().filter((m) => m.text);
+
+    setTurns((t) => [...t, { id, question: q, tools: [], text: "", tokens: 0, note: null, running: true }]);
     setText("");
+
+    const patch = (f: (t: Turn) => Turn) =>
+      setTurns((all) => all.map((t) => (t.id === id ? f(t) : t)));
+
+    try {
+      const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, history }),
+      });
+      if (!res.ok || !res.body) {
+        patch((t) => ({ ...t, running: false, note: `The request failed (${res.status}).` }));
+        return;
+      }
+
+      // SSE parsed by hand rather than with EventSource: EventSource cannot POST,
+      // and the question has to go in a body.
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let cut: number;
+        while ((cut = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, cut);
+          buf = buf.slice(cut + 2);
+          const ev = /^event: (.+)$/m.exec(frame)?.[1];
+          const raw = /^data: (.*)$/m.exec(frame)?.[1];
+          if (!ev || !raw) continue;
+          let data: any;
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+          if (ev === "tool") {
+            patch((t) => ({ ...t, tools: [...t.tools, { name: data.name, detail: data.detail }] }));
+          } else if (ev === "text") {
+            patch((t) => ({ ...t, text: t.text + data.text }));
+          } else if (ev === "usage") {
+            patch((t) => ({ ...t, tokens: data.total }));
+          } else if (ev === "error") {
+            patch((t) => ({ ...t, note: String(data.error) }));
+          } else if (ev === "done") {
+            patch((t) => ({
+              ...t,
+              running: false,
+              text: data.text || t.text,
+              tokens: data.tokens || t.tokens,
+              note:
+                t.note ??
+                (data.ended === "timeout"
+                  ? "It ran out of time before finishing."
+                  : data.ended === "looping"
+                    ? "It was stopped for going in circles — anything above is still what it read."
+                    : data.ended === "spawn-failed"
+                      ? "The agent could not start."
+                      : null),
+            }));
+          }
+        }
+      }
+      patch((t) => ({ ...t, running: false }));
+    } catch (e) {
+      patch((t) => ({ ...t, running: false, note: e instanceof Error ? e.message : String(e) }));
+    }
   }
 
   return (
@@ -92,8 +189,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                     the column, and you supply the bubble. `data-slot` is what
                     MessageContent's `*:data-slot:self-end` rule aligns when the
                     message is align=end, and `data-variant="ghost"` is what tells
-                    the header and footer to drop their padding. Getting either
-                    attribute wrong is why this looked unstyled the first time. */}
+                    the header and footer to drop their padding. */}
                 <Message align="end">
                   <MessageContent>
                     <div
@@ -113,49 +209,44 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                       data-slot="message-surface"
                       data-variant="ghost"
                     >
-                      <Reasoning defaultOpen={false}>
-                        <ReasoningTrigger>Thinking, once this is wired up</ReasoningTrigger>
-                        <ReasoningContent>
-                          Where the agent&rsquo;s own reasoning will appear, collapsed
-                          by default — the same shape Codex already streams through
-                          runAgent&rsquo;s normalised events.
-                        </ReasoningContent>
-                      </Reasoning>
-
-                      <Tool defaultOpen={false}>
-                        <ToolHeader type="tool-db" state="output-available" title="db" />
-                        <ToolContent>
-                          <ToolInput input={{ query: "select count(*) from users" }} />
-                          <ToolOutput
-                            output={
-                              <span className="font-mono text-micro">
-                                preview only — nothing was queried
-                              </span>
-                            }
-                            errorText={undefined}
+                      {/* Every read it made, in order. This is the whole answer to
+                          latency: a real agent run takes seconds, and a rail that
+                          shows what it is reading is working rather than hung. */}
+                      {turn.tools.map((tool, i) => (
+                        <Tool defaultOpen={false} key={`${tool.name}-${i}`}>
+                          <ToolHeader
+                            state={turn.running && i === turn.tools.length - 1 ? "input-available" : "output-available"}
+                            title={tool.name}
+                            type={`tool-${tool.name}` as `tool-${string}`}
                           />
-                        </ToolContent>
-                      </Tool>
+                          <ToolContent>
+                            <ToolInput input={{ [tool.name]: tool.detail || "(no argument)" }} />
+                          </ToolContent>
+                        </Tool>
+                      ))}
 
-                      <MessageResponse>
-                        {"Every figure in a real answer will come from a tool result like the one above, never from prose — so a number you can see is a number something actually read."}
-                      </MessageResponse>
+                      {turn.text ? (
+                        <MessageResponse>{turn.text}</MessageResponse>
+                      ) : turn.running ? (
+                        <span className="text-sub text-ink-2">Reading your app…</span>
+                      ) : null}
                     </div>
-                    <MessageFooter>preview · nothing was read</MessageFooter>
+                    {turn.tokens ? (
+                      <MessageFooter>{turn.tokens.toLocaleString()} tokens</MessageFooter>
+                    ) : null}
                   </MessageContent>
                 </Message>
 
-                {/* A system note belongs in the thread as a marker, not dressed up as
-                    an assistant turn. That distinction is the whole reason this
-                    component exists. */}
-                <Marker variant="border" role="status">
-                  <MarkerIcon>
-                    <CircleDashedIcon className="size-3.5" />
-                  </MarkerIcon>
-                  <MarkerContent>
-                    Chat is not connected yet — the engine lands in step 7.
-                  </MarkerContent>
-                </Marker>
+                {/* A failure is a status row in the thread, not an assistant turn
+                    pretending to be an answer. */}
+                {turn.note ? (
+                  <Marker role="status" variant="border">
+                    <MarkerIcon>
+                      <CircleDashedIcon className="size-3.5" />
+                    </MarkerIcon>
+                    <MarkerContent>{turn.note}</MarkerContent>
+                  </Marker>
+                ) : null}
               </MessageGroup>
             ))}
           </div>
@@ -211,8 +302,8 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                 button you press. */}
             <PromptInputSubmit
               className="size-8 shrink-0 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-white disabled:text-ink-3 disabled:opacity-100"
-              disabled={!text.trim()}
-              status="ready"
+              disabled={!text.trim() || busy}
+              status={busy ? "streaming" : "ready"}
               variant="default"
             >
               <ArrowUpIcon className="size-4" />

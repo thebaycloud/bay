@@ -68,8 +68,15 @@ export interface AgentRun {
   /** Which deploy this belonged to. Null or absent on the in-request path, as elsewhere. */
   runId?: string | null;
   slug: string;
-  /** `planner` reads a repo to decide how to deploy it; `repair` edits one. */
-  role: "planner" | "repair";
+  /**
+   * `planner` reads a repo to decide how to deploy it; `repair` edits one; `chat`
+   * answers a question about a running app and changes nothing.
+   *
+   * `chat` is here so its cost is visible beside deploy cost from the first turn.
+   * Every question is a metered agent run, and knowing that before anyone asks
+   * whether it needs a cap is the whole reason to record it.
+   */
+  role: "planner" | "repair" | "chat";
   engine: string;
   model?: string;
   /** Whatever the backend counted — `Tokens` from codex, `TokenUsage` from
