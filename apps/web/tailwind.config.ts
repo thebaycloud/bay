@@ -37,6 +37,50 @@ export default {
           hi: "rgba(230,63,44,0.075)", // hover
         },
         line: "#EDEDED",
+
+        // ---- the shadcn contract ----
+        // Its components reference bg-background, border-input, ring-ring and so
+        // on. These map those names onto the panel tokens defined in globals.css
+        // under a --sh- prefix, so a component pulled from the registry is
+        // already ours and needs no edit to fit. The prefix exists because our
+        // own token names collide with three of shadcn's: --card, --accent and
+        // --ring all mean something different here.
+        background: "var(--sh-background)",
+        foreground: "var(--sh-foreground)",
+        border: "var(--sh-border)",
+        input: "var(--sh-input)",
+        ring: "var(--sh-ring)",
+        primary: {
+          DEFAULT: "var(--sh-primary)",
+          foreground: "var(--sh-primary-foreground)",
+        },
+        secondary: {
+          DEFAULT: "var(--sh-secondary)",
+          foreground: "var(--sh-secondary-foreground)",
+        },
+        muted: {
+          DEFAULT: "var(--sh-muted)",
+          foreground: "var(--sh-muted-foreground)",
+        },
+        accent: {
+          DEFAULT: "var(--sh-accent)",
+          foreground: "var(--sh-accent-foreground)",
+        },
+        destructive: {
+          DEFAULT: "var(--sh-destructive)",
+          foreground: "var(--sh-destructive-foreground)",
+        },
+        popover: {
+          DEFAULT: "var(--sh-popover)",
+          foreground: "var(--sh-popover-foreground)",
+        },
+        // `card` here is a TAILWIND colour name, which is a different namespace
+        // from the `--card` CSS variable above — no collision, and shadcn's
+        // components write `bg-card` literally.
+        card: {
+          DEFAULT: "var(--sh-card)",
+          foreground: "var(--sh-card-foreground)",
+        },
         // The ground blocks sit on. Deliberately darker than `line`: the corner
         // wells are only as visible as this is different from the block, and at
         // #EDEDED (1.17:1 on white) the shape is technically present and
@@ -54,6 +98,27 @@ export default {
           600: "#798288",
           700: "#5A646A",
         },
+      },
+      borderRadius: {
+        // 8/6/4, which is shadcn's own ramp and already the panel's.
+        xl: "calc(var(--sh-radius) + 2px)",
+        lg: "var(--sh-radius)",
+        md: "calc(var(--sh-radius) - 2px)",
+        sm: "calc(var(--sh-radius) - 4px)",
+      },
+      keyframes: {
+        "accordion-down": {
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
+        },
+        "accordion-up": {
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
+        },
+      },
+      animation: {
+        "accordion-down": "accordion-down 0.2s ease-out",
+        "accordion-up": "accordion-up 0.2s ease-out",
       },
       fontFamily: {
         sans: ["var(--font-geist-sans)", "system-ui", "sans-serif"],
@@ -87,5 +152,5 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [require("tailwindcss-animate")],
 } satisfies Config;
