@@ -2258,6 +2258,7 @@ function step(t){
     CAMP.lerp(fr.p,1-Math.exp(-DTW/LAG_P));
     CAMLA.lerp(fr.t,1-Math.exp(-DTW/LAG_T));
   }
+  fv=framed(fv);
   if(Math.abs(camera.fov-fv)>1e-4){camera.fov=fv;camera.updateProjectionMatrix();}
   const shake=(reduce?0:(s.follow?1.4:0.5))+(s.shake?bang*9:0)+bang*1.5;
   camera.position.copy(CAMP).add(V3(Math.sin(TT*1.7+i)*shake,Math.cos(TT*2.3+i)*shake,Math.sin(TT*1.1)*shake));
@@ -2465,8 +2466,35 @@ function nextStage(){
   if(stage>=STAGES.length-1){ goStage(0,true); return; }
   goStage(stage+1);
 }
+/* The shape of the frame.
+   Every shot below is composed at 2.40:1 — that is what the fovs in `shots()`
+   were chosen against, and on the dashboard and the bench it is exactly what
+   the canvas gets. The ROOM gives the film the whole viewport instead, which
+   is whatever shape the window is, so the frame can no longer be assumed. */
+const FRAME=960/400;
+let ASPECT=FRAME;
+/* The composed fov, corrected for a frame that is not 2.40:1.
+   A PerspectiveCamera's fov is VERTICAL, so handing a 16:9 window the fov a
+   2.40:1 shot was framed with does not letterbox it — it crops the sides, and
+   the sides are where the bridge, the yard and the city are. This holds the
+   HORIZONTAL field the shot was composed with and lets the extra height show
+   more sky and water, which the scene has and which costs the composition
+   nothing. Identity at 2.40:1, so no surface that had this framing changes. */
+function framed(f){
+  if(Math.abs(ASPECT-FRAME)<1e-3) return f;
+  const half=Math.atan(Math.tan(f*Math.PI/360)*(FRAME/ASPECT))*360/Math.PI;
+  /* A very tall window would otherwise ask for a fisheye. Past this the frame
+     stops widening and the picture is allowed to crop, which looks like a
+     close shot rather than like a lens fault. */
+  return Math.min(110,half);
+}
 function resize(){
-  const w=cv.clientWidth||960, h=Math.round(w*400/960);
+  const w=cv.clientWidth||960;
+  /* The canvas's own box is the truth when it has one. On a surface that sizes
+     it by `aspect-ratio: 960/400` this is the same number the old line
+     computed; on a full-viewport one it is the window. */
+  const h=Math.round(cv.clientHeight)||Math.round(w*400/960);
+  ASPECT=w/h;
   renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1));
   renderer.setSize(w,h,false);
   camera.aspect=w/h; camera.updateProjectionMatrix(); dirty=true; if(ready)kick();

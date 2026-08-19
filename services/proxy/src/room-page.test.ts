@@ -36,9 +36,59 @@ test("the slug is escaped, not interpolated", () => {
   assert.equal(html.includes("&lt;script&gt;"), true);
 });
 
-test("the page knows which side of the redaction it is on", () => {
-  assert.equal(/var SLUG = .*, OWNER = true/.test(pageRoom("a", { owner: true })), true);
-  assert.equal(/var SLUG = .*, OWNER = false/.test(pageRoom("a", { owner: false })), true);
+test("a guest is served a different page, not the same one with the film off", () => {
+  // The old shape was one page and an OWNER flag, and the flag reached exactly
+  // two lines of text. Everything that made the page worth looking at — the
+  // film, the pixel room, the stage bar, the count of stages, which one had
+  // broken — was drawn for anyone holding the link. What a guest may see is now
+  // a property of WHICH PAGE THEY GET, so there is no flag left to get wrong.
+  const guest = pageRoom("q6doa", { owner: false });
+  assert.equal(guest.includes("ship-it.js"), false, "the guest page loads the film");
+  assert.equal(guest.includes("EventSource"), false, "the guest page opens the feed");
+  assert.equal(guest.includes("<script"), false, "the guest page runs script at all");
+  assert.equal(guest.includes("<canvas"), false, "the guest page draws the build");
+  // What it does say, which is the one thing a stranger is entitled to.
+  assert.match(guest, /deploying in progress/i);
+  // And it comes back on its own, so the wait ends without anyone reloading.
+  assert.match(guest, /http-equiv="refresh"/);
+
+  // The owner's page is the whole thing, and carries no flag any more.
+  const owner = pageRoom("q6doa", { owner: true });
+  assert.equal(/OWNER/.test(owner), false, "the owner page still branches on a flag");
+  assert.equal(owner.includes("ship-it.js"), true);
+});
+
+test("the film is the whole window, not a card in the middle of one", () => {
+  const html = pageRoom("q6doa", { owner: true });
+  // The page stands at the app's own address with nothing else on it. A fixed
+  // 720px box left most of the screen as background — and the film is composed
+  // in 2.40:1, so the container has to be able to be any shape at all.
+  assert.equal(/#film\{[^}]*position:absolute;inset:0/.test(html), true);
+  assert.equal(/#film canvas\{[^}]*height:100%/.test(html), true);
+  // The old fixed-width card is gone from all three of the things that had it.
+  assert.equal(html.includes("min(92vw,720px)"), false);
+  // dvh, not vh: on a phone vh is the tallest toolbar state, which puts the
+  // stage bar behind the browser's own chrome.
+  assert.match(html, /100dvh/);
+});
+
+test("the owner is shown the build's own words, with the deploy's clock on them", () => {
+  const html = pageRoom("q6doa", { owner: true });
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? "";
+  assert.match(html, /<div id="log"><\/div>/);
+  // The same shape as the bench the film is tuned on: gutter, glyph, line.
+  assert.match(script, /class="t"/);
+  assert.match(script, /class="k"/);
+  assert.match(script, /class="m"/);
+  // The time comes off the step, which the feed labels from the run's first
+  // event — not from a clock the page started when the tab opened.
+  assert.match(script, /step\.t/);
+  // Escaped on the way in: build lines are somebody's file paths and error text,
+  // and this one is written with innerHTML.
+  assert.match(script, /escapeText\(l\.m\)/);
+  // Written when the movement is performed, so the words and the picture are
+  // describing the same moment rather than racing each other.
+  assert.match(script, /if \(step\.text\) logLine\(step\);/);
 });
 
 test("the room subscribes to its own origin", () => {
