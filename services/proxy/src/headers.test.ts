@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop } from "./headers";
+import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, allowWorkbenchFraming } from "./headers";
 
 const visitor = { userId: "usr_1", email: "boris@acme.com", name: "Boris" };
 const COOKIE = "authjs.session-token";
@@ -267,4 +267,55 @@ test("an inbound x-serverless-authorization is never trusted through", () => {
     "__Secure-authjs.session-token",
   );
   assert.equal(out["x-serverless-authorization"], undefined);
+});
+
+test("the workbench may frame a tenant document, and nobody else", () => {
+  const h = allowWorkbenchFraming({ "content-type": "text/html" });
+  assert.equal(h["content-security-policy"], "frame-ancestors https://app.supersonic.cv");
+});
+
+test("X-Frame-Options is dropped whatever case it arrived in", () => {
+  // It has no allowlist form, so DENY and SAMEORIGIN both refuse the workbench and
+  // neither can be narrowed. Dropping it and answering with frame-ancestors is
+  // strictly narrower than SAMEORIGIN would have been.
+  for (const key of ["X-Frame-Options", "x-frame-options", "X-FRAME-OPTIONS"]) {
+    const h = allowWorkbenchFraming({ [key]: "DENY" });
+    assert.equal(Object.keys(h).some((k) => k.toLowerCase() === "x-frame-options"), false);
+  }
+});
+
+test("an app's own frame-ancestors is replaced, not appended to", () => {
+  // A browser enforces the INTERSECTION of every CSP header it receives, so a
+  // second header could never widen 'none'. The directive has to be rewritten.
+  const h = allowWorkbenchFraming({
+    "content-security-policy": "default-src 'self'; frame-ancestors 'none'; img-src *",
+  });
+  assert.equal(
+    h["content-security-policy"],
+    "default-src 'self'; img-src *; frame-ancestors https://app.supersonic.cv",
+  );
+});
+
+test("the rest of an app's policy survives untouched", () => {
+  const h = allowWorkbenchFraming({
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'",
+  });
+  assert.equal(
+    h["content-security-policy"],
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; frame-ancestors https://app.supersonic.cv",
+  );
+});
+
+test("only one CSP header goes out, whatever case the app used", () => {
+  const h = allowWorkbenchFraming({ "Content-Security-Policy": "frame-ancestors 'self'" });
+  const names = Object.keys(h).filter((k) => k.toLowerCase() === "content-security-policy");
+  assert.equal(names.length, 1);
+  assert.equal(h[names[0]], "frame-ancestors https://app.supersonic.cv");
+});
+
+test("report-only policies are left alone — they enforce nothing", () => {
+  const h = allowWorkbenchFraming({
+    "content-security-policy-report-only": "frame-ancestors 'none'",
+  });
+  assert.equal(h["content-security-policy-report-only"], "frame-ancestors 'none'");
 });

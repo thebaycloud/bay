@@ -250,3 +250,63 @@ export function scrubSetCookie(headers: OutgoingHttpHeaders): OutgoingHttpHeader
   );
   return headers;
 }
+
+/** The one origin allowed to frame a tenant app: the workbench. */
+export const WORKBENCH_ORIGIN = "https://app.supersonic.cv";
+
+/**
+ * Let the workbench frame a tenant's app, and nobody else.
+ *
+ * `app.supersonic.cv/apps/<slug>` renders the app in an iframe of
+ * `<slug>.supersonic.cv`, which is cross-origin, so the browser obeys whatever
+ * the app says about being framed. Most say nothing and embed fine; the ones that
+ * set a header refuse, and a refused frame is a blank pane with no error anyone
+ * sees — the same class of silent failure as the fonts that 307'd to /login.
+ *
+ * Two headers decide it and they behave differently:
+ *
+ *   X-Frame-Options has no allowlist form. `DENY` and `SAMEORIGIN` both refuse a
+ *   cross-origin parent and neither can be narrowed to one host, so the only way
+ *   to permit the workbench is to drop it and let CSP answer instead. That is not
+ *   a loosening: frame-ancestors below is strictly narrower than SAMEORIGIN, which
+ *   would permit every path on the tenant's own hostname.
+ *
+ *   Content-Security-Policy is additive across headers — a browser enforces the
+ *   INTERSECTION of every policy it receives — so appending a second header cannot
+ *   widen an existing `frame-ancestors 'none'`. The directive has to be rewritten
+ *   in place, which is why this parses the policy rather than concatenating to it.
+ *
+ * Documents only. A stylesheet cannot be framed, and rewriting policies on
+ * subresources would strip protections that have nothing to do with framing.
+ */
+export function allowWorkbenchFraming(headers: OutgoingHttpHeaders): OutgoingHttpHeaders {
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === "x-frame-options") delete headers[key];
+  }
+
+  // Whatever case the app used, and whatever it holds, is replaced by one header
+  // under one spelling — two CSP headers would both be enforced.
+  let policy: string | null = null;
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === "content-security-policy") {
+      const v = headers[key];
+      policy = Array.isArray(v) ? v.join(", ") : v == null ? null : String(v);
+      delete headers[key];
+    }
+    // The report-only twin is left exactly as it is. It enforces nothing, and
+    // rewriting it would corrupt the app's own telemetry about its own policy.
+  }
+
+  const allow = `frame-ancestors ${WORKBENCH_ORIGIN}`;
+  if (policy === null) {
+    headers["content-security-policy"] = allow;
+    return headers;
+  }
+
+  const kept = policy
+    .split(";")
+    .map((d) => d.trim())
+    .filter((d) => d.length > 0 && !/^frame-ancestors\b/i.test(d));
+  headers["content-security-policy"] = [...kept, allow].join("; ");
+  return headers;
+}

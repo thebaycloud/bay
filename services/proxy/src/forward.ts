@@ -1,6 +1,6 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, type VisitorIdentity } from "./headers";
+import { buildUpstreamHeaders, scrubSetCookie, allowWorkbenchFraming, stripHopByHop, type VisitorIdentity } from "./headers";
 import { mintIdToken } from "./idtoken";
 import { isCloudRunTarget } from "./upstream";
 import { config } from "./config";
@@ -129,6 +129,13 @@ export async function forward(
         path: target.pathname + target.search, method: req.method, headers },
       (upRes) => {
         const headers = stripHopByHop(scrubSetCookie({ ...upRes.headers }));
+
+        // The workbench frames this app, so a document has to permit being framed
+        // by app.supersonic.cv. Applied to every HTML document and not only to the
+        // ones we inject into: a framed request carries Sec-Fetch-Dest: iframe and
+        // is deliberately NOT injected, which is exactly the request that needs the
+        // header most.
+        if (isHtmlDocument(upRes.headers["content-type"])) allowWorkbenchFraming(headers);
 
         // Whether the overlay reached the page, said out loud — for documents,
         // and only documents.
