@@ -14,12 +14,18 @@ import { railIndex, type FilmDrive } from "@/lib/deploy-film";
  * graving dock and sails under the Golden Gate at sunrise, cut on the deploy's
  * own stage boundaries.
  *
- * It is a picture of a real thing and it must stay one. The film plays the
- * stage it is on and then HOLDS there, camera still moving, until the next
- * stage event arrives — so a build that takes four minutes is four minutes of
+ * It is a picture of a real thing and it must stay one. The film plays into
+ * the stage it is on and then CREEPS through it — getting arbitrarily close to
+ * finishing that stage and never actually finishing, until the next stage
+ * event arrives. So a build that takes four minutes is four minutes of
  * plating, and the sun does not come up until the app answers. Nothing here
- * runs on a timer, which is the whole difference between this and a
- * progress bar that lies at 90%.
+ * runs on a timer, which is the whole difference between this and a progress
+ * bar that lies at 90%.
+ *
+ * What DOES run regardless is everything that is alive rather than
+ * progressing: the yard works, the tide moves, the ferries cross the bay and
+ * the camera re-angles every few seconds. A stage the deploy sits in for four
+ * minutes is an edited sequence of a shipyard at night, not a held frame.
  *
  * The three.js scene and its 800KB of library are loaded on demand, inside the
  * effect, so nothing about the deploy page's own weight changes for a person

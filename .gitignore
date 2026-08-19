@@ -42,3 +42,9 @@ apps/web/bench/results/
 # `prebuild` runs, so the image always has it). Generated, ~600 KB, and it moves
 # with every change to the picture — the source is the .js in components/film.
 apps/web/public/film/
+
+# The cutting room, built from apps/web/scripts/film-studio by
+# `node scripts/build-film-studio.mjs`. One 650 KB HTML page with the whole of
+# three.js inlined, because it is published as an artifact and an artifact
+# fetches nothing. Generated; the source is the two files it is built from.
+apps/web/.film-studio.html

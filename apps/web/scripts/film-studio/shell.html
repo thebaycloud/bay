@@ -1,0 +1,298 @@
+<title>Ship It</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* A grading suite, not a web page. The film is the only bright thing here and
+   everything around it is deliberately quiet: the whole point of the bench is
+   to judge a picture, and a bench with an opinion about colour is a bench that
+   lies to you about the picture. Single theme on purpose — there is no light
+   mode of a room you grade night exteriors in. */
+:root{
+  --ground:#0E1014; --panel:#161A20; --panel2:#1C2129; --line:#262C36;
+  --ink:#DCE1E8; --dim:#98A2AF; --faint:#6C7684;
+  --accent:#F2622A;            /* the bridge's own orange, and the film's */
+  --live:#2FD07F; --bad:#E8533A;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Archivo",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     -webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:26px 20px 60px;display:flex;flex-direction:column;gap:18px}
+
+/* ---- masthead ---- */
+.head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.head h1{margin:0;font-size:clamp(19px,2.4vw,25px);font-weight:700;letter-spacing:-.015em;text-wrap:balance}
+.head h1 em{font-style:normal;color:var(--accent)}
+.head p{margin:0;max-width:62ch;color:var(--dim);font-size:13px;line-height:1.55}
+.head .sp{margin-left:auto}
+.tag{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;
+     color:var(--faint);border:1px solid var(--line);border-radius:2px;padding:5px 9px;white-space:nowrap}
+
+/* ---- the film ---- */
+.dfilm{border:1px solid var(--line);background:#000;border-radius:3px;overflow:hidden}
+.dfilm-bar{display:flex;align-items:center;gap:12px;padding:8px 12px;font-family:var(--mono);
+  font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);
+  background:var(--panel);border-top:1px solid var(--line)}
+.dfilm-bar.top{border-top:0;border-bottom:1px solid var(--line)}
+.dfilm-bar .sp{margin-left:auto}
+.dfilm-bar .st{color:var(--ink);text-transform:none;letter-spacing:.02em;font-size:11.5px}
+.dfilm-bar .url{color:var(--live);opacity:0;transition:opacity .4s var(--ease);text-transform:none;letter-spacing:.02em}
+.dfilm-bar .url.on{opacity:1}
+.dfilm-frame{position:relative;background:#0b0b0a;overflow:hidden}
+.dfilm-canvas{display:block}
+.dfilm-frame canvas{display:block;width:100%;aspect-ratio:960/400}
+.dfilm-fallback{padding:54px 20px;text-align:center;color:var(--faint);font-family:var(--mono);font-size:12px}
+.dfilm-slate{position:absolute;left:14px;top:12px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.2em;text-transform:uppercase;color:#fff;opacity:0;text-shadow:0 1px 6px rgba(0,0,0,.8)}
+.dfilm-slate.flash{animation:slate 2.6s var(--ease) forwards}
+@keyframes slate{0%{opacity:0;transform:translateY(-3px)}12%{opacity:.95;transform:none}
+                 72%{opacity:.95}100%{opacity:0}}
+.dfilm-endcard{position:absolute;left:50%;bottom:11%;transform:translate(-50%,14px);opacity:0;
+  text-align:center;color:#fff;text-shadow:0 2px 18px rgba(0,0,0,.7);pointer-events:none}
+.dfilm-endcard b{display:block;font-size:clamp(15px,2.2vw,23px);font-weight:600;letter-spacing:.02em;font-family:var(--mono)}
+.dfilm-endcard span{display:block;font-size:clamp(9px,1.1vw,11px);letter-spacing:.26em;text-transform:uppercase;
+  color:rgba(255,255,255,.72);margin-top:6px;font-family:var(--mono)}
+.dfilm-stagebar{position:absolute;left:14px;bottom:12px;right:14px;display:flex;align-items:baseline;gap:10px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:rgba(255,255,255,.62);text-shadow:0 1px 8px rgba(0,0,0,.8)}
+.dfilm-stagebar b{font-size:13.5px;font-weight:600;color:#fff;letter-spacing:.01em}
+.dfilm-stagebar .no{letter-spacing:.14em;font-variant-numeric:tabular-nums}
+.dfilm-stagebar .note{opacity:0;transition:opacity .3s var(--ease);text-transform:none;letter-spacing:.04em}
+.dfilm-stagebar.held .note{opacity:.8}
+.dfilm-vig{position:absolute;inset:0;pointer-events:none;
+  box-shadow:inset 0 0 190px 40px rgba(0,0,0,.55)}
+.dfilm-bang{position:absolute;inset:0;pointer-events:none;opacity:0;background:#fff}
+.dfilm-grade{position:absolute;inset:0;pointer-events:none;mix-blend-mode:soft-light;opacity:0}
+.dfilm-grain{position:absolute;inset:0;pointer-events:none;opacity:.14;mix-blend-mode:overlay;
+  background-size:150px 150px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='150' height='150'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/></filter><rect width='150' height='150' filter='url(%23n)' opacity='.5'/></svg>")}
+
+/* ---- the console ---- */
+.console{display:grid;grid-template-columns:1fr 320px;gap:18px;align-items:start}
+@media (max-width:860px){.console{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:14px 15px;
+      display:flex;flex-direction:column;gap:12px}
+.card h2{margin:0;font-family:var(--mono);font-size:10px;letter-spacing:.24em;text-transform:uppercase;
+         color:var(--faint);font-weight:500}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+button,select{font-family:var(--mono);font-size:11.5px;color:var(--ink);background:var(--panel2);
+  border:1px solid var(--line);border-radius:2px;padding:7px 11px;cursor:pointer;
+  letter-spacing:.06em;transition:border-color .15s var(--ease),color .15s var(--ease)}
+button:hover,select:hover{border-color:#3A4350}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.on{border-color:var(--accent);color:var(--accent)}
+.profiles{display:flex;flex-direction:column;gap:6px}
+.profiles button{text-align:left;display:flex;justify-content:space-between;gap:10px}
+label{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}
+
+/* the beat strip: one flex-grown segment per beat, width == its scripted length */
+.scrub{position:relative;height:22px;cursor:pointer;display:flex;align-items:center}
+.track{display:flex;gap:2px;width:100%;height:9px}
+.seg{background:#232A34;position:relative;overflow:hidden;border-radius:1px}
+.seg i{position:absolute;inset:0;background:var(--accent);transform:scaleX(0);transform-origin:left;
+       display:block;transition:transform .12s linear}
+.seg.bad i{background:var(--bad)}
+.head-mark{position:absolute;top:0;bottom:0;width:1px;background:#fff;opacity:.8;pointer-events:none}
+.rail{display:flex;flex-wrap:wrap;gap:5px}
+.pip{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+  border:1px solid var(--line);border-radius:2px;padding:3px 6px;display:flex;align-items:center;gap:5px}
+.pip .d{width:5px;height:5px;border-radius:50%;background:#333B45;display:block}
+.pip.now{color:var(--ink);border-color:#3D4753}
+.pip.now .d{background:var(--accent)}
+.pip.done .d{background:var(--live)}
+.pip.bad{color:var(--bad);border-color:#4A2A22}
+.pip.bad .d{background:var(--bad)}
+.clock{font-family:var(--mono);font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:.06em}
+.sim{font-family:var(--mono);font-size:11px;color:var(--ink);line-height:1.7;
+     border-left:2px solid var(--accent);padding-left:10px;font-variant-numeric:tabular-nums}
+.log{font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--dim);
+     max-height:132px;overflow:auto;display:flex;flex-direction:column}
+.log>div{display:flex;gap:8px}
+.log .t{color:#4E5763;font-variant-numeric:tabular-nums}
+.log .k{width:1em}
+.log .g{color:var(--live)} .log .e{color:var(--bad)} .log .a{color:#7FA8D8}
+.note{color:var(--faint);font-size:12px;line-height:1.6;margin:0}
+.note b{color:var(--dim);font-weight:600}
+@media (prefers-reduced-motion:reduce){.dfilm-slate.flash{animation:none;opacity:.9}}
+.fixes{margin-top:34px;border-top:1px solid var(--line);padding-top:22px}
+.fixes h2{margin:0 0 16px}
+.fixes .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px}
+.fixes article{display:flex;flex-direction:column;gap:9px}
+.fixes h3{margin:0;font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:-.01em;
+  color:var(--ink);text-transform:none}
+.fixes h3::before{content:"";display:block;width:26px;height:2px;background:var(--accent);margin-bottom:9px}
+.fixes p{margin:0;color:var(--dim);font-size:13.5px;line-height:1.62;max-width:62ch}
+.fixes b{color:var(--ink);font-weight:600}
+.fixes em{color:var(--dim);font-style:italic}
+</style>
+
+<div class="wrap">
+  <div class="head">
+    <div>
+      <h1>Ship It <em>Cutting Room</em></h1>
+      <p>The deploy film, on a bench, driven by a simulated deploy rather than a real one — including
+         the deploys worth worrying about: a four-minute build, a cold start, a node that takes two
+         and a half minutes to pull an image.</p>
+    </div>
+    <span class="sp"></span>
+    <span class="tag">cel 3d · 2.40:1</span>
+  </div>
+
+  <div class="dfilm" data-film>
+    <div class="dfilm-bar top">
+      <span data-el="tagLane">deploying…</span>
+      <span class="sp"></span>
+      <span><span data-el="shotCount">0</span> shots</span>
+    </div>
+    <div class="dfilm-frame">
+      <div class="dfilm-canvas" data-el="cv" role="img"
+           aria-label="An animated cutaway of a deploy: a ship built in a dry dock, launched, and sailing under the Golden Gate as it goes live."></div>
+      <div class="dfilm-slate" data-el="slate"></div>
+      <div class="dfilm-endcard" data-el="endcard"><b data-el="ecUrl"></b><span data-el="ecMeta"></span></div>
+      <div class="dfilm-bang" data-el="bang"></div>
+      <div class="dfilm-grade" data-el="grade"></div>
+      <div class="dfilm-grain"></div>
+      <div class="dfilm-vig"></div>
+      <div class="dfilm-stagebar" data-el="stagebar">
+        <span class="no" data-el="stageNo"></span>
+        <b data-el="stageName"></b>
+        <span class="note" data-el="stageNote"></span>
+      </div>
+      <div class="dfilm-fallback" data-el="fallback" hidden></div>
+    </div>
+    <div class="dfilm-bar">
+      <span class="st" data-el="status"></span>
+      <span class="sp"></span>
+      <span class="url" data-el="urlOut"></span>
+    </div>
+  </div>
+
+  <div class="scrub" data-el="scrub">
+    <div class="track" data-el="track"></div>
+    <div class="head-mark" data-el="head"></div>
+  </div>
+
+  <div class="console">
+    <div class="card">
+      <h2>Transport</h2>
+      <div class="row">
+        <button data-el="play">Pause</button>
+        <button data-el="prev">← Prev</button>
+        <button data-el="next">Next stage →</button>
+        <button data-el="restart">Restart</button>
+        <span class="clock"><span data-el="tElapsed">0s</span> <span data-el="tTotal"></span></span>
+      </div>
+      <div class="row">
+        <label for="mode">Mode</label>
+        <select data-el="mode" id="mode">
+          <option value="stages">stages · waits for the deploy</option>
+          <option value="film">film · straight through</option>
+        </select>
+        <label for="scenario">Cut</label>
+        <select data-el="scenario" id="scenario">
+          <option value="container">container</option>
+          <option value="repair">repair</option>
+          <option value="static">static</option>
+        </select>
+        <label for="theme">Palette</label>
+        <select data-s="theme" id="theme">
+          <option value="dark" selected>dark</option>
+          <option value="light">light</option>
+        </select>
+        <label for="speed">Speed</label>
+        <select data-el="speed" id="speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </div>
+      <div class="rail" data-el="rail"></div>
+      <div class="log" data-el="log"></div>
+    </div>
+
+    <div class="card">
+      <h2>Deploy simulator</h2>
+      <div class="sim" data-s="sim">starting…</div>
+      <div class="profiles">
+        <button data-p="p50">typical <span>92s</span></button>
+        <button data-p="slow">slow build <span>4m40</span></button>
+        <button data-p="cold">cold start + slow node <span>5m</span></button>
+        <button data-p="repair">the build fails <span>4m</span></button>
+        <button data-p="static">static lane <span>48s</span></button>
+      </div>
+      <div class="row">
+        <button data-s="freeze">Freeze here</button>
+        <button data-s="bump">Force next stage</button>
+      </div>
+      <p class="note"><b>Freeze here</b> stops the simulated deploy where it is and leaves the film
+         waiting on it, forever. That is the case to watch: the picture has to stay alive with no
+         progress at all to show.</p>
+    </div>
+  </div>
+
+  <section class="fixes">
+    <h2>Four complaints, and what each one turned out to be</h2>
+    <div class="grid">
+      <article>
+        <h3>It was static</h3>
+        <p>The worst of the four, and the one the other three hid behind. A stage played at ten
+           times life — a thirty-three-second build went past in three — and then stopped dead
+           while the deploy took another three minutes over it. So most of every deploy was a
+           frozen frame, and the part that moved was too fast to read.</p>
+        <p>Both halves were one mistake: treating a beat's scripted duration as the speed to play
+           it at. Now the film <b>creeps</b>. It opens a stage at a readable pace and then eases
+           along a power law — still visibly moving at four minutes — approaching the end and
+           never arriving, because the last of a stage belongs to the deploy. An asymptote is the
+           only kind of progress bar that cannot lie.</p>
+        <p>And the picture stopped being wired to that clock. There are <b>two clocks</b> now:
+           story time, paced by the deploy, and wall time, which never stops. Everything that is
+           merely alive — the water, the welders, the gantry, the ferries, the traffic, the
+           lamps — runs on the wall clock. The yard works whether or not the build does.</p>
+      </article>
+      <article>
+        <h3>The camera sat still, then cut too fast</h3>
+        <p>A shot used to be a move parameterised by story time, so it finished in three seconds
+           and then held for three minutes. A shot is now a move on the <b>wall</b> clock that
+           keeps drifting when the move is done — and it has a length. When the length runs out
+           and the stage has not, the film <b>cuts to another angle on the same subject</b>. A
+           long stage is an edited sequence, which is what a long stage is in any film.</p>
+        <p>The alternates are derived from the master rather than written: same target, a yaw, a
+           height and a distance off it. Which is only safe because of the next one.</p>
+      </article>
+      <article>
+        <h3>The camera went through things</h3>
+        <p>There was no collision pass at all. There is one now, and it asks the right question:
+           not <em>how thick is this object</em> but <em>how much of the frame would it take
+           up</em>. A girder at arm's length is in the way; the same girder across the bay is the
+           background. When the master framing is blocked the operator steps round and up until
+           it is not — the same eight moves a real one would try.</p>
+      </article>
+      <article>
+        <h3>The night was empty and the world had edges</h3>
+        <p>Night was lit by ambient alone, because the key light followed a sun that is below the
+           horizon for two thirds of the film. There is a <b>moon</b> now: it keys the scene, it
+           lays a path on the water, and it gives the sky something to be about. Around it, a city
+           whose windows are six banks on six different flickers, street light in the streets,
+           five vessels crossing the bay under running lights, aircraft warning lights on the
+           towers, an aeroplane, festoon lighting down the walls of the dock, and light pools on
+           the quay under every lamp.</p>
+        <p>The world's edges went two ways. Every terrain now <b>drowns at its own rim</b> — the
+           land bends under the sea before the model runs out, so the far distance is water going
+           into haze rather than a cliff with sky behind it — and there is a ring of hills at the
+           edge of sight that opens out to nothing over the ocean, which is the one direction with
+           no land in it. The yard was the other half: it used to be concrete boxes on a patch of
+           seabed, a raft moored in open water. It is cut into the hill now, with the dock cut out
+           of the shelf and a channel dredged from the gates to deep water.</p>
+        <p>And there are <b>people</b> in it now — six of them, walking the apron, standing at the
+           dock edge, kneeling at the seam with a welding arc. The motion study left itself that
+           note and never acted on it: nothing in the picture was at human scale, so nothing said
+           how big she is. They are also the cheapest movement in the film.</p>
+      </article>
+    </div>
+  </section>
+</div>
+<script>/*BUNDLE*/</script>
