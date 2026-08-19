@@ -51,7 +51,26 @@ async function db(slug: string, sql: string): Promise<Answer> {
   }
 }
 
-export function toolsFor(slug: string): Handler {
+/**
+ * Two of these reads are OWNER-ONLY and live on the app's own hostname.
+ *
+ * `/_xray` and `/_dashboard/analytics` are answered by the proxy in front of the
+ * tenant, and only for the owner — to anybody else the path means nothing and the
+ * app answers it however it likes. A server-side fetch with no cookie IS anybody
+ * else: the request was forwarded to the app, which returned its own HTML, and the
+ * tool reported "the analytics tool is returning an invalid response". It was.
+ *
+ * So the caller's session is forwarded. That is sound rather than a shortcut: the
+ * chat route has already established that this user owns this app, and the reading
+ * being fetched is the one that user is entitled to. Nothing is forwarded anywhere
+ * except that user's own app.
+ */
+export function toolsFor(slug: string, cookie?: string): Handler {
+  const asOwner: HeadersInit = {
+    Accept: "application/json",
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+
   return async (op: Op, arg: string): Promise<Answer> => {
     try {
       switch (op) {
@@ -81,8 +100,18 @@ export function toolsFor(slug: string): Handler {
           // Read through the app's own proxy, which already assembles this and is
           // the only thing holding umami credentials.
           const r = await fetch(`https://${slug}.supersonic.cv/_dashboard/analytics?range=${range}`, {
-            headers: { Accept: "application/json" },
+            headers: asOwner,
           });
+          // A non-JSON body here means the request was not recognised as the
+          // owner's and the app answered instead of the proxy. Say that, rather
+          // than letting a parse failure read as "analytics is broken".
+          const ct = r.headers.get("content-type") ?? "";
+          if (!ct.includes("json")) {
+            return {
+              ok: false,
+              error: "the analytics reading came back as a page rather than JSON — this read was not recognised as the owner's",
+            };
+          }
           return { ok: true, data: await r.json() };
         }
 
@@ -133,8 +162,15 @@ export function toolsFor(slug: string): Handler {
           // The edge reading, from the proxy in front of this app. It counts
           // REQUESTS; analytics counts PEOPLE. Never add them together.
           const r = await fetch(`https://${slug}.supersonic.cv/_xray`, {
-            headers: { Accept: "application/json" },
+            headers: asOwner,
           });
+          const ct = r.headers.get("content-type") ?? "";
+          if (!ct.includes("json")) {
+            return {
+              ok: false,
+              error: "the edge reading came back as a page rather than JSON — this read was not recognised as the owner's",
+            };
+          }
           const j = await r.json();
           return {
             ok: true,

@@ -55,6 +55,9 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   if (!question) return Response.json({ error: "no question given" }, { status: 400 });
 
   const prompt = buildPrompt(question, (body.history ?? []) as Turn[]);
+  // Forwarded to the two tools that read owner-only endpoints on the app's own
+  // hostname. Ownership was established above; this is that same user's reading.
+  const cookie = req.headers.get("cookie") ?? undefined;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -73,7 +76,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
 
       try {
         const dir = seedTools(ws);
-        bridge = serveTools(dir, toolsFor(slug));
+        bridge = serveTools(dir, toolsFor(slug, cookie));
 
         const backend = backendFor(agentName());
         const spec = chatSpec({ ws, model: bareModel(CHAT_MODEL), prompt });
