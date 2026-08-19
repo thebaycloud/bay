@@ -49,7 +49,7 @@ export function Workbench({
   slug: string;
   address: string;
   state: AppState;
-  /** Dev mode's body. The Cockpit, until the screens are ported. */
+  /** Dev mode's body: the cell grid and the screens behind it. */
   children: ReactNode;
 }) {
   const { word, dot } = STATE[state];

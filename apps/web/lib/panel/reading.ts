@@ -1,0 +1,260 @@
+/**
+ * Everything the panel shows, read at once.
+ *
+ * A port of `dwLoad` from services/proxy/panel/layer.js, with two things changed
+ * and one kept.
+ *
+ * Changed: it is same-origin now, so there is no `credentials: "include"` and no
+ * CORS rule standing behind it. And the live half comes from the app's own
+ * `/_xray`, which is on a DIFFERENT host from this page — the tenant's — so that
+ * one call is the only cross-origin read left, and it is the one already allowed.
+ *
+ * Kept: the per-request deadline. `dwSoon` exists because one of these reaches
+ * umami, which reading.ts itself says can be off or unreachable, and the first
+ * version waited on Promise.all with no deadline anywhere — leaving the whole
+ * panel saying "Reading…" forever with nothing on screen and nothing in the
+ * console. A cell holding a dash is worth more than seven cells that never
+ * arrive.
+ */
+
+export type Ship = {
+  did: string;
+  when: string;
+  who: string;
+  out: string;
+  status?: string;
+  stage?: string;
+  error?: string | null;
+  url?: string | null;
+};
+
+export type Alert = { kind: string; title: string; sub: string; act: string };
+
+export type Reading = {
+  slug: string;
+  addr: string;
+  /** Null when analytics is off, unprovisioned, or unreachable — never zeroes. */
+  an: {
+    visitors: number;
+    views: number;
+    mins: string;
+    returning: string;
+    dv: string;
+    dvUp: boolean;
+  } | null;
+  anOn: boolean;
+  anReady: boolean;
+  here: string[];
+  initials: string[];
+  who: string;
+  people: string[];
+  pInitials: string[];
+  requests: unknown[];
+  tables: [string, number][];
+  files: number;
+  missing: string | null;
+  keys: { name: string; tone: string }[];
+  jobs: unknown[];
+  tokens: { last_used_at?: string | null }[];
+  mcp: boolean;
+  shipping: boolean;
+  ships: Ship[];
+  live: { path: string; hits: number; p50: number; ago: number; brokenFor?: number }[];
+  alert: Alert | null;
+};
+
+/** How long ago, in the shortest true form. Defined through dur() so the two
+ *  cannot disagree about where an hour ends. */
+export function dur(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  if (sec < 86400) return `${Math.round(sec / 3600)}h`;
+  return `${Math.round(sec / 86400)}d`;
+}
+export function ago(sec: number): string {
+  return `${dur(sec)} ago`;
+}
+
+/** Initials from an address, so a row has something to look at. */
+export function ini(x: string): string {
+  const n = x.split("@")[0].replace(/[^a-z]/gi, "");
+  return (n.slice(0, 2) || "··").toUpperCase();
+}
+
+/** A request that cannot hang the panel. Resolves to `fallback` on a deadline. */
+function soon<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let done = false;
+    const t = setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolve(fallback);
+      }
+    }, ms);
+    p.then(
+      (v) => {
+        if (!done) {
+          done = true;
+          clearTimeout(t);
+          resolve(v);
+        }
+      },
+      () => {
+        if (!done) {
+          done = true;
+          clearTimeout(t);
+          resolve(fallback);
+        }
+      },
+    );
+  });
+}
+
+type Json = Record<string, any>;
+
+function api(slug: string, path: string): Promise<Json> {
+  return fetch(`/api/apps/${encodeURIComponent(slug)}${path}`, {
+    headers: { Accept: "application/json" },
+  })
+    .then((r) => r.json())
+    .catch((e) => ({ error: String(e) }));
+}
+
+/**
+ * Rows out of information_schema come back under names that have changed once
+ * already; read them defensively rather than pinning one spelling.
+ */
+function tableRow(t: Json | string): [string, number] {
+  if (typeof t === "string") return [t, 0];
+  const name = t.table_name ?? t.tablename ?? t.name ?? String(t);
+  const n = t.n_live_tup ?? t.rows ?? 0;
+  return [String(name), Number(n) || 0];
+}
+
+function keyName(k: Json | string): string {
+  return typeof k === "string" ? k : String(k.key ?? k.name ?? k);
+}
+
+export async function readPanel(slug: string, addr: string): Promise<Reading> {
+  const [share, env, db, store, jobs, dep, an, agent, live] = await Promise.all([
+    soon(api(slug, "/share"), 6000, {} as Json),
+    soon(api(slug, "/env"), 6000, {} as Json),
+    soon(api(slug, "/db"), 6000, {} as Json),
+    soon(api(slug, "/storage"), 6000, {} as Json),
+    soon(api(slug, "/jobs"), 6000, {} as Json),
+    soon(api(slug, "/deploy-status"), 6000, {} as Json),
+    soon(api(slug, "/analytics"), 6000, {} as Json),
+    soon(api(slug, "/agent"), 6000, {} as Json),
+    // Shortest deadline and first to be given up on: this is the one that reaches
+    // umami, and it is cross-origin to the tenant's own host.
+    soon(
+      fetch(`https://${addr}/_xray`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      })
+        .then((r) => r.json())
+        .catch(() => null),
+      4000,
+      null as Json | null,
+    ),
+  ]);
+
+  const grants: string[] = share.grants ?? [];
+  const paths = live?.live?.paths ?? [];
+  const here: string[] = live?.live?.here?.names ?? [];
+  const aud = live?.audience ?? null;
+  const broken = paths.filter((p: Json) => p.brokenFor);
+
+  const d: Reading = {
+    slug,
+    addr,
+    // The edge counts REQUESTS and umami counts PEOPLE — one page view with
+    // eleven assets on it is eleven requests and one visitor. These are never
+    // added together or compared.
+    an: aud
+      ? {
+          visitors: aud.visitors,
+          views: aud.views,
+          mins: String(aud.avgSeconds ?? ""),
+          // Umami gives a bounce rate, not a returning count. Say what the number
+          // is rather than what we wished it were.
+          returning: `${Math.round(Number(aud.bounce) || 0)}%`,
+          dv: aud.change == null ? "" : `${aud.change > 0 ? "+" : ""}${Math.round(aud.change)}%`,
+          dvUp: (Number(aud.change) || 0) >= 0,
+        }
+      : null,
+    anOn: an.enabled !== false,
+    anReady: Boolean(an.provisioned),
+    here,
+    initials: here.map(ini),
+    who: share.visibility ?? "private",
+    people: grants,
+    pInitials: grants.map(ini),
+    requests: share.requests ?? [],
+    tables: (db.tables ?? []).map(tableRow),
+    files: (store.objects ?? []).length,
+    missing: db.error ?? null,
+    keys: (env.keys ?? []).map((k: Json | string) => ({ name: keyName(k), tone: "" })),
+    jobs: jobs.jobs ?? [],
+    // A token belongs to a person, not an app: one deploys everything they own.
+    tokens: agent.tokens ?? [],
+    mcp: Boolean(agent.mcp),
+    // deploys.ts: status is live | building | deploying | pending | failed |
+    // canceled, and there is no 'done'. Reading `stage` for doneness left every
+    // finished app saying "Shipping" forever, because stage holds the last step
+    // that RAN, not whether it ended.
+    shipping: ["building", "deploying", "pending"].includes(String(dep.deploy?.status)),
+    ships: [],
+    live: paths.slice(0, 40).map((p: Json) => ({
+      path: p.path,
+      hits: p.hits,
+      p50: p.p50,
+      ago: p.ago,
+      brokenFor: p.brokenFor,
+    })),
+    alert: null,
+  };
+
+  if (dep.deploy) {
+    const dd = dep.deploy;
+    const st = String(dd.status ?? "");
+    const stamp = dd.finishedAt ?? dd.updatedAt;
+    d.ships = [
+      {
+        did: dd.name ?? dd.stage ?? "a change",
+        when: stamp ? ago(Math.round((Date.now() - new Date(stamp).getTime()) / 1000)) : "just now",
+        // The row records no actor. An owner is the only person who can see this,
+        // so naming them is honest; inventing a name would not be.
+        who: "you",
+        out: st === "live" ? "shipped" : st === "failed" || st === "canceled" ? "never left" : "live",
+        status: st,
+        stage: dd.stage ?? "",
+        error: dd.error ?? null,
+        url: dd.url ?? null,
+      },
+    ];
+    if (dd.error) {
+      d.alert = {
+        kind: "bad",
+        title: "The last ship did not land",
+        sub: String(dd.error).slice(0, 160),
+        act: "Look at it",
+      };
+    }
+  }
+  if (!d.ships.length) d.ships = [{ did: "first ship", when: "not yet", who: "you", out: "live" }];
+
+  // A path the edge has seen fail with no success since outranks a failed deploy:
+  // one is the app being broken now, the other is a change that never landed.
+  if (broken.length) {
+    const b = broken[0];
+    d.alert = {
+      kind: "bad",
+      title: `${b.path} has been failing for ${dur(b.brokenFor)}`,
+      sub: "The edge has seen no success there since.",
+      act: "Look at it",
+    };
+  }
+
+  return d;
+}

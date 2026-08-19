@@ -1,8 +1,6 @@
 import { Suspense } from "react";
-import { Cockpit } from "@/components/Cockpit";
+import { Dev } from "@/components/panel/Dev";
 import { Workbench, type AppState } from "@/components/Workbench";
-import SharePanel from "@/components/SharePanel";
-import { CockpitSkeleton, RailSkeleton } from "@/components/Skeleton";
 import { describeService, type ServiceInfo } from "@/lib/gcloud";
 import { getAppBySlug } from "@/lib/apps";
 import { getDeploy } from "@/lib/deploys";
@@ -63,7 +61,7 @@ function fromRecord(slug: string, name: string, uid: string, ready: boolean): Se
  */
 export default function AppPage({ params }: { params: { slug: string } }) {
   return (
-    <Suspense fallback={<div className="shell shell-side"><RailSkeleton /><CockpitSkeleton /></div>}>
+    <Suspense fallback={<div className="fixed inset-0 bg-background" />}>
       <AppData params={params} />
     </Suspense>
   );
@@ -86,9 +84,7 @@ async function AppData({ params }: { params: { slug: string } }) {
     if (data && data.owner === uid) {
       return (
         <Workbench slug={slug} address={`${slug}.supersonic.cv`} state={stateOf(app.status, data.ready)}>
-          <Cockpit appName={slug} data={data}>
-            <SharePanel slug={slug} />
-          </Cockpit>
+          <Dev address={`${slug}.supersonic.cv`} slug={slug} />
         </Workbench>
       );
     }
@@ -103,9 +99,7 @@ async function AppData({ params }: { params: { slug: string } }) {
     const ready = app?.status === "live";
     return (
       <Workbench slug={slug} address={`${slug}.supersonic.cv`} state={stateOf(app?.status ?? dep?.status, ready)}>
-        <Cockpit appName={slug} data={fromRecord(slug, name, uid, ready)}>
-          <SharePanel slug={slug} />
-        </Cockpit>
+        <Dev address={`${slug}.supersonic.cv`} slug={slug} />
       </Workbench>
     );
   }

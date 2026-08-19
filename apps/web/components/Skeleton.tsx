@@ -61,19 +61,3 @@ export function CardsSkeleton({ rows = 3 }: { rows?: number }) {
   );
 }
 
-/** An app's own page: the bar, the hero block and the panel below it. */
-export function CockpitSkeleton() {
-  return (
-    <div className="main">
-      <header className="topbar"><Bar w="180px" h={14} /></header>
-      <div className="content">
-        <div className="wrap" style={{ padding: "26px 30px" }}>
-          <Bar w="220px" h={26} />
-          <Bar w="320px" h={13} mt={12} />
-          <div className="sk-panel"><Bar w="100%" h={132} /></div>
-          <div className="sk-panel"><Bar w="100%" h={92} /></div>
-        </div>
-      </div>
-    </div>
-  );
-}
