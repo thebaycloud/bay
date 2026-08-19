@@ -53,7 +53,14 @@ import {
  * it does not follow a live edge, which is a real gap once step 7 streams tokens.
  */
 
-type Tool = { name: string; detail: string };
+type Tool = {
+  name: string;
+  detail: string;
+  /** Null until the call ends. Undefined when the backend reports no code. */
+  exitCode?: number | null;
+  output?: string;
+  done?: boolean;
+};
 
 /**
  * What to call a tool call in the rail.
@@ -64,6 +71,11 @@ type Tool = { name: string; detail: string };
  * scripts is `./db` or `./keys`. Falls back to the backend's own name for anything
  * that is not one of ours.
  */
+/** A call that ended badly. Opened by default, because it is the answer. */
+function failed(t: Tool): boolean {
+  return t.done === true && t.exitCode !== null && t.exitCode !== undefined && t.exitCode !== 0;
+}
+
 function toolLabel(t: Tool): string {
   const first = t.detail.trim().split(/\s+/)[0] ?? "";
   const m = /^\.\/(\w+)$/.exec(first);
@@ -152,6 +164,19 @@ export function WorkbenchChat({ slug }: { slug: string }) {
           }
           if (ev === "tool") {
             patch((t) => ({ ...t, tools: [...t.tools, { name: data.name, detail: data.detail }] }));
+          } else if (ev === "result") {
+            // Attaches to the most recent unfinished call. Codex reports one result
+            // per call in order, so the open one is always the last.
+            patch((t) => {
+              const tools = [...t.tools];
+              for (let i = tools.length - 1; i >= 0; i--) {
+                if (!tools[i].done) {
+                  tools[i] = { ...tools[i], done: true, exitCode: data.exitCode, output: data.output };
+                  break;
+                }
+              }
+              return { ...t, tools };
+            });
           } else if (ev === "text") {
             patch((t) => ({ ...t, text: t.text + data.text }));
           } else if (ev === "usage") {
@@ -228,14 +253,35 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                           latency: a real agent run takes seconds, and a rail that
                           shows what it is reading is working rather than hung. */}
                       {turn.tools.map((tool, i) => (
-                        <Tool defaultOpen={false} key={`${tool.name}-${i}`}>
+                        <Tool defaultOpen={failed(tool)} key={`${tool.name}-${i}`}>
+                          {/* The state is OBSERVED now. It used to be asserted:
+                              every finished call rendered "Completed" because the
+                              only event that reached here was the call itself, so a
+                              tool that could not run looked identical to one that
+                              answered. That is how five broken tools looked fine. */}
                           <ToolHeader
-                            state={turn.running && i === turn.tools.length - 1 ? "input-available" : "output-available"}
+                            state={
+                              !tool.done
+                                ? "input-available"
+                                : failed(tool)
+                                  ? "output-error"
+                                  : "output-available"
+                            }
                             title={toolLabel(tool)}
                             type={`tool-${toolLabel(tool)}` as `tool-${string}`}
                           />
                           <ToolContent>
                             <ToolInput input={{ ran: tool.detail || "(no argument)" }} />
+                            {tool.done ? (
+                              <ToolOutput
+                                errorText={failed(tool) ? `exited ${tool.exitCode}` : undefined}
+                                output={
+                                  <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-micro text-ink-2">
+                                    {tool.output?.trim() || "(no output)"}
+                                  </pre>
+                                }
+                              />
+                            ) : null}
                           </ToolContent>
                         </Tool>
                       ))}

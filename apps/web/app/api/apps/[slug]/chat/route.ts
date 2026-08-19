@@ -115,6 +115,13 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
           onEvent: (e: AgentEvent) => {
             if (e.kind === "tool" && e.tool) {
               send("tool", { name: e.tool.name, detail: e.tool.detail });
+            } else if (e.kind === "result" && e.result) {
+              // The rail can now say what a call DID rather than asserting it
+              // succeeded, and the container keeps the exit code either way.
+              send("result", {
+                exitCode: e.result.exitCode,
+                output: e.result.output.slice(0, 2000),
+              });
             } else if (e.kind === "text" && e.text) {
               send("text", { text: e.text });
             } else if (e.kind === "usage" && e.usage) {

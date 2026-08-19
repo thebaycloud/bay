@@ -159,10 +159,32 @@ export class CodexBackend implements AgentBackend {
     }
 
     if (itemType === "command_execution") {
-      // Only on start: that is when the call is made, and reporting the
-      // completion too would double every entry the loop detector sees.
-      if (type !== "item.started") return null;
-      return { kind: "tool", tool: { name: "bash", detail: cleanCommand(String(item.command ?? "")) } };
+      // `started` is the CALL — that is what the loop detector counts. `completed`
+      // is the RESULT, which used to be dropped entirely on the grounds that
+      // reporting it would double every entry the detector sees. True, and the fix
+      // is a separate kind rather than silence: without the exit code there is no
+      // way to tell a tool that answered from one that could not run, which is
+      // exactly the failure that then took an afternoon to find.
+      if (type === "item.started") {
+        return { kind: "tool", tool: { name: "bash", detail: cleanCommand(String(item.command ?? "")) } };
+      }
+      if (type === "item.completed") {
+        const raw =
+          item.aggregated_output ?? item.output ?? item.stdout ?? item.result ?? "";
+        const code = item.exit_code;
+        return {
+          kind: "result",
+          result: {
+            name: "bash",
+            exitCode: typeof code === "number" ? code : null,
+            // Capped here rather than at the consumer: this is the one place that
+            // knows the payload is a command's whole stdout, which for `./logs` is
+            // as large as the app has been noisy.
+            output: String(raw).slice(0, 4000),
+          },
+        };
+      }
+      return null;
     }
 
     if (itemType === "file_change") {

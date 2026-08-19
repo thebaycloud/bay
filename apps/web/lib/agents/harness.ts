@@ -135,6 +135,17 @@ export async function runAgent(o: RunOptions): Promise<RunResult> {
         else if (n > repeatsAllowed) stop(`repeating \`${key.slice(0, 60)}\` — stopping it`);
         return;
       }
+      if (e.kind === "result" && e.result) {
+        // Deliberately NOT counted and NOT fed to the loop detector: this is the same
+        // call the `tool` event already counted. It is logged, because a non-zero exit
+        // is the single most useful line in a failed run and was previously invisible.
+        const { name, exitCode, output } = e.result;
+        if (exitCode !== null && exitCode !== 0) {
+          const first = output.trim().split("\n")[0] ?? "";
+          say(`${label} · ${name} exited ${exitCode}${first ? `: ${first.slice(0, 160)}` : ""}`);
+        }
+        return;
+      }
       if (e.kind === "text" && e.text) {
         // ALL text accumulates for parsing; only a first sentence is shown.
         // Slicing at a fixed width cut narration off mid-word ("plan.jso",

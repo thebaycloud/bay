@@ -36,7 +36,7 @@ export const ZERO_TOKENS: Tokens = {
  * converts to totals; the harness keeps the last one it saw.
  */
 export interface AgentEvent {
-  kind: "tool" | "text" | "usage" | "error";
+  kind: "tool" | "result" | "text" | "usage" | "error";
   /** A tool call, for the live log and the loop detector. */
   tool?: {
     /** `bash`, `edit`, `read` — normalised, not the backend's spelling. */
@@ -45,6 +45,26 @@ export interface AgentEvent {
     detail: string;
     /** Workspace-relative paths this call wrote, if any. Feeds `changes`. */
     editedPaths?: string[];
+  };
+  /**
+   * How a tool call ENDED. Its exit code and what it printed.
+   *
+   * Added late, and the cost of not having it was five broken tools shipping and a
+   * production failure nobody could diagnose. A `tool` event says a call was made;
+   * without a result there is no exit code, no output, and no way to tell a tool that
+   * answered from one that could not run. The rail was asserting "Completed" on every
+   * call because it had nothing else to go on.
+   *
+   * NOT fed to the loop detector. It is the same call the `tool` event already
+   * counted, and counting it twice would halve every budget.
+   */
+  result?: {
+    /** Normalised, matching the `tool` event that opened it. */
+    name: string;
+    /** Null when the backend does not report one. */
+    exitCode: number | null;
+    /** Whatever the call printed, truncated by the backend. */
+    output: string;
   };
   /** Assistant prose. */
   text?: string;
