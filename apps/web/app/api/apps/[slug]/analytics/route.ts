@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { getAppBySlug, setAnalyticsEnabled } from "@/lib/apps";
+import { websiteStats } from "@/lib/umami";
 import { currentUserId } from "@/lib/session";
 import { corsFor, optionsHandler } from "@/lib/cors";
 
@@ -42,6 +43,21 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
       // work out which is which from a single boolean.
       enabled: app.analytics_enabled !== false,
       provisioned: Boolean(app.umami_website_id),
+      // The COUNT, from the same reader chat's `analytics` tool uses.
+      //
+      // The panel used to take its audience half from the app's own `/_xray`, which
+      // is assembled by the proxy. So the workbench and chat answered the same
+      // question from two different sources and disagreed on screen: chat said "0
+      // visitors in the last 30 days" while the Analytics screen beside it said "the
+      // analytics service could not be reached". At least one was wrong and showing
+      // both is worse than either.
+      //
+      // `null` is not zero. Unreachable and nobody-came are opposite answers, and the
+      // screen says them differently — which it can only do if this stays null rather
+      // than collapsing to a count.
+      stats: app.umami_website_id && app.analytics_enabled !== false
+        ? await websiteStats(app.umami_website_id, "30d")
+        : null,
     },
     { headers: cors }
   );

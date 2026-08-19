@@ -162,25 +162,30 @@ export async function readPanel(slug: string, addr: string): Promise<Reading> {
   const grants: string[] = share.grants ?? [];
   const paths = live?.live?.paths ?? [];
   const here: string[] = live?.live?.here?.names ?? [];
-  const aud = live?.audience ?? null;
+  const stats = (an as Json).stats ?? null;
   const broken = paths.filter((p: Json) => p.brokenFor);
 
   const d: Reading = {
     slug,
     addr,
-    // The edge counts REQUESTS and umami counts PEOPLE — one page view with
-    // eleven assets on it is eleven requests and one visitor. These are never
-    // added together or compared.
-    an: aud
+    // The COUNT comes from /analytics, which reads umami through the same function
+    // chat's `analytics` tool uses. It used to come from the audience half of
+    // `/_xray`, so this screen and the chat rail answered one question from two
+    // sources — and disagreed on screen, one saying "0 visitors" and the other
+    // "could not be reached".
+    //
+    // The edge counts REQUESTS and umami counts PEOPLE — one page view with eleven
+    // assets on it is eleven requests and one visitor. Still never added together.
+    an: stats
       ? {
-          visitors: aud.visitors,
-          views: aud.views,
-          mins: String(aud.avgSeconds ?? ""),
-          // Umami gives a bounce rate, not a returning count. Say what the number
-          // is rather than what we wished it were.
-          returning: `${Math.round(Number(aud.bounce) || 0)}%`,
-          dv: aud.change == null ? "" : `${aud.change > 0 ? "+" : ""}${Math.round(aud.change)}%`,
-          dvUp: (Number(aud.change) || 0) >= 0,
+          visitors: stats.visitors,
+          views: stats.views,
+          mins: String(Math.round((stats.totalTime || 0) / Math.max(stats.visits || 1, 1))),
+          // Umami gives bounces and visits, not a returning count. Say what the
+          // number is rather than what we wished it were.
+          returning: `${Math.round(((stats.bounces || 0) / Math.max(stats.visits || 1, 1)) * 100)}%`,
+          dv: "",
+          dvUp: true,
         }
       : null,
     anOn: an.enabled !== false,

@@ -331,7 +331,7 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
             ? "Analytics is off, so nobody is being counted."
             : !d.anReady
               ? "Analytics is still being set up for this app."
-              : "The analytics service could not be reached just now."}
+              : "The count could not be read just now — which is not the same as nobody having visited."}
         </p>
       )}
     </Card>
