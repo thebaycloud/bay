@@ -54,6 +54,21 @@ import {
  */
 
 type Tool = { name: string; detail: string };
+
+/**
+ * What to call a tool call in the rail.
+ *
+ * Codex reports every one of these as `bash`, with the command as the detail — so
+ * three reads in a row all rendered as "bash" and the rail said nothing about what
+ * was being read. The tool is the FIRST WORD of the command, which for our seeded
+ * scripts is `./db` or `./keys`. Falls back to the backend's own name for anything
+ * that is not one of ours.
+ */
+function toolLabel(t: Tool): string {
+  const first = t.detail.trim().split(/\s+/)[0] ?? "";
+  const m = /^\.\/(\w+)$/.exec(first);
+  return m ? m[1] : t.name;
+}
 type Turn = {
   id: number;
   question: string;
@@ -216,11 +231,11 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                         <Tool defaultOpen={false} key={`${tool.name}-${i}`}>
                           <ToolHeader
                             state={turn.running && i === turn.tools.length - 1 ? "input-available" : "output-available"}
-                            title={tool.name}
-                            type={`tool-${tool.name}` as `tool-${string}`}
+                            title={toolLabel(tool)}
+                            type={`tool-${toolLabel(tool)}` as `tool-${string}`}
                           />
                           <ToolContent>
-                            <ToolInput input={{ [tool.name]: tool.detail || "(no argument)" }} />
+                            <ToolInput input={{ ran: tool.detail || "(no argument)" }} />
                           </ToolContent>
                         </Tool>
                       ))}

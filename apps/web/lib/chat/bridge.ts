@@ -81,7 +81,18 @@ n=$(date +%s)$$
 req="${dir}/$n.json"
 out="${dir}/$n.out"
 arg=\${1:-}
-printf '%s' "$(printf '{"op":"${op}","arg":%s}' "$(printf '%s' "$arg" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g; s/^/"/; s/$/"/')")" > "$req"
+# The escaping is built in TWO steps on purpose. It used to be one nested printf
+# whose innermost \`sed\` added the surrounding quotes — and sed reads LINES, so an
+# EMPTY argument produced no output at all and the request came out as
+# {"op":"keys","arg":} which is not JSON. Every tool that takes no argument was
+# therefore broken: ./keys and ./describe failed on a real run while ./db worked.
+# Here the quotes come from printf's format string, which does not care whether the
+# value is empty, and sed only ever escapes.
+#
+# Newlines are flattened to spaces first. A raw newline inside a JSON string is
+# invalid, and a multi-line SQL query is the obvious way to hit it.
+esc=$(printf '%s' "$arg" | tr '\n\r' '  ' | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+printf '{"op":"${op}","arg":"%s"}' "$esc" > "$req"
 i=0
 while [ ! -f "$out" ]; do
   i=$((i+1))

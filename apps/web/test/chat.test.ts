@@ -147,3 +147,73 @@ test("the db tool refuses anything that is not one SELECT", async () => {
   assert.equal(stacked.ok, false);
   assert.match(String((stacked as { error: string }).error), /one statement/);
 });
+
+/**
+ * Run a seeded tool script.
+ *
+ * MUST be async. `execFileSync` blocks the event loop, so serveTools' interval never
+ * fires, the script polls until its own 60s deadline, and the test hangs — which is
+ * the same shape as the deadlock the deadline exists to survive in production.
+ */
+function runTool(dir: string, op: string, arg?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    import("node:child_process").then(({ execFile }) => {
+      execFile(join(dir, op), arg === undefined ? [] : [arg], { cwd: dir, timeout: 20_000 }, (err, stdout) =>
+        err ? reject(err) : resolve(String(stdout)),
+      );
+    });
+  });
+}
+
+test("a tool with NO argument still writes valid JSON", async () => {
+  // The bug this exists for: the escaping was one nested printf whose innermost sed
+  // added the surrounding quotes, and sed reads LINES — so an empty argument produced
+  // no output at all and the request came out as {"op":"keys","arg":}. Every tool
+  // taking no argument was broken (./keys, ./describe, ./access, ./live, ./deploys)
+  // while ./db worked, so it survived until a real run.
+  //
+  // The earlier tests all wrote request files by hand, which is exactly why they did
+  // not catch it. These RUN the scripts.
+  const dir = ws();
+  try {
+    const ask = seedTools(dir);
+    const seen: { op: string; arg: string }[] = [];
+    const bridge = serveTools(ask, async (op, arg) => {
+      seen.push({ op, arg });
+      return { ok: true, data: null };
+    });
+    for (const op of ["keys", "describe", "access"]) {
+      await runTool(dir, op);
+    }
+    bridge.close();
+    assert.deepEqual(
+      seen.map((s) => s.op).sort(),
+      ["access", "describe", "keys"],
+      "every no-argument tool reached the handler",
+    );
+    assert.deepEqual([...new Set(seen.map((s) => s.arg))], [""], "with an empty argument");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an argument with quotes or newlines survives the round trip", async () => {
+  const dir = ws();
+  try {
+    const ask = seedTools(dir);
+    const seen: string[] = [];
+    const bridge = serveTools(ask, async (_op, arg) => {
+      seen.push(arg);
+      return { ok: true, data: null };
+    });
+    await runTool(dir, "db", 'select "a" from t');
+    // A raw newline inside a JSON string is invalid, and multi-line SQL is the
+    // obvious way to write one.
+    await runTool(dir, "db", "select 1\nfrom users");
+    bridge.close();
+    assert.equal(seen[0], 'select "a" from t');
+    assert.equal(seen[1], "select 1 from users", "newlines are flattened, not left to break the JSON");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
