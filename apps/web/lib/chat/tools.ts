@@ -5,6 +5,7 @@ import { getDeploy } from "@/lib/deploys";
 import { getAppBySlug, listGrants } from "@/lib/apps";
 import { listPending } from "@/lib/requests";
 import { envKeysFor } from "@/lib/env-keys";
+import { websiteStats } from "@/lib/umami";
 import type { Answer, Handler, Op } from "@/lib/chat/bridge";
 
 /**
@@ -81,8 +82,12 @@ export function toolsFor(slug: string, cookie?: string): Handler {
    * cannot validate it and correctly treats the read as a stranger's.
    *
    * Detected and stated rather than left to fail, because the failure is
-   * indistinguishable from "analytics is broken" and costs whoever meets it an hour
-   * looking at umami. These two tools are the only ones that leave this process.
+   * indistinguishable from a real outage.
+   *
+   * Only `live` needs this now. `analytics` used to as well and no longer does: it
+   * reads umami directly, which the control plane can always do. `live` genuinely
+   * cannot be answered here — the edge reading lives in the proxy's own memory, and
+   * no other process holds it.
    */
   // NODE_ENV, not a URL variable. `next dev` sets "development" and a built image
   // sets "production", which is exactly the distinction that matters and needs
@@ -114,30 +119,32 @@ export function toolsFor(slug: string, cookie?: string): Handler {
         }
 
         case "analytics": {
-          // The window is chosen from a list rather than parsed: it reaches umami,
-          // and the panel's own analytics read does the same for the same reason.
+          // The window is chosen from a list rather than parsed: it reaches umami, and
+          // the panel's own analytics read does the same for the same reason.
           const range = ["1d", "7d", "30d"].includes(arg) ? arg : "1d";
           const app = await getAppBySlug(slug);
           if (!app?.umami_website_id || !app.analytics_enabled) {
             return { ok: true, data: { on: false, note: "analytics is off for this app, so nobody is being counted" } };
           }
-          if (!deployed) return { ok: false, error: localNote };
-          // Read through the app's own proxy, which already assembles this and is
-          // the only thing holding umami credentials.
-          const r = await fetch(`https://${slug}.supersonic.cv/_dashboard/analytics?range=${range}`, {
-            headers: asOwner,
-          });
-          // A non-JSON body here means the request was not recognised as the
-          // owner's and the app answered instead of the proxy. Say that, rather
-          // than letting a parse failure read as "analytics is broken".
-          const ct = r.headers.get("content-type") ?? "";
-          if (!ct.includes("json")) {
-            return {
-              ok: false,
-              error: "the analytics reading came back as a page rather than JSON — this read was not recognised as the owner's",
-            };
+          // Read umami DIRECTLY. This used to fetch the app's own proxy at
+          // /_dashboard/analytics — an owner-only endpoint on a different host — which
+          // needed a session cookie a server cannot reliably present, only worked from
+          // a deployed control plane, and depended on Cloud Run egress reaching a
+          // public hostname to answer a question the control plane can answer itself.
+          // It failed three different ways before it failed silently.
+          const stats = await websiteStats(app.umami_website_id, range);
+          if (!stats) {
+            // Unreachable is NOT zero. "Nobody came" and "we could not count" are
+            // opposite answers, and reading one as the other is how a dashboard lies.
+            return { ok: false, error: "umami could not be reached, so the count is unknown — this is not the same as nobody having visited" };
           }
-          return { ok: true, data: await r.json() };
+          return {
+            ok: true,
+            data: {
+              ...stats,
+              note: "visitors are PEOPLE, counted by umami — never add these to the edge's request counts",
+            },
+          };
         }
 
         case "deploys": {

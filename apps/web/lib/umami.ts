@@ -181,3 +181,71 @@ export async function deleteWebsite(websiteId: string): Promise<void> {
   const r = await api(`/api/websites/${websiteId}`, { method: "DELETE" });
   if (!r || !r.ok) console.error(`umami: could not delete site ${websiteId}`);
 }
+
+/** How far back a window reaches, in milliseconds. Chosen from a list, never parsed. */
+const WINDOWS: Record<string, number> = {
+  "1d": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+};
+
+export interface WebsiteStats {
+  range: string;
+  visitors: number;
+  views: number;
+  visits: number;
+  bounces: number;
+  totalTime: number;
+  pages: { x: string; y: number }[];
+  referrers: { x: string; y: number }[];
+}
+
+/**
+ * One window of an app's audience, read straight from umami.
+ *
+ * Added because chat's analytics tool was fetching the app's OWN proxy at
+ * `/_dashboard/analytics` — an owner-only endpoint on a different host — which meant
+ * it needed a session cookie that a server cannot reliably present, only worked from
+ * a deployed control plane, and depended on Cloud Run egress reaching a public
+ * hostname to answer a question the control plane can answer directly. Three failure
+ * modes for a read that was always available locally.
+ *
+ * `null` means umami could not be asked, which is NOT zero visitors. Every caller has
+ * to say those differently: "nobody came" and "we could not count" are opposite
+ * answers, and reading unreachable as zero is how a dashboard lies.
+ */
+export async function websiteStats(
+  websiteId: string,
+  range = "1d",
+): Promise<WebsiteStats | null> {
+  const span = WINDOWS[range] ?? WINDOWS["1d"];
+  const endAt = Date.now();
+  const startAt = endAt - span;
+  const q = `startAt=${startAt}&endAt=${endAt}`;
+
+  const [statsRes, pagesRes, refsRes] = await Promise.all([
+    api(`/api/websites/${websiteId}/stats?${q}`),
+    api(`/api/websites/${websiteId}/metrics?${q}&type=url&limit=10`),
+    api(`/api/websites/${websiteId}/metrics?${q}&type=referrer&limit=10`),
+  ]);
+  if (!statsRes || !statsRes.ok) return null;
+
+  // umami answers each figure as { value, prev }; only the value is wanted here.
+  const s = (await statsRes.json().catch(() => null)) as Record<string, { value?: number }> | null;
+  if (!s) return null;
+  const n = (k: string) => Number(s[k]?.value ?? 0);
+
+  const list = async (r: Response | null) =>
+    r && r.ok ? (((await r.json().catch(() => [])) as { x: string; y: number }[]) ?? []) : [];
+
+  return {
+    range,
+    visitors: n("visitors"),
+    views: n("pageviews"),
+    visits: n("visits"),
+    bounces: n("bounces"),
+    totalTime: n("totaltime"),
+    pages: await list(pagesRes),
+    referrers: await list(refsRes),
+  };
+}
