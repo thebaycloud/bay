@@ -37,6 +37,7 @@ import { detectStack, describeDetection } from "@/lib/detect-stack";
 import { publishStatic } from "@/lib/publish-static";
 import { buildImage as buildAppImage } from "@/lib/build-image";
 import { advise as rollbackAdvice } from "@/lib/rollback-advice";
+import { siblingEnv } from "@/lib/sibling-env";
 import { createAppRecord, markAppLive, markAppFailed, getAppBySlug } from "@/lib/apps";
 import { requestThumbnail } from "@/lib/thumbnail";
 import { setDeploy } from "@/lib/deploys";
@@ -2741,21 +2742,14 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // FORCE_SCRIPT_NAME exists, and the primary's facts say nothing about it.
       const siblingFacts: DeploymentFacts = { ...facts, pathPrefix: servicePath(svc) };
       const siblingDeployment = deploymentEnv(svc.framework, siblingFacts);
-      const env = [
-        ...extraEnv
-          .filter((e) => !e.startsWith("SUPERSONIC_CODE_") && !e.startsWith("SUPERSONIC_RUN="))
-          // The primary's facts must not leak into the sibling: they name a
-          // different prefix, and a stale SUPERSONIC_PATH_PREFIX is worse than
-          // none because the app would trust it.
-          .filter((e) => !Object.keys(siblingDeployment).some((k) => e.startsWith(`${k}=`)))
-          // Nor the primary's declared literals, for the same reason: `env` is
-          // per SERVICE in the schema, so the frontend's NODE_ENV has no
-          // business on the API.
-          .filter((e) => !declaredEnv.env.some((d) => e.slice(0, e.indexOf("=")) === d.slice(0, d.indexOf("=")))),
-        // …and its own.
-        ...configEnv(svc.env, Object.keys(secrets)).env,
-        ...Object.entries(siblingDeployment).map(([k, v]) => `${k}=${v}`),
-      ];
+      // Three subtractions from the primary's environment, each closing a leak
+      // that fails quietly — see lib/sibling-env.ts, which has a test per rule.
+      const env = siblingEnv({
+        inherited: extraEnv,
+        own: configEnv(svc.env, Object.keys(secrets)).env,
+        deployment: siblingDeployment,
+        primaryDeclared: declaredEnv.env,
+      });
       // A sibling deploys to CLOUD RUN even when the primary went to a node —
       // `deploySibling` has no fleet branch — and the database env it inherits
       // from the primary was computed at the PRIMARY's address. On the fleet
