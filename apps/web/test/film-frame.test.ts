@@ -89,3 +89,70 @@ test("a phone in portrait gets a close shot, not a fisheye", () => {
   // room-page.ts), so this is the belt rather than the braces.
   assert.ok(tall <= 110);
 });
+
+/**
+ * The yard's two moving props, and the arithmetic that decides where they are.
+ *
+ * Both of these were reported by watching a real deploy, not by a test — which
+ * is the point of writing them down now. Neither throws, neither logs, and
+ * neither is visible in any frame but the one it is wrong in.
+ */
+
+/** `gantryLoad.visible`, as it was and as it is. */
+const plateWasVisible = (drop: number) => drop < 0.94;
+const plateIsVisible = (lc: number) => lc < 0.86;
+
+/** The lift cycle: down over [0,.4], hold to .6, back up by 1. */
+function dropAt(lc: number): number {
+  const eio = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+  return lc < 0.4 ? eio(lc / 0.4) : lc < 0.6 ? 1 : 1 - eio((lc - 0.6) / 0.4);
+}
+
+test("the crane does not lose the plate on the way down", () => {
+  // What was reported: "у вот этой штуки пропадает плита когда она спускается".
+  // The old rule hid the load whenever the hook was near the bottom, which is
+  // most of the descent and all of the hold — 40% of the cycle, centred on the
+  // exact moment the plate is supposed to arrive somewhere.
+  const hiddenThen: number[] = [], hiddenNow: number[] = [];
+  for (let i = 0; i < 1000; i++) {
+    const lc = i / 1000;
+    if (!plateWasVisible(dropAt(lc))) hiddenThen.push(lc);
+    if (!plateIsVisible(lc)) hiddenNow.push(lc);
+  }
+  // The bug, stated as a number so it cannot come back quietly: the plate used
+  // to vanish while still descending.
+  assert.ok(hiddenThen[0] < 0.4, "the old rule did not actually hide it during the descent");
+  assert.ok(hiddenThen.length / 1000 > 0.35, "the old rule hid it for less of the cycle than reported");
+
+  // Now: visible for the whole descent…
+  for (const lc of [0, 0.1, 0.2, 0.3, 0.39]) assert.equal(plateIsVisible(lc), true, `hidden mid-descent at ${lc}`);
+  // …and the whole hold, which is when it is set down.
+  for (const lc of [0.4, 0.5, 0.59]) assert.equal(plateIsVisible(lc), true, `hidden during the hold at ${lc}`);
+  // It only goes once the hook is back up and the trolley has moved off.
+  assert.equal(plateIsVisible(0.9), false);
+  assert.ok(hiddenNow[0] >= 0.6, "the plate still disappears before the hook has risen");
+});
+
+test("the repair drone stays level and faces the break", () => {
+  // What was reported: "дрон почему-то переворачивается … он же должен быть
+  // горизонтально всегда". It was `lookAt` (which aims -Z at a target BELOW it,
+  // so: pitched hard over) followed by `rotation.y += PI/2` — adding to the Y
+  // of an already-pitched Euler, which recomposes as roll.
+  //
+  // The body is built along +X, and under Ry(a) local +X maps to
+  // (cos a, 0, -sin a). This is that yaw, and nothing else.
+  const yaw = (dx: number, dz: number) => Math.atan2(-dz, dx);
+  for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-3, 2]]) {
+    const a = yaw(dx, dz);
+    const L = Math.hypot(dx, dz);
+    assert.ok(Math.abs(Math.cos(a) - dx / L) < 1e-9, `+X.x wrong facing (${dx},${dz})`);
+    assert.ok(Math.abs(-Math.sin(a) - dz / L) < 1e-9, `+X.z wrong facing (${dx},${dz})`);
+  }
+  // And the attitude carries no roll: rotation is set as (0, yaw, pitch), where
+  // Euler XYZ applies the Z first — in the body frame, where it lowers the nose.
+  // An X component would be roll, and there must not be one.
+  assert.match(SRC, /drone\.rotation\.set\(0,Math\.atan2\(-dz,dx\),/);
+  // The old formulation must be gone, both halves of it.
+  assert.equal(/drone\.lookAt/.test(SRC), false, "the drone still uses lookAt");
+  assert.equal(/drone\.rotation\.y\+=/.test(SRC), false, "the drone still adds to its Euler Y");
+});
