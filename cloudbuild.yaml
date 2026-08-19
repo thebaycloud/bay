@@ -152,6 +152,20 @@ steps:
       - --cpu=2
       - --concurrency=4
       - --min-instances=1
+      # gen2, because chat runs Codex and Codex sandboxes itself with bubblewrap.
+      #
+      # On gen1 every command the agent ran died with
+      # `bwrap: loopback: Failed RTM_NEWADDR: No child process` — bubblewrap could not
+      # create its network namespace, so nothing executed: not the tools, not even a
+      # `sed` on a file in its own workspace. The agent reported "the analytics tool
+      # failed to run" and it was right about every tool it had.
+      #
+      # gen2 runs a real kernel with the namespaces bubblewrap needs. This is the fix
+      # that KEEPS the sandbox: the alternative is --sandbox danger-full-access, which
+      # would hand the agent's shell the network back, and no network is the whole
+      # reason a prompt injected through an app's own database rows cannot leave with
+      # anything. See lib/chat/bridge.ts.
+      - --execution-environment=gen2
       # The lane flags. These select WHICH PIPELINE RUNS — whether server apps go
       # to the prebuilt runner, whether the model planner is consulted, whether
       # apps are sealed behind the proxy, which engine repairs a failed deploy,
