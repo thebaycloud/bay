@@ -2011,10 +2011,33 @@ function step(t){
   hoist.scale.y=busy?lerp(.42,1,drop):.3;
   hoist.position.y=DK.quay+lerp(128,90,drop);
   hook.position.y=DK.quay+lerp(118,42,drop)+Math.sin(TT*1.6)*1.6;
-  gantryLoad.visible=busy&&drop<.94;
-  gantryLoad.position.y=hook.position.y-13;
-  gantryLoad.rotation.y=Math.sin(TT*.9)*.10;
-  gantryLoad.rotation.z=Math.sin(TT*1.25)*.035;
+  /* The plate is carried DOWN, set down, and the hook comes back up empty.
+     It used to be `visible = busy && drop < .94`, which hid the plate at the
+     bottom of the descent and showed it again on the way up — so it blinked out
+     just as it reached the deck, in the one part of the cycle the camera is
+     usually pointed at, and blinked back while rising. A crane that loses its
+     load on the way down and finds it again on the way up is the opposite of
+     the thing it is there to depict.
+     Now it rides the hook down, stays where it was left while the hook lifts
+     away from it, and is gone by the time the trolley has traversed — which is
+     the only moment nothing is watching it. */
+  const rising=lc>=.6;
+  if(!rising){
+    gantryLoad.position.x=gx;
+    gantryLoad.position.y=hook.position.y-13;
+    gantryLoad.userData.setDownX=gx;
+  }else{
+    /* released: it does not follow the trolley any more, and it does not ride
+       back up. It sits at the height the hook reached at full drop. */
+    gantryLoad.position.x=gantryLoad.userData.setDownX??gx;
+    gantryLoad.position.y=DK.quay+42-13;
+  }
+  gantryLoad.visible=busy&&lc<.86;
+  /* Swinging is for a plate on a hook. One that has been set down is sitting
+     on the deck, and a deck plate that sways is a plate nobody welded. */
+  const sway=rising?0:1;
+  gantryLoad.rotation.y=Math.sin(TT*.9)*.10*sway;
+  gantryLoad.rotation.z=Math.sin(TT*1.25)*.035*sway;
   gantry.userData.alarm.material.opacity=failing?(Math.sin(TT*7)>0?1:.1):0;
 
   /* ---------- the yard works whether or not the deploy does ----------
@@ -2123,8 +2146,22 @@ function step(t){
     const far=shipG.localToWorld(V3(bowX+150,150,190));
     drone.position.copy(far).lerp(hover,inK).lerp(far,outK);
     drone.position.y+=Math.sin(TT*2.2)*3;
-    drone.lookAt(dmg.x,dmg.y+6,dmg.z);
-    drone.rotation.y+=Math.PI/2;
+    /* Level, and turned to the work. It used to be `lookAt` plus a quarter turn
+       on Y, and it tumbled: `lookAt` aims -Z at the target, the target is BELOW
+       a hovering drone, so it pitched hard nose-down — and then `rotation.y +=`
+       reads back the Euler decomposition of that pitched quaternion and adds to
+       its Y, which is not a yaw about world up. Recomposed, it comes out as
+       roll. Flying in from `far` swung the angle through most of a circle on
+       the way, so the thing arrived barrel-rolling.
+       Its body is built along +X (the eye is at x=+11), and under Ry(a) local
+       +X maps to (cos a, 0, -sin a) — so this is the yaw that faces it at the
+       break, with no pitch and no roll in it. */
+    const dx=dmg.x-drone.position.x, dz=dmg.z-drone.position.z;
+    /* Euler XYZ applies Z first, in the body frame, where it lowers the nose —
+       then Y yaws about world up. So a quadcopter's whole attitude is these two
+       numbers, and the second one is zero unless it is looking down at
+       something. It noses over as it settles rather than on the way in. */
+    drone.rotation.set(0,Math.atan2(-dz,dx),-0.16*inK*(1-outK));
     droneEye.material.color.setHex(dr<.30?0xFFC63A:0x2FD07F);
   }
   const weld=AT.repair?pr("repair",.34,.74):0;
