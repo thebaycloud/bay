@@ -1,5 +1,4 @@
 import { config } from "./config";
-import { DRAWER_CSS, DRAWER_JS } from "./drawer";
 
 // The Supersonic overlay injected into every hosted app's HTML. It renders inside
 // a Shadow DOM so the app's own CSS can't reach it (no style bleed, no glow) and
@@ -19,92 +18,77 @@ const SITE = "https://supersonic.cv";
  * and learn a private surface exists — and paid for the bytes of a feature they
  * can never use, on every page view.
  */
-const OWNER_CSS = String.raw`.bar{position:fixed;top:14px;right:14px;display:flex;align-items:center;gap:8px;background:#15140f;color:#fff;padding:6px 6px 6px 14px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.28);z-index:2147483000}
-.bar .brand{font:600 12px/1 sans-serif;letter-spacing:.02em;color:#cfcfc7;display:flex;align-items:center;gap:6px}
-.bar button{font:600 12.5px/1 sans-serif;border:0;cursor:pointer;padding:8px 13px;border-radius:8px}
-.bar .share{background:#2ea86a;color:#05130b}
-.bar .open{background:#2b2a26;color:#fff;text-decoration:none;display:inline-flex;align-items:center}
-.pop{position:fixed;top:58px;right:14px;width:300px;background:#1c1b18;color:#eae8df;border:1px solid #35342e;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.5);z-index:2147483000;overflow:hidden}
-.pop h4{margin:0;padding:12px 14px;font:600 12px/1 sans-serif;border-bottom:1px solid #2a2925;color:#eae8df}
-.opt{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;padding:10px 12px;cursor:pointer;color:#eae8df}
-.opt:hover{background:#232219}.opt.on{background:#17281f}
-.opt .l{font:600 13px/1.2 sans-serif}.opt .d{font:400 11px/1.3 sans-serif;color:#9c9a8f;margin-top:2px}
-.opt .g{flex:1}.opt .ck{color:#2ea86a}
-.people{border-top:1px solid #2a2925;padding:10px 12px}
-.people input{width:100%;padding:7px 9px;background:#111;border:1px solid #35342e;color:#fff;border-radius:6px;font:400 12px sans-serif;outline:none}
-.people .row{display:flex;align-items:center;justify-content:space-between;font:400 12px sans-serif;padding:6px 2px;color:#cfcfc7}
-.people .rm{background:none;border:0;color:#7a786f;cursor:pointer}
-.reqs{border:1px solid #1f3a2b;background:#12241a;margin:8px 10px}
-.reqs h5{margin:0;padding:8px 10px 4px;font:600 10.5px sans-serif;letter-spacing:.06em;text-transform:uppercase;color:#2ea86a}
-.reqs .r{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;font:400 12px sans-serif;color:#eae8df}
-.reqs .r .e{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.reqs .r .a{display:flex;gap:6px;flex:none}
-.reqs .ap{background:#2ea86a;color:#05130b;border:0;border-radius:6px;padding:5px 10px;font:600 11px sans-serif;cursor:pointer}
-.reqs .dn{background:none;border:0;color:#9db0a6;cursor:pointer;font:400 11px sans-serif}
-.bar .xray{background:#2b2a26;color:#fff}
-${DRAWER_CSS}`;
+/**
+ * Everything only an owner may see — as SOURCE, not as a runtime branch.
+ *
+ * This used to be one script with `if(!C.owner)return;` in the middle, which meant
+ * every visitor to every hosted app was served the entire owner toolbar, the share
+ * editor and the panel as text, and simply never ran them. The gate worked; the
+ * secrecy did not.
+ *
+ * What is left is a pill. The panel it used to open moved to
+ * app.supersonic.cv/apps/<slug>, so an owner's own app page no longer carries a
+ * dashboard at all — it carries a link to one. Two things follow from that and both
+ * are the point: an owner downloads a few hundred bytes instead of a panel on every
+ * page of their own app, and there is almost nothing left in a tenant's document for
+ * a visitor to read.
+ *
+ * A white pill rather than the old dark bar with square buttons, which was the last
+ * thing in the product that looked like the previous one — and it says the app's
+ * name and state, so it explains itself instead of being a button you have to
+ * already know about.
+ */
+const OWNER_CSS = String.raw`.pill{position:fixed;top:14px;right:14px;z-index:2147483000;
+  display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 13px;
+  background:#fff;border:1px solid #E5E5E5;border-radius:999px;
+  box-shadow:0 2px 10px rgba(0,0,0,.10);text-decoration:none;
+  font:500 13px/1 'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#0A0A0A}
+.pill:hover{background:#FAFAFA}
+.pill i{width:6px;height:6px;border-radius:50%;background:#A1A1AA;flex:none}
+.pill i.ok{background:#16A34A}
+.pill i.bad{background:#E63F2C}
+.pill s{font:400 11px/1 'Geist Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  letter-spacing:.06em;color:#737373;text-decoration:none}`;
 
 const OWNER_JS = String.raw`
-// toolbar (owner)
-var bar=h('div','bar');
-var brand=h('div','brand');brand.innerHTML=MARK(12,'#2ea86a')+'Supersonic';
-var share=h('button','share','Share');
-var xrayBtn=h('button','xray','Dashboard');
-var open=document.createElement('a');open.className='open';open.href=C.app+'/apps/'+C.slug;open.target='_blank';open.textContent='Open in Supersonic';
-bar.appendChild(brand);bar.appendChild(xrayBtn);bar.appendChild(share);bar.appendChild(open);root.appendChild(bar);
+// The pill. A link to the workbench, saying which app this is and how it is doing.
+var pill=document.createElement('a');
+pill.className='pill';
+pill.href=C.app+'/apps/'+C.slug;
+pill.target='_blank';
+pill.rel='noreferrer';
+var dot=h('i');
+var name=h('span',null,C.slug);
+var state=document.createElement('s');
+state.textContent='checking';
+pill.appendChild(dot);pill.appendChild(name);pill.appendChild(state);
+root.appendChild(pill);
 
-var pop=null;
-var OPTS=[['private','Only me','Just you can open it'],['shared','Specific people','People you invite by email'],['public','Public','Anyone with the link']];
-function api(body){return fetch(C.app+'/api/apps/'+C.slug+'/share',{method:body?'POST':'GET',credentials:'include',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json()});}
-function render(){
-  if(!pop)return;
-  pop.innerHTML='';
-  pop.appendChild(h('h4',null,'Who can open this app'));
-  if(reqs.length){
-    var rq=h('div','reqs');rq.appendChild(h('h5',null,'Access requests'));
-    reqs.forEach(function(em){
-      var row=h('div','r');row.appendChild(h('span','e',em));
-      var a=h('div','a');
-      var ap=h('button','ap','Approve');ap.onclick=function(){api({addEmail:em}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};
-      var dn=h('button','dn','Deny');dn.onclick=function(){api({denyEmail:em}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};
-      a.appendChild(ap);a.appendChild(dn);row.appendChild(a);rq.appendChild(row);
+// One read, same-origin, on idle. The panel used to fan out nine of these; a pill
+// needs one word, and /_xray already answers it for the owner and nobody else.
+// requestIdleCallback so it never competes with the tenant app's own load — and
+// this is owner-only, so it costs a visitor nothing at all.
+function ssState(){
+  fetch('/_xray',{credentials:'include',headers:{Accept:'application/json'}})
+    .then(function(r){return r.json()})
+    .then(function(j){
+      var paths=(j&&j.live&&j.live.paths)||[];
+      var broken=false;
+      for(var i=0;i<paths.length;i++){ if(paths[i].brokenFor){broken=true;break;} }
+      // The panel's own words, and its own rule: green is status and nothing else,
+      // so a broken path is the one thing wearing the accent.
+      if(broken){ dot.className='bad'; state.textContent='broken'; return; }
+      dot.className='ok'; state.textContent='afloat';
+    })
+    .catch(function(){
+      // A pill that cannot reach the reading says nothing rather than guessing.
+      // It is still a working link, which is the part that matters.
+      state.textContent='';
     });
-    pop.appendChild(rq);
-  }
-  OPTS.forEach(function(o){
-    var b=h('button','opt'+(vis===o[0]?' on':''));
-    var g=h('div','g');g.appendChild(h('div','l',o[1]));g.appendChild(h('div','d',o[2]));
-    b.appendChild(g);
-    if(vis===o[0]){var ck=h('span','ck','✓');b.appendChild(ck);}
-    b.onclick=function(){api({visibility:o[0]}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};
-    pop.appendChild(b);
-  });
-  if(vis==='shared'){
-    var ppl=h('div','people');
-    var inp=document.createElement('input');inp.type='email';inp.placeholder='colleague@company.com';
-    inp.onkeydown=function(e){if(e.key==='Enter'&&inp.value){api({addEmail:inp.value}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});}};
-    ppl.appendChild(inp);
-    grants.forEach(function(gr){var row=h('div','row');row.appendChild(h('span',null,gr));var rm=h('button','rm','remove');rm.onclick=function(){api({removeEmail:gr}).then(function(j){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();});};row.appendChild(rm);ppl.appendChild(row);});
-    pop.appendChild(ppl);
-  }
 }
-share.onclick=function(){
-  if(pop){pop.remove();pop=null;return;}
-  pop=h('div','pop');root.appendChild(pop);render();
-  api().then(function(j){if(j&&j.visibility){vis=j.visibility;grants=j.grants||[];reqs=j.requests||[];render();}});
-};
-
-${DRAWER_JS}
-xrayBtn.onclick=openDrawer;
-// A key as well as a button, because the point of this layer is that it is one
-// gesture away from the app rather than a place you navigate to.
-document.addEventListener('keydown',function(e){
-  if(e.key==='x'&&(e.metaKey||e.ctrlKey)&&e.shiftKey){ e.preventDefault(); openDrawer(); }
-  if(e.key==='Escape'&&dw){ closeDrawer(); }
-});
+if(window.requestIdleCallback) requestIdleCallback(ssState); else setTimeout(ssState,2000);
 `;
 
-/** A self-contained script that builds the overlay in a shadow root. */
 function overlayScript(slug: string, owner: boolean, badge: boolean): string {
   // slug is validated [a-z0-9-] upstream; JSON.stringify guards the rest.
   const cfg = JSON.stringify({ slug, owner, badge, app: APP, site: SITE });

@@ -4,7 +4,6 @@ import { lookupApp, lookupAppByHost, hasGrant, workspaceOfUser, workspaceDomainO
 import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "./pages";
 import { pageRoom } from "./room-page";
 import { serveRoomEvents } from "./room";
-import { xrayPage } from "./xray-page";
 import { assembleReading, liveDeps } from "./reading";
 import { wantsHtml } from "./negotiate";
 import { viewerOnce, authUrls, hasCredential } from "./session";
@@ -162,8 +161,18 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // One address, two readers. A browser asking for a page gets the panel —
     // which is the only x-ray an API-shaped app can have, since there is no
     // HTML of its own to inject into. Anything else gets the numbers.
+    // A browser is sent to the workbench, which is where the panel lives now.
+    // `/_xray` and `/_dashboard` keep answering JSON exactly as they did — every
+    // page already served carries the address, and agents' scripts have it typed
+    // in, so the URL cannot 404 and the JSON cannot change shape. Only the HTML
+    // moved, and a 302 says so rather than serving a second copy of the panel.
     if (wantsHtml(String(req.headers.accept ?? ""))) {
-      return html(res, 200, xrayPage(slug));
+      res.writeHead(302, {
+        Location: `https://app.supersonic.cv/apps/${encodeURIComponent(slug)}`,
+        "Cache-Control": "no-store",
+      });
+      res.end();
+      return;
     }
     const reading = await assembleReading(slug, liveDeps(async () => ({
       door: `${slug}.supersonic.cv`,

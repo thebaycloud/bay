@@ -21,17 +21,6 @@ test("a visitor is never told the dashboard exists", () => {
   }
 });
 
-test("the owner gets the button, the shortcut and the panel", () => {
-  const html = asOwner();
-  // These asserted "X-ray" until the old module was deleted, and passed on a
-  // string inside it rather than on anything the toolbar actually renders. The
-  // button has said Dashboard since the rename; nothing was checking.
-  assert.ok(html.includes(">Dashboard<") || html.includes("'Dashboard'"), "the button is named");
-  assert.ok(html.includes("fetch('/_xray'"), "the panel reads its own origin");
-  assert.ok(html.includes("keydown"), "and the shortcut is wired");
-  assert.ok(html.includes("function homeScreen"), "the panel itself is here");
-});
-
 test("the x-ray asks the app's own origin, not the control plane", () => {
   // Same-origin is what makes this work with the session cookie and with no CORS,
   // and it is also the point: the numbers come from the edge in front of THIS
@@ -65,39 +54,50 @@ test("only real HTML documents are decorated", () => {
   assert.equal(isHtmlDocument(undefined), false);
 });
 
-test("the panel is defined once and used in both places", async () => {
-  // It started inside the overlay, which covers every app that serves HTML and
-  // no app that does not. Now it is also a page at /_dashboard, and both build
-  // from the same source — two copies would drift within a week, and the one
-  // that drifted would be the one nobody was looking at.
-  const { xrayPage } = await import("./xray-page");
+test("an owner's own app page carries a link, not a dashboard", () => {
+  // The panel used to ride this overlay. It lives at app.supersonic.cv/apps/<slug>
+  // now, so what an owner downloads on every page of their own app is a pill: the
+  // app's name, its state, and a link. Two properties follow and both are the
+  // point — the bytes, and the fact that there is almost nothing left in a
+  // tenant's document for a visitor to read out of it.
   const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
-  for (const marker of ["function homeScreen", "function dwLoad", "Right now"]) {
-    assert.ok(overlay.includes(marker), `the overlay is missing ${marker}`);
-    assert.ok(xrayPage("q6doa").includes(marker), `the page is missing ${marker}`);
+  assert.ok(overlay.includes("class='pill'") || overlay.includes("'pill'"), "the pill is there");
+  assert.ok(overlay.includes("/apps/'+C.slug"), "and it links to the workbench");
+  for (const gone of ["function homeScreen", "function dwLoad", "function screen(", "Right now"]) {
+    assert.equal(overlay.includes(gone), false, `${gone} should not ship any more`);
   }
 });
 
-test("nothing of the old x-ray panel is shipped any more", async () => {
-  // xray-panel.ts drew a dark floating card with a table in it. The panel
-  // replaced every part of that, but its module was still imported whole into
-  // drawer.ts — 2,358 bytes of CSS nothing rendered and 12,181 of JS the panel
-  // used two functions from, on every owner's page load. dur() and ago() live
-  // in the panel now and the module is deleted.
-  const { DRAWER_CSS, DRAWER_JS } = await import("./drawer");
-  assert.equal(DRAWER_CSS.includes(".xr{"), false, "the dark card's styles are gone");
-  assert.equal(DRAWER_JS.includes("function drawXray"), false, "and so is its renderer");
-  assert.match(DRAWER_JS, /function dur\(sec\)/, "the two helpers it was kept for are here");
-  assert.match(DRAWER_JS, /function ago\(sec\)/);
+test("the pill asks its own origin for one word, not the control plane for nine", () => {
+  const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
+  assert.ok(overlay.includes("fetch('/_xray'"), "same-origin, so no CORS and no bearer");
+  // dwLoad fanned out nine reads to build a panel. A pill needs one word, and
+  // asking for nine to draw a dot would be the panel's cost without the panel.
+  assert.equal((overlay.match(/\/api\/apps\//g) ?? []).length, 0);
 });
 
-test("the standalone page is self-contained and reads its own origin", async () => {
-  const { xrayPage } = await import("./xray-page");
-  const page = xrayPage("q6doa");
-  assert.equal(/src\s*=\s*["']https?:/.test(page), false, "no third-party host");
-  assert.ok(page.includes("fetch('/_xray'"), "reads its own origin");
-  assert.doesNotThrow(() => new Function(/<script>([\s\S]*)<\/script>/.exec(page)![1]));
+test("the injected script never defines a global that would silently kill it", () => {
+  // top/self/parent/closed/length are [LegacyUnforgeable] on Window: a global with
+  // one of those names makes the WHOLE script fail to evaluate, with no error and
+  // nothing rendered. This is how the recovered prototype was broken, and it
+  // outlived the panel it was found in — the pill is still injected source.
+  const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
+  const script = /<script>([\s\S]*?)<\/script>/.exec(overlay)![1];
+  const globals = [...script.matchAll(/^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
+  const unforgeable = ["window", "document", "location", "top", "self", "parent", "frames", "closed", "length"];
+  assert.deepEqual(globals.filter((n) => unforgeable.includes(n)), []);
 });
+
+test("the injected script evaluates, so a stray backtick cannot ship silently", () => {
+  // CSS and JS reach the browser inside String.raw. A backtick or ${} in either
+  // closes the literal early: the browser then evaluates something that PARSES,
+  // throws nothing, leaves the console clean, and renders wrong. That is how the
+  // stylesheet once became the string "NaN".
+  const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
+  const script = /<script>([\s\S]*?)<\/script>/.exec(overlay)![1];
+  assert.doesNotThrow(() => new Function(script));
+});
+
 
 /**
  * Run the emitted overlay against a body that behaves like a hydrating app.
@@ -212,10 +212,14 @@ test("the overlay's stylesheet arrives whole, not as the string NaN", () => {
 
   assert.equal(styles.length, 1, "exactly one stylesheet goes into the shadow root");
   const css = styles[0];
+  // The failure this test exists for: a backtick inside String.raw closed the
+  // literal early, the browser evaluated "…" * "…", and the stylesheet became the
+  // NUMBER NaN. It parsed, it ran, it threw nothing, the console was clean, and the
+  // whole overlay rendered unstyled 6,000px down the page. The panel is gone and
+  // this hazard is not — the pill is still built the same way.
   assert.notEqual(css, "NaN", "a stray backtick turns the whole stylesheet into a multiplication");
-  assert.ok(css.length > 5000, `the stylesheet is ${css.length} chars, far too short to be the real one`);
-  // The rules the panel cannot be seen without.
-  assert.match(css, /\.bar\{position:fixed/, "the toolbar must be pinned, not left in the page flow");
-  assert.match(css, /\.drawer\{font-family:var\(--sans\)/);
+  // The rules the pill cannot be seen without.
+  assert.match(css, /\.pill\{position:fixed/, "the pill must be pinned, not left in the page flow");
+  assert.match(css, /\.pill i\.ok\{background:#16A34A\}/, "green is status, and status is green");
   assert.match(css, /:host\{all:initial/);
 });
