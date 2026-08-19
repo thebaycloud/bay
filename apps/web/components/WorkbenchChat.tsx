@@ -1,16 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { DatabaseIcon } from "lucide-react";
+import { CircleDashedIcon, DatabaseIcon } from "lucide-react";
 import {
-  Conversation,
-  ConversationContent,
-  ConversationEmptyState,
-  ConversationScrollButton,
-} from "@/components/ai-elements/conversation";
-import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+  Message,
+  MessageContent,
+  MessageFooter,
+  MessageGroup,
+  MessageHeader,
+} from "@/components/ui/message";
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { MessageResponse } from "@/components/ai-elements/message";
 import {
   PromptInput,
   PromptInputBody,
@@ -21,21 +23,26 @@ import {
 } from "@/components/ai-elements/prompt-input";
 
 /**
- * The chat rail.
+ * The chat rail, on shadcn's conversation primitives.
  *
- * Built on components/ai-elements — the shadcn AI registry — rather than
- * hand-rolled bubbles, because the parts a real agent turn produces are exactly
- * the parts it ships: `Reasoning` is the collapsed thinking block, `Tool` is a
- * tool call with its input and output, `MessageResponse` renders markdown as it
- * streams, and `Conversation` is a stick-to-bottom scroller that stays pinned
- * while tokens arrive and lets go the moment you scroll up. Every one of those is
- * something I would otherwise have got subtly wrong.
+ * `Message` / `MessageGroup` / `MessageHeader` / `MessageFooter` come from the
+ * shadcn registry and own the whole conversation layout — alignment by `align`,
+ * consecutive turns stacked by MessageGroup, header and footer slots that collapse
+ * correctly on a ghost surface. `Marker` is the inline system note, which is what
+ * "chat is not connected" actually is: a status row in the thread, not a fake
+ * assistant message dressed up as one.
  *
- * The engine is step 7. Until then a submit does NOT invent an answer: it echoes
- * the question and replies saying it is not connected, then renders one Reasoning
- * block and one Tool call so the vocabulary can be reviewed. Those two are
- * labelled as a preview in the copy itself, because a fake answer that reads like
- * a real one is the one thing this surface must never do.
+ * Three parts still come from components/ai-elements because the base registry has
+ * no equivalent: Reasoning (the collapsed thinking block), Tool (a call with its
+ * input, output and status), and PromptInput (the composer).
+ *
+ * MessageScroller is what should be holding this transcript — it anchors turn
+ * boundaries and preserves reader position while content streams, which is exactly
+ * the hard part of a chat log. It cannot be installed here: it depends on
+ * `@shadcn/react`, whose peers are `react >=19` and `@types/react >=19`, and this
+ * app is React 18.3.1 on Next 14.2.15. That is a React 19 upgrade, not a component
+ * install. Until then the transcript is a plain overflow container — it scrolls, but
+ * it does not follow a live edge, which is a real gap once step 7 streams tokens.
  */
 
 type Turn = { id: number; question: string };
@@ -53,51 +60,94 @@ export function WorkbenchChat({ slug }: { slug: string }) {
 
   return (
     <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
-      <Conversation className="min-h-0">
-        <ConversationContent className="gap-4 p-4">
-          {turns.length === 0 && (
-            <ConversationEmptyState
-              icon={<DatabaseIcon className="size-5 text-ink-3" />}
-              title={`Ask about ${slug}`}
-              description="How many users, what broke, what the last ship did. Answers come from a read-only agent reading your app's own data — it can look, and it cannot change anything."
-            />
-          )}
+      <div className="min-h-0 overflow-y-auto p-4">
+        {turns.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 py-10 text-center">
+            <DatabaseIcon className="size-5 text-ink-3" aria-hidden="true" />
+            <p className="text-sub font-medium text-ink">Ask about {slug}</p>
+            <p className="max-w-[34ch] text-micro text-ink-2">
+              How many users, what broke, what the last ship did. A read-only agent
+              reads your app&rsquo;s own data — it can look, and it cannot change
+              anything.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-5">
+            {turns.map((turn) => (
+              <MessageGroup key={turn.id}>
+                {/* The surface is NOT a component — Message gives you the row and
+                    the column, and you supply the bubble. `data-slot` is what
+                    MessageContent's `*:data-slot:self-end` rule aligns when the
+                    message is align=end, and `data-variant="ghost"` is what tells
+                    the header and footer to drop their padding. Getting either
+                    attribute wrong is why this looked unstyled the first time. */}
+                <Message align="end">
+                  <MessageContent>
+                    <div
+                      className="max-w-[85%] rounded-lg bg-tile px-3 py-2 text-ink"
+                      data-slot="message-surface"
+                    >
+                      {turn.question}
+                    </div>
+                  </MessageContent>
+                </Message>
 
-          {turns.map((turn) => (
-            <div className="flex flex-col gap-3" key={turn.id}>
-              <Message from="user">
-                <MessageContent>{turn.question}</MessageContent>
-              </Message>
+                <Message align="start">
+                  <MessageContent>
+                    <MessageHeader>agent</MessageHeader>
+                    <div
+                      className="flex flex-col gap-2.5"
+                      data-slot="message-surface"
+                      data-variant="ghost"
+                    >
+                      <Reasoning defaultOpen={false}>
+                        <ReasoningTrigger>Thinking, once this is wired up</ReasoningTrigger>
+                        <ReasoningContent>
+                          Where the agent&rsquo;s own reasoning will appear, collapsed
+                          by default — the same shape Codex already streams through
+                          runAgent&rsquo;s normalised events.
+                        </ReasoningContent>
+                      </Reasoning>
 
-              <Message from="assistant">
-                <MessageContent>
-                  <Reasoning defaultOpen={false}>
-                    <ReasoningTrigger>Thinking, once this is wired up</ReasoningTrigger>
-                    <ReasoningContent>
-                      This is where the agent&rsquo;s thinking will appear, collapsed
-                      by default and expandable — the same shape Codex already
-                      streams through `runAgent`&rsquo;s normalised events.
-                    </ReasoningContent>
-                  </Reasoning>
+                      <Tool defaultOpen={false}>
+                        <ToolHeader type="tool-db" state="output-available" title="db" />
+                        <ToolContent>
+                          <ToolInput input={{ query: "select count(*) from users" }} />
+                          <ToolOutput
+                            output={
+                              <span className="font-mono text-micro">
+                                preview only — nothing was queried
+                              </span>
+                            }
+                            errorText={undefined}
+                          />
+                        </ToolContent>
+                      </Tool>
 
-                  <Tool defaultOpen={false}>
-                    <ToolHeader type="tool-db" state="output-available" title="db" />
-                    <ToolContent>
-                      <ToolInput input={{ query: "select count(*) from users" }} />
-                      <ToolOutput output={<span className="font-mono text-micro">preview only — nothing was queried</span>} errorText={undefined} />
-                    </ToolContent>
-                  </Tool>
+                      <MessageResponse>
+                        {"Every figure in a real answer will come from a tool result like the one above, never from prose — so a number you can see is a number something actually read."}
+                      </MessageResponse>
+                    </div>
+                    <MessageFooter>preview · nothing was read</MessageFooter>
+                  </MessageContent>
+                </Message>
 
-                  <MessageResponse>
-                    {"**Chat is not connected yet.** The rail above is the real UI — a collapsed thinking block and a tool call with its input and output — rendered from placeholder content so it can be reviewed before the engine exists.\n\nWhen it lands, every figure in an answer will come from a tool result like that one and never from prose, so a number you can see is a number something actually read."}
-                  </MessageResponse>
-                </MessageContent>
-              </Message>
-            </div>
-          ))}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
+                {/* A system note belongs in the thread as a marker, not dressed up as
+                    an assistant turn. That distinction is the whole reason this
+                    component exists. */}
+                <Marker variant="border" role="status">
+                  <MarkerIcon>
+                    <CircleDashedIcon className="size-3.5" />
+                  </MarkerIcon>
+                  <MarkerContent>
+                    Chat is not connected yet — the engine lands in step 7.
+                  </MarkerContent>
+                </Marker>
+              </MessageGroup>
+            ))}
+          </div>
+        )}
+      </div>
 
       <PromptInput
         className="rounded-none border-0 border-t border-border shadow-none"
