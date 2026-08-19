@@ -25,6 +25,11 @@ const buttonVariants = cva(
         sm: "h-8 rounded-md px-3 text-xs",
         lg: "h-10 rounded-md px-8",
         icon: "h-9 w-9",
+        // ai-elements' message actions ask for these two. Added here rather than
+        // patched at each call site: the variant table is the one place a size is
+        // meant to be defined.
+        "icon-sm": "size-7 [&_svg:not([class*='size-'])]:size-3.5",
+        "icon-lg": "size-11",
       },
     },
     defaultVariants: {

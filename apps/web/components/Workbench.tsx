@@ -3,10 +3,8 @@
 import { ArrowUpRight, MessageSquare, SquareTerminal } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { WorkbenchChat } from "@/components/WorkbenchChat";
 import { cn } from "@/lib/utils";
 
 /**
@@ -90,25 +88,9 @@ export function Workbench({
         </a>
       </header>
 
-      <div className="grid min-h-0 grid-cols-[340px_minmax(0,1fr)]">
-        <aside className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] border-r border-border bg-card">
-          <ScrollArea className="min-h-0">
-            <p className="p-4 text-sub text-ink-2">
-              Ask about your app — how many users, what broke, what the last ship
-              did. Answers come from a read-only agent reading your app&rsquo;s own
-              data.
-            </p>
-          </ScrollArea>
-          <div>
-            <Separator />
-            {/* Disabled rather than absent. The chat engine is step 7, and a
-                composer that looked live would be the dead control this codebase
-                keeps refusing to ship — but the shell cannot be judged for layout
-                without one in place. */}
-            <div className="p-3">
-              <Input disabled placeholder="Chat is not wired up yet" aria-label="Ask about your app" />
-            </div>
-          </div>
+      <div className="grid min-h-0 grid-cols-[380px_minmax(0,1fr)]">
+        <aside className="grid min-h-0 border-r border-border bg-card">
+          <WorkbenchChat slug={slug} />
         </aside>
 
         {/* Both panes are mounted; Radix hides the inactive one. forceMount is
