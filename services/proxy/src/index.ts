@@ -117,6 +117,28 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
    */
   if (url0.split("?")[0] === "/_dashboard/analytics") {
     const who = await viewer();
+    /**
+     * Why this read was or was not answered.
+     *
+     * Chat's `analytics` tool fetches this from the control plane with the owner's
+     * session forwarded, and it came back 404 — which is this branch declining and
+     * the request falling through to the app. Four wrong theories were argued from
+     * inference before anyone instrumented the overlay decision; this is the same
+     * mistake avoided the same way. Owner-only path, so this is one line per read a
+     * person or their agent actually asked for.
+     */
+    console.log(
+      JSON.stringify({
+        ev: "analytics-read",
+        slug,
+        // Present at all? Distinguishes "the cookie was not forwarded" from "it was
+        // forwarded and could not be verified", which are different bugs.
+        cookie: Boolean(req.headers.cookie),
+        named: req.headers.cookie?.includes(config.sessionCookieName) ?? false,
+        resolved: Boolean(who),
+        owner: Boolean(who && who.userId === app.owner_id),
+      }),
+    );
     if (who && who.userId === app.owner_id) {
       const url = new URL(url0, "http://x");
       // Windows the panel offers, and nothing else: the range is a number that
@@ -235,8 +257,23 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // Resolved once per request rather than per response: the plan travels on the
   // app row that has already been fetched and cached, so this costs nothing.
   const badge = badgeRequired(app.owner_plan, app.owner_status);
+  /**
+   * The pill is suppressed inside a frame.
+   *
+   * The workbench renders this app in an iframe, and the pill is a fixed element in
+   * the top-right corner that links OUT to the workbench. Inside the frame it draws
+   * itself over the app's own header, pointing at the page it is already on — which
+   * is what shipped, and it looked exactly as wrong as it sounds.
+   *
+   * `Sec-Fetch-Dest` is set by the browser and cannot be forged by page script, so a
+   * framed document is distinguishable from a top-level one without asking the page
+   * anything. Only the OWNER half is suppressed: the badge is a plan obligation and
+   * still belongs on a framed page, since framing an app must not be a way to remove
+   * it.
+   */
+  const framed = String(req.headers["sec-fetch-dest"] ?? "") === "iframe";
   const serve = (visitorCtx: { userId: string; email: string; name: string }, wd: string, owner: boolean) =>
-    forward(req, res, target as string, visitorCtx, wd, { slug, owner, badge, websiteId: site?.websiteId ?? null }, prefix);
+    forward(req, res, target as string, visitorCtx, wd, { slug, owner: owner && !framed, badge, websiteId: site?.websiteId ?? null }, prefix);
 
   // Public apps skip the sign-in wall entirely — anyone with the link gets in.
   //
