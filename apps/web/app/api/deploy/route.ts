@@ -167,6 +167,12 @@ export async function POST(req: Request) {
   // two are exclusive and everything downstream sees only what createRun writes.
   let uploaded: UploadedSource | null = null;
   let cloneToken: unknown = null;
+  /**
+   * The GitHub installation this repository is reachable through, when the
+   * GitHub door sent one. Null on every other path, including every upload —
+   * an uploaded folder has no repository and therefore no grant.
+   */
+  let ghInstallationId: number | null = null;
   let reservedSlug = "";
   // The production run command the deploying agent worked out for this app (e.g.
   // `uvicorn main:app --host 0.0.0.0 --port $PORT`, `next start`). It's the reliable
@@ -210,6 +216,12 @@ export async function POST(req: Request) {
     cloneToken = body.cloneToken ?? null;
     reservedSlug = String(body.slug ?? "").trim();
     runCmd = String(body.run ?? "").trim();
+    // Named only by the GitHub door. An id, not a credential — which is why it
+    // can travel in the run row to a job that runs minutes later, while a token
+    // could not.
+    const rawInstall = String(body.installationId ?? "").trim();
+    ghInstallationId = /^\d+$/.test(rawInstall) && Number.isSafeInteger(Number(rawInstall))
+      ? Number(rawInstall) : null;
   }
   // Apps get a short random subdomain (e.g. as76d.supersonic.cv). A reserved slug
   // (URL-first / tunnel deploys) is honoured so the build lands on the URL already
@@ -252,7 +264,7 @@ export async function POST(req: Request) {
 
   const input = {
     ownerId, ownerWorkspace, slug, friendlyName, repoUrl: url,
-    isUpload, isPrebuilt, prebuiltHash, secrets, cloneToken, runCmd, limits,
+    ghInstallationId, isUpload, isPrebuilt, prebuiltHash, secrets, cloneToken, runCmd, limits,
   };
 
   // Hand the deploy to a job and stream back its event log. The request stops

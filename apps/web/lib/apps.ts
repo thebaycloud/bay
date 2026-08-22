@@ -49,15 +49,26 @@ export async function createAppRecord(o: {
    * build the app again without its owner present.
    */
   repoUrl?: string | null;
+  /**
+   * Through which GitHub installation that repository was reachable, or null
+   * for a public URL and for every upload.
+   *
+   * COALESCEd for the same reason `repoUrl` is, and it is the same reason
+   * twice: a redeploy from a folder must not erase the grant an earlier GitHub
+   * deploy recorded, or the app becomes unbuildable without its owner present —
+   * which is the whole thing the column exists to prevent.
+   */
+  ghInstallationId?: number | null;
 }): Promise<string> {
   const r = await getPool(DB).query(
-    `INSERT INTO apps(slug, workspace_id, owner_id, status, repo_url)
-     VALUES($1, $2, $3, 'deploying', $4)
+    `INSERT INTO apps(slug, workspace_id, owner_id, status, repo_url, gh_installation_id)
+     VALUES($1, $2, $3, 'deploying', $4, $5)
      ON CONFLICT(slug) DO UPDATE SET
        status = 'deploying',
-       repo_url = COALESCE($4, apps.repo_url)
+       repo_url = COALESCE($4, apps.repo_url),
+       gh_installation_id = COALESCE($5, apps.gh_installation_id)
      RETURNING id`,
-    [o.slug, o.workspaceId, o.ownerId, o.repoUrl ?? null]
+    [o.slug, o.workspaceId, o.ownerId, o.repoUrl ?? null, o.ghInstallationId ?? null]
   );
   await provisionAnalytics(o.slug);
   return r.rows[0].id;
