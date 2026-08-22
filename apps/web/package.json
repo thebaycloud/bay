@@ -18,6 +18,7 @@
     "bench:watch": "node --import tsx bench/watch.ts",
     "bench:cleanup": "node --import tsx bench/cleanup.ts",
     "drift": "node --import tsx scripts/drift.ts",
+    "github:check": "node --import tsx scripts/github-check.ts",
     "deadcode": "knip",
     "film": "esbuild components/film/entry.ts --bundle --format=iife --minify --target=es2020 --outfile=public/film/ship-it.js",
     "prebuild": "npm run film"
