@@ -31,8 +31,13 @@ import { Button } from "./Button";
  * half, a crossing is the whole thing.
  */
 export function CellGrid({ children }: { children: ReactNode }) {
+  // bg-line, not bg-ground. `ground` used to be #E4E4E4 here — a hairline chosen
+  // to be visible against white, sharing a name with the page ground it is not.
+  // Now that `ground` means the page ground (#FAFAFA) it would have erased these
+  // rules; `line` is the hairline token, one point from the value this was drawn
+  // with.
   return (
-    <div className="grid grid-cols-1 gap-px bg-ground p-px sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-px bg-line p-px sm:grid-cols-2">
       {children}
     </div>
   );
