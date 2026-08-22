@@ -2036,6 +2036,40 @@ git push
 
 ---
 
+## What changed during execution
+
+Two things in this plan were wrong and were corrected while building. Recorded
+here rather than quietly fixed, because a plan that disagrees with the code is
+worse than no plan.
+
+**Route files cannot export helpers.** Tasks 5, 6 and 7 put testable decisions
+next to their handlers and exported them. Next validates the exports of a
+`route.ts` and rejects anything that is not a handler or a config value, and no
+route in this repository does it either. The decisions moved to
+`lib/github-setup.ts`, `lib/github-import.ts` and `lib/github-clone.ts`; the
+routes are plumbing.
+
+**`cloneTargetFor` and `cloneAuthFor` were one function written twice.** Tasks 7
+and 8 each defined a helper that asked the same question — may this workspace
+clone through this installation — and differed only in whether the caller wanted
+a URL or a token. They became one `cloneTokenFor` in `lib/github-clone.ts`,
+because a check written twice disagrees with itself eventually and this one is
+the security boundary of the phase.
+
+Two things were added that the plan did not anticipate.
+
+**`redactToken`.** Today's git already strips userinfo from its error messages —
+checked against both a missing repository and an unresolvable host — but
+`/api/detect` returns git's message straight to a browser, and the ADR's claim
+that the token reaches no log line and no response should not rest on another
+program's error formatting.
+
+**`installationId == null`, not `=== null`.** A strict check turned "nobody named
+an installation" into "that account is not connected to your workspace" for every
+caller that simply omits the field, which is every upload and every run row
+written before the column existed. It broke 26 deploy-pipeline tests; without
+those tests it would have broken every upload deploy in production.
+
 ## Self-Review
 
 **Spec coverage.** Every claim in ADR 0005 has a task: the App/login separation is Task 1's credential module and nothing widens the login; `installation → workspace` is Task 2's table; the app naming its grant is Task 2's `apps.gh_installation_id` written in Task 8; the three refusals are Task 1's `GithubRefusal`, surfaced in Task 6's 409 and Task 9's three sentences; no webhook appears anywhere; the token-never-logged claim is Task 4's assertion.
