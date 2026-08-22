@@ -1,6 +1,6 @@
 # GitHub Connect, Phase One — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** A person connects a GitHub account to their workspace, picks a private repository from a list, and deploys it — with no token ever pasted, stored, or logged.
 
@@ -62,7 +62,7 @@ Task order is dependency order. Tasks 1–3 are pure modules with no callers and
   - `interface MintDeps { fetch: typeof globalThis.fetch; now: () => number }`
   - `_resetTokenCache(): void`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/test/github-app.test.ts
@@ -226,7 +226,7 @@ test("an unconfigured platform fails before it reaches the network", async () =>
 });
 ```
 
-- [ ] **Step 2: Run the suite to verify it fails**
+- [x] **Step 2: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -234,7 +234,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — `Cannot find module '../lib/github-app'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // apps/web/lib/github-app.ts
@@ -394,7 +394,7 @@ function refusalFor(status: number, message?: string): GithubRefusal {
 }
 ```
 
-- [ ] **Step 4: Run the suite to verify it passes**
+- [x] **Step 4: Run the suite to verify it passes**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -402,7 +402,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: PASS, and the total count is 1368 + 9.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd apps/web && npx tsc --noEmit
@@ -429,7 +429,7 @@ git push
   - `workspaceOwnsInstallation(workspaceId: string, installationId: number, q?: Query): Promise<boolean>`
   - `type Query = (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>`
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 ```sql
 -- apps/web/db/032_github_installations.sql
@@ -478,7 +478,7 @@ CREATE INDEX IF NOT EXISTS github_installations_workspace_idx
 ALTER TABLE apps ADD COLUMN IF NOT EXISTS gh_installation_id bigint;
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```ts
 // apps/web/test/github-connections.test.ts
@@ -560,7 +560,7 @@ test("no workspace means no ownership, and no query", async () => {
 });
 ```
 
-- [ ] **Step 3: Run the suite to verify it fails**
+- [x] **Step 3: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -568,7 +568,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — `Cannot find module '../lib/github-connections'`.
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 ```ts
 // apps/web/lib/github-connections.ts
@@ -664,7 +664,7 @@ export async function workspaceOwnsInstallation(
 }
 ```
 
-- [ ] **Step 5: Run the suite and apply the migration**
+- [x] **Step 5: Run the suite and apply the migration**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -675,7 +675,7 @@ npm run db:migrate 2>&1 | tail -5
 
 Expected: tests PASS; `migration 032_github_installations.sql applied`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web/db/032_github_installations.sql apps/web/lib/github-connections.ts apps/web/test/github-connections.test.ts
@@ -700,7 +700,7 @@ git push
   - `cloneUrlFor(installationId: number, repoUrl: string, deps?: ReposDeps): Promise<string>`
   - `interface ReposDeps { fetch: typeof globalThis.fetch; token: (id: number) => Promise<string> }`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/test/github-repos.test.ts
@@ -799,7 +799,7 @@ test("cloneUrlFor mints and splices in one step", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the suite to verify it fails**
+- [x] **Step 2: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -807,7 +807,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — `Cannot find module '../lib/github-repos'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // apps/web/lib/github-repos.ts
@@ -907,7 +907,7 @@ export async function cloneUrlFor(installationId: number, repoUrl: string, deps:
 }
 ```
 
-- [ ] **Step 4: Run the suite to verify it passes**
+- [x] **Step 4: Run the suite to verify it passes**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -916,7 +916,7 @@ npx tsc --noEmit
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/lib/github-repos.ts apps/web/test/github-repos.test.ts
@@ -936,7 +936,7 @@ git push
 - Consumes: `authenticatedCloneUrl` from Task 3.
 - Produces: `SourceOrigin` gains `{ kind: "clone"; url: string; token?: string }`. `url` stays the clean URL and is what every log line and every stage row shows.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // append to apps/web/test/source.test.ts
@@ -974,7 +974,7 @@ test("a clone without a token is byte-for-byte what it always was", async () => 
 
 Note: `spy()` in this file already collects `ran` and `logs`; if it does not expose them, widen its return to `{ deps, ran, logs, stages }` and leave every existing assertion untouched.
 
-- [ ] **Step 2: Run the suite to verify it fails**
+- [x] **Step 2: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -982,7 +982,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — the token is not in the `git` args (the type does not carry it yet).
 
-- [ ] **Step 3: Change the type and the branch**
+- [x] **Step 3: Change the type and the branch**
 
 ```ts
 // in apps/web/lib/source.ts — replace the `clone` member of SourceOrigin
@@ -1017,7 +1017,7 @@ Expected: FAIL — the token is not in the `git` args (the type does not carry i
 import { authenticatedCloneUrl } from "./github-repos";
 ```
 
-- [ ] **Step 4: Run the suite to verify it passes**
+- [x] **Step 4: Run the suite to verify it passes**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1026,7 +1026,7 @@ npx tsc --noEmit
 
 Expected: PASS, including every pre-existing case in `source.test.ts`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/lib/source.ts apps/web/test/source.test.ts
@@ -1046,7 +1046,7 @@ git push
 - Consumes: `recordInstallation` (Task 2), `installationToken` + `GithubError` (Task 1), `currentUserId` from `lib/session`.
 - Produces: `GET /api/github/setup?installation_id=<n>&setup_action=install` → 302 to `/new?connected=<login>` on success, 302 to `/new?github_error=<kind>` on refusal, 401 when not signed in.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/test/github-setup.test.ts
@@ -1089,7 +1089,7 @@ test("a request-scoped id is not read from anywhere but the query", () => {
 });
 ```
 
-- [ ] **Step 2: Run the suite to verify it fails**
+- [x] **Step 2: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1097,7 +1097,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Write the route**
+- [x] **Step 3: Write the route**
 
 ```ts
 // apps/web/app/api/github/setup/route.ts
@@ -1201,7 +1201,7 @@ async function accountFor(installationId: number): Promise<{ login: string; type
 }
 ```
 
-- [ ] **Step 4: Run the suite to verify it passes**
+- [x] **Step 4: Run the suite to verify it passes**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1210,7 +1210,7 @@ npx tsc --noEmit
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/app/api/github/setup/route.ts apps/web/test/github-setup.test.ts
@@ -1230,7 +1230,7 @@ git push
 - Consumes: `connectionsForWorkspace`, `workspaceOwnsInstallation` (Task 2), `listRepos` (Task 3), `GithubError` (Task 1).
 - Produces: `GET /api/github/repos` → `{ connections: Array<{ installationId, accountLogin }>, configureUrl: string }`. `GET /api/github/repos?installation_id=<n>` → `{ repos: Repo[] }` or 403 when the workspace does not own it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/test/github-repos-route.test.ts
@@ -1306,7 +1306,7 @@ test("a broken connection answers with the kind, not GitHub's prose", async () =
 });
 ```
 
-- [ ] **Step 2: Run the suite to verify it fails**
+- [x] **Step 2: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1314,7 +1314,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Write the route**
+- [x] **Step 3: Write the route**
 
 ```ts
 // apps/web/app/api/github/repos/route.ts
@@ -1408,7 +1408,7 @@ export async function GET(req: Request): Promise<Response> {
 }
 ```
 
-- [ ] **Step 4: Run the suite to verify it passes**
+- [x] **Step 4: Run the suite to verify it passes**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1417,7 +1417,7 @@ npx tsc --noEmit
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/app/api/github/repos/route.ts apps/web/test/github-repos-route.test.ts
@@ -1437,7 +1437,7 @@ git push
 - Consumes: `workspaceOwnsInstallation` (Task 2), `cloneUrlFor` (Task 3).
 - Produces: `POST /api/detect` accepts `{ repo, installationId? }`. The response is unchanged.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/test/detect-installation.test.ts
@@ -1486,7 +1486,7 @@ test("an installation the workspace does not own mints nothing and throws", asyn
 });
 ```
 
-- [ ] **Step 2: Run the suite to verify it fails**
+- [x] **Step 2: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1494,7 +1494,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — `cloneTargetFor` is not exported.
 
-- [ ] **Step 3: Modify the route**
+- [x] **Step 3: Modify the route**
 
 Add the imports:
 
@@ -1556,7 +1556,7 @@ and change the clone line inside `try`:
 
 Note the existing `if (!(await currentUserId()))` line is replaced by the `userId` binding above — the check is the same, the result is now kept.
 
-- [ ] **Step 4: Run the suite to verify it passes**
+- [x] **Step 4: Run the suite to verify it passes**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1565,7 +1565,7 @@ npx tsc --noEmit
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/app/api/detect/route.ts apps/web/test/detect-installation.test.ts
@@ -1587,7 +1587,7 @@ git push
 - Consumes: `cloneTargetFor`-shaped logic from Task 7 (reimplemented here against the pipeline's own inputs), `installationToken` (Task 1), `workspaceOwnsInstallation` (Task 2).
 - Produces: `DeployInput` gains `ghInstallationId: number | null`. `apps.gh_installation_id` is written on create.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/test/deploy-installation.test.ts
@@ -1645,7 +1645,7 @@ test("an installation with no workspace behind it is refused", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the suite to verify it fails**
+- [x] **Step 2: Run the suite to verify it fails**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -20
@@ -1653,7 +1653,7 @@ cd apps/web && npm test 2>&1 | tail -20
 
 Expected: FAIL — `cloneAuthFor` is not exported from `lib/deploy-pipeline`.
 
-- [ ] **Step 3: Add the helper and thread the id**
+- [x] **Step 3: Add the helper and thread the id**
 
 In `apps/web/lib/deploy-pipeline.ts`, add near the other exported helpers:
 
@@ -1739,7 +1739,7 @@ In `apps/web/app/api/deploy/route.ts`, read the id from the body and pass it:
 
 and add `ghInstallationId` to the `runDeploy` input object beside `repoUrl: url`.
 
-- [ ] **Step 4: Run the suite to verify it passes**
+- [x] **Step 4: Run the suite to verify it passes**
 
 ```bash
 cd apps/web && npm test 2>&1 | tail -30
@@ -1748,7 +1748,7 @@ npx tsc --noEmit
 
 Expected: PASS. `test/deploy-pipeline.test.ts` runs as part of the suite — do not run it alone.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/lib/deploy-pipeline.ts apps/web/lib/apps.ts apps/web/app/api/deploy/route.ts apps/web/test/deploy-installation.test.ts
@@ -1767,7 +1767,7 @@ git push
 - Consumes: `GET /api/github/repos` (Task 6), `POST /api/detect` and `POST /api/deploy` with `installationId` (Tasks 7–8).
 - Produces: no exports; the `github` door renders connections and repositories instead of a text field.
 
-- [ ] **Step 1: Add the state and the fetch**
+- [x] **Step 1: Add the state and the fetch**
 
 ```tsx
 // near the other useState calls
@@ -1813,7 +1813,7 @@ useEffect(() => {
 }, [ghInstallation]);
 ```
 
-- [ ] **Step 2: Read the callback's outcome on arrival**
+- [x] **Step 2: Read the callback's outcome on arrival**
 
 ```tsx
 // alongside the existing effect that reads ?repo= from the query
@@ -1832,7 +1832,7 @@ useEffect(() => {
 }, []);
 ```
 
-- [ ] **Step 3: Replace the github branch of the door body**
+- [x] **Step 3: Replace the github branch of the door body**
 
 The current JSX renders one `<div className="repo">` for both `github` and `url`. Split it: keep it verbatim for `url`, and render this for `github`.
 
@@ -1889,7 +1889,7 @@ The current JSX renders one `<div className="repo">` for both `github` and `url`
 )}
 ```
 
-- [ ] **Step 4: Send the installation id through both calls**
+- [x] **Step 4: Send the installation id through both calls**
 
 ```tsx
 async function beginGithub(fullName: string) {
@@ -1921,7 +1921,7 @@ async function beginGithub(fullName: string) {
 
 In `runDeploy`, add `installationId: door === "github" ? ghInstallation : null` to the JSON body.
 
-- [ ] **Step 5: Build and commit**
+- [x] **Step 5: Build and commit**
 
 ```bash
 cd apps/web && npx tsc --noEmit && npm run build 2>&1 | tail -10
@@ -1942,7 +1942,7 @@ git push
 - Consumes: everything above.
 - Produces: `npm run github:check` — proves the whole chain against the real App, or says which link broke.
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 ```ts
 // apps/web/scripts/github-check.ts
@@ -2004,7 +2004,7 @@ Add to `apps/web/package.json` scripts:
 "github:check": "node --import tsx scripts/github-check.ts"
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd apps/web && npm run github:check
@@ -2012,7 +2012,7 @@ cd apps/web && npm run github:check
 
 Expected: `installations: 1`, a minted token, `repositories: 1`, `clone of thebaycloud/bay (private): ok`, `the chain works end to end`.
 
-- [ ] **Step 3: Add the term to CONTEXT.md**
+- [x] **Step 3: Add the term to CONTEXT.md**
 
 Under **Platform language**, in alphabetical position:
 
@@ -2026,7 +2026,7 @@ _Avoid_: integration, link, OAuth connection, GitHub account.
 Product language says *connected account*.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add apps/web/scripts/github-check.ts apps/web/package.json CONTEXT.md
