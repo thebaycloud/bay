@@ -46,6 +46,17 @@ more. Distinct from a container: two processes can share an image.
 _Avoid_: service (that word belongs to Cloud Run), job, task.
 Has no product counterpart. A person never reads this word.
 
+**Connection**:
+An installation of our GitHub App, owned by one workspace. The record of what a
+person granted us — which account, which repositories — and never a token. A
+token is minted from a **Connection** and lives an hour; the connection outlives
+every token made from it, which is the whole reason it is the thing that gets
+stored.
+One workspace can hold several: a personal account and two orgs are three
+connections and one workspace.
+_Avoid_: integration, link, OAuth connection, GitHub account, token.
+Product language says *connected account*.
+
 **Deploy target**:
 Where an app's processes end up running. Today there are two — the **Fleet**, and
 Cloud Run. Naming the concept is what makes "which one" a decision rather than
@@ -151,6 +162,8 @@ it in the meantime.
 - An **App** has one **Room**, until it **opens** for the first time
 - An **App** may have a **Shadow**
 - An **App** may have any number of **Attached domains**; each belongs to one app
+- A workspace may hold any number of **Connections**; each belongs to one workspace
+- An **App** deployed from a private repository names the **Connection** it came through
 
 ## Resolved ambiguities
 

@@ -53,6 +53,15 @@ export interface DeployRunRequest {
   slug: string;
   friendlyName: string;
   repoUrl: string;
+  /**
+   * The GitHub installation `repoUrl` is reachable through, or null.
+   *
+   * An id travels here; a token never could. This row is written now and read
+   * by a job that may start minutes later, and an installation token lives an
+   * hour — so the job mints its own from this id rather than being handed one
+   * that might already be spent.
+   */
+  ghInstallationId: number | null;
   isUpload: boolean;
   isPrebuilt: boolean;
   prebuiltHash: string;

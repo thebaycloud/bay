@@ -638,6 +638,18 @@ a.shelf-host:hover { color: var(--ink); text-decoration: underline; text-underli
 .repo input { flex: 1; border: none; background: none; outline: none; font-family: var(--mono); font-size: 14px; color: var(--ink); padding: 12px; }
 .repo input::placeholder { color: var(--faint); }
 .deploy-cta { display: flex; align-items: center; gap: 14px; }
+
+/* The GitHub door's repository list.
+   Scrolls at eight rows rather than growing the page: an account with two
+   hundred repositories would otherwise push the whole screen away, and the
+   thing a person came to press is the row, not the button below it. */
+.gh-repos { display: flex; flex-direction: column; border: 1px solid var(--line-2); background: var(--card); border-radius: var(--r); max-height: 336px; overflow-y: auto; margin-bottom: 4px; }
+.gh-repo { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 11px 14px; background: none; border: none; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 13px; color: var(--ink); transition: background .12s var(--ease); }
+.gh-repo:last-child { border-bottom: none; }
+.gh-repo:hover { background: var(--fill); color: var(--fill-fg); }
+.gh-repo .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-repo .tag { font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line); padding: 2px 6px; border-radius: var(--r); }
+.gh-repo:hover .tag { color: inherit; border-color: currentColor; }
 .btn.big { height: 42px; padding: 0 20px; font-size: 13px; }
 .deploy-cta .hint { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; text-transform: uppercase; }
 

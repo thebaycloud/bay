@@ -53,6 +53,9 @@ export async function deployOne(runId: string, hooks: DeployOneHooks = {}): Prom
     slug: request.slug,
     friendlyName: request.friendlyName,
     repoUrl: request.repoUrl,
+    // `?? null` rather than assumed present: rows written before this column
+    // existed are still in the table and still get claimed.
+    ghInstallationId: request.ghInstallationId ?? null,
     isUpload: request.isUpload,
     isPrebuilt: request.isPrebuilt,
     prebuiltHash: request.prebuiltHash,

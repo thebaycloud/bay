@@ -1,6 +1,7 @@
 import { writeFileSync, readdirSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { StageRecorder } from "./stages";
+import { authenticatedCloneUrl } from "./github-repos";
 
 /**
  * Getting the app's source onto disk, whichever way it arrived.
@@ -28,8 +29,20 @@ export type SourceOrigin =
    * appears nowhere in the data is a saving nobody can check.
    */
   | { kind: "cached-clone" }
-  /** A fresh shallow clone. */
-  | { kind: "clone"; url: string };
+  /**
+   * A fresh shallow clone.
+   *
+   * `url` is always the CLEAN url — it is what gets logged, and a log line here
+   * is stored, replayed on reconnect and read by the person watching. When the
+   * repository is private, `token` carries the installation token BESIDE it,
+   * and the two are joined exactly once, at the call to `git`.
+   *
+   * Two fields rather than one pre-authenticated string, because an
+   * authenticated string is a credential: the moment it arrives as `url`, every
+   * line that already logs `origin.url` starts leaking it, and nothing about
+   * those lines looks wrong.
+   */
+  | { kind: "clone"; url: string; token?: string };
 
 export type Log = (line: string) => void;
 
@@ -64,8 +77,11 @@ export async function fetchSource(dir: string, origin: SourceOrigin, deps: Fetch
     await stages.skipped("clone");
   } else {
     await stages.around("clone", async () => {
+      // The clean url is logged; the authenticated one is built here, handed to
+      // git, and never bound to anything a later line could reach for.
       log(`Pulling ${origin.url}`);
-      await run("git", ["clone", "--depth", "1", origin.url, dir]);
+      const target = origin.token ? authenticatedCloneUrl(origin.url, origin.token) : origin.url;
+      await run("git", ["clone", "--depth", "1", target, dir]);
     });
   }
 

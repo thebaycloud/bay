@@ -45,6 +45,7 @@ import { notifyDeployFinished } from "@/lib/deploy-notify";
 import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/static-release";
 import { listObjectNames, readObjectText, writeObject, describeServiceRest, resolveImageDigest, imageExposedPort, accessToken } from "@/lib/gcp-rest";
 import { take as takeClone } from "@/lib/clone-cache";
+import { cloneTokenFor } from "@/lib/github-clone";
 import { staticBuildConfig } from "@/lib/static-build";
 import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
@@ -1067,6 +1068,16 @@ export interface DeployInput {
   friendlyName: string;
   /** The git URL to clone, or "" when the source arrived as an upload. */
   repoUrl: string;
+  /**
+   * Which GitHub installation that URL is reachable through, or null for a
+   * public repository and for every upload.
+   *
+   * An id, not a credential. It is checked against `ownerWorkspace` before
+   * anything is minted from it — here rather than only in the route, because
+   * this function is reached from the request handler, the deploy worker and
+   * the deploy job, and a check in one of them is a check the other two skip.
+   */
+  ghInstallationId: number | null;
   isUpload: boolean;
   isPrebuilt: boolean;
   prebuiltHash: string;
@@ -1120,6 +1131,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       await createAppRecord({
         slug, workspaceId: ownerWorkspace, ownerId,
         repoUrl: redeployableRepo({ url, isUpload }),
+        ghInstallationId: input.ghInstallationId,
       });
     }
     // /api/detect already cloned this repo moments ago. Reuse that clone when
@@ -1162,11 +1174,19 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // Three ways in, one populated directory out — see lib/source.ts, which also
     // owns the symlink pruning all three need and that used to live inside one
     // of them.
+    // Minted here, not carried in: a token that travelled through the request
+    // body, the worker and the job would have to survive a queue, and an hour
+    // is not long enough for that to be safe or reliable.
+    const gitToken = await cloneTokenFor({
+      workspaceId: ownerWorkspace,
+      installationId: input.ghInstallationId,
+    });
+
     await fetchSource(
       dir,
       isUpload && archive ? { kind: "upload", archive }
         : reused ? { kind: "cached-clone" }
-        : { kind: "clone", url },
+        : { kind: "clone", url, token: gitToken },
       { run: (cmd, args) => run(cmd, args, () => {}), log, stages },
     );
 
