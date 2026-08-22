@@ -35,6 +35,10 @@ If my app has migrations and nothing in the repo says how to run them — no Pro
 If a key is missing or is obviously a placeholder (sk_test_…, "changeme"), ask me for the real one in one sentence: what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
 
 type Door = "url" | "github" | "local";
+/** One GitHub account this workspace has connected. */
+interface GhConnection { installationId: number; accountLogin: string }
+/** One repository that connection can see. */
+interface GhRepo { fullName: string; private: boolean; defaultBranch: string; pushedAt: string | null }
 type Phase = "idle" | "detecting" | "secrets" | "deploying" | "done" | "error";
 
 interface Detected {
@@ -69,10 +73,75 @@ export default function NewApp() {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const cloneToken = useRef<string | null>(null);
 
+  // The GitHub door. `null` means "not asked yet" and is distinct from an empty
+  // list, which means "asked, and nothing is connected" — the two draw
+  // different screens and collapsing them would flash the connect button at
+  // somebody who is already connected.
+  const [ghConnections, setGhConnections] = useState<GhConnection[] | null>(null);
+  const [ghInstallation, setGhInstallation] = useState<number | null>(null);
+  const [ghRepos, setGhRepos] = useState<GhRepo[] | null>(null);
+  const [ghLinks, setGhLinks] = useState<{ installUrl: string; configureUrl: string } | null>(null);
+  const [ghTrouble, setGhTrouble] = useState("");
+
   useEffect(() => {
-    const r = new URLSearchParams(window.location.search).get("repo");
+    const q = new URLSearchParams(window.location.search);
+    const r = q.get("repo");
     if (r) { setRepo(r.replace(/^https?:\/\//, "")); setDoor("url"); }
+    // Coming back from GitHub. `connected` re-asks rather than trusting the
+    // name in the URL: the list is the truth and it was just changed.
+    if (q.get("connected")) { setDoor("github"); setGhConnections(null); }
+    const err = q.get("github_error");
+    if (err) {
+      setDoor("github");
+      setGhTrouble(
+        err === "no-installation" ? "That didn't finish connecting. Try again — it takes about a minute."
+        : err === "bad-credentials" ? "We can't reach GitHub right now. This one is on us — nothing you do will fix it."
+        : err === "no-workspace" ? "Your account isn't set up yet. Ship something once and this will work."
+        : "We couldn't finish connecting to GitHub. Try again in a moment.",
+      );
+    }
   }, []);
+
+  // Asked when the door is opened, not on mount: most people arrive to use a
+  // different door and this is a round trip they never needed.
+  useEffect(() => {
+    if (door !== "github" || ghConnections !== null) return;
+    let alive = true;
+    fetch("/api/github/repos")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        setGhConnections(d.connections ?? []);
+        setGhLinks({ installUrl: d.installUrl, configureUrl: d.configureUrl });
+        // One connected account is the common case and choosing between one
+        // thing is not a choice.
+        if (d.connections?.length === 1) setGhInstallation(d.connections[0].installationId);
+      })
+      .catch(() => { if (alive) setGhConnections([]); });
+    return () => { alive = false; };
+  }, [door, ghConnections]);
+
+  useEffect(() => {
+    if (ghInstallation === null) return;
+    let alive = true;
+    setGhRepos(null); setGhTrouble("");
+    fetch(`/api/github/repos?installation_id=${ghInstallation}`)
+      .then(async (r) => ({ ok: r.ok, d: await r.json() }))
+      .then(({ ok, d }) => {
+        if (!alive) return;
+        if (ok) { setGhRepos(d.repos ?? []); return; }
+        // Three refusals, three different next actions — and never GitHub's own
+        // words, which are text we did not write.
+        setGhRepos([]);
+        setGhTrouble(
+          d.reason === "no-installation" ? "That account isn't connected any more. Connect it again to pick a repository."
+          : d.reason === "bad-credentials" ? "We can't reach GitHub right now. This one is on us — nothing you do will fix it."
+          : "GitHub isn't answering. Try again in a moment.",
+        );
+      })
+      .catch(() => { if (alive) setGhTrouble("GitHub isn't answering. Try again in a moment."); });
+    return () => { alive = false; };
+  }, [ghInstallation]);
 
   function reset() {
     setPhase("idle"); setLogs([]); setDetected(null); setSecretsNeeded([]); setSecretVals({});
@@ -83,15 +152,31 @@ export default function NewApp() {
     setFilm(FILM_START);
   }
 
-  const repoArg = () => (door === "github" ? `github.com/${repo}` : repo);
+  // Only the Git URL door types a repository now; the GitHub door passes the
+  // one that was clicked straight into begin().
+  const repoArg = () => repo;
 
-  async function begin() {
-    if (!repo.trim()) return;
+  /**
+   * What detect actually inspected, and through which connection.
+   *
+   * A ref rather than the `repo` state, because the secrets step deploys
+   * minutes after detect ran and must send the same two values detect was
+   * given. Reading state there would deploy whatever the field says now.
+   */
+  const asked = useRef<{ repo: string; installationId: number | null }>({ repo: "", installationId: null });
+
+  async function begin(pickedRepo?: string) {
+    // From the picker the name is passed in: setRepo has not landed yet when
+    // this runs, and reading it here would send an empty repository.
+    const target = pickedRepo ? `github.com/${pickedRepo}` : repoArg();
+    const installationId = door === "github" ? ghInstallation : null;
+    if (!target.trim() || target === "github.com/") return;
+    asked.current = { repo: target, installationId };
     setPhase("detecting"); setError("");
     try {
       const res = await fetch("/api/detect", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: repoArg() }),
+        body: JSON.stringify({ repo: target, installationId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "detection failed");
@@ -128,7 +213,12 @@ export default function NewApp() {
     try {
       const res = await fetch("/api/deploy", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: repoArg(), secrets, cloneToken: cloneToken.current }),
+        body: JSON.stringify({
+          repo: asked.current.repo,
+          installationId: asked.current.installationId,
+          secrets,
+          cloneToken: cloneToken.current,
+        }),
       });
       // A billing gate returns a JSON 402 *before* the SSE stream — surface the
       // paywall / upgrade modal instead of trying to parse it as events.
@@ -244,22 +334,77 @@ export default function NewApp() {
                       <span className="hint">paste into Claude Code / Cursor / Codex</span>
                     </div>
                   </>
+                ) : door === "github" ? (
+                  <>
+                    {ghConnections === null ? (
+                      <p className="lead" style={{ margin: "0 0 14px", fontSize: 13 }}>Looking for your GitHub accounts…</p>
+                    ) : ghConnections.length === 0 ? (
+                      <>
+                        <p className="lead" style={{ margin: "0 0 14px", fontSize: 13 }}>
+                          Connect GitHub once and your private code shows up here. We only ever read it — and only the repositories you pick.
+                        </p>
+                        {ghTrouble && <p className="lead" style={{ margin: "0 0 10px", fontSize: 13 }}>{ghTrouble}</p>}
+                        <div className="deploy-cta">
+                          <a className="btn primary big" href={ghLinks?.installUrl ?? "#"}>
+                            <Github size={13} />Connect GitHub<ArrowRight size={13} />
+                          </a>
+                          <span className="hint">takes about a minute</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {ghConnections.length > 1 && (
+                          <div className="doors" style={{ marginBottom: 10 }}>
+                            {ghConnections.map((c) => (
+                              <button
+                                key={c.installationId}
+                                className={"door" + (ghInstallation === c.installationId ? " on" : "")}
+                                onClick={() => setGhInstallation(c.installationId)}
+                              >{c.accountLogin}</button>
+                            ))}
+                          </div>
+                        )}
+                        {ghTrouble && <p className="lead" style={{ margin: "0 0 10px", fontSize: 13 }}>{ghTrouble}</p>}
+                        {ghRepos === null ? (
+                          <p className="lead" style={{ margin: "0 0 14px", fontSize: 13 }}>Reading what you picked…</p>
+                        ) : ghRepos.length === 0 && !ghTrouble ? (
+                          <p className="lead" style={{ margin: "0 0 14px", fontSize: 13 }}>
+                            This account is connected, but no repositories were shared with us yet.
+                          </p>
+                        ) : (
+                          <div className="gh-repos">
+                            {ghRepos.map((r) => (
+                              <button
+                                key={r.fullName}
+                                className="gh-repo"
+                                onClick={() => { setRepo(r.fullName); begin(r.fullName); }}
+                              >
+                                <span className="name">{r.fullName}</span>
+                                {r.private && <span className="tag">private</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <p className="lead" style={{ margin: "10px 0 0", fontSize: 12, opacity: 0.7 }}>
+                          Not seeing one? <a href={ghLinks?.configureUrl ?? "#"}>Choose which repositories we can see</a>.
+                        </p>
+                      </>
+                    )}
+                  </>
                 ) : (
                   <>
                     <div className="repo">
-                      <span className="pre">{door === "github" ? "github.com/" : "https://"}</span>
+                      <span className="pre">https://</span>
                       <input
                         value={repo}
                         onChange={(e) => setRepo(e.target.value)}
-                        placeholder={door === "github" ? "owner/repo" : "github.com/owner/repo"}
+                        placeholder="github.com/owner/repo"
                         onKeyDown={(e) => { if (e.key === "Enter") begin(); }}
                         autoFocus
                       />
                     </div>
                     <div className="deploy-cta">
-                      
-                        <button className="btn primary big" onClick={begin}>Deploy<ArrowRight size={13} /></button>
-                      
+                      <button className="btn primary big" onClick={() => begin()}>Deploy<ArrowRight size={13} /></button>
                       <span className="hint">live in ~1–2 minutes</span>
                     </div>
                   </>
