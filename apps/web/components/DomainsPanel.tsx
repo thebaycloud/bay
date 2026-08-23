@@ -208,36 +208,29 @@ export function DomainsPanel({
   const rows = (
     <>
       {domains.map((d) => (
-        <Row key={d.hostname} title={<span className="font-mono text-[13px]">{d.hostname}</span>}>
-          {/* One thing on the right, and it is whichever thing is true.
-              
-              This row used to carry four: a detail sentence, a state chip, a
-              `Records` button and a recheck icon — three of them saying the same
-              thing in different words. Where there is something to DO, the
-              button is the whole answer and says what it is. Where there is
-              nothing to do, a state is all that is left. */}
-          {d.status === "pending_dns" ? (
-            <Button
-              className="h-7 px-2.5 text-[13px]"
-              onClick={() => setRecords(d.hostname)}
-              size="sm"
-              variant="outline"
-            >
-              Set up
-            </Button>
-          ) : d.status === "failed" ? (
-            <Button
-              className="h-7 px-2.5 text-[13px]"
-              onClick={() => setRecords(d.hostname)}
-              size="sm"
-              variant="outline"
-            >
-              Check the record
-            </Button>
-          ) : (
-            // live and securing: nothing for a person to do. The words are
-            // English, so they are not mono — that is for machine values, and
-            // the hostname beside them is one.
+        <Row
+          key={d.hostname}
+          // The action sits with the NAME, not at the far end of the row: it is
+          // about this domain, and 900px away from it read as a column of
+          // buttons rather than as one domain's next step.
+          after={
+            d.status === "pending_dns" || d.status === "failed" ? (
+              <Button
+                className="h-7 px-2.5 text-[13px]"
+                onClick={() => setRecords(d.hostname)}
+                size="sm"
+                variant="outline"
+              >
+                {d.status === "failed" ? "Check the record" : "Set up"}
+              </Button>
+            ) : null
+          }
+          title={d.hostname}
+        >
+          {/* Only where there is nothing to do. A row waiting on the person has
+              its button beside the name and needs no state as well — the button
+              is the state. */}
+          {d.status === "live" || d.status === "securing" ? (
             <span className="flex items-center gap-1.5">
               <span
                 aria-hidden="true"
@@ -250,7 +243,7 @@ export function DomainsPanel({
                 {d.status === "live" ? "live" : "getting a certificate"}
               </span>
             </span>
-          )}
+          ) : null}
 
           {/* A recheck only while it is OURS to finish. On a pending domain the
               modal's Reload is the same read, offered where the record is. */}
@@ -294,7 +287,7 @@ export function DomainsPanel({
             }}
           >
             <Input
-              className="h-9 font-mono text-[13px]"
+              className="h-9"
               disabled={busy}
               onChange={(e) => setHost(e.currentTarget.value)}
               placeholder="yourapp.com"
@@ -313,7 +306,7 @@ export function DomainsPanel({
           {suggestion ? (
             <p className="flex flex-wrap items-center gap-2 text-[13px] text-ink-3">
               <span>
-                Visitors will also type <span className="font-mono text-ink-2">{suggestion}</span>.
+                Visitors will also type <span className="text-ink-2">{suggestion}</span>.
               </span>
               <Button disabled={busy} onClick={() => addPair(suggestion)} size="sm" variant="outline">
                 <Plus className="size-3.5" />

@@ -178,7 +178,6 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           expanded={addrOpen}
           icon={ICON.address}
           onOpen={() => setAddrOpen((o) => !o)}
-          sub="Where it lives"
           title="Address"
         >
           <TintRow value={d.addr} />
@@ -190,47 +189,57 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           </RowNest>
         ) : null}
 
-        <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
+        <Row icon={ICON.access} onOpen={() => setView("access")} title="Access">
           <Chips>
             <Avatars initials={d.pInitials} />
-            <StatusChip text={d.who} tone={d.who === "public" ? "grey" : "green"} />
+            <StatusChip
+              text={
+                d.who === "public"
+                  ? "anyone with the link"
+                  : d.who === "shared"
+                    ? "people you invited"
+                    : "only you"
+              }
+              tone={d.who === "public" ? "grey" : "green"}
+            />
           </Chips>
         </Row>
 
-        <Row
-          icon={ICON.analytics}
-          onOpen={() => setView("analytics")}
-          sub={
-            d.an
-              ? `${d.an.visitors} today${d.an.dv ? ` ${d.an.dv}` : ""} · ${d.here.length} here now`
-              : d.here.length
-                ? `${d.here.length} here now`
-                : "Not counting yet"
-          }
-          title="Analytics"
-        >
-          {d.an ? (
-            <Chips>
-              <StatusChip text={`${d.an.visitors.toLocaleString()} visitors`} tone={d.an.dvUp ? "green" : "red"} />
-              <Avatars initials={d.initials} />
-            </Chips>
-          ) : null}
+        <Row icon={ICON.analytics} onOpen={() => setView("analytics")} title="Analytics">
+          <Chips>
+            {d.an ? (
+              <StatusChip
+                text={`${d.an.visitors.toLocaleString()} ${d.an.visitors === 1 ? "visitor" : "visitors"} today`}
+                tone={d.an.dvUp ? "green" : "red"}
+              />
+            ) : (
+              // Not zero. Nobody counted is a different fact from nobody came.
+              <StatusChip text="not counting yet" tone="grey" />
+            )}
+            {d.here.length ? (
+              <>
+                <Avatars initials={d.initials} />
+                <StatusChip text={`${d.here.length} here now`} tone="green" />
+              </>
+            ) : null}
+          </Chips>
         </Row>
 
-        <Row icon={ICON.ships} onOpen={() => setView("ships")} sub={`Last shipped ${d.ships[0].when}`} title="Ships">
+        {/* The right-hand fact carries the STATE, which is what the sub was
+            saying all along — a row does not need a label and a value when the
+            value already reads as a sentence. */}
+        <Row icon={ICON.ships} onOpen={() => setView("ships")} title="Ships">
           <Chips>
             {/* No re-ship button. There is no deploy-trigger route behind it, and a
                 dead control on the one screen about shipping is worse than none. */}
-            <StatusChip text={d.shipping ? "Shipping" : "Running"} tone={d.shipping ? "red" : "green"} />
+            <StatusChip
+              text={d.shipping ? "shipping now" : `last shipped ${d.ships[0].when}`}
+              tone={d.shipping ? "red" : "green"}
+            />
           </Chips>
         </Row>
 
-        <Row
-          icon={ICON.infra}
-          onOpen={() => setView("infra")}
-          sub="What it is doing, and what runs on its own"
-          title="Infra"
-        >
+        <Row icon={ICON.infra} onOpen={() => setView("infra")} title="Infra">
           <Chips>
             <StatusChip
               text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
@@ -242,7 +251,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
       </RowGroup>
 
       <RowGroup title="Resources">
-        <Row icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
+        <Row icon={ICON.data} onOpen={() => setView("data")} title="Data">
           <Chips>
             <StatusChip
               text={`${d.tables.length} ${d.tables.length === 1 ? "table" : "tables"} · ${d.files} ${d.files === 1 ? "file" : "files"}`}
@@ -251,27 +260,23 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           </Chips>
         </Row>
 
-        <Row
-          icon={ICON.keys}
-          onOpen={() => setView("keys")}
-          sub={d.keys.length ? "What it connects to" : "Nothing connected yet"}
-          title="Keys"
-        >
-          {d.keys.length ? (
-            <Chips>
-              {/* Two, not three: a row has one line and the third name pushed the
-                  address column off the screen. The rest are behind the row. */}
-              {d.keys.slice(0, 2).map((k) => (
-                <StatusChip key={k.name} text={k.name} tone={k.tone === "bad" ? "red" : "green"} />
-              ))}
-              {d.keys.length > 2 ? (
-                <span className="font-mono text-micro text-ink-3">+{d.keys.length - 2}</span>
-              ) : null}
-            </Chips>
-          ) : null}
+        {/* A count, not the names. Three key names filled the row and were the
+            one place mono was load-bearing; the names are one click away, where
+            there is room for all of them. */}
+        <Row icon={ICON.keys} onOpen={() => setView("keys")} title="Keys">
+          <Chips>
+            <StatusChip
+              text={
+                d.keys.length
+                  ? `${d.keys.length} ${d.keys.length === 1 ? "key" : "keys"} set`
+                  : "nothing connected yet"
+              }
+              tone={d.keys.length ? "green" : "grey"}
+            />
+          </Chips>
         </Row>
 
-        <Row icon={ICON.agent} onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent">
+        <Row icon={ICON.agent} onOpen={() => setView("agent")} title="Agent">
           <Chips>
             {/* Two states said differently on purpose: no token is something to
                 fix, a token never used is something to try. */}
@@ -285,7 +290,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
               }
               tone={d.tokens.some((t) => t.last_used_at) ? "green" : "red"}
             />
-            <StatusChip text={d.mcp ? "mcp on" : "mcp not built"} tone="grey" />
+            <StatusChip text={d.mcp ? "MCP on" : "MCP not built"} tone="grey" />
           </Chips>
         </Row>
       </RowGroup>
@@ -357,7 +362,7 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
           <div className="flex flex-col gap-2">
             {d.keys.map((k) => (
               <div className="flex items-center justify-between gap-3 border-b border-border pb-2 last:border-0 last:pb-0" key={k.name}>
-                <span className="font-mono text-val text-ink">{k.name}</span>
+                <span className="text-val text-ink">{k.name}</span>
                 <StatusChip text="set" tone="green" />
               </div>
             ))}
@@ -418,8 +423,8 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <div className="font-mono text-section text-ink tabular-nums">{value}</div>
-      <div className="font-mono text-label uppercase text-ink-3">{label}</div>
+      <div className="text-section text-ink tabular-nums">{value}</div>
+      <div className="text-[13px] text-ink-3">{label}</div>
     </div>
   );
 }

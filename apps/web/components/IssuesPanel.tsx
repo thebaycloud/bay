@@ -79,7 +79,7 @@ export function IssuesPanel({ slug }: { slug: string }) {
 
       {errors?.map((e, i) => (
         <div key={i}>
-          <Row icon={TriangleAlert} title={<span className="font-mono text-[13px]">{e.message}</span>}>
+          <Row icon={TriangleAlert} title={<span className="text-[14px]">{e.message}</span>}>
             <Button disabled={fixing === i} onClick={() => getFix(i, e.message)} size="sm" variant="outline">
               <Wand2 className="size-3.5" />
               {fixing === i ? "Reading it…" : "Get the fix"}

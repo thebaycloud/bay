@@ -34,6 +34,8 @@ import { cn } from "@/lib/utils";
 export function Row({
   title,
   sub,
+  /** Sits immediately after the name — for an action that IS about the name. */
+  after,
   icon: Icon,
   onOpen,
   /** A CHOICE, not a door: a tick when it is the current one, and no chevron. */
@@ -45,6 +47,7 @@ export function Row({
   /** ReactNode so a row about a hostname can set it in mono without a prop. */
   title: ReactNode;
   sub?: ReactNode;
+  after?: ReactNode;
   /** The block's own mark, in the tile the app list draws beside a row. */
   icon?: ComponentType<{ className?: string }>;
   onOpen?: () => void;
@@ -61,6 +64,7 @@ export function Row({
         </span>
       ) : null}
       <span className="shrink-0 text-[15px] font-[450] text-ink">{title}</span>
+      {after}
       {/* Hidden on narrow screens rather than wrapped — the fact on the right is
           what the row is for. */}
       {sub ? <span className="hidden min-w-0 truncate text-[13px] text-ink-3 md:block">{sub}</span> : null}
@@ -158,7 +162,7 @@ export function AlertCell({
   return (
     <Card className="flex flex-col gap-1 rounded-xl border-transparent bg-tint p-4 shadow-none">
       <div className="text-val leading-tight tracking-[-0.011em] text-red-ink">{title}</div>
-      <div className="font-mono text-micro text-ink-2">{sub}</div>
+      <div className="text-[13px] text-ink-2">{sub}</div>
       <div className="pt-3.5">
         <Button onClick={onAct} size="sm">
           {act}
@@ -177,7 +181,7 @@ export function AlertCell({
 export function TintRow({ value }: { value: string }) {
   return (
     <div className="flex items-center gap-1">
-      <span className="min-w-0 truncate font-mono text-[13px] text-ink-2">{value}</span>
+      <span className="min-w-0 truncate text-[13px] text-ink-2">{value}</span>
       <Button
         aria-label="Open"
         className="size-7 shrink-0 rounded-md text-ink-3 hover:text-ink"
@@ -213,7 +217,10 @@ export function StatusChip({ text, tone }: { text: string; tone: "green" | "red"
           tone === "grey" && "bg-ink-3",
         )}
       />
-      <span className="font-mono text-micro text-ink-2">{text}</span>
+      {/* Not mono. Every one of these is English — "Running", "0 tables · 0
+          files", "public" — and mono on a word makes a sentence look like a
+          value somebody has to transcribe. */}
+      <span className="text-[13px] text-ink-2">{text}</span>
     </span>
   );
 }
@@ -225,7 +232,7 @@ export function Avatars({ initials }: { initials: string[] }) {
     <span className="flex">
       {initials.slice(0, 4).map((t, i) => (
         <span
-          className="-ml-1 inline-flex size-6 items-center justify-center rounded-full border border-card bg-tile font-mono text-[10px] text-ink-2 first:ml-0"
+          className="-ml-1 inline-flex size-6 items-center justify-center rounded-full border border-card bg-tile text-[10px] text-ink-2 first:ml-0"
           key={`${t}-${i}`}
         >
           {t}

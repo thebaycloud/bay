@@ -67,14 +67,14 @@ export function StoragePanel({ slug, hasStorage }: { slug: string; hasStorage: b
           icon={File}
           key={o.name}
           sub={o.contentType || undefined}
-          title={<span className="font-mono text-[13px]">{o.name}</span>}
+          title={<span className="text-[13px]">{o.name}</span>}
         >
-          <span className="font-mono text-[13px] tabular-nums text-ink-2">{fmtSize(o.size)}</span>
+          <span className="text-[13px] tabular-nums text-ink-2">{fmtSize(o.size)}</span>
         </Row>
       ))}
 
       {bucket ? (
-        <Row sub={<span className="font-mono">{bucket}</span>} title="Bucket" />
+        <Row sub={bucket} title="Bucket" />
       ) : null}
     </RowGroup>
   );

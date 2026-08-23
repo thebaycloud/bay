@@ -114,7 +114,7 @@ export default function SharePanel({ slug }: { slug: string }) {
       {requests.length > 0 && (
         <RowGroup title="Waiting to be let in">
           {requests.map((rq) => (
-            <Row key={rq} title={<span className="font-mono text-[13px]">{rq}</span>}>
+            <Row key={rq} title={<span className="text-[14px]">{rq}</span>}>
               <Button disabled={busy} onClick={() => post({ addEmail: rq })} size="sm">
                 Approve
               </Button>
@@ -151,7 +151,7 @@ export default function SharePanel({ slug }: { slug: string }) {
                 icon={Globe}
                 key={d}
                 sub="Anyone signed in with a verified address there"
-                title={<span className="font-mono text-[13px]">@{d}</span>}
+                title={`@${d}`}
               >
                 <Button
                   aria-label={`Remove @${d}`}
@@ -167,7 +167,7 @@ export default function SharePanel({ slug }: { slug: string }) {
             ))}
 
             {grants.map((g) => (
-              <Row icon={Mail} key={g} title={<span className="font-mono text-[13px]">{g}</span>}>
+              <Row icon={Mail} key={g} title={g}>
                 <Button
                   aria-label={`Remove ${g}`}
                   className="size-7 text-ink-3 hover:text-ink"

@@ -107,13 +107,13 @@ export function JobsPanel({ slug }: { slug: string }) {
               value={name}
             />
             <Input
-              className="h-9 min-w-[140px] flex-1 font-mono text-[13px]"
+              className="h-9 min-w-[140px] flex-1"
               onChange={(e) => setSchedule(e.currentTarget.value)}
               placeholder="0 9 * * *"
               value={schedule}
             />
             <Input
-              className="h-9 w-[130px] font-mono text-[13px]"
+              className="h-9 w-[130px]"
               onChange={(e) => setPath(e.currentTarget.value)}
               placeholder="/path"
               value={path}
@@ -135,7 +135,7 @@ export function JobsPanel({ slug }: { slug: string }) {
             icon={Clock}
             key={j.id}
             sub={
-              <span className="font-mono">
+              <span>
                 {j.schedule} · {j.uri.replace(/^https?:\/\//, "")}
               </span>
             }
