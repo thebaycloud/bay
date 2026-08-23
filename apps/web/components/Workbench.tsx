@@ -2,10 +2,11 @@
 
 import { ArrowUpRight, MessageSquare, SquareTerminal } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useQueryState } from "@/lib/use-query-state";
 import { cn } from "@/lib/utils";
 
 /**
@@ -86,8 +87,12 @@ export function Workbench({
    * Controlled, because the LAYOUT depends on which tab is open: dev mode is the
    * whole width, not a pane beside the rail. Radix would happily manage this
    * itself, but then the shell could not know what to be.
+   *
+   * And in the URL, so a reload keeps you where you were and the page is
+   * linkable. `?tab=dev`; chat is the default and writes nothing.
    */
-  const [tab, setTab] = useState("chat");
+  const [tabParam, setTab] = useQueryState("tab", "chat");
+  const tab = tabParam === "dev" ? "dev" : "chat";
 
   return (
     <Tabs

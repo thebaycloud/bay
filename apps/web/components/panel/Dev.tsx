@@ -35,6 +35,7 @@ import { IssuesPanel } from "@/components/IssuesPanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
 import { GitPanel } from "@/components/GitPanel";
 import SharePanel from "@/components/SharePanel";
+import { useQueryState } from "@/lib/use-query-state";
 import {
   deriveReading,
   readParts,
@@ -114,13 +115,27 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
    */
   const [raw, setRaw] = useState<Raw>({});
   const [done, setDone] = useState<Set<Part>>(new Set());
-  const [view, setView] = useState<View | null>(null);
+  /**
+   * Which screen is open, in the URL.
+   *
+   * `?view=analytics`, so a reload lands back on the screen somebody was reading
+   * and the browser's back button leaves it rather than leaving the app. Validated
+   * against the union rather than cast: the value comes from a URL, which anybody
+   * can type, and an unknown one has to mean "the list" and not a blank pane.
+   */
+  const [viewParam, setViewParam] = useQueryState("view");
+  const view = viewParam && viewParam in TITLE ? (viewParam as View) : null;
+  const setView = (v: View | null) => setViewParam(v);
   /**
    * Open, because the domains under Address are the answer to the question the
    * row asks. A disclosure that starts shut makes somebody click to find out
    * whether there is anything to find out.
+   *
+   * `replace` and not `push`: shutting a disclosure is not a place you navigated
+   * to, and three of them in the history would make the back button feel broken.
    */
-  const [addrOpen, setAddrOpen] = useState(true);
+  const [addrParam, setAddrParam] = useQueryState("addr", "open");
+  const addrOpen = addrParam !== "shut";
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
@@ -179,7 +194,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           <Row
             expanded={addrOpen}
             icon={ICON.address}
-            onOpen={() => setAddrOpen((o) => !o)}
+            onOpen={() => setAddrParam(addrOpen ? "shut" : "open", "replace")}
             title="Address"
           />
         </RowList>
