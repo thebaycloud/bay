@@ -12,7 +12,27 @@ export const config = {
   /** Must match apps/web auth.config.ts exactly — it is also the decode salt. */
   sessionCookieName: PROD ? "__Secure-authjs.session-token" : "authjs.session-token",
   loginUrl: process.env.LOGIN_URL ?? "https://app.supersonic.cv/login",
+  /**
+   * The root every URL we BUILD is built from. One value, deliberately: a
+   * redirect that sent people to a domain being retired would be manufacturing
+   * new traffic for it.
+   */
   rootDomain: process.env.ROOT_DOMAIN ?? "supersonic.cv",
+  /**
+   * Every root we SERVE, canonical first.
+   *
+   * During a rename both the old and the new domain issue the same apps, so
+   * nobody's bookmark breaks on cutover day. LEGACY_ROOT_DOMAINS is a
+   * comma-separated list and is empty in the steady state, which makes this
+   * exactly equal to [rootDomain] — the behaviour before it existed.
+   */
+  servedRootDomains: [
+    process.env.ROOT_DOMAIN ?? "supersonic.cv",
+    ...(process.env.LEGACY_ROOT_DOMAINS ?? "")
+      .split(",")
+      .map((d) => d.trim().toLowerCase())
+      .filter(Boolean),
+  ],
   /** Inject the "Runs on Supersonic" badge + owner toolbar into HTML pages. */
   injectOverlay: process.env.INJECT_OVERLAY !== "0",
   /**

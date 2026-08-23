@@ -46,7 +46,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // address we issued carries its slug in the name; a domain its owner attached
   // carries nothing and has to be looked up. See door.ts — nothing below this
   // point cares which of the two it was, except the return immediately after it.
-  const door = doorFor(req.headers.host, config.rootDomain);
+  const door = doorFor(req.headers.host, config.servedRootDomains);
   if (door.kind === "nowhere") return html(res, 404, page404());
   const app = door.kind === "issued" ? await lookupApp(door.slug) : await lookupAppByHost(door.hostname);
   if (!app) return html(res, 404, page404());

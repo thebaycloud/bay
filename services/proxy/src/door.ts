@@ -34,14 +34,34 @@ export function hostnameOf(host: string | undefined): string {
   return name.endsWith(".") ? name.slice(0, -1) : name;
 }
 
-export function doorFor(host: string | undefined, rootDomain: string): Door {
+/**
+ * Which app, or whose domain, this request is for.
+ *
+ * Takes one root or several. Several is what a rename needs: while the platform
+ * moves from one domain to another, both have to issue the same apps, or the
+ * cutover is a day on which every bookmark stops working at once.
+ *
+ * A single string is still accepted because every caller passes one, and a
+ * signature that quietly required an array would break them at runtime instead
+ * of at the type checker.
+ */
+export function doorFor(host: string | undefined, roots: string | string[]): Door {
   const hostname = hostnameOf(host);
   if (!hostname) return { kind: "nowhere" };
-  if (hostname.endsWith("." + rootDomain)) {
-    const slug = hostname.slice(0, -(rootDomain.length + 1));
+  // Longest first. With roots that nest — `cloud` and `thebay.cloud` — matching
+  // the short one turns `lilna.thebay.cloud` into the slug `lilna.thebay`,
+  // which is not a slug, which is a 404 at an address that works.
+  const list = (typeof roots === "string" ? [roots] : roots)
+    .slice()
+    .sort((a, b) => b.length - a.length);
+  for (const root of list) {
+    if (!hostname.endsWith("." + root)) continue;
+    const slug = hostname.slice(0, -(root.length + 1));
     // A label that is not a slug is not an app, and must not fall through to the
     // attached-domain lookup: `evil.lilna.supersonic.cv` would otherwise become a
-    // hostname somebody could attach, inside the namespace we issue.
+    // hostname somebody could attach, inside the namespace we issue. This runs
+    // per root rather than once, because a guard applied to only the first root
+    // is exactly the kind that gets left behind when a second one is added.
     return /^[a-z0-9-]+$/.test(slug) ? { kind: "issued", slug } : { kind: "nowhere" };
   }
   return { kind: "attached", hostname };
