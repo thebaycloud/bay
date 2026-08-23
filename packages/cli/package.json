@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "Deploy & debug Bay apps from your coding agent — the agent-native CLI.",
   "bin": {
-    "bay": "./index.js",
-    "supersonic": "./index.js"
+    "bay": "index.js",
+    "supersonic": "index.js"
   },
   "type": "commonjs",
   "engines": {
@@ -28,15 +28,18 @@
     "deploy",
     "cloud",
     "gcp",
-    "cloud-run",
     "vibecoding",
-    "supersonic"
+    "bay",
+    "coding-agent"
   ],
-  "homepage": "https://app.supersonic.cv",
+  "homepage": "https://thebay.cloud",
   "repository": {
     "type": "git",
-    "url": "https://github.com/The-Red-Onion/supersonic",
+    "url": "git+https://github.com/thebaycloud/bay.git",
     "directory": "packages/cli"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/The-Red-Onion/supersonic/issues"
+  }
 }
