@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Clock, Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Row, RowGroup, RowList, StatusChip } from "@/components/panel/atoms";
 
 /**
  * Connecting a domain, from the person's side.
@@ -29,12 +32,19 @@ interface Domain {
 
 interface Dns { ip: string; cname: string }
 
-/** How the four states read to a person. Platform words never appear here. */
-const SAID: Record<Status, { label: string; tone: "wait" | "ok" | "bad" }> = {
-  pending_dns: { label: "Waiting for your DNS", tone: "wait" },
-  securing: { label: "Getting a certificate", tone: "wait" },
-  live: { label: "Live", tone: "ok" },
-  failed: { label: "Couldn't get a certificate", tone: "bad" },
+/**
+ * How the four states read to a person. Platform words never appear here.
+ *
+ * The tone is StatusChip's, so a domain's state is drawn by the same dot as
+ * every other state in the panel — green for arrived, red for something to fix,
+ * grey for still moving. Grey and not red while waiting: DNS taking an hour is
+ * not a fault.
+ */
+const SAID: Record<Status, { label: string; tone: "green" | "red" | "grey" }> = {
+  pending_dns: { label: "waiting for your DNS", tone: "grey" },
+  securing: { label: "getting a certificate", tone: "grey" },
+  live: { label: "live", tone: "green" },
+  failed: { label: "no certificate", tone: "red" },
 };
 
 export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: string) => void }) {
@@ -107,77 +117,102 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
   const waiting = domains.some((d) => d.status !== "live");
 
   return (
-    <div className="dom-custom">
-      <span className="dom-lbl">Your own domain</span>
+    <div className="flex flex-col gap-2.5">
+      <h2 className="px-0.5 text-[15px] text-ink">Your own domain</h2>
 
       {domains.length > 0 && (
-        <div className="dom-list">
+        <RowList>
           {domains.map((d) => {
             const said = SAID[d.status] ?? SAID.pending_dns;
             return (
-              <div className="dom-item" key={d.hostname}>
-                <span className="dom-host mono">{d.hostname}</span>
-                <span className={`dom-state ${said.tone}`}>
-                  {said.tone === "ok" ? <Check size={13} /> : said.tone === "bad" ? <AlertTriangle size={13} /> : <Clock size={13} />}
-                  {said.label}
-                </span>
-                <button className="ic-btn" title="Remove" disabled={busy} onClick={() => remove(d.hostname)}>
-                  <Trash2 size={14} />
-                </button>
-                {d.detail && d.status !== "live" && <div className="dom-detail">{d.detail}</div>}
-              </div>
+              <Row
+                key={d.hostname}
+                // The detail is part of the sub, not a line below the row: it says
+                // WHAT is being waited for, and "waiting" without it and "you
+                // pointed it somewhere else" look identical.
+                sub={d.status !== "live" ? d.detail ?? undefined : undefined}
+                title={<span className="font-mono text-[13px]">{d.hostname}</span>}
+              >
+                <StatusChip text={said.label} tone={said.tone} />
+                <Button
+                  aria-label={`Remove ${d.hostname}`}
+                  className="size-7 text-ink-3 hover:text-ink"
+                  disabled={busy}
+                  onClick={() => remove(d.hostname)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </Row>
             );
           })}
-        </div>
+        </RowList>
       )}
 
       {allowed ? (
         <>
-          <div className="dom-add">
-            <input
-              className="in mono" placeholder="yourapp.com" value={host} disabled={busy}
-              onChange={(e) => setHost(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              add();
+            }}
+          >
+            <Input
+              className="h-9 font-mono text-[13px]"
+              disabled={busy}
+              onChange={(e) => setHost(e.currentTarget.value)}
+              placeholder="yourapp.com"
+              value={host}
             />
-            <button className="btn primary" disabled={busy || !host.trim()} onClick={add}>
-              {busy ? <Loader2 size={13} className="spin" /> : <Plus size={13} />}Connect
-            </button>
-          </div>
-          {err && <div className="set-err">⚠ {err}</div>}
+            <Button disabled={busy || !host.trim()} type="submit">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              Connect
+            </Button>
+          </form>
+
+          {err ? <p className="text-[14px] text-red">{err}</p> : null}
 
           {/* Shown while anything is still waiting, and after adding — this is
               the one place the records a person has to create are written down,
               so it cannot be behind a state they have already left. */}
           {dns && (domains.length === 0 || waiting) && (
-            <div className="dom-dns">
-              <div className="dom-rec">
-                <span className="dom-rec-k mono">CNAME</span>
-                <span className="dom-rec-v mono">{dns.cname}</span>
-                <span className="dom-rec-w">for a subdomain — shop.yourapp.com</span>
-              </div>
-              <div className="dom-rec">
-                <span className="dom-rec-k mono">A</span>
-                <span className="dom-rec-v mono">{dns.ip}</span>
-                <span className="dom-rec-w">for the domain itself — yourapp.com</span>
-              </div>
-              <span className="dom-note">
-                HTTPS turns on by itself, usually within ten minutes of the record going live.
-                Nothing to redeploy.
-              </span>
-            </div>
+            <>
+              <RowList>
+                <Row
+                  sub="for a subdomain — shop.yourapp.com"
+                  title={<span className="font-mono text-[13px]">CNAME</span>}
+                >
+                  <span className="font-mono text-[13px] text-ink-2">{dns.cname}</span>
+                </Row>
+                <Row
+                  sub="for the domain itself — yourapp.com"
+                  title={<span className="font-mono text-[13px]">A</span>}
+                >
+                  <span className="font-mono text-[13px] text-ink-2">{dns.ip}</span>
+                </Row>
+              </RowList>
+              <p className="text-[13px] text-ink-3">
+                HTTPS turns on by itself, usually within ten minutes of the record going
+                live. Nothing to redeploy.
+              </p>
+            </>
           )}
 
           {visibility !== "public" && (
-            <span className="dom-note">
-              This app is {visibility}, so visitors on your domain are sent to {slug}.supersonic.cv to sign in —
-              sign-in only works at that address. Make the app public to have your domain answer for it.
-            </span>
+            <p className="text-[13px] text-ink-3">
+              This app is {visibility}, so visitors on your domain are sent to{" "}
+              {slug}.supersonic.cv to sign in — sign-in only works at that address. Make
+              the app public to have your domain answer for it.
+            </p>
           )}
         </>
       ) : (
-        <span className="dom-note">
-          Custom domains are on Pro. Your app keeps its supersonic.cv address — upgrade to point your own domain at it.
-        </span>
+        <p className="text-[13px] text-ink-3">
+          Custom domains are on Pro. Your app keeps its supersonic.cv address — upgrade
+          to point your own domain at it.
+        </p>
       )}
     </div>
   );

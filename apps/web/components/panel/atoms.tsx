@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentType, ReactNode } from "react";
-import { ChevronRight, Copy, Eye } from "lucide-react";
+import { Check, ChevronRight, Copy, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -36,13 +36,17 @@ export function Row({
   sub,
   icon: Icon,
   onOpen,
+  /** A CHOICE, not a door: a tick when it is the current one, and no chevron. */
+  picked,
   children,
 }: {
-  title: string;
-  sub: string;
+  /** ReactNode so a row about a hostname can set it in mono without a prop. */
+  title: ReactNode;
+  sub?: ReactNode;
   /** The block's own mark, in the tile the app list draws beside a row. */
   icon?: ComponentType<{ className?: string }>;
   onOpen?: () => void;
+  picked?: boolean;
   /** The fact. Right-aligned, where "9 days ago" sits in the app list. */
   children?: ReactNode;
 }) {
@@ -56,9 +60,15 @@ export function Row({
       <span className="shrink-0 text-[15px] font-[450] text-ink">{title}</span>
       {/* Hidden on narrow screens rather than wrapped — the fact on the right is
           what the row is for. */}
-      <span className="hidden min-w-0 truncate text-[13px] text-ink-3 md:block">{sub}</span>
+      {sub ? <span className="hidden min-w-0 truncate text-[13px] text-ink-3 md:block">{sub}</span> : null}
       {children ? <span className="ml-auto flex shrink-0 items-center gap-2.5 pl-3">{children}</span> : null}
-      {onOpen ? (
+      {picked !== undefined ? (
+        <Check
+          aria-hidden="true"
+          className={cn("size-4 shrink-0", children ? "" : "ml-auto", picked ? "text-ink" : "opacity-0")}
+          strokeWidth={2}
+        />
+      ) : onOpen ? (
         <ChevronRight
           aria-hidden="true"
           className={cn("size-4 shrink-0 text-ink-3", children ? "" : "ml-auto")}
@@ -77,6 +87,7 @@ export function Row({
       className={cn(
         shape,
         "transition-colors hover:bg-tile focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-red",
+        picked && "bg-tile",
       )}
       onClick={onOpen}
       type="button"

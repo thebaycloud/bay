@@ -302,7 +302,7 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
   }
   if (view === "access") {
     return (
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-6">
         <SharePanel slug={slug} />
         <GitPanel onToast={toast} slug={slug} />
         <DomainsPanel onToast={toast} slug={slug} />
