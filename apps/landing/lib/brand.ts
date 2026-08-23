@@ -45,3 +45,21 @@ export const APP_URL = env("NEXT_PUBLIC_APP_URL", "https://app.supersonic.cv");
 
 /** Where somebody writes to us. */
 export const CONTACT_EMAIL = env("NEXT_PUBLIC_CONTACT_EMAIL", `founders@${DOMAIN}`);
+
+/** This site's own origin, for absolute URLs in feeds and agent instructions. */
+export const SITE = env("NEXT_PUBLIC_SITE_URL", `https://${DOMAIN}`);
+
+/**
+ * The npm package that provides the CLI. Usually the same word as the command,
+ * but not necessarily: a name can be taken on npm and free as a binary.
+ */
+export const PKG = env("NEXT_PUBLIC_CLI_PACKAGE", CLI);
+
+/**
+ * The repo the star count and the community link read from.
+ *
+ * PLACEHOLDER: ours is private, so this points at a public repo to have a real
+ * number to render. It is not our repository, so both the pill and the community
+ * link lead somewhere that is not us until this is swapped.
+ */
+export const GITHUB_REPO = env("NEXT_PUBLIC_GITHUB_REPO", "thepersonalaicompany/amurex");

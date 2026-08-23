@@ -12,7 +12,7 @@ export default {
       colors: {
         /* Channel triplets so /<alpha-value> keeps working, and so the whole
            palette can be swapped at once when the page goes dark. Values live
-           in app/home/home.css on :root and html[data-night].
+           in app/home.css on :root and html[data-night].
 
            `white` is rebound on purpose: every raised surface on the page is
            bg-white, and in the dark pass they have to become raised DARK rather

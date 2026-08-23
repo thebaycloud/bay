@@ -1,0 +1,93 @@
+/* The changelog's reading styles.
+ *
+ * The palette comes from the home page's stylesheet, imported rather than
+ * restated: apps/web now spends the same channel values (see the comment in its
+ * globals.css) and a third copy is how three surfaces start disagreeing about
+ * what grey means.
+ *
+ * Only `.prose` lives here, because the body is HTML produced by `marked` and
+ * there is nowhere to put a utility class on it. Everything else on these pages
+ * is Tailwind, same as the rest of the site.
+ *
+ * Radii follow the DASHBOARD's scale (4 / 8 / 12), which is the documented one.
+ */
+
+@import "../home.css";
+
+.prose {
+  font-size: 17px;
+  line-height: 1.65; /* looser than the landing's 1.6: this is the one place anyone reads */
+  color: rgb(var(--c-ink-2));
+  text-wrap: pretty;
+}
+
+.prose > * + * {
+  margin-top: 1.15em;
+}
+
+.prose h2,
+.prose h3 {
+  /* globals.css puts var(--serif) on every h2 and h3 unscoped, and an element
+     selector beats anything a class can say about an inherited property. */
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  color: rgb(var(--c-ink));
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin-top: 2em;
+}
+.prose h2 { font-size: 21px; }
+.prose h3 { font-size: 18px; }
+
+.prose strong { color: rgb(var(--c-ink)); font-weight: 550; }
+
+.prose a {
+  color: #b32c1a; /* --red-ink: the brand red is 3.58:1 on paper, so links use the darkened one */
+  text-decoration: underline;
+  text-decoration-color: rgb(var(--c-ink-3));
+  text-underline-offset: 3px;
+}
+.prose a:hover { text-decoration-color: currentColor; }
+
+.prose ul,
+.prose ol { padding-left: 1.15em; }
+.prose ul { list-style: disc; }
+.prose ol { list-style: decimal; }
+.prose li { margin-top: 0.4em; }
+.prose li::marker { color: rgb(var(--c-ink-3)); }
+
+.prose code {
+  font-family: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.88em;
+  background: rgb(var(--c-tile));
+  border: 1px solid rgb(var(--c-line));
+  border-radius: 4px;
+  padding: 0.1em 0.34em;
+}
+
+.prose pre {
+  background: rgb(var(--c-tile));
+  border: 1px solid rgb(var(--c-line));
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+.prose pre code { background: none; border: 0; padding: 0; font-size: 12.5px; }
+
+.prose img,
+.prose video {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: rgb(var(--c-tile));
+  border: 1px solid rgb(var(--c-line));
+  border-radius: 12px;
+}
+
+.prose blockquote {
+  border-left: 2px solid rgb(var(--c-line));
+  padding-left: 1em;
+  color: rgb(var(--c-ink-3));
+}
+
+.prose hr { border: 0; border-top: 1px solid rgb(var(--c-line)); margin-top: 2em; }
