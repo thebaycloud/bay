@@ -342,6 +342,15 @@ export default function NewApp() {
 
   const busy = phase === "deploying";
 
+  /* Nothing scrolls behind the cinema. The overlay covers the window, so a
+     wheel over it would otherwise move a page nobody can see. */
+  useEffect(() => {
+    if (phase !== "deploying" && phase !== "done") return;
+    const was = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = was; };
+  }, [phase]);
+
   return (
     <div className="shell">
       <header className="topbar">
@@ -561,17 +570,21 @@ export default function NewApp() {
               </div>
             )}
 
-            {(phase === "deploying" || phase === "done" || phase === "error") && (
+            {/* A deploy that is RUNNING is the whole screen — see `cinema` at
+                the bottom of this file. What is left here is the wreckage of one
+                that failed: the words, without the picture. The film's break and
+                its repair drone are worth watching while the agent is actually
+                working, which is in the cinema; by the time this screen is up the
+                story is over and the fix below is what has to be read. */}
+            {phase === "error" && (
               <div className="stage">
                 <div className="stage-head">
                   <span className="t">
-                    <span className="mono">{phase === "error" ? "✕" : "▸"}</span>
-                    {phase === "done" ? `Deployed ${slug}` : phase === "error" ? "Deploy failed" : `Deploying ${slug || "…"}`}
+                    <span className="mono">✕</span>
+                    Deploy failed
                   </span>
                   <span className="clock">{elapsed}s</span>
                 </div>
-
-                <DeployFilm drive={film} elapsed={elapsed} />
 
                 {detected && (
                   <div className="detected">
@@ -595,20 +608,6 @@ export default function NewApp() {
                     );
                   })}
                   {busy && <div className="ln show"><span className="arrow">▸</span><span className="tx muted">working…</span></div>}
-                </div>
-              </div>
-            )}
-
-            {phase === "done" && (
-              <div className="success">
-                <div className="success-live"><span className="d" />Live</div>
-                <div className="big">{liveUrl.replace(/^https?:\/\//, "")}</div>
-                <div className="u muted">deployed in {elapsed}s · Cloud Run · us-central1</div>
-                <div className="acts">
-                  <a className="btn" href={liveUrl} target="_blank" rel="noreferrer">Visit<ArrowRight size={13} /></a>
-                  
-                    <Link href={`/apps/${slug}`} className="btn primary">Open cockpit<ArrowRight size={13} /></Link>
-                  
                 </div>
               </div>
             )}
@@ -655,6 +654,54 @@ export default function NewApp() {
           </div>
         </div>
       </div>
+
+      {/* THE CINEMA — a deploy that is running, at the size it deserves.
+
+          A container deploy is 90 seconds during which this page has exactly
+          one thing on it worth looking at, and it was a 2.40:1 card in the
+          middle of a column of white. It gets the window now, the same way the
+          room does at the app's own address, and everything the page was
+          saying underneath is said over the picture: the name and the clock in
+          one corner, the build's last six lines in the other.
+
+          Fixed, and mounted HERE rather than inside `.newflow` — an ancestor
+          with a transform on it (the reveal animation) is a containing block
+          for `position: fixed`, and this would have been fixed to that column
+          rather than to the window.
+
+          It stays up when the deploy lands, because the ending is the point:
+          the sun comes up, she sails under the bridge, and the address is the
+          film's own endcard. These are what to do about it. */}
+      {(phase === "deploying" || phase === "done") && (
+        <div className={"cinema" + (phase === "done" ? " done" : "")}>
+          <DeployFilm drive={film} elapsed={elapsed} full />
+          <div className="cinema-bar">
+            <span className="nm">{slug || "…"}</span>
+            <span className="clock">{elapsed}s</span>
+          </div>
+          <div className="cinema-log">
+            {logs.slice(-6).map((l, i) => {
+              const ok = /^(Detected|Provision|Live at|Injecting|Agent fixed)/.test(l);
+              const agent = /^agent · /.test(l);
+              return (
+                <div key={`${i}-${l}`}>
+                  <span className={"k" + (ok ? " g" : agent ? " a" : "")}>{ok ? "✓" : agent ? "◆" : "·"}</span>
+                  <span className="m">{l}</span>
+                </div>
+              );
+            })}
+            {busy && <div><span className="k">▸</span><span className="m">working…</span></div>}
+          </div>
+          {phase === "done" && (
+            <div className="cinema-acts">
+              <a className="btn" href={liveUrl} target="_blank" rel="noreferrer">Visit<ArrowRight size={13} /></a>
+              <Link href={`/apps/${slug}`} className="btn primary">Open cockpit<ArrowRight size={13} /></Link>
+              {/* The way out of a picture that has finished playing. */}
+              <button className="btn" onClick={reset}><RotateCcw size={13} />Deploy another</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Always dismissable: there is no state a person can be in where the
           only thing behind this modal is a locked account. Free is always
