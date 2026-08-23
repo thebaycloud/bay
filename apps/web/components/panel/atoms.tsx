@@ -243,14 +243,20 @@ export function Avatars({ initials }: { initials: string[] }) {
 }
 
 /**
- * The strip a disclosure opens into.
+ * The card a disclosure opens into.
  *
- * Filled rather than indented: an inset row on a white list reads as a
- * mis-aligned row, and the fill says "these belong to the one above" without
- * moving anything sideways.
+ * Inset on all four sides and bordered, so it floats inside the list rather than
+ * becoming part of it. Flush to the edges it read as three more rows of the
+ * table that happened to be shaded — the fill alone was not enough to say "these
+ * belong to the row above", and the strip's own rows then looked like siblings
+ * of Address rather than its contents.
  */
 export function RowNest({ children }: { children: ReactNode }) {
-  return <div className="border-b border-border bg-ground last:border-0">{children}</div>;
+  return (
+    <div className="mx-3 my-3 overflow-hidden rounded-lg border border-border bg-ground">
+      {children}
+    </div>
+  );
 }
 
 /** A row of facts under a cell's sub. */
