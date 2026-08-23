@@ -777,7 +777,10 @@ function McpCard() {
 
 function CommandLine() {
   const [copied, setCopied] = useState(false);
-  const cmd = `npx ${CLI} deploy`;
+  // PKG, not CLI. `npx` takes a PACKAGE name and `bay` is somebody else's
+  // package on npm — this is the headline command on the page, so it was the
+  // most-copied instruction to run a stranger's code.
+  const cmd = `npx ${PKG} deploy`;
 
   useEffect(() => {
     if (!copied) return;
