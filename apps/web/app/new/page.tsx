@@ -384,17 +384,29 @@ export default function NewApp() {
                       </>
                     ) : (
                       <>
-                        {ghConnections.length > 1 && (
-                          <div className="doors" style={{ marginBottom: 10 }}>
-                            {ghConnections.map((c) => (
-                              <button
-                                key={c.installationId}
-                                className={"door" + (ghInstallation === c.installationId ? " on" : "")}
-                                onClick={() => setGhInstallation(c.installationId)}
-                              >{c.accountLogin}</button>
-                            ))}
-                          </div>
-                        )}
+                        {/* The accounts, and the way to add one.
+                            
+                            Shown at ONE account as well as at several, which it
+                            was not: a person who connected the wrong account —
+                            an organisation with one repository instead of the
+                            personal account with sixty — saw that account's
+                            short list, a link to widen its selection, and no way
+                            at all to connect the right one. The install link
+                            existed only on the screen for somebody with no
+                            connections, which is the one person who does not
+                            need it twice. */}
+                        <div className="doors" style={{ marginBottom: 10 }}>
+                          {ghConnections.map((c) => (
+                            <button
+                              key={c.installationId}
+                              className={"door" + (ghInstallation === c.installationId ? " on" : "")}
+                              onClick={() => setGhInstallation(c.installationId)}
+                            >{c.accountLogin}</button>
+                          ))}
+                          <a className="door" href={ghLinks?.installUrl ?? "#"}>
+                            <Github size={12} />&nbsp;Add an account
+                          </a>
+                        </div>
                         {ghTrouble && <p className="lead" style={{ margin: "0 0 10px", fontSize: 13 }}>{ghTrouble}</p>}
                         {ghRepos === null ? (
                           <p className="lead" style={{ margin: "0 0 14px", fontSize: 13 }}>Reading what you picked…</p>
