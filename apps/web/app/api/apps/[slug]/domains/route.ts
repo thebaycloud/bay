@@ -75,7 +75,7 @@ function dnsInstructions(slug: string) {
   };
 }
 
-export async function GET(_req: Request, { params }: { params: { slug: string } }) {
+export async function GET(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403 });
@@ -83,7 +83,13 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   // Reading the list is also what advances it. See lib/domain-attach.ts: there
   // is no worker, and `dueForCheck` keeps a page that polls from turning into a
   // load generator.
-  const domains = await reconcileAll(await listDomains(slug));
+  //
+  // `?force=1` skips that throttle, and only a person pressing "Check DNS" sends
+  // it. Without the escape hatch, two presses inside ten seconds gave the same
+  // answer whether or not the record had appeared — a button that reports the
+  // previous check is worse than no button.
+  const force = new URL(req.url).searchParams.get("force") === "1";
+  const domains = await reconcileAll(await listDomains(slug), liveAttachDeps, force ? 0 : undefined);
   const ent = await entitlement(app.owner_id);
   const dns = dnsInstructions(slug);
   return Response.json({

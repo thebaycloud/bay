@@ -116,11 +116,22 @@ export function DomainsPanel({
    */
   const [records, setRecords] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  /**
+   * Whether a check is in flight, and whether one has finished.
+   *
+   * `checked` is a counter and not a boolean because the answer is often the
+   * same twice — "still nothing" — and a boolean that is already true renders
+   * nothing new, so the second press would look ignored.
+   */
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     try {
-      const d = await (await fetch(`/api/apps/${slug}/domains`)).json();
+      const d = await (
+        await fetch(`/api/apps/${slug}/domains${force ? "?force=1" : ""}`)
+      ).json();
       if (d.error) return;
       setDomains(d.domains ?? []);
       setDns(d.dns ?? null);
@@ -334,6 +345,8 @@ export function DomainsPanel({
 
   const prompt = records && dns ? agentPrompt(records, dns) : "";
   const record = records && dns ? recordFor(records, dns) : null;
+  /** The row this modal is about, as the last read left it. */
+  const current = records ? domains.find((d) => d.hostname === records) : undefined;
 
   /**
    * The records, as the thing you do next.
@@ -349,7 +362,17 @@ export function DomainsPanel({
    * it by hand and ask again.
    */
   const modal = (
-    <Dialog onOpenChange={(o) => !o && setRecords(null)} open={Boolean(records && dns)}>
+    <Dialog
+      onOpenChange={(o) => {
+        if (o) return;
+        setRecords(null);
+        // The verdict belongs to one visit. Reopening to read the record again
+        // must not show a "still nothing" from ten minutes ago as if it were
+        // just measured.
+        setChecked(0);
+      }}
+      open={Boolean(records && dns)}
+    >
       <DialogContent className="w-[calc(100vw-2rem)] max-w-[560px] gap-0 overflow-hidden p-0">
         <DialogHeader className="px-5 pb-4 pt-5">
           <DialogTitle className="min-w-0 truncate text-[17px] font-[450] tracking-[-0.01em]">
@@ -383,6 +406,53 @@ export function DomainsPanel({
             </div>
           ) : null}
 
+          {/* The answer, in the modal, after a check.
+              
+              `Reload` used to re-read the list and CLOSE this — which looks
+              exactly like a button that did nothing, since the row behind it
+              rarely changes on the first press. A person who has just saved a
+              DNS record is asking one question, and it deserves answering
+              where they asked it. */}
+          {checked > 0 && !checking && current ? (
+            <div
+              className={cn(
+                "flex items-start gap-2 rounded-lg px-3.5 py-3 text-[13px] leading-[1.6]",
+                current.status === "live" || current.status === "securing"
+                  ? "bg-tile text-ink"
+                  : "bg-tint text-red-ink",
+              )}
+              // Announced, because pressing the button and reading the result is
+              // the whole interaction and a screen reader would otherwise get
+              // silence.
+              role="status"
+            >
+              {current.status === "live" ? (
+                <>
+                  <Check className="mt-px size-4 shrink-0" />
+                  <span>It’s live. {records} is serving your app over HTTPS.</span>
+                </>
+              ) : current.status === "securing" ? (
+                <>
+                  <Check className="mt-px size-4 shrink-0" />
+                  <span>
+                    Found the record. The certificate is being issued — usually about ten
+                    minutes, and nothing for you to do.
+                  </span>
+                </>
+              ) : (
+                // Two refusals, two different next actions. "No record yet" is
+                // waiting; "points at 1.2.3.4 instead" is a record that exists
+                // and is wrong, and telling somebody to wait for propagation
+                // there sends them away from the thing they have to fix.
+                <span>
+                  {(current.detail ?? "").startsWith("points at")
+                    ? `That name ${current.detail} — change the value above and check again.`
+                    : `${current.detail ?? "The record isn’t visible yet"}. DNS can take a few minutes to spread after you save it.`}
+                </span>
+              )}
+            </div>
+          ) : null}
+
           <div className="flex items-center gap-2">
             <Button
               className="flex-1"
@@ -397,15 +467,23 @@ export function DomainsPanel({
             </Button>
             <Button
               className="flex-1"
-              disabled={busy}
-              onClick={() => {
-                load();
-                setRecords(null);
+              disabled={checking}
+              onClick={async () => {
+                setChecking(true);
+                // Forced: the throttle is there to stop a poll generating load,
+                // not to answer a deliberate question with the last answer.
+                await load(true);
+                setChecking(false);
+                setChecked((n) => n + 1);
               }}
               variant="outline"
             >
-              <RefreshCw className="size-4" />
-              Reload
+              {checking ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              {checking ? "Checking…" : "Check DNS"}
             </Button>
           </div>
         </div>

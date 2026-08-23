@@ -181,14 +181,21 @@ async function resolvesToUs(
  * that asks shows them together: two domains on one app should not be two
  * different ages on the same screen.
  */
+/**
+ * @param recheckMs How stale a check has to be before it is redone. Pass 0 to
+ *   force one: a person who has just pressed "Check DNS" is owed a real answer,
+ *   and the throttle exists to stop a POLL from generating load, not to make a
+ *   deliberate question return the last one's answer.
+ */
 export async function reconcileAll(
   domains: AppDomain[],
-  deps: AttachDeps = liveAttachDeps
+  deps: AttachDeps = liveAttachDeps,
+  recheckMs: number = RECHECK_MS
 ): Promise<AppDomain[]> {
   const now = deps.now();
   return Promise.all(
     domains.map(async (d) => {
-      if (!dueForCheck(d, now)) return d;
+      if (!dueForCheck(d, now, recheckMs)) return d;
       const next = await reconcileDomain(d, deps);
       await deps.record(d.hostname, next);
       return {
