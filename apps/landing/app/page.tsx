@@ -24,6 +24,7 @@ import { CONTACT_EMAIL, GITHUB_REPO } from "@/lib/brand";
 import { TEMPLATES, selfhostPrompt } from "@/lib/templates";
 import { Stars } from "@/components/Stars";
 import { SiteNav } from "@/components/SiteNav";
+import { LanguagePicker } from "@/components/LanguagePicker";
 import { CopyPrompt } from "./templates/copy-prompt";
 
 // ── the cutover block ──────────────────────────────────────────────────────
@@ -69,7 +70,6 @@ const ARROW =
   "group inline-flex items-center gap-[7px] text-[15px] text-brand-ink transition-colors hover:text-brand";
 const ARROW_ICON = "transition-transform group-hover:translate-x-[3px]";
 
-const EYEBROW = "block font-sans text-[12px] uppercase tracking-[0.16em] text-ink-3";
 const BODY = "max-w-[54ch] text-pretty text-[17px] leading-[1.6] text-ink-2";
 const H2 =
   "m-0 font-sans text-balance text-[clamp(25px,2.4vw,31px)] font-normal leading-[1.16] tracking-[-0.022em]";
@@ -775,39 +775,6 @@ function McpCard() {
 
 // ── the command line ───────────────────────────────────────────────────────
 
-function CommandLine() {
-  const [copied, setCopied] = useState(false);
-  const cmd = `npx ${CLI} deploy`;
-
-  useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 1600);
-    return () => clearTimeout(t);
-  }, [copied]);
-
-  return (
-    <div className="inline-flex h-10 items-center gap-3 whitespace-nowrap rounded-[6px] border border-line bg-white pl-[14px] pr-1.5 font-mono text-[13.5px] text-ink">
-      <code>
-        <span className="text-ink-3">$ </span>
-        {cmd}
-      </code>
-      <button
-        type="button"
-        aria-label={copied ? "Copied" : "Copy command"}
-        onClick={() => {
-          navigator.clipboard?.writeText(cmd).then(() => setCopied(true)).catch(() => {});
-        }}
-        className={cn(
-          "grid size-7 shrink-0 place-items-center rounded-[4px] transition-colors hover:bg-tile",
-          copied ? "text-live" : "text-ink-3 hover:text-ink"
-        )}
-      >
-        {copied ? <Check size={14} strokeWidth={2.4} /> : <Copy size={13.5} strokeWidth={2} />}
-      </button>
-    </div>
-  );
-}
-
 // ── works with ─────────────────────────────────────────────────────────────
 
 // Each brand's own lockup, in public/logos/brand. Supplied by hand rather than
@@ -1004,9 +971,8 @@ export default function Home() {
             The cloud for the agentic era
           </h1>
           <p className={cn(BODY, "mt-[18px]")}>
-            Bay runs the software you and your agents write. Every app gets an address, a
-            database and storage the moment it ships. Nothing to provision, nothing to configure,
-            and no infrastructure to own.
+            {BRAND} runs the apps you build with coding agents. Deploy from your agent or
+            terminal with a live URL, Postgres, Redis and storage included.
           </p>
           <div className="mt-8">
             <OnboardAgent />
@@ -1217,8 +1183,7 @@ export default function Home() {
         <div className={cn(WRAP, "rise")}>
           <div className="flex flex-wrap items-end justify-between gap-6">
             <div className="max-w-[36ch]">
-              <span className={EYEBROW}>Templates</span>
-              <h2 className={cn(H2, "mt-[18px]")}>Self-host something you already use</h2>
+              <h2 className={H2}>Self-host something you already use</h2>
             </div>
             <a className={ARROW} href="/templates">
               All templates <ArrowRight size={15} strokeWidth={2} className={ARROW_ICON} />
@@ -1327,13 +1292,13 @@ export default function Home() {
       {/* ── closing ──────────────────────────────────────────────────── */}
 
       <section className="border-t border-line py-[clamp(76px,9vw,130px)]">
-        <div className={cn(WRAP, "rise")}>
-          <h2 className={H2}>Bring it in to the bay</h2>
-          <div className="mt-[26px] flex flex-wrap items-center gap-[18px] max-[560px]:flex-col max-[560px]:items-stretch max-[560px]:gap-3.5">
-            <a className={cn(BTN, BTN_FILL)} href={`${APP_URL}/new`}>
-              Get started <ArrowRight size={15} strokeWidth={2} />
-            </a>
-            <CommandLine />
+        <div className={cn(WRAP, "rise text-center")}>
+          <h2 className={cn(H2, "mx-auto")}>Bring it in to the bay</h2>
+          {/* The same control as the hero, and the only one here. The page opens
+              by asking you to hand a prompt to your agent; closing on a
+              different ask would be closing on a different product. */}
+          <div className="mt-[26px] flex justify-center">
+            <OnboardAgent />
           </div>
         </div>
       </section>
@@ -1374,7 +1339,7 @@ export default function Home() {
             },
           ].map((col) => (
             <div key={col.head} className="flex min-w-[116px] flex-col gap-[10px]">
-              <span className={cn(EYEBROW, "mb-1 text-[11px]")}>{col.head}</span>
+              <span className="mb-1 text-[14.5px] text-ink-3">{col.head}</span>
               {col.links.map(([label, href]) => {
                 // Third-party links open in a new tab. The control plane does
                 // NOT: signing in is a flow, and a flow that opens behind you is
@@ -1394,10 +1359,8 @@ export default function Home() {
             </div>
           ))}
           <div className="mt-10 flex w-full flex-wrap justify-between gap-4 border-t border-line pt-5 font-mono text-[12px] text-ink-3">
-            <span>
-              © {new Date().getFullYear()} {BRAND} Cloud
-            </span>
-            <span>{DOMAIN}</span>
+            <span>© {new Date().getFullYear()} Supersonic Software, Inc.</span>
+            <LanguagePicker />
           </div>
         </div>
       </footer>
