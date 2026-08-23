@@ -23,6 +23,14 @@ import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
  * this page worse than the one it replaced.
  */
 async function initialApps(sort: AppSort): Promise<{ apps: App[]; error?: string }> {
+  // Sample rows, for looking at the list without a database behind it. Explicit
+  // flag, and refused in production: a list that invents rows when Postgres is
+  // unreachable is a dashboard that lies at the moment somebody most needs it not
+  // to. This is not a fallback for a failed read — the failed read still says so.
+  if (process.env.MOCK_APPS === "1" && process.env.NODE_ENV !== "production") {
+    const { mockApps } = await import("@/lib/mock-apps");
+    return { apps: mockApps() };
+  }
   const uid = await currentUserId();
   if (!uid) return { apps: [] };
   try {
