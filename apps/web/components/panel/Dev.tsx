@@ -49,6 +49,7 @@ import { readPanel, type Reading } from "@/lib/panel/reading";
  */
 
 type View =
+  | "address"
   | "analytics"
   | "ships"
   | "data"
@@ -77,6 +78,7 @@ const ICON = {
 } as const;
 
 const TITLE: Record<View, string> = {
+  address: "Address",
   analytics: "Analytics",
   ships: "Ships",
   data: "Data",
@@ -165,7 +167,15 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
       ) : null}
 
       <RowGroup title="Overview">
-        <Row icon={ICON.address} sub="Where it lives" title="Address">
+        {/* A door, because a custom domain is a fact about WHERE the app lives.
+            It was behind Access, which is about who may open it — a different
+            question that happens to share a screen with certificates. */}
+        <Row
+          icon={ICON.address}
+          onOpen={() => setView("address")}
+          sub="Where it lives"
+          title="Address"
+        >
           <TintRow value={d.addr} />
         </Row>
 
@@ -305,6 +315,19 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
       <div className="flex flex-col gap-6">
         <SharePanel slug={slug} />
         <GitPanel onToast={toast} slug={slug} />
+      </div>
+    );
+  }
+  if (view === "address") {
+    return (
+      <div className="flex flex-col gap-6">
+        {/* The name we issued, first and always: it is the one address that works
+            before any DNS exists, and the one a person falls back to. */}
+        <RowList>
+          <Row sub="issued by Bay, always live" title="Platform address">
+            <TintRow value={d.addr} />
+          </Row>
+        </RowList>
         <DomainsPanel onToast={toast} slug={slug} />
       </div>
     );

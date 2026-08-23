@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Row, RowGroup, RowList, StatusChip } from "@/components/panel/atoms";
@@ -47,6 +47,27 @@ const SAID: Record<Status, { label: string; tone: "green" | "red" | "grey" }> = 
   failed: { label: "no certificate", tone: "red" },
 };
 
+/**
+ * The other half of a domain, when there obviously is one.
+ *
+ * `acme.com` and `www.acme.com` are one thing to a person and two hostnames to a
+ * certificate, and somebody who attaches only the first finds out when a visitor
+ * types the second. Offered rather than added silently: the www record is theirs
+ * to create in DNS, and attaching a name they have no plan for would leave a
+ * domain sitting in "waiting for your DNS" forever with no way to know why.
+ *
+ * Only the www pair, and nothing cleverer. Guessing an apex from label count is
+ * wrong for `acme.co.uk`, and telling somebody to put a CNAME on their root is a
+ * dead end their DNS provider refuses.
+ */
+function pairFor(hostname: string): string | null {
+  if (hostname.startsWith("www.")) {
+    const base = hostname.slice(4);
+    return base.split(".").length >= 2 ? base : null;
+  }
+  return hostname.split(".").length === 2 ? `www.${hostname}` : null;
+}
+
 export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: string) => void }) {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [dns, setDns] = useState<Dns | null>(null);
@@ -86,6 +107,29 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, [domains, loaded, load]);
 
+  /** Adds a hostname the person did not type — the www half of one they did. */
+  async function addPair(hostname: string) {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await (
+        await fetch(`/api/apps/${slug}/domains`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hostname }),
+        })
+      ).json();
+      if (r.error) {
+        setErr(r.error);
+        return;
+      }
+      onToast(`${hostname} added — point its DNS here too`);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function add() {
     const typed = host.trim();
     if (!typed) return;
@@ -116,6 +160,12 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
 
   const waiting = domains.some((d) => d.status !== "live");
 
+  // The first missing half, if any. One suggestion at a time: two of these would
+  // read as a list of things wrong rather than one thing to consider.
+  const suggestion = domains
+    .map((d) => pairFor(d.hostname))
+    .find((h): h is string => Boolean(h) && !domains.some((d) => d.hostname === h));
+
   return (
     <div className="flex flex-col gap-2.5">
       <h2 className="px-0.5 text-[15px] text-ink">Your own domain</h2>
@@ -134,6 +184,22 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
                 title={<span className="font-mono text-[13px]">{d.hostname}</span>}
               >
                 <StatusChip text={said.label} tone={said.tone} />
+                {/* A recheck is just another read — the GET reconciles, and the
+                    throttle is ten seconds. Worth a button because the poll is
+                    twelve seconds long and somebody who just saved a DNS record
+                    is watching this row. */}
+                {d.status !== "live" ? (
+                  <Button
+                    aria-label={`Check ${d.hostname} now`}
+                    className="size-7 text-ink-3 hover:text-ink"
+                    disabled={busy}
+                    onClick={() => load()}
+                    size="icon-sm"
+                    variant="ghost"
+                  >
+                    <RefreshCw className="size-3.5" />
+                  </Button>
+                ) : null}
                 <Button
                   aria-label={`Remove ${d.hostname}`}
                   className="size-7 text-ink-3 hover:text-ink"
@@ -173,6 +239,18 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
           </form>
 
           {err ? <p className="text-[14px] text-red">{err}</p> : null}
+
+          {suggestion ? (
+            <p className="flex flex-wrap items-center gap-2 text-[13px] text-ink-3">
+              <span>
+                Visitors will also type <span className="font-mono text-ink-2">{suggestion}</span>.
+              </span>
+              <Button disabled={busy} onClick={() => addPair(suggestion)} size="sm" variant="outline">
+                <Plus className="size-3.5" />
+                Add it too
+              </Button>
+            </p>
+          ) : null}
 
           {/* Shown while anything is still waiting, and after adding — this is
               the one place the records a person has to create are written down,
