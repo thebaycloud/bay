@@ -5,7 +5,8 @@ import { getPool } from "@/lib/db";
 import { currentUserId } from "@/lib/session";
 import { installationToken, GithubError } from "@/lib/github-app";
 import { recordInstallation } from "@/lib/github-connections";
-import { installationFromCallback, accountFor } from "@/lib/github-setup";
+import { installationFromCallback, accountFor, nameFromCallback } from "@/lib/github-setup";
+import { publicOrigin } from "@/lib/public-origin";
 
 /**
  * Where GitHub sends a person after they install the App.
@@ -26,7 +27,7 @@ import { installationFromCallback, accountFor } from "@/lib/github-setup";
  */
 
 function back(req: Request, params: Record<string, string>): Response {
-  const to = new URL("/new", new URL(req.url).origin);
+  const to = new URL("/new", publicOrigin(req));
   for (const [k, v] of Object.entries(params)) to.searchParams.set(k, v);
   return Response.redirect(to.toString(), 302);
 }
@@ -35,13 +36,19 @@ export async function GET(req: Request): Promise<Response> {
   const userId = await currentUserId();
   if (!userId) return Response.json({ error: "not signed in" }, { status: 401 });
 
-  const decision = installationFromCallback(new URL(req.url));
-  if (!decision.ok) return back(req, { github_error: decision.reason });
+  const url = new URL(req.url);
+  const decision = installationFromCallback(url);
+  // Carried through GitHub and back, so a person who named the app before they
+  // were sent off to connect an account does not return to an empty field.
+  // Empty when they named nothing, or when what came back was not a name.
+  const wanted = nameFromCallback(url);
+  const named: Record<string, string> = wanted ? { name: wanted } : {};
+  if (!decision.ok) return back(req, { github_error: decision.reason, ...named });
 
   const workspaceId = (await getPool("supersonic_platform").query(
     `SELECT workspace_id FROM users WHERE id = $1`, [userId],
   )).rows[0]?.workspace_id ?? null;
-  if (!workspaceId) return back(req, { github_error: "no-workspace" });
+  if (!workspaceId) return back(req, { github_error: "no-workspace", ...named });
 
   try {
     // Minting proves the installation is real, is ours, and is reachable —
@@ -49,7 +56,7 @@ export async function GET(req: Request): Promise<Response> {
     // minted again, from cache, the moment anything needs it.
     await installationToken(decision.installationId);
     const account = await accountFor(decision.installationId);
-    await recordInstallation({
+    const mine = await recordInstallation({
       installationId: decision.installationId,
       workspaceId,
       accountLogin: account.login,
@@ -62,12 +69,16 @@ export async function GET(req: Request): Promise<Response> {
       // CONTEXT.md on why a wrong name there is worse than no name.
       connectedLogin: account.type === "User" ? account.login : null,
     });
-    return back(req, { connected: account.login });
+    // Already somebody else's, and left that way. See `recordInstallation`:
+    // an installation id is not a secret, so the row it names cannot be moved
+    // between workspaces by whoever quotes it back at us.
+    if (!mine) return back(req, { github_error: "taken", ...named });
+    return back(req, { connected: account.login, ...named });
   } catch (e) {
     // Never GitHub's message in a URL: it is text we did not write, landing on
     // a page we render. The KIND is ours, and is all the screen needs to say
     // the right sentence.
     const kind = e instanceof GithubError ? e.refusal.kind : "unavailable";
-    return back(req, { github_error: kind });
+    return back(req, { github_error: kind, ...named });
   }
 }
