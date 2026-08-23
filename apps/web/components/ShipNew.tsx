@@ -222,9 +222,7 @@ export function ShipNew() {
             {/* Both routes at once. */}
             <section className="flex min-w-0 flex-col gap-2.5">
               <div className="flex items-center gap-3">
-                <span className="text-[14px] font-[450] text-ink">
-                  Ship the folder you have open
-                </span>
+                <span className="text-[14px] font-[450] text-ink">Ship with your agent</span>
                 <span className="ml-auto flex shrink-0 items-center gap-2.5">
                   {AGENTS.map((a) => (
                     <img
