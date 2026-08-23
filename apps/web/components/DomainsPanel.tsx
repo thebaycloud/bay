@@ -11,8 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Row, RowGroup, RowList, StatusChip } from "@/components/panel/atoms";
+import { Row, RowGroup, RowList } from "@/components/panel/atoms";
 import { recordFor } from "@/lib/dns-record";
+import { cn } from "@/lib/utils";
 
 /**
  * Connecting a domain, from the person's side.
@@ -23,9 +24,10 @@ import { recordFor } from "@/lib/dns-record";
  *  - It never claims a domain is live because we created a certificate. `live`
  *    means Google is serving that certificate, which is the only version of the
  *    claim a browser will agree with.
- *  - It never shows a bare spinner. Every waiting state carries what it is
- *    waiting for, because "waiting for DNS" and "you pointed it somewhere else"
- *    look identical otherwise, and only one of them is something to act on.
+ *  - It never shows a bare spinner. A row waiting on the PERSON shows the button
+ *    that finishes it; a row waiting on US says what we are doing. Those are
+ *    different sentences because only one of them is somebody's to act on, and a
+ *    single "waiting…" for both is what makes a domain feel stuck.
  */
 
 type Status = "pending_dns" | "securing" | "live" | "failed";
@@ -39,21 +41,6 @@ interface Domain {
 }
 
 interface Dns { ip: string; cname: string }
-
-/**
- * How the four states read to a person. Platform words never appear here.
- *
- * The tone is StatusChip's, so a domain's state is drawn by the same dot as
- * every other state in the panel — green for arrived, red for something to fix,
- * grey for still moving. Grey and not red while waiting: DNS taking an hour is
- * not a fault.
- */
-const SAID: Record<Status, { label: string; tone: "green" | "red" | "grey" }> = {
-  pending_dns: { label: "waiting for your DNS", tone: "grey" },
-  securing: { label: "getting a certificate", tone: "grey" },
-  live: { label: "live", tone: "green" },
-  failed: { label: "no certificate", tone: "red" },
-};
 
 /**
  * The other half of a domain, when there obviously is one.
@@ -220,58 +207,78 @@ export function DomainsPanel({
 
   const rows = (
     <>
-      {domains.map((d) => {
-            const said = SAID[d.status] ?? SAID.pending_dns;
-            return (
-              <Row
-                key={d.hostname}
-                // The detail is part of the sub, not a line below the row: it says
-                // WHAT is being waited for, and "waiting" without it and "you
-                // pointed it somewhere else" look identical.
-                sub={d.status !== "live" ? d.detail ?? undefined : undefined}
-                title={<span className="font-mono text-[13px]">{d.hostname}</span>}
-              >
-                <StatusChip text={said.label} tone={said.tone} />
-                {/* A recheck is just another read — the GET reconciles, and the
-                    throttle is ten seconds. Worth a button because the poll is
-                    twelve seconds long and somebody who just saved a DNS record
-                    is watching this row. */}
-                {d.status !== "live" ? (
-                  <Button
-                    aria-label={`Records for ${d.hostname}`}
-                    className="h-7 px-2 text-[13px] text-ink-2 hover:text-ink"
-                    onClick={() => setRecords(d.hostname)}
-                    size="sm"
-                    variant="ghost"
-                  >
-                    Records
-                  </Button>
-                ) : null}
-                {d.status !== "live" ? (
-                  <Button
-                    aria-label={`Check ${d.hostname} now`}
-                    className="size-7 text-ink-3 hover:text-ink"
-                    disabled={busy}
-                    onClick={() => load()}
-                    size="icon-sm"
-                    variant="ghost"
-                  >
-                    <RefreshCw className="size-3.5" />
-                  </Button>
-                ) : null}
-                <Button
-                  aria-label={`Remove ${d.hostname}`}
-                  className="size-7 text-ink-3 hover:text-ink"
-                  disabled={busy}
-                  onClick={() => remove(d.hostname)}
-                  size="icon-sm"
-                  variant="ghost"
-                >
-                  <Trash2 className="size-3.5" />
-                </Button>
-              </Row>
-            );
-      })}
+      {domains.map((d) => (
+        <Row key={d.hostname} title={<span className="font-mono text-[13px]">{d.hostname}</span>}>
+          {/* One thing on the right, and it is whichever thing is true.
+              
+              This row used to carry four: a detail sentence, a state chip, a
+              `Records` button and a recheck icon — three of them saying the same
+              thing in different words. Where there is something to DO, the
+              button is the whole answer and says what it is. Where there is
+              nothing to do, a state is all that is left. */}
+          {d.status === "pending_dns" ? (
+            <Button
+              className="h-7 px-2.5 text-[13px]"
+              onClick={() => setRecords(d.hostname)}
+              size="sm"
+              variant="outline"
+            >
+              Set up
+            </Button>
+          ) : d.status === "failed" ? (
+            <Button
+              className="h-7 px-2.5 text-[13px]"
+              onClick={() => setRecords(d.hostname)}
+              size="sm"
+              variant="outline"
+            >
+              Check the record
+            </Button>
+          ) : (
+            // live and securing: nothing for a person to do. The words are
+            // English, so they are not mono — that is for machine values, and
+            // the hostname beside them is one.
+            <span className="flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  d.status === "live" ? "bg-[var(--green)]" : "bg-ink-3",
+                )}
+              />
+              <span className="text-[13px] text-ink-2">
+                {d.status === "live" ? "live" : "getting a certificate"}
+              </span>
+            </span>
+          )}
+
+          {/* A recheck only while it is OURS to finish. On a pending domain the
+              modal's Reload is the same read, offered where the record is. */}
+          {d.status === "securing" ? (
+            <Button
+              aria-label={`Check ${d.hostname} now`}
+              className="size-7 text-ink-3 hover:text-ink"
+              disabled={busy}
+              onClick={() => load()}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <RefreshCw className="size-3.5" />
+            </Button>
+          ) : null}
+
+          <Button
+            aria-label={`Remove ${d.hostname}`}
+            className="size-7 text-ink-3 hover:text-ink"
+            disabled={busy}
+            onClick={() => remove(d.hostname)}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+        </Row>
+      ))}
     </>
   );
 
