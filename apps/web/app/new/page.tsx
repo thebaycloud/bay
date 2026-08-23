@@ -83,10 +83,23 @@ export default function NewApp() {
   const [ghLinks, setGhLinks] = useState<{ installUrl: string; configureUrl: string } | null>(null);
   const [ghTrouble, setGhTrouble] = useState("");
 
+  const beginRef = useRef<((repo?: string) => void) | null>(null);
+
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const r = q.get("repo");
     if (r) { setRepo(r.replace(/^https?:\/\//, "")); setDoor("url"); }
+    // Handed off from the Ship-new dialog, which already asked WHERE the code
+    // comes from. This page's remaining job is the film, so it starts straight
+    // away rather than showing the doors again with one already answered.
+    const inst = q.get("installation_id");
+    if (q.get("src") === "github" && r) {
+      setDoor("github");
+      if (inst) setGhInstallation(Number(inst));
+      // A frame later, so the state above is committed before begin() reads it.
+      setTimeout(() => beginRef.current?.(r), 0);
+      return;
+    }
     // Coming back from GitHub. `connected` re-asks rather than trusting the
     // name in the URL: the list is the truth and it was just changed.
     if (q.get("connected")) { setDoor("github"); setGhConnections(null); }
@@ -164,6 +177,10 @@ export default function NewApp() {
    * given. Reading state there would deploy whatever the field says now.
    */
   const asked = useRef<{ repo: string; installationId: number | null }>({ repo: "", installationId: null });
+
+  // Kept in a ref so the query-param effect above can start a run without
+  // being declared after the state it reads.
+  beginRef.current = (r?: string) => { void begin(r); };
 
   async function begin(pickedRepo?: string) {
     // From the picker the name is passed in: setRepo has not landed yet when

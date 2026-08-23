@@ -21,8 +21,8 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
+        default: "h-10 rounded-md px-[18px] text-[15px] font-[450] tracking-[-0.01em]",
+        sm: "h-[34px] rounded-md px-[14px] text-[14px] font-[450] tracking-[-0.01em]",
         lg: "h-10 rounded-md px-8",
         icon: "h-9 w-9",
         // ai-elements' message actions ask for these two. Added here rather than

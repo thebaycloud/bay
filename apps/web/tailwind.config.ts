@@ -107,11 +107,14 @@ export default {
         },
       },
       borderRadius: {
-        // 8/6/4, which is shadcn's own ramp and already the panel's.
-        xl: "calc(var(--sh-radius) + 2px)",
-        lg: "var(--sh-radius)",
-        md: "calc(var(--sh-radius) - 2px)",
-        sm: "calc(var(--sh-radius) - 4px)",
+        /* Literal, and measured off apps/landing rather than derived from one
+           number. Deriving them meant a card and a button could not be 12px and
+           6px at the same time, which is exactly what the landing page is. */
+        sm: "4px",
+        md: "6px",
+        lg: "8px",
+        xl: "12px",
+        "2xl": "16px",
       },
       keyframes: {
         "accordion-down": {

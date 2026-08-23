@@ -58,11 +58,10 @@
      the alert state stays the only thing wearing a warning. The control plane's
      accent WAS green; this swap is that rule finally being applied. */
   --green: rgb(var(--c-green));
-  /* Was 8/6/4, shadcn's ramp, ported straight from the panel. Too tight in use:
-     at 6px a card reads as a box with the corners filed off rather than a soft
-     surface, which is the whole difference between this and the tools it is being
-     measured against. Bumped one step up the scale. */
-  --r-xl: 20px; --r-lg: 16px; --r-sm: 10px;
+  /* Measured off apps/landing, not chosen. The landing page uses rounded-[12px]
+     on every card and panel, rounded-[6px] on every button, and 4px on chips —
+     so 20/16/10 was not "rounder", it was a different product. */
+  --r-xl: 12px; --r-lg: 8px; --r-sm: 4px;
   --ease: cubic-bezier(.2, .8, .2, 1);
 
   /* ---- aliases: the blueprint system's names, pointed at the new palette ----
@@ -112,7 +111,7 @@
      anything focused — including the composer, which is focused most of the time.
      Red stays for fills and marks; focus is neutral and still visible at 3px. */
   --sh-ring: var(--ink-3);
-  --sh-radius: 16px;
+  --sh-radius: 8px;
 
   --mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
   --sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;

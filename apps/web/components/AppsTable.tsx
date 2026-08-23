@@ -7,13 +7,13 @@ import {
   Box,
   ChevronDown,
   MoreHorizontal,
-  Plus,
   Search,
   SlidersHorizontal,
   TriangleAlert,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ShipNew } from "@/components/ShipNew";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -85,14 +85,14 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
   return (
     <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-7 px-6 py-10">
       <header className="flex flex-col gap-1">
-        <h1 className="text-[26px] font-medium tracking-[-0.025em] text-ink">Your apps</h1>
-        <p className="text-sub text-ink-2">Ship one, and check on the ones that are running.</p>
+        <h1 className="text-[28px] font-[450] tracking-[-0.02em] text-ink">Your apps</h1>
+        <p className="text-[15px] text-ink-2">Ship one, and check on the ones that are running.</p>
       </header>
 
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-val text-ink">All apps</span>
-          <span className="font-mono text-micro text-ink-3">{initial.length}</span>
+          <span className="text-[15px] text-ink">All apps</span>
+          <span className="text-[14px] text-ink-3">{initial.length}</span>
 
           <div className="ml-auto flex items-center gap-2">
             <div className="relative">
@@ -124,32 +124,29 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
             </DropdownMenu>
 
             {/* The one filled button on the page. Everything else on this screen is
-                looking; this is the only thing that makes something. */}
-            <Button asChild size="sm">
-              <Link href="/new">
-                <Plus className="size-3.5" />
-                Ship new
-              </Link>
-            </Button>
+                looking; this is the only thing that makes something. Opens a dialog
+                rather than navigating: choosing where the code comes from is a
+                two-option question. */}
+            <ShipNew />
           </div>
         </div>
 
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
-            <span className="font-mono text-label uppercase text-ink-3">Name</span>
-            <span className="ml-auto font-mono text-label uppercase text-ink-3">Last shipped</span>
+            <span className="text-[13px] text-ink-3">Name</span>
+            <span className="ml-auto text-[13px] text-ink-3">Last shipped</span>
             <span className="w-8" aria-hidden="true" />
           </div>
 
           {initialError ? (
             <Row>
-              <p className="text-sub text-ink-2">
+              <p className="text-[14px] text-ink-2">
                 Your apps could not be read just now. {initialError}
               </p>
             </Row>
           ) : shown.length === 0 ? (
             <Row>
-              <p className="text-sub text-ink-2">
+              <p className="text-[14px] text-ink-2">
                 {initial.length === 0
                   ? "Nothing here yet. Ship one and it appears in this list."
                   : `Nothing matches “${q}”.`}
@@ -173,29 +170,29 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
                   >
                     <span
                       className={cn(
-                        "flex size-7 shrink-0 items-center justify-center rounded-lg border border-border",
+                        "flex size-7 shrink-0 items-center justify-center rounded-md border border-border",
                         b === "failed" ? "bg-tint text-red" : "bg-ground text-ink-2",
                       )}
                     >
                       {b === "failed" ? <TriangleAlert className="size-3.5" /> : <Box className="size-3.5" />}
                     </span>
 
-                    <span className="min-w-0 truncate text-val text-ink">{a.name || a.slug}</span>
+                    <span className="min-w-0 truncate text-[15px] font-[450] text-ink">{a.name || a.slug}</span>
 
                     <Badge className="h-5 shrink-0 gap-1.5 rounded-full px-2 font-normal" variant="outline">
                       <span aria-hidden="true" className={cn("size-1.5 rounded-full", state.dot)} />
-                      <span className="font-mono text-[10.5px] text-ink-2">{state.label}</span>
+                      <span className="text-[12px] text-ink-2">{state.label}</span>
                     </Badge>
 
                     {/* The address, which is the fact people actually come for, and
                         mono because it is a machine value. Hidden on narrow screens
                         rather than wrapped — the state matters more. */}
-                    <span className="hidden min-w-0 truncate font-mono text-micro text-ink-3 sm:block">
+                    <span className="hidden min-w-0 truncate text-[13px] text-ink-3 sm:block">
                       {a.slug}.supersonic.cv
                     </span>
                   </Link>
 
-                  <span className="shrink-0 font-mono text-micro text-ink-3 tabular-nums">
+                  <span className="shrink-0 text-[13px] text-ink-3 tabular-nums">
                     {b === "building" ? a.stage || "shipping…" : ago(a.deployedAt)}
                   </span>
 
@@ -203,7 +200,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
                     <DropdownMenuTrigger asChild>
                       <Button
                         aria-label={`Actions for ${a.name || a.slug}`}
-                        className="size-8 shrink-0 rounded-lg text-ink-3 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                        className="size-8 shrink-0 rounded-md text-ink-3 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
                         size="icon-sm"
                         variant="ghost"
                       >
@@ -242,7 +239,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
           )}
         </div>
 
-        <p className="font-mono text-micro text-ink-3">
+        <p className="text-[13px] text-ink-3">
           Showing {shown.length} of {initial.length}
         </p>
       </div>
