@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Check, Copy, Github, Loader2, Plus } from "lucide-react";
+import { ArrowRight, Check, Copy, Github, Loader2, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -64,6 +64,8 @@ interface GhConnection {
 interface GhRepo {
   fullName: string;
   private: boolean;
+  defaultBranch: string;
+  pushedAt: string | null;
 }
 
 export function ShipNew() {
@@ -79,6 +81,7 @@ export function ShipNew() {
   const [installation, setInstallation] = useState<number | null>(null);
   const [repos, setRepos] = useState<GhRepo[] | null>(null);
   const [trouble, setTrouble] = useState("");
+  const [query, setQuery] = useState("");
 
   /**
    * What it will actually be called: the field when filled, the offer when not.
@@ -146,6 +149,9 @@ export function ShipNew() {
     let alive = true;
     setRepos(null);
     setTrouble("");
+    // The previous account's search term must not silently filter this
+    // account's list — the rows would be missing and the reason off screen.
+    setQuery("");
     fetch(`/api/github/repos?installation_id=${installation}`)
       .then((r) => r.json())
       .then((d) => {
@@ -167,6 +173,29 @@ export function ShipNew() {
       alive = false;
     };
   }, [installation]);
+
+  /**
+   * Where a person goes to put the App on another account.
+   *
+   * The name they have already typed rides along in `state`, which GitHub hands
+   * back to the setup redirect untouched — see `nameFromCallback`. Without it,
+   * connecting an account mid-flow throws away the first thing this dialog
+   * asked for.
+   */
+  const connectUrl = links?.installUrl ? `${links.installUrl}?state=${encodeURIComponent(chosen)}` : "#";
+
+  /**
+   * The rows the search leaves.
+   *
+   * Matched on the whole `owner/repo`, so typing an organisation narrows to it
+   * and typing a repository name finds it wherever it lives. Case-insensitive
+   * because nobody types the capital in `MyProject` when they are looking for it.
+   */
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!repos) return repos;
+    return q ? repos.filter((r) => r.fullName.toLowerCase().includes(q)) : repos;
+  }, [repos, query]);
 
   function ship(fullName: string) {
     // The chosen name travels with it, so /new reserves the slug this dialog just
@@ -291,47 +320,81 @@ export function ShipNew() {
                 </p>
               ) : connections.length === 0 ? (
                 <Button asChild className="w-full" variant="outline">
-                  <a href={links?.installUrl ?? "#"}>
+                  <a href={connectUrl}>
                     <Github className="size-4" />
                     Connect GitHub
                   </a>
                 </Button>
               ) : (
                 <>
-                  {connections.length > 1 && (
-                    <div className="inline-flex gap-0.5 self-start rounded-lg bg-tile p-[3px]">
-                      {connections.map((c) => (
-                        <button
-                          className={cn(
-                            "h-[28px] rounded-md px-2.5 text-[13px] transition-colors",
-                            installation === c.installationId
-                              ? "bg-white text-ink shadow-sm"
-                              : "text-ink-2 hover:text-ink",
-                          )}
-                          key={c.installationId}
-                          onClick={() => setInstallation(c.installationId)}
-                          type="button"
-                        >
-                          {c.accountLogin}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  {/* The accounts, and always the way to add one.
+                      
+                      Shown at one account as well as at several. The App is
+                      installed per account, so somebody who connected an
+                      organisation is not thereby connected to their own
+                      repositories, or to a second organisation's — and the
+                      screen that hid "Connect GitHub" the moment ONE account
+                      existed was a dead end for exactly the person who had
+                      connected the wrong one first. */}
+                  <div className="flex flex-wrap items-center gap-0.5 rounded-lg bg-tile p-[3px]">
+                    {connections.map((c) => (
+                      <button
+                        className={cn(
+                          "h-[28px] rounded-md px-2.5 text-[13px] transition-colors",
+                          installation === c.installationId
+                            ? "bg-white text-ink shadow-sm"
+                            : "text-ink-2 hover:text-ink",
+                        )}
+                        key={c.installationId}
+                        onClick={() => setInstallation(c.installationId)}
+                        type="button"
+                      >
+                        {c.accountLogin}
+                      </button>
+                    ))}
+                    <a
+                      className="ml-auto flex h-[28px] items-center gap-1.5 rounded-md px-2.5 text-[13px] text-ink-2 transition-colors hover:text-ink"
+                      href={connectUrl}
+                    >
+                      <Plus className="size-3.5" />
+                      Add account
+                    </a>
+                  </div>
 
                   {trouble ? <p className="text-[14px] text-ink-2">{trouble}</p> : null}
 
+                  {/* The search appears once the list is long enough to need
+                      scrolling. Below that it would be a second thing to read
+                      above four rows a person can already see. */}
+                  {repos && repos.length > 5 ? (
+                    <div className="flex items-center gap-2 rounded-lg border border-border px-2.5">
+                      <Search className="size-3.5 shrink-0 text-ink-3" />
+                      <input
+                        aria-label="Search repositories"
+                        className="h-9 w-full bg-transparent text-[14px] text-ink outline-none placeholder:text-ink-3"
+                        onChange={(e) => setQuery(e.currentTarget.value)}
+                        placeholder="Search repositories…"
+                        value={query}
+                      />
+                    </div>
+                  ) : null}
+
                   <div className="max-h-[176px] overflow-y-auto rounded-lg border border-border">
-                    {repos === null ? (
+                    {shown === null ? (
                       <p className="flex items-center gap-2 px-3 py-5 text-[14px] text-ink-2">
                         <Loader2 className="size-3.5 animate-spin" />
                         Reading what you picked…
                       </p>
-                    ) : repos.length === 0 ? (
+                    ) : shown.length === 0 ? (
                       <p className="px-3 py-5 text-[14px] text-ink-2">
-                        {trouble ? "" : "No repositories were shared with us yet."}
+                        {trouble
+                          ? ""
+                          : query.trim()
+                            ? `Nothing here matches “${query.trim()}”.`
+                            : "No repositories were shared with us yet."}
                       </p>
                     ) : (
-                      repos.map((r) => (
+                      shown.map((r) => (
                         <button
                           className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-tile"
                           key={r.fullName}

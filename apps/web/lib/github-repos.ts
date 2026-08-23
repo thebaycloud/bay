@@ -78,8 +78,28 @@ export async function listRepos(installationId: number, deps: ReposDeps = live):
         pushedAt: r.pushed_at == null ? null : String(r.pushed_at),
       });
     }
-    if (batch.length < PER_PAGE) return out;
+    if (batch.length < PER_PAGE) return sortByRecency(out);
   }
+}
+
+/**
+ * Most recently pushed first.
+ *
+ * GitHub returns an installation's repositories in its own order, which is
+ * neither alphabetical nor chronological and reads as random to the person
+ * scrolling. The repository somebody came here to deploy is, overwhelmingly,
+ * the one they pushed to today — so that one is at the top and the picker is
+ * usually one click with no scrolling at all.
+ *
+ * A null `pushed_at` (an empty repository, freshly created) sorts last rather
+ * than first: it has nothing to build.
+ */
+function sortByRecency(repos: Repo[]): Repo[] {
+  return repos.sort((a, b) => {
+    const at = a.pushedAt ? Date.parse(a.pushedAt) : 0;
+    const bt = b.pushedAt ? Date.parse(b.pushedAt) : 0;
+    return bt - at;
+  });
 }
 
 /**

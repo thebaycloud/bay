@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound } from "lucide-react";
+import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound, Search } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 import { DeployFilm } from "@/components/DeployFilm";
@@ -82,6 +82,9 @@ export default function NewApp() {
   const [ghRepos, setGhRepos] = useState<GhRepo[] | null>(null);
   const [ghLinks, setGhLinks] = useState<{ installUrl: string; configureUrl: string } | null>(null);
   const [ghTrouble, setGhTrouble] = useState("");
+  /** Narrows the repository list. Cleared whenever the account changes, so the
+      previous account's term never hides this one's rows off screen. */
+  const [ghQuery, setGhQuery] = useState("");
 
   const beginRef = useRef<((repo?: string) => void) | null>(null);
 
@@ -109,6 +112,7 @@ export default function NewApp() {
       setDoor("github");
       setGhTrouble(
         err === "no-installation" ? "That didn't finish connecting. Try again — it takes about a minute."
+        : err === "taken" ? "That GitHub account is already connected to another workspace here. Uninstall our App from it on GitHub, then connect it again."
         : err === "bad-credentials" ? "We can't reach GitHub right now. This one is on us — nothing you do will fix it."
         : err === "no-workspace" ? "Your account isn't set up yet. Ship something once and this will work."
         : "We couldn't finish connecting to GitHub. Try again in a moment.",
@@ -138,7 +142,7 @@ export default function NewApp() {
   useEffect(() => {
     if (ghInstallation === null) return;
     let alive = true;
-    setGhRepos(null); setGhTrouble("");
+    setGhRepos(null); setGhTrouble(""); setGhQuery("");
     fetch(`/api/github/repos?installation_id=${ghInstallation}`)
       .then(async (r) => ({ ok: r.ok, d: await r.json() }))
       .then(({ ok, d }) => {
@@ -156,6 +160,28 @@ export default function NewApp() {
       .catch(() => { if (alive) setGhTrouble("GitHub isn't answering. Try again in a moment."); });
     return () => { alive = false; };
   }, [ghInstallation]);
+
+  /**
+   * The install link, carrying whatever the app was already going to be called.
+   *
+   * GitHub gives `state` back to the setup redirect untouched, which is the
+   * only way a value survives a trip through github.com — see
+   * `nameFromCallback`. Empty when nothing named it, and then the link is
+   * exactly what it was.
+   */
+  function connectUrl(): string {
+    const base = ghLinks?.installUrl;
+    if (!base) return "#";
+    const name = wantedName.current.trim();
+    return name ? `${base}?state=${encodeURIComponent(name)}` : base;
+  }
+
+  /** The rows the search leaves, matched on the whole `owner/repo`. */
+  function shownRepos(): GhRepo[] {
+    const q = ghQuery.trim().toLowerCase();
+    if (!ghRepos) return [];
+    return q ? ghRepos.filter((r) => r.fullName.toLowerCase().includes(q)) : ghRepos;
+  }
 
   function reset() {
     setPhase("idle"); setLogs([]); setDetected(null); setSecretsNeeded([]); setSecretVals({});
@@ -376,7 +402,7 @@ export default function NewApp() {
                         </p>
                         {ghTrouble && <p className="lead" style={{ margin: "0 0 10px", fontSize: 13 }}>{ghTrouble}</p>}
                         <div className="deploy-cta">
-                          <a className="btn primary big" href={ghLinks?.installUrl ?? "#"}>
+                          <a className="btn primary big" href={connectUrl()}>
                             <Github size={13} />Connect GitHub<ArrowRight size={13} />
                           </a>
                           <span className="hint">takes about a minute</span>
@@ -403,7 +429,7 @@ export default function NewApp() {
                               onClick={() => setGhInstallation(c.installationId)}
                             >{c.accountLogin}</button>
                           ))}
-                          <a className="door" href={ghLinks?.installUrl ?? "#"}>
+                          <a className="door" href={connectUrl()}>
                             <Github size={12} />&nbsp;Add an account
                           </a>
                         </div>
@@ -415,24 +441,44 @@ export default function NewApp() {
                             This account is connected, but no repositories were shared with us yet.
                           </p>
                         ) : (
-                          <div className="gh-repos">
-                            {ghRepos.map((r) => (
-                              <button
-                                key={r.fullName}
-                                className="gh-repo"
-                                onClick={() => { setRepo(r.fullName); begin(r.fullName); }}
-                              >
-                                <span className="name">{r.fullName}</span>
-                                {/* The branch that will ship from now on, said
-                                    here rather than asked for: picking one is a
-                                    second click on the screen whose whole job is
-                                    the first, and it is changeable afterwards in
-                                    the app's own panel. */}
-                                <span className="tag branch">{r.defaultBranch}</span>
-                                {r.private && <span className="tag">private</span>}
-                              </button>
-                            ))}
-                          </div>
+                          <>
+                            {/* The search shows up once the list is long enough
+                                to scroll. Below that it is a second thing to
+                                read above rows already on screen. */}
+                            {ghRepos.length > 5 && (
+                              <div className="gh-search">
+                                <Search size={13} />
+                                <input
+                                  aria-label="Search repositories"
+                                  value={ghQuery}
+                                  onChange={(e) => setGhQuery(e.target.value)}
+                                  placeholder="Search repositories…"
+                                />
+                              </div>
+                            )}
+                            <div className="gh-repos">
+                              {shownRepos().length === 0 ? (
+                                <div className="gh-repo" style={{ opacity: 0.7 }}>
+                                  <span className="name">Nothing here matches “{ghQuery.trim()}”.</span>
+                                </div>
+                              ) : shownRepos().map((r) => (
+                                <button
+                                  key={r.fullName}
+                                  className="gh-repo"
+                                  onClick={() => { setRepo(r.fullName); begin(r.fullName); }}
+                                >
+                                  <span className="name">{r.fullName}</span>
+                                  {/* The branch that will ship from now on, said
+                                      here rather than asked for: picking one is a
+                                      second click on the screen whose whole job is
+                                      the first, and it is changeable afterwards in
+                                      the app's own panel. */}
+                                  <span className="tag branch">{r.defaultBranch}</span>
+                                  {r.private && <span className="tag">private</span>}
+                                </button>
+                              ))}
+                            </div>
+                          </>
                         )}
                         <p className="lead" style={{ margin: "10px 0 0", fontSize: 12, opacity: 0.7 }}>
                           Every push to that branch ships your app. You can change the branch, or turn it off, any time.

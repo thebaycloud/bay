@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { installationFromCallback } from "../lib/github-setup";
+import { installationFromCallback, nameFromCallback } from "../lib/github-setup";
 
 /**
  * The callback's decision, kept out of the route so it can be read without a
@@ -46,4 +46,18 @@ test("setup_action does not change the outcome", () => {
     installationFromCallback(new URL("https://x/api/github/setup?installation_id=7")),
     { ok: true, installationId: 7 },
   );
+});
+
+test("the name typed before the trip to GitHub survives it", async () => {
+  assert.equal(nameFromCallback(new URL("https://x/cb?state=harbor-412")), "harbor-412");
+});
+
+test("anything that is not a name comes back as no name at all", async () => {
+  // `state` is a string that left our origin and returned through a third
+  // party, and it lands in a query string on a page we render. The regexp is
+  // the whole defence: what is not a Cloud Run name is not a name.
+  for (const bad of ["", "  ", "Harbor", "a b", "-lead", "x/y", "<script>", "a".repeat(40)]) {
+    assert.equal(nameFromCallback(new URL(`https://x/cb?state=${encodeURIComponent(bad)}`)), "", bad);
+  }
+  assert.equal(nameFromCallback(new URL("https://x/cb")), "");
 });

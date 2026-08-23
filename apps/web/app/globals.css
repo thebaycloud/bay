@@ -677,6 +677,9 @@ a.door { text-decoration: none; }
    Scrolls at eight rows rather than growing the page: an account with two
    hundred repositories would otherwise push the whole screen away, and the
    thing a person came to press is the row, not the button below it. */
+.gh-search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-2); background: var(--card); border-radius: var(--r); padding: 0 11px; margin-bottom: 8px; color: var(--faint); }
+.gh-search input { flex: 1; height: 36px; background: none; border: none; outline: none; font-family: var(--mono); font-size: 13px; color: var(--ink); }
+.gh-search input::placeholder { color: var(--faint); }
 .gh-repos { display: flex; flex-direction: column; border: 1px solid var(--line-2); background: var(--card); border-radius: var(--r); max-height: 336px; overflow-y: auto; margin-bottom: 4px; }
 .gh-repo { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 11px 14px; background: none; border: none; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 13px; color: var(--ink); transition: background .12s var(--ease); }
 .gh-repo:last-child { border-bottom: none; }

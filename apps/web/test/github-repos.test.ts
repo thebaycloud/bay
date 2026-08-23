@@ -115,3 +115,34 @@ test("a refusal while listing is a GithubError with the kind, not a raw status",
   assert.ok(e instanceof GithubError);
   assert.equal(e.refusal.kind, "no-installation");
 });
+
+test("the picker gets the most recently pushed repository first", async () => {
+  // GitHub's own order is neither alphabetical nor chronological, and the
+  // repository somebody came to deploy is almost always the one they pushed to
+  // today. An empty repository — no `pushed_at` — has nothing to build and goes
+  // last rather than first, which is where a plain date sort would put it.
+  const d = deps([[
+    { id: 1, full_name: "o/old", private: false, default_branch: "main", pushed_at: "2024-01-01T00:00:00Z" },
+    { id: 2, full_name: "o/empty", private: false, default_branch: "main", pushed_at: null },
+    { id: 3, full_name: "o/today", private: false, default_branch: "main", pushed_at: "2026-08-23T18:45:00Z" },
+  ]]);
+  const repos = await listRepos(1, d);
+  assert.deepEqual(repos.map((r) => r.fullName), ["o/today", "o/old", "o/empty"]);
+});
+
+test("the order holds across pages, not only within one", async () => {
+  // The sort runs once on the whole list. Sorting per page would leave page
+  // two's fresher repository below page one's stale ones — the exact failure a
+  // person with a hundred repositories would hit and nobody testing with five
+  // would see.
+  const page1 = Array.from({ length: 100 }, (_, i) => ({
+    id: i + 1, full_name: `o/r${i}`, private: false, default_branch: "main",
+    pushed_at: "2024-01-01T00:00:00Z",
+  }));
+  const d = deps([page1, [
+    { id: 999, full_name: "o/fresh", private: false, default_branch: "main", pushed_at: "2026-08-23T00:00:00Z" },
+  ]]);
+  const repos = await listRepos(1, d);
+  assert.equal(repos.length, 101);
+  assert.equal(repos[0].fullName, "o/fresh");
+});

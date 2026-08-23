@@ -31,6 +31,27 @@ export function installationFromCallback(url: URL): CallbackDecision {
   return { ok: true, installationId };
 }
 
+/**
+ * The app name a person had already typed before they were sent to GitHub.
+ *
+ * GitHub hands an App's install URL one opaque `state` parameter and gives it
+ * back on the setup redirect, which is the only channel there is: the install
+ * happens on github.com, in a flow we do not control, and anything we knew
+ * before it is otherwise gone by the time they come back. Somebody who names an
+ * app, discovers their account is not connected, connects it and then finds the
+ * name field empty has been made to do the same work twice.
+ *
+ * Validated as a slug rather than trusted, because it is a string that left our
+ * origin and came back through a third party — it lands in a query string on a
+ * page we render, and the set of characters that can be in a Cloud Run name is
+ * far smaller than the set that can hurt. Anything else answers empty, which
+ * means "name it from the repository", exactly as before.
+ */
+export function nameFromCallback(url: URL): string {
+  const raw = (url.searchParams.get("state") ?? "").trim();
+  return /^[a-z0-9][a-z0-9-]{0,38}$/.test(raw) ? raw : "";
+}
+
 export interface Account { login: string; type: string }
 
 /**
