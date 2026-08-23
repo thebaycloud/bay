@@ -290,7 +290,11 @@ an "Open app" button pointing at a host with no certificate.
 
 So, in order, and none skippable:
 
-1. `@thebaycloud/cli` published to npm and installable
+1. ~~`@thebaycloud/cli` published to npm and installable~~ — **done 24 Aug**,
+   v1.0.0. Verified against the published tarball, not the checkout: a clean
+   install exposes both `bay` and `supersonic`, an existing
+   `~/.supersonic/config.json` is copied to `~/.bay` with the original left in
+   place, and `SUPERSONIC_URL` is still honoured.
 2. ~~`app.thebay.cloud` serving the control plane~~ — **done 24 Aug**: all three mappings Ready, apex/www/app answer 200/200/307
 3. `apps/landing` deployed
 4. `ROOT_DOMAIN` flipped on the control plane, the worker and the job
