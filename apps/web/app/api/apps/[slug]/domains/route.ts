@@ -12,6 +12,7 @@ import {
 import { reconcileAll, reconcileDomain, liveAttachDeps } from "@/lib/domain-attach";
 import { removeDomainCert, EDGE_IP } from "@/lib/domain-cert";
 import { rootDomain } from "@/lib/roots";
+import { recordFor } from "@/lib/dns-record";
 
 /**
  * The domains attached to one app: read them, attach one, detach one.
@@ -35,7 +36,7 @@ async function ownedApp(slug: string) {
  * Google project; they are ours, they mean nothing to the person, and a field a
  * page does not use is a field that leaks the day someone logs the payload.
  */
-function forPage(d: AppDomain) {
+function forPage(d: AppDomain, dns: { ip: string; cname: string }) {
   return {
     hostname: d.hostname,
     status: d.status,
@@ -43,6 +44,16 @@ function forPage(d: AppDomain) {
     checkedAt: d.checkedAt,
     createdAt: d.createdAt,
     liveAt: d.liveAt,
+    // The one record to create for THIS hostname, decided here.
+    //
+    // The dashboard computes it in the browser from `dns` and `lib/dns-record`,
+    // and could go on doing that alone — but the CLI cannot. It would have to
+    // carry its own copy of the apex-versus-subdomain rule, and that copy would
+    // agree on the day it was written and disagree the first time the two-level
+    // suffix list grows: a person told to create a CNAME at an apex, by us, for
+    // a domain their registrar will refuse. One rule, one file, sent to whoever
+    // asks.
+    record: recordFor(d.hostname, dns),
   };
 }
 
@@ -74,9 +85,10 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
   // load generator.
   const domains = await reconcileAll(await listDomains(slug));
   const ent = await entitlement(app.owner_id);
+  const dns = dnsInstructions(slug);
   return Response.json({
-    domains: domains.map(forPage),
-    dns: dnsInstructions(slug),
+    domains: domains.map((d) => forPage(d, dns)),
+    dns,
     allowed: ent.limits.customDomains,
     // A private app cannot answer for a custom domain the way it answers for its
     // supersonic.cv address: the session cookie that proves who a visitor is is
@@ -135,6 +147,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   const next = await reconcileDomain(attached.domain, liveAttachDeps);
   await recordDomain(hostname, next);
 
+  const dns = dnsInstructions(slug);
   return Response.json({
     domain: forPage({
       ...attached.domain,
@@ -142,8 +155,8 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
       detail: next.detail,
       checkedAt: Date.now(),
       liveAt: next.status === "live" ? Date.now() : attached.domain.liveAt,
-    }),
-    dns: dnsInstructions(slug),
+    }, dns),
+    dns,
   });
 }
 

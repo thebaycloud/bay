@@ -95,10 +95,10 @@ export default function Settings() {
 
           {/* CLI tokens */}
           <div className="set-card">
-            <div className="set-head"><Terminal size={15} /><div><div className="st">CLI tokens</div><div className="ss">Tokens your coding agent uses with the <span className="mono">supersonic</span> CLI. Revoke any you don&apos;t recognize.</div></div></div>
+            <div className="set-head"><Terminal size={15} /><div><div className="st">CLI tokens</div><div className="ss">Tokens your coding agent uses with the <span className="mono">bay</span> CLI. Revoke any you don&apos;t recognize.</div></div></div>
             <div className="env-list">
               {tokens === null && <div className="env-empty">Loading…</div>}
-              {tokens?.length === 0 && <div className="env-empty">No CLI tokens yet. Run <span className="mono">supersonic login</span> to create one.</div>}
+              {tokens?.length === 0 && <div className="env-empty">No CLI tokens yet. Run <span className="mono">bay login</span> to create one.</div>}
               {tokens?.map((t) => (
                 <div className="env-row" key={t.id}>
                   <span className="ek">{t.name || "token"}</span>

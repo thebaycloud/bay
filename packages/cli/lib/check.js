@@ -143,7 +143,7 @@ async function checkApp(dir, { resolver: r, detect }) {
 function secretWarnings(r, app, available) {
   const missing = r.missingSecrets(app, available);
   if (!missing.length) return [];
-  return [`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} declared under \`secrets\` and set nowhere here — supersonic env <app> set, or a .env`];
+  return [`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} declared under \`secrets\` and set nowhere here — bay env <app> set, or a .env`];
 }
 
 const PHASE_WIDTH = 10;
@@ -203,7 +203,20 @@ function renderService(s) {
     // has no start command, no health path and no request timeout, and printing
     // the defaults for all three would describe a service that is not deployed.
     if (!s.serviceless) {
-      lines.push(phase("start", s.lane === "container"
+      // Keyed off the AUTHOR's Dockerfile, not off the lane.
+      //
+      // Asking `s.lane === "container"` was right while there were four lanes.
+      // There are two. `container` now means "an image is built and a node runs
+      // it" whether the author committed a Dockerfile or `generateDockerfile`
+      // wrote one FROM THIS `start` COMMAND — so the old condition answered "the
+      // Dockerfile's own CMD" for every non-static service, about a repository
+      // with no Dockerfile in it, hiding a command the config states in plain
+      // text. In the one command whose whole job is to say what will run.
+      //
+      // `s.dockerfile` is the author's file and only ever that; resolve.ts draws
+      // the same line. The `image` phase above already names it, so this line
+      // does not repeat the path.
+      lines.push(phase("start", s.dockerfile
         ? "the Dockerfile's own CMD"
         : s.start || (s.runs.length ? "—  (the web process below)" : "—  (nothing to run: this lane needs one)")));
       // The web process's own health check is what the deploy probes, so it is
@@ -255,7 +268,7 @@ function renderCheck(configFilename, app, problems, warnings) {
     // file that is not there.
     const from = app.source === "config"
       ? configFilename
-      : `inferred — there is no ${configFilename} (\`supersonic init\` writes one)`;
+      : `inferred — there is no ${configFilename} (\`bay init\` writes one)`;
     const yours = external ? `, uses your own ${external.engine || "database"} from ${external.urlFrom}` : "";
     lines.push(`${from} — ${n} service${n === 1 ? "" : "s"}${provisioned.length ? `, provisions ${provisioned.join(" + ")}` : ""}${yours}`);
     lines.push("");
@@ -271,7 +284,7 @@ function renderCheck(configFilename, app, problems, warnings) {
       lines.push(head.startsWith("✕") ? head : `✕ ${head}`, ...rest);
     }
     lines.push("");
-    lines.push(`${problems.length} problem${problems.length === 1 ? "" : "s"} — nothing was deployed, and nothing would be.`);
+    lines.push(`${problems.length} problem${problems.length === 1 ? "" : "s"} — nothing was shipped, and nothing would be.`);
   } else {
     lines.push("✓ nothing here fails before the build. No GCP was touched.");
   }

@@ -478,7 +478,7 @@ function renderDraft(configFilename, config, unknowns) {
   // confidence answer. Presenting its output as a finding rather than a draft is
   // how that answer became a deploy.
   lines.push("This is a draft, from a detector that has been confidently wrong before.");
-  lines.push(`Read it, fix what is wrong, then: supersonic check`);
+  lines.push(`Read it, fix what is wrong, then: bay check`);
   return lines;
 }
 

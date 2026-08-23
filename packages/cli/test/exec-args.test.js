@@ -7,7 +7,7 @@ const { joinExecArgs, shellQuote } = require("../lib/exec-args");
 
 test("an argv command keeps the quoting the local shell removed", () => {
   // The bug, verbatim. Typed as:
-  //   supersonic exec app -- python -c 'import os; print(os.environ["X"])'
+  //   bay exec app -- python -c 'import os; print(os.environ["X"])'
   // the local shell hands us three words with the quotes already gone, and a
   // plain join sent `print(os.environ[...])` to sh, which answered
   // `Syntax error: "(" unexpected`.

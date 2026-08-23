@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+**The command is `bay`, and the package is `bay-cli`.**
+
+The product is Bay and the domain is thebay.cloud, so the thing you type is
+`bay ship`. Everything about the old name keeps working, and none of it is
+deprecated: the package still installs a `supersonic` binary, `~/.supersonic`
+is still read when it is the directory that exists, and `SUPERSONIC_TOKEN`,
+`SUPERSONIC_URL` and `SUPERSONIC_WHO` are still honoured beside `BAY_TOKEN`,
+`BAY_URL` and `BAY_WHO`. A rename that silently stops reading a token file
+does not read as a rename — it reads as the platform signing you out — so the
+migration is: use the new name if it is there, otherwise keep using theirs.
+`lib/home.js` holds that rule and `test/home.test.js` pins it.
+
+Not renamed, deliberately: `supersonic.json`, the `x-supersonic-*` headers,
+`SUPERSONIC_RUN`, `SUPERSONIC_CODE_*`, and the encryption salt. Those are read
+by the CONTROL PLANE rather than typed by a person, and moving them from this
+side would break every ship against a server that has not moved with them.
+
+**Everything the dashboard does, the CLI does.**
+
+`bay share` (visibility, people, and `@company` rules), `bay domains` (attach a
+domain you own and print the one DNS record to create), `bay db` (tables, rows,
+one read-only SELECT), `bay git` (which branch, and whether a push ships),
+`bay plan` (the plan and every limit left) and `bay tokens` (every CLI signed
+in to the account, and revoking one). No new endpoints were needed: the control
+plane resolves a Bearer token wherever it resolves a session cookie.
+
+The DNS record comes from the server rather than being derived here. Apex versus
+subdomain is a public-suffix question, and a second copy of that rule would agree
+until the day the list grew — then tell somebody to create a CNAME their
+registrar refuses.
+
+**Fixed: `check` claimed every service started from a Dockerfile.**
+
+It printed "start · the Dockerfile's own CMD" for every non-static service,
+because it asked whether the lane was `container` — and after the buildpack
+lane was removed, `container` means all of them. So a repository with no
+Dockerfile, whose start command is stated in the config in plain text, had that
+command hidden by the one command whose job is to say what will run. It reads
+the author's Dockerfile now.
+
+**Fixed: `open` and `status` knew exactly one domain.**
+
+Both built `https://<app>.supersonic.cv` in the published package — a URL that
+survives a rebrand, ignores every attached domain, and can only be corrected by
+a release. They ask the API for the app's own address.
+
 ## 0.12.1
 
 **A ship now says who is shipping.**

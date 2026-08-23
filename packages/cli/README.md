@@ -1,32 +1,42 @@
-# supersonic-cli
+# bay-cli
 
-Deploy anything to [Supersonic](https://app.supersonic.cv) in one command.
+Ship anything to [Bay](https://thebay.cloud) in one command.
 
 ```bash
-npm install -g supersonic-cli
+npm install -g bay-cli
 ```
+
+The command is `bay`. It also installs as `supersonic`, which is the name it had
+before and which every existing script, CI job and agent prompt still says — that
+alias is permanent, not deprecated.
 
 ## Usage
 
 ```bash
-supersonic init                  # write a DRAFT supersonic.json from this repo
-supersonic check                 # what each phase would run, and what would fail
-supersonic login                 # authenticate (defaults to app.supersonic.cv)
-supersonic deploy                # deploy the current repo (uses your git origin)
-supersonic deploy --repo <url>   # or deploy any public git repo
-supersonic whoami
-supersonic logout
+bay init                  # write a DRAFT supersonic.json from this repo
+bay check                 # what each phase would run, and what would fail
+bay login                 # authenticate (defaults to app.supersonic.cv)
+bay ship                  # ship this folder — a live URL now, the build behind it
+bay ship --github         # or ship from your git origin / any public repo
+bay whoami
+bay logout
 ```
 
-`supersonic deploy` streams the live build log — clone → detect stack → build → Cloud Run — and prints your live URL when it's up.
+`bay ship --wait` streams the live build — clone → detect stack → build → run — and
+prints the live URL when the app is actually serving it. `bay deploy` is the same
+command under its older name and always will be.
 
-## Before you deploy
+Everything the dashboard does, this does: `bay share` (who can open it),
+`bay domains` (a domain you own, and the DNS record to create), `bay db`,
+`bay git` (branch + ship-on-push), `bay plan`, `bay tokens`. Run `bay help --all`.
+
+## Before you ship
 
 `init` and `check` are local. No cloud, no build, no model, about two seconds each,
 and they are the loop an agent authoring a `supersonic.json` should be in — because
-the same loop through a real deploy is eleven minutes long.
+the same loop through a real ship is eleven minutes long.
 
-`supersonic init` reads the repository and writes a **draft** `supersonic.json`: the
+`bay init` reads the repository and writes a **draft** `supersonic.json`: the
 monorepo split, the install command from the lockfile, the build command and output
 directory, the start command bound to `$PORT`, the runtime version the manifests ask
 for, and the framework. Then it prints what it could not determine — which service
@@ -35,7 +45,7 @@ names are secrets — because none of those are answerable from files, and a gue
 would be indistinguishable from a decision. It refuses to overwrite an existing
 config without `--force`.
 
-`supersonic check` resolves and validates that file exactly as a deploy would, and
+`bay check` resolves and validates that file exactly as a deploy would, and
 prints, per service, the command each phase runs. Non-zero exit on any problem.
 
 Both go through `vendor/resolve.js`, which is `apps/web/lib/{resolve,app-config,
@@ -47,7 +57,14 @@ after the runner had moved to 3.14.
 
 ## Options
 
-- `supersonic login --url <control-plane>` — point at a different control-plane (defaults to `https://app.supersonic.cv`; also settable via `SUPERSONIC_URL`).
-- `supersonic login --email <e>` — skip the email prompt. Password can be piped via `SUPERSONIC_PASSWORD`.
+- `bay login --url <control-plane>` — point at a different control-plane (defaults to `https://app.supersonic.cv`; also settable via `BAY_URL`).
+- `bay login --token <t>` — for CI and headless agents. `BAY_TOKEN` in the environment does the same and overrides anything saved.
 
-Your session is stored in `~/.supersonic/config.json`.
+Your session is stored in `~/.bay/config.json`. An existing `~/.supersonic/config.json`
+is still read, so an upgrade does not sign anybody out — and `SUPERSONIC_URL` /
+`SUPERSONIC_TOKEN` are still honoured alongside the `BAY_` names.
+
+What is deliberately NOT renamed: the config file is still `supersonic.json`, and the
+`x-supersonic-*` headers, `SUPERSONIC_RUN` and `SUPERSONIC_CODE_*` are still what they
+were. Those are read by the control plane, not typed by a person; they change when the
+server changes, not before.
