@@ -296,11 +296,13 @@ export function DomainsPanel({
           // buttons rather than as one domain's next step.
           after={
             d.status === "pending_dns" || d.status === "failed" ? (
+              // Filled, in the accent. It is the only unfinished thing on the
+              // screen and the only control that moves it — an outline button
+              // beside a live domain's plain "live" read as one more label.
               <Button
                 className="h-7 px-2.5 text-[13px]"
                 onClick={() => setRecords(d.hostname)}
                 size="sm"
-                variant="outline"
               >
                 {d.status === "failed" ? "Check the record" : "Set up"}
               </Button>
