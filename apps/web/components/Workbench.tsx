@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUpRight, MessageSquare, SquareTerminal } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WorkbenchChat } from "@/components/WorkbenchChat";
@@ -21,6 +21,11 @@ import { cn } from "@/lib/utils";
  * `Tabs` swaps the RIGHT pane only. The rail sits outside it and is mounted once,
  * because an answer is allowed to send you into a dev screen and the thread has to
  * survive that. That is why the tab CONTENT is the pane and not the whole body.
+ *
+ * Dev mode is FULL SCREEN: the rail is hidden, not unmounted. The cells push into
+ * screens with real tables in them, and 380px of chat was taking a quarter of the
+ * width away from the thing somebody switched tabs to read. Hidden rather than
+ * removed so the thread is still there on the way back.
  *
  * Chat shows the app in an iframe of `<slug>.supersonic.cv`: cross-origin but
  * same-site, so the app's own cookies still reach it and a logged-in app previews
@@ -53,25 +58,35 @@ export function Workbench({
   children: ReactNode;
 }) {
   const { word, dot } = STATE[state];
+  /**
+   * Controlled, because the LAYOUT depends on which tab is open: dev mode is the
+   * whole width, not a pane beside the rail. Radix would happily manage this
+   * itself, but then the shell could not know what to be.
+   */
+  const [tab, setTab] = useState("chat");
 
   return (
     <Tabs
-      defaultValue="chat"
       className="fixed inset-0 grid grid-rows-[52px_minmax(0,1fr)] gap-0 bg-background"
+      onValueChange={setTab}
+      value={tab}
     >
       <header className="flex items-center gap-3 border-b border-border bg-card px-3.5">
-        <Badge variant="outline" className="h-7 gap-2 rounded-full px-2.5 font-normal">
+        {/* `rounded-md`, like every other chip in this product. A pill here and
+            pills on the tabs were the two things making this screen read as a
+            different application from the list it is opened from. */}
+        <Badge variant="outline" className="h-7 gap-2 px-2.5 font-normal">
           <span className={cn("size-1.5 shrink-0 rounded-full", dot)} aria-hidden="true" />
           <span className="text-sub font-medium text-ink">{slug}</span>
           <span className="font-mono text-[11px] tracking-[0.06em] text-ink-2">{word}</span>
         </Badge>
 
-        <TabsList className="h-8 rounded-full">
-          <TabsTrigger value="chat" className="gap-1.5 rounded-full px-4 text-sub">
+        <TabsList className="h-8">
+          <TabsTrigger value="chat" className="gap-1.5 px-4 text-sub">
             <MessageSquare size={13} strokeWidth={2} aria-hidden="true" />
             Chat
           </TabsTrigger>
-          <TabsTrigger value="dev" className="gap-1.5 rounded-full px-4 text-sub">
+          <TabsTrigger value="dev" className="gap-1.5 px-4 text-sub">
             <SquareTerminal size={13} strokeWidth={2} aria-hidden="true" />
             Dev
           </TabsTrigger>
@@ -88,8 +103,23 @@ export function Workbench({
         </a>
       </header>
 
-      <div className="grid min-h-0 grid-cols-[380px_minmax(0,1fr)]">
-        <aside className="grid min-h-0 border-r border-border bg-card">
+      <div
+        className={cn(
+          "grid min-h-0",
+          tab === "dev" ? "grid-cols-[minmax(0,1fr)]" : "grid-cols-[380px_minmax(0,1fr)]",
+        )}
+      >
+        {/* HIDDEN in dev mode, not unmounted. Dev mode is a full-screen surface —
+            the cells and the screens behind them have real tables in them and a
+            380px column of chat was taking a quarter of the width from the thing
+            somebody switched tabs to read. But an answer is allowed to send you
+            into a dev screen, so the thread has to survive the trip back. */}
+        <aside
+          className={cn(
+            "grid min-h-0 border-r border-border bg-card",
+            tab === "dev" && "hidden",
+          )}
+        >
           <WorkbenchChat slug={slug} />
         </aside>
 

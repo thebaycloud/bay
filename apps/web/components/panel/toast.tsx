@@ -19,7 +19,7 @@ export function toast(message: string) {
     node.setAttribute("role", "status");
     node.setAttribute("aria-live", "polite");
     node.className =
-      "fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-border " +
+      "fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-lg border border-border " +
       "bg-card px-4 py-2 text-sub text-ink shadow-lg";
     node.addEventListener("click", () => node?.remove());
     document.body.appendChild(node);

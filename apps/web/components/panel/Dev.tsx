@@ -1,7 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronLeft, RefreshCw } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  ChartColumn,
+  ChevronLeft,
+  Database,
+  Globe,
+  KeyRound,
+  RefreshCw,
+  Ship,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -46,6 +57,25 @@ type View =
   | "access"
   | "agent";
 
+/**
+ * A mark per block.
+ *
+ * Eight cells of identical shape, told apart by reading their titles — which is
+ * what a grid exists to save you from. Each is the plainest icon for the thing:
+ * Ships is a ship, Keys is a key. Address has no view behind it and still gets
+ * one, because the point is recognising the block, not that it is clickable.
+ */
+const ICON = {
+  address: Globe,
+  analytics: ChartColumn,
+  ships: Ship,
+  data: Database,
+  keys: KeyRound,
+  infra: Activity,
+  access: Users,
+  agent: Bot,
+} as const;
+
 const TITLE: Record<View, string> = {
   analytics: "Analytics",
   ships: "Ships",
@@ -85,7 +115,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           <p className="text-sub text-ink-2">Nothing could be read about this app just now.</p>
           {/* Never left spinning. A panel that says "Reading…" forever is
               indistinguishable from one that is broken, which is what this was. */}
-          <Button className="mt-1 rounded-full" onClick={() => setNonce((n) => n + 1)} size="sm" variant="outline">
+          <Button className="mt-1" onClick={() => setNonce((n) => n + 1)} size="sm" variant="outline">
             <RefreshCw className="size-3.5" />
             Try again
           </Button>
@@ -112,7 +142,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
     return (
       <Screen>
         <div className="flex items-center gap-1 pb-1">
-          <Button className="rounded-full" onClick={() => setView(null)} size="sm" variant="ghost">
+          <Button className="-ml-2" onClick={() => setView(null)} size="sm" variant="ghost">
             <ChevronLeft className="size-4" />
             {TITLE[view]}
           </Button>
@@ -131,7 +161,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
         ) : null}
 
-        <Cell sub="Where it lives" title="Address" wide>
+        <Cell icon={ICON.address} sub="Where it lives" title="Address" wide>
           <TintRow value={d.addr} />
         </Cell>
 
@@ -144,6 +174,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
                 ? `${d.here.length} here now`
                 : "Not counting yet"
           }
+          icon={ICON.analytics}
           title="Analytics"
         >
           {d.an ? (
@@ -154,7 +185,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           ) : null}
         </Cell>
 
-        <Cell onOpen={() => setView("ships")} sub={`Last shipped ${d.ships[0].when}`} title="Ships">
+        <Cell icon={ICON.ships} onOpen={() => setView("ships")} sub={`Last shipped ${d.ships[0].when}`} title="Ships">
           <Chips>
             {/* No re-ship button. There is no deploy-trigger route behind it, and a
                 dead control on the one screen about shipping is worse than none. */}
@@ -162,7 +193,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           </Chips>
         </Cell>
 
-        <Cell onOpen={() => setView("data")} sub="Its data and files" title="Data">
+        <Cell icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
           <Chips>
             <StatusChip
               text={`${d.tables.length} ${d.tables.length === 1 ? "table" : "tables"} · ${d.files} ${d.files === 1 ? "file" : "files"}`}
@@ -173,6 +204,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
 
         <Cell
           onOpen={() => setView("keys")}
+          icon={ICON.keys}
           sub={d.keys.length ? "What it connects to" : "Nothing connected yet"}
           title="Keys"
         >
@@ -185,7 +217,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           ) : null}
         </Cell>
 
-        <Cell onOpen={() => setView("infra")} sub="What it is doing, and what runs on its own" title="Infra">
+        <Cell icon={ICON.infra} onOpen={() => setView("infra")} sub="What it is doing, and what runs on its own" title="Infra">
           <Chips>
             <StatusChip
               text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
@@ -195,14 +227,14 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           </Chips>
         </Cell>
 
-        <Cell onOpen={() => setView("access")} sub="Who can open this" title="Access">
+        <Cell icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
           <Chips>
             <Avatars initials={d.pInitials} />
             <StatusChip text={d.who} tone={d.who === "public" ? "grey" : "green"} />
           </Chips>
         </Cell>
 
-        <Cell onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent" wide>
+        <Cell icon={ICON.agent} onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent" wide>
           <Chips>
             {/* Two states said differently on purpose: no token is something to
                 fix, a token never used is something to try. */}

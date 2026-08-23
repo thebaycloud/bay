@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { ChevronRight, Copy, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,12 +23,21 @@ import { cn } from "@/lib/utils";
 export function Cell({
   title,
   sub,
+  icon: Icon,
   onOpen,
   wide,
   children,
 }: {
   title: string;
   sub: string;
+  /**
+   * The block's own mark, in the same tile the app list draws beside a row.
+   *
+   * Eight cells with the same three-line shape were told apart by reading their
+   * titles, which is the one thing a grid is supposed to save you from. The tile
+   * is what makes a cell findable by shape at a glance.
+   */
+  icon?: ComponentType<{ className?: string }>;
   onOpen?: () => void;
   wide?: boolean;
   /** The fact. Pushed to the bottom of the cell so a row of them lines up. */
@@ -36,15 +45,22 @@ export function Cell({
 }) {
   const body = (
     <>
-      {/* 14px/400. At 18px/500 a cell's title outweighed the fact under it, which
-          is backwards for a panel whose whole job is the fact. */}
-      <div className="text-val leading-tight tracking-[-0.011em] text-ink">{title}</div>
+      <div className="flex items-center gap-2.5">
+        {Icon ? (
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-sm border border-border bg-ground text-ink-2">
+            <Icon className="size-3.5" />
+          </span>
+        ) : null}
+        {/* 14px/400. At 18px/500 a cell's title outweighed the fact under it, which
+            is backwards for a panel whose whole job is the fact. */}
+        <div className="text-val leading-tight tracking-[-0.011em] text-ink">{title}</div>
+      </div>
       <div className="text-sub text-ink-2">{sub}</div>
       {children ? <div className={cn("pt-3.5", wide ? "" : "mt-auto")}>{children}</div> : null}
       {onOpen ? (
         <ChevronRight
           aria-hidden="true"
-          className="absolute right-4 top-4 size-4 text-ink-3"
+          className="absolute right-4 top-[22px] size-4 text-ink-3"
           strokeWidth={2}
         />
       ) : null}
@@ -52,7 +68,7 @@ export function Cell({
   );
 
   const shape = cn(
-    "relative flex flex-col gap-1 rounded-xl border-border bg-card p-4 pb-4.5 text-left shadow-none",
+    "relative flex flex-col gap-1.5 rounded-xl border-border bg-card p-4 pb-4.5 text-left shadow-none",
     wide && "col-span-full",
     !wide && "min-h-[132px]",
     // hover:bg-tile, NOT bg-ground. Tailwind's `ground` is #E4E4E4 — it is the
@@ -98,7 +114,7 @@ export function AlertCell({
       <div className="text-val leading-tight tracking-[-0.011em] text-red-ink">{title}</div>
       <div className="font-mono text-micro text-ink-2">{sub}</div>
       <div className="pt-3.5">
-        <Button className="rounded-full" onClick={onAct} size="sm">
+        <Button onClick={onAct} size="sm">
           {act}
         </Button>
       </div>
@@ -114,11 +130,11 @@ export function AlertCell({
  */
 export function TintRow({ value }: { value: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-xl bg-tint px-3.5 py-2.5">
+    <div className="flex items-center gap-2 rounded-lg bg-tint px-3.5 py-2.5">
       <span className="min-w-0 flex-1 truncate font-mono text-val text-red-ink">{value}</span>
       <Button
         aria-label="Open"
-        className="size-7 shrink-0 rounded-full text-red-ink hover:bg-white"
+        className="size-7 shrink-0 rounded-md text-red-ink hover:bg-white"
         onClick={() => window.open(`https://${value}`, "_blank", "noreferrer")}
         size="icon-sm"
         variant="ghost"
@@ -127,7 +143,7 @@ export function TintRow({ value }: { value: string }) {
       </Button>
       <Button
         aria-label="Copy"
-        className="size-7 shrink-0 rounded-full text-red-ink hover:bg-white"
+        className="size-7 shrink-0 rounded-md text-red-ink hover:bg-white"
         onClick={() => navigator.clipboard?.writeText(value).catch(() => {})}
         size="icon-sm"
         variant="ghost"
