@@ -9,10 +9,13 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@paper-design/shaders-react": "^0.0.80",
     "clsx": "^2.1.1",
     "cobe": "^0.6.3",
     "geist": "1.3.1",
+    "gray-matter": "^4.0.3",
     "lucide-react": "^0.454.0",
+    "marked": "^18.0.10",
     "motion": "^11.11.17",
     "next": "14.2.15",
     "react": "18.3.1",

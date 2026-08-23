@@ -52,9 +52,9 @@ const WorkbenchChat = dynamic(
  * width away from the thing somebody switched tabs to read. Hidden rather than
  * removed so the thread is still there on the way back.
  *
- * Chat shows the app in an iframe of `<slug>.supersonic.cv`: cross-origin but
+ * Chat shows the app in an iframe of `<slug>.<root>`: cross-origin but
  * same-site, so the app's own cookies still reach it and a logged-in app previews
- * logged in. It needs the proxy to send `frame-ancestors https://app.supersonic.cv`
+ * logged in. It needs the proxy to send `frame-ancestors` for the control plane
  * and to stop sending `X-Frame-Options`, which has no allowlist form; until that
  * lands the frame is blank for any app that sets either. See
  * docs/superpowers/specs/2026-08-19-app-workbench-design.md §3.

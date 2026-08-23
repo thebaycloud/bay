@@ -19,6 +19,11 @@ import {
 } from "@/components/ui/dialog";
 import { Row, RowGroup, RowList } from "@/components/panel/atoms";
 import { recordFor } from "@/lib/dns-record";
+// The team's seam, on top of roots.ts: one place that knows what we are called
+// and where we answer. Two hardcoded `supersonic.cv` strings in this copy would
+// have gone on claiming the old name after the cutover.
+import { appHost } from "@/lib/brand";
+import { rootDomain } from "@/lib/roots";
 import { cn } from "@/lib/utils";
 
 /**
@@ -399,14 +404,14 @@ export function DomainsPanel({
           {visibility !== "public" && (
             <p className="text-[13px] text-ink-3">
               This app is {visibility}, so visitors on your domain are sent to{" "}
-              {slug}.supersonic.cv to sign in — sign-in only works at that address. Make
-              the app public to have your domain answer for it.
+              {appHost(slug)} to sign in — sign-in only works at that address. Make the
+              app public to have your domain answer for it.
             </p>
           )}
         </>
       ) : (
         <p className="text-[13px] text-ink-3">
-          Custom domains are on Pro. Your app keeps its supersonic.cv address — upgrade
+          Custom domains are on Pro. Your app keeps its {rootDomain()} address — upgrade
           to point your own domain at it.
         </p>
       )}
