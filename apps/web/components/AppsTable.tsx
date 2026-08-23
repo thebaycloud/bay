@@ -11,7 +11,6 @@ import {
   SlidersHorizontal,
   TriangleAlert,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ShipNew } from "@/components/ShipNew";
 import { Input } from "@/components/ui/input";
@@ -47,13 +46,6 @@ function bucketOf(a: App): Bucket {
   if (a.status === "building" || a.status === "deploying" || a.status === "pending") return "building";
   return "live";
 }
-
-/** The panel's words and the panel's rule: green is status, red is wrong. */
-const STATE: Record<Bucket, { label: string; dot: string }> = {
-  live: { label: "live", dot: "bg-[var(--green)]" },
-  building: { label: "shipping", dot: "bg-ink-3" },
-  failed: { label: "failed", dot: "bg-red" },
-};
 
 /** "2 days ago", and never a date nobody can subtract in their head. */
 function ago(iso?: string): string {
@@ -155,7 +147,6 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
           ) : (
             shown.map((a) => {
               const b = bucketOf(a);
-              const state = STATE[b];
               return (
                 <div
                   className="group flex items-center gap-3 border-b border-border px-4 transition-colors last:border-0 hover:bg-tile"
@@ -178,11 +169,6 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
                     </span>
 
                     <span className="min-w-0 truncate text-[15px] font-[450] text-ink">{a.name || a.slug}</span>
-
-                    <Badge className="h-5 shrink-0 gap-1.5 rounded-full px-2 font-normal" variant="outline">
-                      <span aria-hidden="true" className={cn("size-1.5 rounded-full", state.dot)} />
-                      <span className="text-[12px] text-ink-2">{state.label}</span>
-                    </Badge>
 
                     {/* The address, which is the fact people actually come for, and
                         mono because it is a machine value. Hidden on narrow screens
