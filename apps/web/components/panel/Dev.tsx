@@ -164,7 +164,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
       ) : null}
 
-      <RowGroup title="Right now">
+      <RowGroup title="Live">
         <Row icon={ICON.address} sub="Where it lives" title="Address">
           <TintRow value={d.addr} />
         </Row>
@@ -213,7 +213,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         </Row>
       </RowGroup>
 
-      <RowGroup title="What it holds">
+      <RowGroup title="Inside">
         <Row icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
           <Chips>
             <StatusChip
@@ -244,7 +244,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         </Row>
       </RowGroup>
 
-      <RowGroup title="Who gets in">
+      <RowGroup title="Doors">
         <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
           <Chips>
             <Avatars initials={d.pInitials} />
