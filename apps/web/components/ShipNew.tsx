@@ -130,7 +130,7 @@ export function ShipNew() {
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="max-w-[520px] gap-0 p-0">
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-[520px] gap-0 overflow-hidden p-0">
         <DialogHeader className="px-5 pb-3 pt-5">
           <DialogTitle className="text-[17px] font-[450] tracking-[-0.01em]">Ship an app</DialogTitle>
           <DialogDescription className="text-[14px] text-ink-2">
@@ -159,14 +159,14 @@ export function ShipNew() {
           </div>
         </div>
 
-        <div className="px-5 pb-5 pt-4">
+        <div className="min-w-0 px-5 pb-5 pt-4">
           {tab === "local" ? (
-            <div className="flex flex-col gap-3">
+            <div className="flex min-w-0 flex-col gap-3">
               <p className="text-[14px] text-ink-2">
                 Paste this into Claude Code, Cursor or Codex. Your agent installs the
                 CLI, signs you in and ships the folder.
               </p>
-              <pre className="overflow-x-auto rounded-lg border border-border bg-ground p-3 font-mono text-[12.5px] leading-relaxed text-ink">
+              <pre className="max-w-full overflow-x-auto rounded-lg border border-border bg-ground p-3 font-mono text-[12.5px] leading-relaxed text-ink">
                 {AGENT_PROMPT}
               </pre>
               <Button

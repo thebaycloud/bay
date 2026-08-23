@@ -154,7 +154,11 @@ button { font-family: inherit; cursor: pointer; color: inherit; letter-spacing: 
 .switch .nm { font-weight: 550; font-size: 14px; }
 .switch .chev { margin-left: auto; color: var(--faint); }
 
-nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 0; }
+/* SCOPED to the rail. As a bare `nav` selector this reached every nav element in
+   the product and forced it into a vertical column — which is what broke the top
+   bar: "CLI" wrapped onto its own line and "Apps" disappeared behind the bar. It
+   was written for the sidebar's stacked list and only ever meant that. */
+.sidebar nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 0; }
 .nav-label { font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .16em; color: var(--faint); padding: 14px 8px 7px; text-transform: uppercase; }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--r-sm); color: var(--ink-2); font-size: 13.5px; font-weight: 500; border: none; background: none; width: 100%; text-align: left; transition: background .12s var(--ease), color .12s var(--ease); position: relative; }
 .nav-item svg { opacity: .85; flex: none; }
