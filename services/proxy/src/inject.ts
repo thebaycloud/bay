@@ -2,11 +2,14 @@ import { config } from "./config";
 
 // The Supersonic overlay injected into every hosted app's HTML. It renders inside
 // a Shadow DOM so the app's own CSS can't reach it (no style bleed, no glow) and
-// ours can't leak out. Everyone sees a "Runs on Supersonic" badge; owners also get
+// ours can't leak out. Everyone sees a "Runs on <product>" badge; owners also get
 // a separated toolbar (Share · Open in Supersonic), and Share edits access inline.
 
-const APP = "https://app.supersonic.cv";
-const SITE = "https://supersonic.cv";
+// Read from the same root the rest of the edge uses. This markup is injected
+// into other people's pages, so a stale literal here is our old brand showing
+// up on somebody's live site after the rename.
+const APP = `https://app.${config.rootDomain}`;
+const SITE = `https://${config.rootDomain}`;
 
 /**
  * Everything only an owner may see — as SOURCE, not as a runtime branch.
@@ -153,7 +156,7 @@ var style=document.createElement('style');style.textContent=css;root.appendChild
 // badge (everyone on free; removable on paid plans)
 if(C.badge){
 var badge=document.createElement('a');badge.className='badge';badge.href=C.site;badge.target='_blank';
-badge.innerHTML=MARK(12,'#fff')+'Runs on Supersonic';
+badge.innerHTML=MARK(12,'#fff')+'Runs on ${config.productName}';
 root.appendChild(badge);
 }
 

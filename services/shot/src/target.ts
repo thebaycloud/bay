@@ -11,6 +11,8 @@
  * proxy sets. Going direct means setting that header ourselves.
  */
 
+const ALLOWED_SUFFIXES = [".run.app", ".thebay.cloud", ".supersonic.cv"] as const;
+
 const STATIC_HOST_RE = /^https:\/\/supersonic-static[-.]/;
 
 export interface Target {
@@ -45,7 +47,11 @@ export function buildTarget(slug: string, runUrl: string, idToken: string | null
     return null;
   }
   if (parsed.protocol !== "https:") return null;
-  if (!parsed.hostname.endsWith(".run.app") && !parsed.hostname.endsWith(".supersonic.cv")) return null;
+  // The allow-list, and it has to name every root the platform serves. This is
+  // an SSRF guard: a hostname that is not on it is refused outright. Missing the
+  // new root would not fail loudly — it would simply stop taking screenshots of
+  // every app on it, and read as the screenshot service being broken.
+  if (!ALLOWED_SUFFIXES.some((suffix) => parsed.hostname.endsWith(suffix))) return null;
 
   const headers: Record<string, string> = {};
   if (idToken) headers.Authorization = `Bearer ${idToken}`;

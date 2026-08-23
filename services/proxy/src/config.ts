@@ -17,6 +17,8 @@ export const config = {
    * redirect that sent people to a domain being retired would be manufacturing
    * new traffic for it.
    */
+  /** What a person calls us. Appears on the badge injected into every app. */
+  productName: process.env.PRODUCT_NAME ?? "Supersonic",
   rootDomain: process.env.ROOT_DOMAIN ?? "supersonic.cv",
   /**
    * Every root we SERVE, canonical first.
