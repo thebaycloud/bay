@@ -107,7 +107,7 @@ Either way the old domain is not switched off on cutover day.
 `supersonic-cli` is on npm at v0.10.0. It cannot be renamed; a new name is
 published and the old one deprecated with a pointer. Pick one:
 
-- `bay-cli` — matches `bay deploy`, short, and `bay` is the command people type
+- `@thebaycloud/cli` — matches `bay deploy`, short, and `bay` is the command people type
 - `@thebaycloud/cli` — scoped, unmistakably yours, but `npm i -g @thebaycloud/cli`
   is a mouthful
 
@@ -282,15 +282,15 @@ once and 16 tests said so.
 
 ### Cutover preconditions — none of these are optional
 
-The landing page and `llms.txt` now say **Bay**, `bay-cli` and
+The landing page and `llms.txt` now say **Bay**, `@thebaycloud/cli` and
 `app.thebay.cloud`. All three are promises, and two of them are not yet true.
 Deploying `apps/landing` before they are would put a manual in front of coding
-agents telling them to `npm i -g bay-cli` — a package that does not exist — and
+agents telling them to `npm i -g @thebaycloud/cli` — a package that does not exist — and
 an "Open app" button pointing at a host with no certificate.
 
 So, in order, and none skippable:
 
-1. `bay-cli` published to npm and installable
+1. `@thebaycloud/cli` published to npm and installable
 2. ~~`app.thebay.cloud` serving the control plane~~ — **done 24 Aug**: all three mappings Ready, apex/www/app answer 200/200/307
 3. `apps/landing` deployed
 4. `ROOT_DOMAIN` flipped on the control plane, the worker and the job

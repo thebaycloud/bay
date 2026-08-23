@@ -1,5 +1,5 @@
 {
-  "name": "bay-cli",
+  "name": "@thebaycloud/cli",
   "version": "1.0.0",
   "description": "Deploy & debug Bay apps from your coding agent — the agent-native CLI.",
   "bin": {
@@ -41,5 +41,8 @@
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/The-Red-Onion/supersonic/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

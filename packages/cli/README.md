@@ -1,9 +1,9 @@
-# bay-cli
+# @thebaycloud/cli
 
 Deploy anything to [Bay](https://app.thebay.cloud) in one command.
 
 ```bash
-npm install -g bay-cli
+npm install -g @thebaycloud/cli
 ```
 
 ## Usage

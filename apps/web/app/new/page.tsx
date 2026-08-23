@@ -6,6 +6,7 @@ import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRou
 import { Mark } from "@/components/Mark";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 import { DeployFilm } from "@/components/DeployFilm";
+import { productName } from "@/lib/brand";
 import { drive as advanceFilm, START as FILM_START, type FilmDrive } from "@/lib/deploy-film";
 
 // The 402 bodies carry a `reason`; anything unrecognised (an older server, a
@@ -16,19 +17,19 @@ function asReason(v: unknown): PaywallReason {
   return REASONS.includes(v as PaywallReason) ? (v as PaywallReason) : "choose_plan";
 }
 
-const AGENT_PROMPT = `You are publishing my app to Supersonic — a cloud for small software (agent manual: https://supersonic.cv/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
+const AGENT_PROMPT = `You are publishing my app to Bay — a cloud for small software (agent manual: https://thebay.cloud/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
 
-1. Install the CLI if it isn't already:  npm i -g supersonic-cli
+1. Install the CLI if it isn't already:  npm i -g @thebaycloud/cli
 
 2. Publish it, and WAIT for the answer:
-   supersonic deploy --wait
+   bay deploy --wait
    The first run opens a browser for me to sign in. Without --wait the command returns the moment the URL is reserved and finishes building after you have stopped watching, so you would report success for a build that has not happened yet.
 
-3. The deploy succeeded only when you see a line starting "✓ live:". Anything else is not done. Getting it green is your job, not mine:  supersonic logs <app>  shows what production actually saw and  supersonic diagnose <app>  hands you a fix. Fix the code, redeploy, repeat. Don't paste me an error and ask what to do.
+3. The deploy succeeded only when you see a line starting "✓ live:". Anything else is not done. Getting it green is your job, not mine:  bay logs <app>  shows what production actually saw and  bay diagnose <app>  hands you a fix. Fix the code, redeploy, repeat. Don't paste me an error and ask what to do.
 
 4. The URL will ask me to sign in — every app is private until I say otherwise. That is not a bug; tell me the app is live and private, and that I can make it public in the dashboard.
 
-My .env travels with the deploy automatically — you do not need to copy keys across. Use  supersonic env <app> set KEY=VALUE  only for a value that is NOT in my .env. Skip DATABASE_URL and anything pointing at localhost: Supersonic provisions the database and injects that itself.
+My .env travels with the deploy automatically — you do not need to copy keys across. Use  bay env <app> set KEY=VALUE  only for a value that is NOT in my .env. Skip DATABASE_URL and anything pointing at localhost: Bay provisions the database and injects that itself.
 
 If my app has migrations and nothing in the repo says how to run them — no Procfile release line, nothing in compose.yml, fly.toml or package.json — say so and add one. An app deployed against an empty schema serves its homepage and fails everything else.
 
@@ -290,7 +291,7 @@ export default function NewApp() {
       <header className="topbar">
         <Link href="/" className="topbrand">
           <span className="logo"><Mark size={14} onDark /></span>
-          SUPERSONIC
+          {productName().toUpperCase()}
         </Link>
         <div className="spacer" />
         <Link href="/" className="btn"><ArrowLeft size={13} />Apps</Link>
