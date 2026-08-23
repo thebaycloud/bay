@@ -15,11 +15,17 @@
  */
 import { getPool } from "./db";
 import { removeDomainCert } from "./domain-cert";
+import { rootDomain, productName } from "./brand";
 
 const DB = "supersonic_platform";
 
-/** The domain we issue addresses under. A person may never attach a name inside it. */
-export const ROOT_DOMAIN = "supersonic.cv";
+/**
+ * The domain we issue addresses under. A person may never attach a name inside it.
+ *
+ * Read through lib/brand rather than written here, so a rename is configuration
+ * rather than an edit to a file about custom domains.
+ */
+export const ROOT_DOMAIN = rootDomain();
 
 /**
  * How many domains one app may hold.
@@ -113,7 +119,7 @@ export function refuseHostname(hostname: string, rootDomain: string = ROOT_DOMAI
     // be claiming a name the platform issues — a row in this table that the
     // edge would have to resolve against the wildcard rule, with one of the two
     // winning for reasons nobody could see from the dashboard.
-    return `${rootDomain} addresses are issued by Supersonic — attach a domain you own instead`;
+    return `${rootDomain} addresses are issued by ${productName()} — attach a domain you own instead`;
   }
   if (hostname.endsWith(".local") || hostname.endsWith(".localhost") || hostname.endsWith(".internal")) {
     return "that name only exists inside a private network, so it can never get a certificate";

@@ -35,7 +35,7 @@
  * get no CORS headers, exactly as before.
  */
 
-const ROOT = process.env.ROOT_DOMAIN ?? "supersonic.cv";
+import { rootDomain } from "./brand";
 
 /**
  * The headers that permit this request, or an empty object.
@@ -58,7 +58,7 @@ export function corsFor(req: Request, slug: string): Record<string, string> {
     return {};
   }
 
-  const allowed = host === `${slug}.${ROOT}` || host === `app.${ROOT}`;
+  const allowed = host === `${slug}.${rootDomain()}` || host === `app.${rootDomain()}`;
   if (!allowed) return {};
 
   return {

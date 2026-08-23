@@ -21,11 +21,11 @@
  * read from client components.
  */
 
-const ROOT = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "supersonic.cv";
+import { rootDomain } from "./brand";
 
 /** The app itself — what an owner shares with somebody. */
 export function appUrl(slug: string): string {
-  return `https://${slug}.${ROOT}`;
+  return `https://${slug}.${rootDomain()}`;
 }
 
 /**
