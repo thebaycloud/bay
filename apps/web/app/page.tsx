@@ -89,7 +89,7 @@ async function Apps() {
   return (
     <>
       <AccountBanner />
-      <TopBar apps={apps} />
+      <TopBar />
       <AppsTable initial={apps} initialError={error} />
     </>
   );
@@ -109,7 +109,7 @@ export default function Home() {
 function HomeShell() {
   return (
     <>
-      <TopBar apps={[]} />
+      <TopBar />
       <div className="mx-auto w-full max-w-[1080px] px-6 py-10">
         <div className="h-8 w-40 rounded-md bg-tile" />
         <div className="mt-8 h-64 rounded-xl border border-border bg-card" />

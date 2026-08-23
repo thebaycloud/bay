@@ -7,13 +7,12 @@ import {
   Box,
   ChevronDown,
   MoreHorizontal,
-  Search,
   SlidersHorizontal,
   TriangleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ShipNew } from "@/components/ShipNew";
-import { Input } from "@/components/ui/input";
+import { CommandPalette } from "@/components/CommandPalette";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -59,20 +58,16 @@ function ago(iso?: string): string {
 }
 
 export function AppsTable({ initial, initialError }: { initial: App[]; initialError?: string }) {
-  const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortKey>("recent");
 
   const shown = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const list = needle
-      ? initial.filter((a) => `${a.name ?? ""} ${a.slug}`.toLowerCase().includes(needle))
-      : [...initial];
+    const list = [...initial];
     const when = (a: App) => (a.deployedAt ? new Date(a.deployedAt).getTime() : Date.now());
     if (sort === "name") list.sort((x, y) => (x.name || x.slug).localeCompare(y.name || y.slug));
     else if (sort === "oldest") list.sort((x, y) => when(x) - when(y));
     else list.sort((x, y) => when(y) - when(x));
     return list;
-  }, [initial, q, sort]);
+  }, [initial, sort]);
 
   return (
     <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-7 px-6 py-10">
@@ -87,19 +82,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
           <span className="text-[14px] text-ink-3">{initial.length}</span>
 
           <div className="ml-auto flex items-center gap-2">
-            <div className="relative">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-3"
-              />
-              <Input
-                aria-label="Find an app"
-                className="h-9 w-[190px] pl-8"
-                onChange={(e) => setQ(e.currentTarget.value)}
-                placeholder="Find an app…"
-                value={q}
-              />
-            </div>
+            <CommandPalette apps={initial} />
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -139,9 +122,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
           ) : shown.length === 0 ? (
             <Row>
               <p className="text-[14px] text-ink-2">
-                {initial.length === 0
-                  ? "Nothing here yet. Ship one and it appears in this list."
-                  : `Nothing matches “${q}”.`}
+                Nothing here yet. Ship one and it appears in this list.
               </p>
             </Row>
           ) : (

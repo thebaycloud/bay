@@ -1,8 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { CommandPalette } from "@/components/CommandPalette";
-import type { App } from "@/components/AppsGrid";
 
 /**
  * The whole chrome, in 52px.
@@ -15,7 +13,7 @@ import type { App } from "@/components/AppsGrid";
  * The mark links to the landing page rather than to `/`, which is what the mark on
  * every other page of this product does; the app list is one click along the bar.
  */
-export function TopBar({ apps }: { apps: App[] }) {
+export function TopBar() {
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-card">
       <div className="mx-auto flex h-[52px] w-full max-w-[1080px] items-center gap-4 px-6">
@@ -47,9 +45,9 @@ export function TopBar({ apps }: { apps: App[] }) {
           </Link>
         </nav>
 
-        <div className="ml-auto">
-          <CommandPalette apps={apps} />
-        </div>
+        {/* Nothing on the right. Search moved down beside the rows it searches —
+            it was 900px from them up here, and the table had its own box, so the
+            screen carried two ways to find one app. */}
       </div>
     </header>
   );
