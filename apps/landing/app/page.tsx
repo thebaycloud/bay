@@ -20,7 +20,7 @@ import { ArrowRight, Check, Copy, Lock, Terminal } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { cn } from "@/lib/utils";
 import { Dithering, MeshGradient } from "@paper-design/shaders-react";
-import { CONTACT_EMAIL, GITHUB_REPO } from "@/lib/brand";
+import { BRAND, DOMAIN, CLI, PKG, APP_URL, CONTACT_EMAIL, GITHUB_REPO } from "@/lib/brand";
 import { TEMPLATES, selfhostPrompt } from "@/lib/templates";
 import { Stars } from "@/components/Stars";
 import { SiteNav } from "@/components/SiteNav";
@@ -35,11 +35,11 @@ import { CopyPrompt } from "./templates/copy-prompt";
 // NOTE: while DOMAIN says thebay.cloud and the fleet still serves supersonic.cv,
 // this page is ahead of the product. It should not go live before the migration.
 // Or point these back at the old names until it does.
-const BRAND = "Bay";
-const DOMAIN = "thebay.cloud";
-const CLI = "bay";
-const PKG = "bay";
-const APP_URL = "https://app.supersonic.cv";
+// From lib/brand, not written out here. These five were literals in this file
+// and lib/brand had its own copies, which is how APP_URL stayed on the old host
+// after the cutover and how PKG came to say `bay` — a package on npm that
+// belongs to somebody else. A page that hardcodes what a module already owns
+// does not fail loudly; it just stops agreeing with it.
 
 // ── repeated class strings ─────────────────────────────────────────────────
 //
