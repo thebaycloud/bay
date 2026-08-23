@@ -1,11 +1,35 @@
 "use client";
 
 import { ArrowUpRight, MessageSquare, SquareTerminal } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { WorkbenchChat } from "@/components/WorkbenchChat";
 import { cn } from "@/lib/utils";
+
+/**
+ * The rail arrives on its own.
+ *
+ * It is 187 KB gzipped — `ai-elements/message` pulls in `streamdown`, which
+ * pulls in Shiki and KaTeX, and Shiki brings grammars for ABAP, Fortran, Verilog
+ * and COBOL. That was 187 of the workbench's 347 KB, on the critical path of a
+ * page somebody may well open straight into Dev mode and never chat on.
+ *
+ * `ssr: false` because it is a chat: there is nothing to render on the server
+ * that is worth a second of hydration, and the thread starts empty.
+ */
+const WorkbenchChat = dynamic(
+  () => import("@/components/WorkbenchChat").then((m) => ({ default: m.WorkbenchChat })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-0 flex-col justify-end gap-3 p-3">
+        <Skeleton className="h-[92px] w-full rounded-xl" />
+      </div>
+    ),
+  },
+);
 
 /**
  * The workbench: a chat rail beside the running app, and a dev mode holding the
@@ -123,10 +147,12 @@ export function Workbench({
           <WorkbenchChat slug={slug} />
         </aside>
 
-        {/* Both panes are mounted; Radix hides the inactive one. forceMount is
-            deliberately NOT used on the frame — an iframe left mounted keeps the
+        {/* The frame is NOT force-mounted: an iframe left mounted keeps the
             tenant's app running, and its timers and polling, behind a dev screen
-            nobody is watching. */}
+            nobody is watching. Dev IS, below — it is nine network reads, two of
+            which take a second, and Radix unmounts an inactive pane, so every
+            switch back was paying for all of them again. The comment that used to
+            be here claimed both panes were mounted; they were not. */}
         <TabsContent value="chat" className="m-0 min-h-0 overflow-hidden">
           <iframe
             className="block size-full border-0 bg-card"
@@ -139,7 +165,11 @@ export function Workbench({
           />
         </TabsContent>
 
-        <TabsContent value="dev" className="m-0 min-h-0 overflow-hidden">
+        <TabsContent
+          className="m-0 min-h-0 overflow-hidden data-[state=inactive]:hidden"
+          forceMount
+          value="dev"
+        >
           {children}
         </TabsContent>
       </div>

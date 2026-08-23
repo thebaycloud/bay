@@ -540,6 +540,40 @@ export async function writeObject(bucket: string, name: string, body: string): P
  * One Cloud Run service, in the same Knative shape gcloud prints. Replaces
  * `gcloud run services describe <name> --format=json`.
  */
+/**
+ * Every Cloud Scheduler job in the region, or null.
+ *
+ * Exists because `listJobs` spawned the gcloud CLI for this — a Python process
+ * per page load, measured at a second with warm credentials and worse inside a
+ * Cloud Run container, on the read that the whole Dev screen was waiting behind.
+ *
+ * Returns null rather than a partial list on a paging cap, for the same reason
+ * `listServicesRest` does: every caller treats the answer as complete, and a
+ * truncated list reads as "that job does not exist".
+ */
+export async function listSchedulerJobsRest(region: string): Promise<any[] | null> {
+  const out: any[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < 20; page++) {
+    const url =
+      `https://cloudscheduler.googleapis.com/v1/projects/${PROJECT}/locations/${region}/jobs` +
+      `?pageSize=500${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+    const r = await authed(url);
+    if (!r || !r.ok) return null;
+    let j: any;
+    try {
+      j = await r.json();
+    } catch {
+      return null;
+    }
+    if (!j || j.error) return null;
+    out.push(...(Array.isArray(j.jobs) ? j.jobs : []));
+    pageToken = j.nextPageToken || undefined;
+    if (!pageToken) return out;
+  }
+  return null;
+}
+
 export async function describeServiceRest(service: string): Promise<any | null> {
   const r = await authed(runServiceUrl(service));
   if (!r || !r.ok) return null;

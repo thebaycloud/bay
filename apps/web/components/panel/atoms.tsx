@@ -245,6 +245,24 @@ export function RowSection({ title, children }: { title: string; children: React
   );
 }
 
+/**
+ * A fact that has not arrived yet.
+ *
+ * Sized like the thing it stands in for, so the row does not jump when the real
+ * answer lands — which is the whole reason a skeleton beats a spinner here:
+ * every row is present from the first paint and only its right-hand fact fills
+ * in.
+ */
+export function ChipSkeleton({ w = 88 }: { w?: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block h-[14px] animate-pulse rounded-sm bg-tile"
+      style={{ width: w }}
+    />
+  );
+}
+
 /** A row of facts under a cell's sub. */
 export function Chips({ children }: { children: ReactNode }) {
   return <div className="flex flex-wrap items-center gap-2.5">{children}</div>;

@@ -15,11 +15,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/panel/toast";
 import {
   AlertCell,
   Avatars,
+  ChipSkeleton,
   Chips,
   Row,
   RowGroup,
@@ -35,7 +35,13 @@ import { IssuesPanel } from "@/components/IssuesPanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
 import { GitPanel } from "@/components/GitPanel";
 import SharePanel from "@/components/SharePanel";
-import { readPanel, type Reading } from "@/lib/panel/reading";
+import {
+  deriveReading,
+  readParts,
+  type Part,
+  type Raw,
+  type Reading,
+} from "@/lib/panel/reading";
 
 /**
  * Dev mode: the panel's cell grid, and the screens behind it.
@@ -97,8 +103,17 @@ const TITLE: Record<View, string> = {
 };
 
 export function Dev({ slug, address }: { slug: string; address: string }) {
-  const [d, setD] = useState<Reading | null>(null);
-  const [failed, setFailed] = useState(false);
+  /**
+   * The answers, as they arrive, and which ones have.
+   *
+   * Two pieces of state and not one: `raw` is what came back, `done` is what
+   * came back AT ALL — and they are different, because a read that answers
+   * `null` (umami off, no database) has landed and has nothing to say. Without
+   * the second, an empty answer is indistinguishable from a slow one, and the
+   * row would show a skeleton forever.
+   */
+  const [raw, setRaw] = useState<Raw>({});
+  const [done, setDone] = useState<Set<Part>>(new Set());
   const [view, setView] = useState<View | null>(null);
   /**
    * Open, because the domains under Address are the answer to the question the
@@ -109,52 +124,20 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
-    let alive = true;
-    setFailed(false);
-    readPanel(slug, address)
-      .then((r) => {
-        if (alive) setD(r);
-      })
-      .catch(() => {
-        if (alive) setFailed(true);
-      });
-    return () => {
-      alive = false;
-    };
+    setRaw({});
+    setDone(new Set());
+    // Nine reads, nine renders. Each `setState` is a patch, so a row draws the
+    // moment its own read lands instead of behind the slowest of the nine.
+    return readParts(slug, address, (key, value) => {
+      setRaw((r) => ({ ...r, [key]: value }));
+      setDone((s) => new Set(s).add(key));
+    });
   }, [slug, address, nonce]);
 
-  if (failed) {
-    return (
-      <Screen>
-        <Card className="flex flex-col items-start gap-2 rounded-xl border-border bg-card p-5 shadow-none">
-          <div className="text-val text-ink">That did not come back</div>
-          <p className="text-sub text-ink-2">Nothing could be read about this app just now.</p>
-          {/* Never left spinning. A panel that says "Reading…" forever is
-              indistinguishable from one that is broken, which is what this was. */}
-          <Button className="mt-1" onClick={() => setNonce((n) => n + 1)} size="sm" variant="outline">
-            <RefreshCw className="size-3.5" />
-            Try again
-          </Button>
-        </Card>
-      </Screen>
-    );
-  }
+  const d = deriveReading(slug, address, raw);
+  /** Whether this row's own read has come back — skeleton until it has. */
+  const has = (...parts: Part[]) => parts.every((p) => done.has(p));
 
-  if (!d) {
-    return (
-      <Screen>
-        <RowList>
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div className="flex items-center gap-3 border-b border-border px-4 py-3.5 last:border-0" key={i}>
-              <Skeleton className="size-7 shrink-0 rounded-sm" />
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="ml-auto h-4 w-28" />
-            </div>
-          ))}
-        </RowList>
-      </Screen>
-    );
-  }
 
   if (view) {
     return (
@@ -210,23 +193,28 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         <RowList>
           <Row icon={ICON.access} onOpen={() => setView("access")} title="Access">
             <Chips>
+              {!has("share") ? <ChipSkeleton w={104} /> : null}
               <Avatars initials={d.pInitials} />
-              <StatusChip
-                text={
-                  d.who === "public"
-                    ? "anyone with the link"
-                    : d.who === "shared"
-                      ? "people you invited"
-                      : "only you"
-                }
-                tone={d.who === "public" ? "grey" : "green"}
-              />
+              {has("share") ? (
+                <StatusChip
+                  text={
+                    d.who === "public"
+                      ? "anyone with the link"
+                      : d.who === "shared"
+                        ? "people you invited"
+                        : "only you"
+                  }
+                  tone={d.who === "public" ? "grey" : "green"}
+                />
+              ) : null}
             </Chips>
           </Row>
 
           <Row icon={ICON.analytics} onOpen={() => setView("analytics")} title="Analytics">
             <Chips>
-              {d.an ? (
+              {!has("an") ? (
+                <ChipSkeleton w={116} />
+              ) : d.an ? (
                 <StatusChip
                   text={`${d.an.visitors.toLocaleString()} ${d.an.visitors === 1 ? "visitor" : "visitors"} today`}
                   tone={d.an.dvUp ? "green" : "red"}
@@ -251,20 +239,32 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             <Chips>
               {/* No re-ship button. There is no deploy-trigger route behind it, and a
                   dead control on the one screen about shipping is worse than none. */}
-              <StatusChip
-                text={d.shipping ? "shipping now" : `last shipped ${d.ships[0].when}`}
-                tone={d.shipping ? "red" : "green"}
-              />
+              {has("dep") ? (
+                <StatusChip
+                  text={d.shipping ? "shipping now" : `last shipped ${d.ships[0].when}`}
+                  tone={d.shipping ? "red" : "green"}
+                />
+              ) : (
+                <ChipSkeleton w={124} />
+              )}
             </Chips>
           </Row>
 
           <Row icon={ICON.infra} onOpen={() => setView("infra")} title="Infra">
             <Chips>
-              <StatusChip
-                text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
-                tone={broken ? "red" : "green"}
-              />
-              <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
+              {has("live") ? (
+                <StatusChip
+                  text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
+                  tone={broken ? "red" : "green"}
+                />
+              ) : (
+                <ChipSkeleton w={56} />
+              )}
+              {has("jobs") ? (
+                <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
+              ) : (
+                <ChipSkeleton w={48} />
+              )}
             </Chips>
           </Row>
         </RowList>
@@ -273,10 +273,14 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
       <RowGroup title="Resources">
         <Row icon={ICON.data} onOpen={() => setView("data")} title="Data">
           <Chips>
-            <StatusChip
-              text={`${d.tables.length} ${d.tables.length === 1 ? "table" : "tables"} · ${d.files} ${d.files === 1 ? "file" : "files"}`}
-              tone={d.missing ? "grey" : "green"}
-            />
+            {has("db", "store") ? (
+              <StatusChip
+                text={`${d.tables.length} ${d.tables.length === 1 ? "table" : "tables"} · ${d.files} ${d.files === 1 ? "file" : "files"}`}
+                tone={d.missing ? "grey" : "green"}
+              />
+            ) : (
+              <ChipSkeleton w={112} />
+            )}
           </Chips>
         </Row>
 
@@ -285,22 +289,28 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             there is room for all of them. */}
         <Row icon={ICON.keys} onOpen={() => setView("keys")} title="Keys">
           <Chips>
-            <StatusChip
-              text={
-                d.keys.length
-                  ? `${d.keys.length} ${d.keys.length === 1 ? "key" : "keys"} set`
-                  : "nothing connected yet"
-              }
-              tone={d.keys.length ? "green" : "grey"}
-            />
+            {has("env") ? (
+              <StatusChip
+                text={
+                  d.keys.length
+                    ? `${d.keys.length} ${d.keys.length === 1 ? "key" : "keys"} set`
+                    : "nothing connected yet"
+                }
+                tone={d.keys.length ? "green" : "grey"}
+              />
+            ) : (
+              <ChipSkeleton w={72} />
+            )}
           </Chips>
         </Row>
 
         <Row icon={ICON.agent} onOpen={() => setView("agent")} title="Agent">
           <Chips>
+            {!has("agent") ? <ChipSkeleton w={140} /> : null}
             {/* Two states said differently on purpose: no token is something to
                 fix, a token never used is something to try. */}
-            <StatusChip
+            {has("agent") ? (
+              <StatusChip
               text={
                 d.tokens.length
                   ? d.tokens.some((t) => t.last_used_at)
@@ -309,8 +319,11 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
                   : "not connected"
               }
               tone={d.tokens.some((t) => t.last_used_at) ? "green" : "red"}
-            />
-            <StatusChip text={d.mcp ? "MCP on" : "MCP not built"} tone="grey" />
+              />
+            ) : null}
+            {has("agent") ? (
+              <StatusChip text={d.mcp ? "MCP on" : "MCP not built"} tone="grey" />
+            ) : null}
           </Chips>
         </Row>
       </RowGroup>
@@ -380,7 +393,7 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
       <Card className="flex flex-col gap-3 rounded-xl border-border bg-card p-4 shadow-none">
         {d.keys.length ? (
           <div className="flex flex-col gap-2">
-            {d.keys.map((k) => (
+            {d.keys.map((k: { name: string }) => (
               <div className="flex items-center justify-between gap-3 border-b border-border pb-2 last:border-0 last:pb-0" key={k.name}>
                 <span className="text-val text-ink">{k.name}</span>
                 <StatusChip text="set" tone="green" />

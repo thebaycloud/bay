@@ -1,7 +1,13 @@
 import { slugForName } from "./deploys";
 import { spawn } from "node:child_process";
 import { randomSlug } from "./slug";
-import { accessToken as restAccessToken, describeServiceRest, listServicesRest, invalidateToken } from "./gcp-rest";
+import {
+  accessToken as restAccessToken,
+  describeServiceRest,
+  listSchedulerJobsRest,
+  listServicesRest,
+  invalidateToken,
+} from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
 import { dbNameForSlug, getPool } from "./db";
 import { deleteAppSecrets } from "./app-secrets";
@@ -283,8 +289,16 @@ export async function listBucketObjects(bucket: string): Promise<{ name: string;
 export interface Job { id: string; label: string; schedule: string; uri: string; state: string; lastAttempt: string; }
 
 export async function listJobs(slug: string): Promise<Job[]> {
-  const out = await capture(["scheduler", "jobs", "list", "--location", REGION, "--project", PROJECT, "--format=json"]);
-  const arr = JSON.parse(out) as any[];
+  // REST first, gcloud only if it refuses. This is the read the whole Dev screen
+  // used to wait behind: spawning the CLI cost about a second with warm
+  // credentials and more in a container, for a list this filters down to the
+  // handful of jobs belonging to one app.
+  const rest = await listSchedulerJobsRest(REGION);
+  const arr =
+    rest ??
+    (JSON.parse(
+      await capture(["scheduler", "jobs", "list", "--location", REGION, "--project", PROJECT, "--format=json"]),
+    ) as any[]);
   const prefix = `${slug}--`;
   return arr
     .map((j) => ({ id: (j.name || "").split("/").pop() as string, raw: j }))

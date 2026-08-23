@@ -1,5 +1,5 @@
 /**
- * Everything the panel shows, read at once.
+ * Everything the panel shows, read a piece at a time.
  *
  * A port of `dwLoad` from services/proxy/panel/layer.js, with two things changed
  * and one kept.
@@ -15,6 +15,13 @@
  * panel saying "Reading…" forever with nothing on screen and nothing in the
  * console. A cell holding a dash is worth more than seven cells that never
  * arrive.
+ *
+ * And now the deadline is per ROW as well as per request. There is no
+ * `Promise.all` any more: nine reads start together and each row draws the
+ * moment its own read lands. The version this replaces made every cell wait for
+ * `/jobs`, which spawns the gcloud CLI — measured at a second with warm
+ * credentials — so a share lookup that answered in 40ms showed nothing for a
+ * second and a half.
  */
 
 export type Ship = {
@@ -135,34 +142,89 @@ function keyName(k: Json | string): string {
   return typeof k === "string" ? k : String(k.key ?? k.name ?? k);
 }
 
-export async function readPanel(slug: string, addr: string): Promise<Reading> {
-  const [share, env, db, store, jobs, dep, an, agent, live] = await Promise.all([
-    soon(api(slug, "/share"), 6000, {} as Json),
-    soon(api(slug, "/env"), 6000, {} as Json),
-    soon(api(slug, "/db"), 6000, {} as Json),
-    soon(api(slug, "/storage"), 6000, {} as Json),
-    soon(api(slug, "/jobs"), 6000, {} as Json),
-    soon(api(slug, "/deploy-status"), 6000, {} as Json),
-    soon(api(slug, "/analytics"), 6000, {} as Json),
-    soon(api(slug, "/agent"), 6000, {} as Json),
+/**
+ * Which read a fact came from.
+ *
+ * Named because a ROW now waits only for its own read. The screen used to be one
+ * `Promise.all` over all nine with a six-second deadline apiece, so a cell whose
+ * answer arrived in 40ms sat behind `/jobs`, which spawns the gcloud CLI. Nothing
+ * appeared until everything had.
+ */
+export type Part = "share" | "env" | "db" | "store" | "jobs" | "dep" | "an" | "agent" | "live";
+
+/** The raw answers, as they arrive. Absent means "not yet". */
+export type Raw = Partial<Record<Part, Json | null>>;
+
+/** What each read is, and how long it is worth waiting for. */
+const PARTS: { key: Part; get: (slug: string, addr: string) => Promise<Json | null>; ms: number }[] = [
+  { key: "share", get: (s) => api(s, "/share"), ms: 6000 },
+  { key: "env", get: (s) => api(s, "/env"), ms: 6000 },
+  { key: "db", get: (s) => api(s, "/db"), ms: 6000 },
+  { key: "store", get: (s) => api(s, "/storage"), ms: 6000 },
+  { key: "jobs", get: (s) => api(s, "/jobs"), ms: 6000 },
+  { key: "dep", get: (s) => api(s, "/deploy-status"), ms: 6000 },
+  { key: "an", get: (s) => api(s, "/analytics"), ms: 6000 },
+  { key: "agent", get: (s) => api(s, "/agent"), ms: 6000 },
+  {
     // Shortest deadline and first to be given up on: this is the one that reaches
     // umami, and it is cross-origin to the tenant's own host.
-    soon(
+    key: "live",
+    ms: 4000,
+    get: (_s, addr) =>
       fetch(`https://${addr}/_xray`, {
         credentials: "include",
         headers: { Accept: "application/json" },
       })
         .then((r) => r.json())
         .catch(() => null),
-      4000,
-      null as Json | null,
-    ),
-  ]);
+  },
+];
+
+/**
+ * Start all nine, report each one as it lands.
+ *
+ * Returns a cancel function, because the screen can be left while six of these
+ * are still in flight and a `setState` after that is a React warning at best.
+ */
+export function readParts(
+  slug: string,
+  addr: string,
+  onPart: (key: Part, value: Json | null) => void,
+): () => void {
+  let alive = true;
+  for (const p of PARTS) {
+    soon(p.get(slug, addr), p.ms, null).then((v) => {
+      if (alive) onPart(p.key, v);
+    });
+  }
+  return () => {
+    alive = false;
+  };
+}
+
+/**
+ * Everything the panel shows, from whatever has arrived so far.
+ *
+ * Pure, and total: every field has an answer for the case where its read has not
+ * landed, so a half-filled screen is a screen with fewer facts on it rather than
+ * one that throws. `Reading` is what the rows read; `Raw` is what the network
+ * gave us.
+ */
+export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
+  const share = (raw.share ?? {}) as Json;
+  const env = (raw.env ?? {}) as Json;
+  const db = (raw.db ?? {}) as Json;
+  const store = (raw.store ?? {}) as Json;
+  const jobs = (raw.jobs ?? {}) as Json;
+  const dep = (raw.dep ?? {}) as Json;
+  const an = (raw.an ?? {}) as Json;
+  const agent = (raw.agent ?? {}) as Json;
+  const live = raw.live as Json | null | undefined;
 
   const grants: string[] = share.grants ?? [];
   const paths = live?.live?.paths ?? [];
   const here: string[] = live?.live?.here?.names ?? [];
-  const stats = (an as Json).stats ?? null;
+  const stats = an.stats ?? null;
   const broken = paths.filter((p: Json) => p.brokenFor);
 
   const d: Reading = {
