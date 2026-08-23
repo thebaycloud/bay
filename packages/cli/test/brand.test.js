@@ -150,3 +150,24 @@ test("migrating is silent when there is nothing to migrate", () => {
     cleanup();
   }
 });
+
+test("a protocol header is sent under both names, with the same value", () => {
+  // Sending both rather than switching makes this CLI independent of which
+  // server it is talking to. A control plane that only knows the old prefix
+  // still understands it; one that prefers the new gets that. The alternative
+  // — switch, and require the server deployed first — makes every publish an
+  // ordering problem, and gets it wrong once.
+  assert.deepEqual(brand.protoHeaders("app", "myapp"), {
+    "x-bay-app": "myapp",
+    "x-supersonic-app": "myapp",
+  });
+});
+
+test("an empty value still goes under both names", () => {
+  // "" is a value the deploy route reads — an empty slug asks for a generated
+  // one. Dropping it from either half would change what the server was told.
+  assert.deepEqual(brand.protoHeaders("slug", ""), {
+    "x-bay-slug": "",
+    "x-supersonic-slug": "",
+  });
+});

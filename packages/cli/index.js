@@ -119,7 +119,7 @@ async function api(pathname, { method = "GET", body, stream = false } = {}) {
     method,
     headers: {
       Authorization: "Bearer " + tok,
-      "x-supersonic-who": whoHeader(process.env),
+      ...brand.protoHeaders("who", whoHeader(process.env)),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -616,9 +616,9 @@ async function deploy(args) {
     headers: {
       Authorization: "Bearer " + tok,
       "Content-Type": "application/gzip",
-      "x-supersonic-upload": "1",
-      "x-supersonic-app": appName,
-      "x-supersonic-who": whoHeader(process.env),
+      ...brand.protoHeaders("upload", "1"),
+      ...brand.protoHeaders("app", appName),
+      ...brand.protoHeaders("who", whoHeader(process.env)),
     },
     body,
   });
@@ -782,19 +782,19 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
     const headers = {
       Authorization: "Bearer " + token(),
       "Content-Type": "application/gzip",
-      "x-supersonic-upload": "1",
-      "x-supersonic-app": folderName,
-      "x-supersonic-slug": slug,
-      "x-supersonic-who": whoHeader(process.env),
+      ...brand.protoHeaders("upload", "1"),
+      ...brand.protoHeaders("app", folderName),
+      ...brand.protoHeaders("slug", slug),
+      ...brand.protoHeaders("who", whoHeader(process.env)),
     };
     // How to run the app in production, worked out by the agent. Encoded because it
     // has spaces/flags. The runner uses it as SUPERSONIC_RUN.
-    if (runCmd) headers["x-supersonic-run"] = encodeURIComponent(runCmd);
+    if (runCmd) Object.assign(headers, brand.protoHeaders("run", encodeURIComponent(runCmd)));
     // The upload's body is the tarball, so the vars go in a header. Past what Cloud Run
     // will carry there we say so and set nothing: silently dropping half an environment
     // would surface later as an app that is broken for no visible reason.
     const envHeader = encodeEnvHeader(envVars);
-    if (envHeader) headers["x-supersonic-env"] = envHeader;
+    if (envHeader) Object.assign(headers, brand.protoHeaders("env", envHeader));
     else if (envKeys.length) info(red("! ") + ".env is too large to send with the build — set them after it lands: " + bold(`bay env ${slug} set KEY=VALUE`));
 
     // The bytes go to the bucket, not through the API. Attempted for every size
@@ -803,8 +803,8 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
     // biggest uploads is a fallback nobody finds out is broken.
     const placed = await uploadSourceToBucket(body);
     if (placed) {
-      headers["x-supersonic-source-object"] = placed.object;
-      headers["x-supersonic-source-key"] = placed.key;
+      Object.assign(headers, brand.protoHeaders("source-object", placed.object));
+      Object.assign(headers, brand.protoHeaders("source-key", placed.key));
       res = await fetch(baseUrl() + "/api/deploy", { method: "POST", headers });
     } else if (body.length >= BODY_LIMIT) {
       // Said here because nowhere else can. The 413 comes from Google's front
@@ -909,11 +909,11 @@ async function tryPrebuilt(appName, args) {
     headers: {
       Authorization: "Bearer " + tok,
       "Content-Type": "application/gzip",
-      "x-supersonic-upload": "1",
-      "x-supersonic-prebuilt": "1",
-      "x-supersonic-hash": hash,
-      "x-supersonic-app": appName,
-      "x-supersonic-who": whoHeader(process.env),
+      ...brand.protoHeaders("upload", "1"),
+      ...brand.protoHeaders("prebuilt", "1"),
+      ...brand.protoHeaders("hash", hash),
+      ...brand.protoHeaders("app", appName),
+      ...brand.protoHeaders("who", whoHeader(process.env)),
     },
     body,
   });

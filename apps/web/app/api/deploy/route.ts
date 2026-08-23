@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
+import { protocolHeader } from "@/lib/protocol-headers";
 import { cloudRunName } from "@/lib/slug";
 import { currentUserId } from "@/lib/session";
 import { getPool } from "@/lib/db";
@@ -152,12 +153,12 @@ export async function POST(req: Request) {
   // Two ingest doors: a git URL (clone) or a project uploaded straight from the
   // user's computer (a gzipped tar of the folder). Both end in a populated dir,
   // after which the pipeline is identical.
-  const isUpload = req.headers.get("x-supersonic-upload") === "1";
+  const isUpload = protocolHeader(req, "upload") === "1";
   // A third door: the CLI already built the project on the user's machine and is
   // sending only the output directory. Nothing here is detected, installed or built —
   // the bytes are published as a release, which is the whole ~80s-to-~15s difference.
-  const isPrebuilt = isUpload && req.headers.get("x-supersonic-prebuilt") === "1";
-  const prebuiltHash = (req.headers.get("x-supersonic-hash") ?? "").trim().toLowerCase();
+  const isPrebuilt = isUpload && protocolHeader(req, "prebuilt") === "1";
+  const prebuiltHash = (protocolHeader(req, "hash") ?? "").trim().toLowerCase();
   let url = "";
   let slug = "";
   let friendlyName = "app";
@@ -189,8 +190,8 @@ export async function POST(req: Request) {
     // it is a caller-supplied path into a bucket the platform also keeps other
     // things in, and "wherever you say" is not a thing an authenticated request
     // gets to decide.
-    const srcObject = (req.headers.get("x-supersonic-source-object") ?? "").trim();
-    const srcKey = (req.headers.get("x-supersonic-source-key") ?? "").trim();
+    const srcObject = (protocolHeader(req, "source-object") ?? "").trim();
+    const srcKey = (protocolHeader(req, "source-key") ?? "").trim();
     if (srcObject || srcKey) {
       if (!isOwnSourceObject(srcObject) || !/^[0-9a-f]{64}$/.test(srcKey)) {
         return Response.json({ error: "malformed source reference" }, { status: 400 });
@@ -199,15 +200,15 @@ export async function POST(req: Request) {
     } else {
       archive = Buffer.from(await req.arrayBuffer());
     }
-    friendlyName = cloudRunName(req.headers.get("x-supersonic-app") || "app");
-    reservedSlug = (req.headers.get("x-supersonic-slug") ?? "").trim();
-    runCmd = decodeURIComponent(req.headers.get("x-supersonic-run") ?? "").trim();
+    friendlyName = cloudRunName(protocolHeader(req, "app") || "app");
+    reservedSlug = (protocolHeader(req, "slug") ?? "").trim();
+    runCmd = decodeURIComponent(protocolHeader(req, "run") ?? "").trim();
     // The app's own secrets, from the CLI's reading of the project's local `.env`.
     // They arrive in a header because the body is the tarball — and deliberately NOT
     // inside it: a secret in the archive is copied into the build bucket and baked
     // into the image, where it cannot be rotated. Here it becomes an env var on the
     // service, applied to the first revision, so the app starts with what it needs.
-    secrets = decodeEnvHeader(req.headers.get("x-supersonic-env"));
+    secrets = decodeEnvHeader(protocolHeader(req, "env"));
   } else {
     const body = await req.json().catch(() => ({}));
     url = normalizeRepo(String(body.repo ?? ""));
@@ -289,7 +290,7 @@ export async function POST(req: Request) {
     // The durable record of this attempt, written before anything can fail, so a
     // build that dies in its first second still appears on the app's timeline.
     // `who` is whatever the caller declared and nothing more — see lib/builds.
-    void startBuild(runId, slug, req.headers.get("x-supersonic-who"));
+    void startBuild(runId, slug, protocolHeader(req, "who"));
     const handoff = new StageRecorder(slug, "unknown", undefined, undefined, undefined, { runId });
     try {
       const recording = handoff.start("run-record");

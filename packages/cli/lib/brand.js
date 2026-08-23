@@ -101,8 +101,24 @@ function projectFile(dir, base) {
   return fresh;
 }
 
+/**
+ * A protocol header under both names.
+ *
+ * Sending both, rather than switching, makes this CLI independent of which
+ * server it happens to be talking to. A control plane that only knows
+ * `x-supersonic-*` still understands it; one that prefers `x-bay-*` gets that.
+ * The alternative — switch the CLI and require the server to be deployed first
+ * — turns every publish into an ordering problem, and gets it wrong once.
+ *
+ * Costs a few dozen bytes per request. The old half comes out when the server
+ * has stopped reading it.
+ */
+function protoHeaders(name, value) {
+  return { [`x-bay-${name}`]: value, [`x-supersonic-${name}`]: value };
+}
+
 module.exports = {
   BRAND, CLI, DOMAIN, DEFAULT_URL,
   NEW_DIR, OLD_DIR,
-  configDir, migrateConfig, envAny, projectFile,
+  configDir, migrateConfig, envAny, projectFile, protoHeaders,
 };
