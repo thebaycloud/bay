@@ -12,6 +12,7 @@ import { StoragePanel } from "@/components/StoragePanel";
 import { JobsPanel } from "@/components/JobsPanel";
 import { IssuesPanel } from "@/components/IssuesPanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
+import { GitPanel } from "@/components/GitPanel";
 import SharePanel from "@/components/SharePanel";
 import { readPanel, type Reading } from "@/lib/panel/reading";
 
@@ -248,6 +249,7 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
     return (
       <div className="flex flex-col gap-3">
         <SharePanel slug={slug} />
+        <GitPanel onToast={toast} slug={slug} />
         <DomainsPanel onToast={toast} slug={slug} />
       </div>
     );

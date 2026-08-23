@@ -35,7 +35,22 @@ test("recording an installation upserts, so re-installing is not a duplicate", a
   );
   assert.equal(asked.length, 1);
   assert.match(asked[0].sql, /ON CONFLICT \(installation_id\) DO UPDATE/);
-  assert.deepEqual(asked[0].params, [155650459, W, "thebaycloud", "Organization", null]);
+  // The trailing null is `connected_login`, and an organisation is exactly the
+  // case that has none: GitHub does not say which member installed it, so every
+  // push through it answers `someone` rather than a guess.
+  assert.deepEqual(asked[0].params, [155650459, W, "thebaycloud", "Organization", null, null]);
+});
+
+test("a personal installation records the login a push can be compared against", async () => {
+  const { q, asked } = db();
+  await recordInstallation(
+    { installationId: 1, workspaceId: W, accountLogin: "onlytenders", accountType: "User", connectedBy: null, connectedLogin: "onlytenders" },
+    q,
+  );
+  assert.equal(asked[0].params[5], "onlytenders");
+  // COALESCEd, not overwritten: a re-install by somebody else must not erase
+  // the login the first connection recorded.
+  assert.match(asked[0].sql, /connected_login = COALESCE\(EXCLUDED\.connected_login, github_installations\.connected_login\)/);
 });
 
 test("connections come back typed, with the id as a number", async () => {

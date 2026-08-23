@@ -25,6 +25,20 @@ export interface Connection {
   accountLogin: string;
   accountType: string;
   connectedBy: string | null;
+  /**
+   * The GitHub login of whoever installed the App, or null.
+   *
+   * `connectedBy` is OUR user id, which answers "whose workspace is this" and
+   * cannot answer "was this push by that person" — a push carries a GitHub
+   * login and nothing else. Null for an organisation, permanently: GitHub does
+   * not say which member installed it.
+   *
+   * Optional on the type as well as nullable in the column, because
+   * `connectionsForWorkspace` is read on a database that may not have run 033
+   * yet, and a type promising `string | null` would be lying in exactly the
+   * window where being wrong costs most.
+   */
+  connectedLogin?: string | null;
 }
 
 /**
@@ -51,15 +65,16 @@ function plausible(id: number): boolean {
 export async function recordInstallation(c: Connection, q: Query = pool): Promise<void> {
   await q(
     `INSERT INTO github_installations
-       (installation_id, workspace_id, account_login, account_type, connected_by)
-     VALUES ($1, $2, $3, $4, $5)
+       (installation_id, workspace_id, account_login, account_type, connected_by, connected_login)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (installation_id) DO UPDATE SET
-       workspace_id  = EXCLUDED.workspace_id,
-       account_login = EXCLUDED.account_login,
-       account_type  = EXCLUDED.account_type,
-       connected_by  = COALESCE(EXCLUDED.connected_by, github_installations.connected_by),
-       updated_at    = now()`,
-    [c.installationId, c.workspaceId, c.accountLogin, c.accountType, c.connectedBy],
+       workspace_id    = EXCLUDED.workspace_id,
+       account_login   = EXCLUDED.account_login,
+       account_type    = EXCLUDED.account_type,
+       connected_by    = COALESCE(EXCLUDED.connected_by, github_installations.connected_by),
+       connected_login = COALESCE(EXCLUDED.connected_login, github_installations.connected_login),
+       updated_at      = now()`,
+    [c.installationId, c.workspaceId, c.accountLogin, c.accountType, c.connectedBy, c.connectedLogin ?? null],
   );
 }
 
@@ -69,7 +84,7 @@ export async function connectionsForWorkspace(workspaceId: string, q: Query = po
   // depend on how Postgres compares uuid to ''.
   if (!workspaceId) return [];
   const { rows } = await q(
-    `SELECT installation_id, workspace_id, account_login, account_type, connected_by
+    `SELECT installation_id, workspace_id, account_login, account_type, connected_by, connected_login
        FROM github_installations
       WHERE workspace_id = $1
       ORDER BY account_login`,
@@ -83,6 +98,7 @@ export async function connectionsForWorkspace(workspaceId: string, q: Query = po
     accountLogin: String(r.account_login),
     accountType: String(r.account_type),
     connectedBy: r.connected_by == null ? null : String(r.connected_by),
+    connectedLogin: r.connected_login == null ? null : String(r.connected_login),
   }));
 }
 
@@ -98,4 +114,21 @@ export async function workspaceOwnsInstallation(
     [workspaceId, installationId],
   );
   return rows.length > 0;
+}
+
+/**
+ * Forget a connection, because GitHub says it is gone.
+ *
+ * Called from the webhook on `installation.deleted`, which is the only event
+ * that can tell us — an uninstall happens in GitHub's UI and nothing else here
+ * would ever find out. Every `app_repos` row referencing it cascades, so every
+ * app it connected stops shipping on push.
+ *
+ * The apps themselves are untouched and keep running. Uninstalling the App
+ * removes an automation, not a deployment, and a person who uninstalls it to
+ * "disconnect GitHub" must not lose their live site by doing so.
+ */
+export async function forgetInstallation(installationId: number, q: Query = pool): Promise<void> {
+  if (!plausible(installationId)) return;
+  await q(`DELETE FROM github_installations WHERE installation_id = $1`, [installationId]);
 }

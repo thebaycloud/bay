@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { getPool } from "./db";
 import { HTTP_TIMEOUT_MS, accessToken, identityToken, imageTag, runJobUrl, runServiceUrl } from "./gcp-rest";
 import { ASSETS_BUCKET } from "./static-release";
+import type { RepoLink } from "./app-repos";
 
 const DB = "supersonic_platform";
 const PROJECT = "supersonic-deploy-prod";
@@ -62,6 +63,30 @@ export interface DeployRunRequest {
    * that might already be spent.
    */
   ghInstallationId: number | null;
+  /**
+   * The commit this build is OF, when a push caused it. Null everywhere else.
+   *
+   * Pinned here rather than resolved when the builder starts, and the reason is
+   * measured: `app/api/deploy/route.ts` records 79 to 227 seconds between a
+   * deploy being recorded and the builder's first line. On a repository
+   * somebody is pushing to, HEAD moves inside that window — so cloning HEAD
+   * would build code the platform was never told about and then report the
+   * outcome on the wrong commit.
+   *
+   * A SHA travels here for the same reason an installation id does and a token
+   * does not: it is a fact, not a credential, and it is still true when a job
+   * claims this row minutes later.
+   */
+  commitSha: string | null;
+  /**
+   * The repository binding to write once this app's row exists, or null.
+   *
+   * Set only by the GitHub door, and only on the deploy that CONNECTS — every
+   * later build of the app finds the link already in `app_repos`. It travels
+   * here because the link cannot be written before `createAppRecord`, and that
+   * runs inside the pipeline rather than in the route.
+   */
+  connect: RepoLink | null;
   isUpload: boolean;
   isPrebuilt: boolean;
   prebuiltHash: string;

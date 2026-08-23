@@ -14,6 +14,9 @@ import { createRun, startDeployRun, finishRun, pruneRuns, isOwnSourceObject, rea
 import { readEvents, pruneEvents } from "@/lib/deploy-events";
 import { getDeploy } from "@/lib/deploys";
 import { startBuild, finishBuild } from "@/lib/builds";
+import { fullNameFromUrl, repoFor } from "@/lib/github-repos";
+import { branchHead } from "@/lib/github-status";
+import type { RepoLink } from "@/lib/app-repos";
 import { StageRecorder } from "@/lib/stages";
 import { randomUUID } from "node:crypto";
 
@@ -173,6 +176,8 @@ export async function POST(req: Request) {
    * an uploaded folder has no repository and therefore no grant.
    */
   let ghInstallationId: number | null = null;
+  /** The branch the GitHub door asked to follow, before it is resolved. */
+  let connectBranch = "";
   let reservedSlug = "";
   // The production run command the deploying agent worked out for this app (e.g.
   // `uvicorn main:app --host 0.0.0.0 --port $PORT`, `next start`). It's the reliable
@@ -222,6 +227,10 @@ export async function POST(req: Request) {
     const rawInstall = String(body.installationId ?? "").trim();
     ghInstallationId = /^\d+$/.test(rawInstall) && Number.isSafeInteger(Number(rawInstall))
       ? Number(rawInstall) : null;
+    // The branch this app should FOLLOW from now on. Named only by the GitHub
+    // door; empty means "the repository's default", which the door usually
+    // prefills but a bare API caller will not.
+    connectBranch = String(body.connectBranch ?? "").trim();
   }
   // Apps get a short random subdomain (e.g. as76d.supersonic.cv). A reserved slug
   // (URL-first / tunnel deploys) is honoured so the build lands on the URL already
@@ -262,9 +271,40 @@ export async function POST(req: Request) {
   }
 
 
+  // The connection, resolved against GitHub rather than against the request.
+  //
+  // Two things come out of one place on purpose: the repository's real id — a
+  // fact, not the client's claim, see `repoFor` — and the commit the branch
+  // points at right now. Both are needed before the run row is written, and
+  // both are optional in the sense that failing to get either leaves the deploy
+  // exactly as it was before any of this existed: an unpinned clone with no
+  // link written.
+  let connect: RepoLink | null = null;
+  let commitSha: string | null = null;
+  if (!isUpload && ghInstallationId !== null && ownerWorkspace) {
+    const fullName = fullNameFromUrl(url);
+    if (fullName) {
+      try {
+        const repo = await repoFor(ghInstallationId, fullName);
+        if (repo) {
+          const branch = connectBranch || repo.defaultBranch;
+          connect = { installationId: ghInstallationId, repoId: repo.id, repoFullName: repo.fullName, branch };
+          // Pinned so the FIRST build reports on a commit like every later one.
+          // Null here is not a failure — it is the clone this door has always
+          // made, of whatever the branch points at when the builder starts.
+          commitSha = await branchHead(ghInstallationId, repo.fullName, branch);
+        }
+      } catch {
+        // A GitHub that will not answer must not stop a deploy that can
+        // otherwise proceed. The app still builds; it simply does not become
+        // automatic, and the panel can connect it afterwards.
+      }
+    }
+  }
+
   const input = {
     ownerId, ownerWorkspace, slug, friendlyName, repoUrl: url,
-    ghInstallationId, isUpload, isPrebuilt, prebuiltHash, secrets, cloneToken, runCmd, limits,
+    ghInstallationId, commitSha, connect, isUpload, isPrebuilt, prebuiltHash, secrets, cloneToken, runCmd, limits,
   };
 
   // Hand the deploy to a job and stream back its event log. The request stops
