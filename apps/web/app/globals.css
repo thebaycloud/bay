@@ -1364,3 +1364,87 @@ a.door { text-decoration: none; }
 .dfilm-bar .url { color: var(--live); opacity: 0; transition: opacity .4s var(--ease);
   text-transform: none; letter-spacing: .02em; font-size: 11.5px; }
 .dfilm-bar .url.on { opacity: 1; }
+
+/* ------------------------------------------------------------
+   FULLSCREEN — a deploy running is the whole screen.
+
+   The same treatment the ROOM already gives this film
+   (services/proxy/src/room-page.ts): the picture takes the window and
+   everything the page has to say is written over it, because a deploy is 90
+   seconds of nothing else happening and a 2.40:1 card in a column of white
+   spends the screen on the parts of the page nobody is reading.
+
+   The frame can no longer be assumed here, and that is handled in the film
+   rather than in CSS: `framed()` in ship-it.js holds the HORIZONTAL field each
+   shot was composed with, so a 16:9 window shows more sky and water instead of
+   cropping the bridge and the yard off the sides.
+   ------------------------------------------------------------ */
+/* `overflow: hidden` is structural, not tidiness: this is fixed, so anything
+   inside it that does not fit widens the DOCUMENT instead of the box, and then
+   every `right:` in here is measured off a viewport that is wider than the
+   screen — the name slides off the right edge and the buttons go with it.
+   100dvh rather than 100vh: on a phone the toolbars come and go, and vh is the
+   tallest of those states, which puts the stage bar under the browser's own
+   chrome for the first half of the deploy. */
+.cinema { position: fixed; inset: 0; z-index: 50; background: #0a100e; height: 100dvh; overflow: hidden; }
+/* absolute, not fixed: `.cinema` is the fixed box, and the words below have to
+   stack over the picture inside it. */
+.dfilm.full { position: absolute; inset: 0; border: 0; border-radius: 0; background: #0a100e; }
+.dfilm.full .dfilm-frame { position: absolute; inset: 0; }
+/* The holder the film appends its canvas into has to have a height of its own.
+   It never needed one in the card: the canvas sizes itself with
+   `aspect-ratio`, which resolves against an auto-height parent perfectly well.
+   `height:100%` does not — it resolves to auto, and the picture would sit in a
+   band across the top of the window with dead space under it. */
+.dfilm.full .dfilm-canvas { position: absolute; inset: 0; }
+/* `contain`, and it is not decoration: the film sizes its own drawing buffer
+   to this box, so the fit is normally an identity — but an older film still
+   frames its buffer at 2.40:1, and stretched to a 16:9 window that is the
+   whole picture squashed. Contained, it letterboxes instead. */
+.dfilm.full .dfilm-frame canvas { width: 100%; height: 100%; aspect-ratio: auto; object-fit: contain; }
+/* The two bars were the cinema the card sat in. There is no card now. */
+.dfilm.full .dfilm-bar { display: none; }
+.dfilm.full .dfilm-slate { left: 22px; top: 18px; }
+.dfilm.full .dfilm-stagebar { left: 22px; right: 22px; bottom: 18px; }
+.dfilm.full .dfilm-fallback { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); }
+
+/* what the page has to say, over the picture.
+   Top RIGHT, not spread across the top: the film puts its slate in the top
+   left corner and a name at the left edge would print over it. */
+.cinema-bar { position: absolute; right: 22px; top: 18px; display: flex; gap: 12px; align-items: baseline;
+  font-family: var(--mono); font-size: 12px; color: rgba(233,239,235,.55); pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,.75); }
+.cinema-bar .nm { color: #e9efeb; }
+.cinema-bar .clock { font-variant-numeric: tabular-nums; }
+/* The build's own words: the last six lines, which is what fits without the
+   log becoming the page. Above the film's stage bar, not over it. */
+.cinema-log { position: absolute; left: 22px; bottom: 52px; width: min(62ch, 52vw);
+  display: flex; flex-direction: column; font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+  color: rgba(233,239,235,.60); text-shadow: 0 1px 3px rgba(0,0,0,.75); pointer-events: none; }
+.cinema-log > div { display: flex; gap: 8px; min-width: 0; }
+.cinema-log .k { flex: none; width: 1em; color: rgba(233,239,235,.34); }
+.cinema-log .k.g { color: #4ec585; }
+.cinema-log .k.a { color: #7fa8d8; }
+.cinema-log .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The address is the film's own endcard, bottom centre. These are what to do
+   about it, and they clear the stage bar on a short window. */
+.cinema-acts { position: absolute; left: 50%; bottom: max(64px, 7%); transform: translateX(-50%);
+  display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 44px); }
+/* Under the endcard is where these belong, and there is room for them there on
+   a wide window. On a narrower one the log — `min(62ch, 52vw)` — reaches the
+   middle of the screen, and a long line would run under the buttons, so they
+   go to the corner the stage bar leaves empty instead. */
+@media (max-width: 1200px) {
+  .cinema-acts { left: auto; right: 22px; bottom: 44px; transform: none; justify-content: flex-end; }
+}
+@media (max-width: 640px) {
+  .cinema-log { width: auto; right: 22px; }
+  /* The film's own caption and the app's name are both one line across the top
+     of a screen that has room for one of them. The name is the one a person
+     came for. */
+  .dfilm.full .dfilm-slate { display: none; }
+  /* A phone has one column and the deploy is over: the address on the endcard
+     and what to do about it are the screen. The log has had its whole run. */
+  .cinema.done .cinema-log { display: none; }
+  .cinema-acts { left: 22px; right: 22px; bottom: 44px; justify-content: center; }
+}
