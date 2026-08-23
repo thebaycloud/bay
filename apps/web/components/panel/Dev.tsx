@@ -164,9 +164,16 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
       ) : null}
 
-      <RowGroup title="Live">
+      <RowGroup title="Overview">
         <Row icon={ICON.address} sub="Where it lives" title="Address">
           <TintRow value={d.addr} />
+        </Row>
+
+        <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
+          <Chips>
+            <Avatars initials={d.pInitials} />
+            <StatusChip text={d.who} tone={d.who === "public" ? "grey" : "green"} />
+          </Chips>
         </Row>
 
         <Row
@@ -213,7 +220,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         </Row>
       </RowGroup>
 
-      <RowGroup title="Inside">
+      <RowGroup title="Resources">
         <Row icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
           <Chips>
             <StatusChip
@@ -241,15 +248,6 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
               ) : null}
             </Chips>
           ) : null}
-        </Row>
-      </RowGroup>
-
-      <RowGroup title="Doors">
-        <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
-          <Chips>
-            <Avatars initials={d.pInitials} />
-            <StatusChip text={d.who} tone={d.who === "public" ? "grey" : "green"} />
-          </Chips>
         </Row>
 
         <Row icon={ICON.agent} onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent">
