@@ -61,21 +61,39 @@ function plausible(id: number): boolean {
  * `connected_by` is COALESCEd rather than overwritten so a re-install by a
  * second person does not erase who set it up originally, while a first
  * connection made by nobody in particular can still be claimed later.
+ *
+ * ## Why the update is conditional
+ *
+ * The conflicting row names a workspace, and overwriting that unconditionally
+ * meant any signed-in person who knew an installation id could move somebody
+ * else's connected account onto their own workspace — and an installation id is
+ * not a secret: it is in a redirect URL and in GitHub's own UI. The victim's
+ * `app_repos` rows cascade with it, so the theft also stops their apps shipping
+ * on push, silently, from the far side of the platform.
+ *
+ * So a row already bound elsewhere is left exactly as it is and this answers
+ * false. The honest version of that situation has a way through: uninstalling
+ * the App fires `installation.deleted`, `forgetInstallation` drops the row, and
+ * the next install claims it freely.
+ *
+ * @returns whether the connection is now this workspace's.
  */
-export async function recordInstallation(c: Connection, q: Query = pool): Promise<void> {
-  await q(
+export async function recordInstallation(c: Connection, q: Query = pool): Promise<boolean> {
+  const { rows } = await q(
     `INSERT INTO github_installations
        (installation_id, workspace_id, account_login, account_type, connected_by, connected_login)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (installation_id) DO UPDATE SET
-       workspace_id    = EXCLUDED.workspace_id,
        account_login   = EXCLUDED.account_login,
        account_type    = EXCLUDED.account_type,
        connected_by    = COALESCE(EXCLUDED.connected_by, github_installations.connected_by),
        connected_login = COALESCE(EXCLUDED.connected_login, github_installations.connected_login),
-       updated_at      = now()`,
+       updated_at      = now()
+     WHERE github_installations.workspace_id = EXCLUDED.workspace_id
+     RETURNING installation_id`,
     [c.installationId, c.workspaceId, c.accountLogin, c.accountType, c.connectedBy, c.connectedLogin ?? null],
   );
+  return rows.length > 0;
 }
 
 export async function connectionsForWorkspace(workspaceId: string, q: Query = pool): Promise<Connection[]> {

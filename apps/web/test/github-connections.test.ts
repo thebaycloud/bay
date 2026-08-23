@@ -97,3 +97,32 @@ test("an empty workspace lists nothing rather than everything", async () => {
   assert.deepEqual(await connectionsForWorkspace("", q), []);
   assert.equal(asked.length, 0);
 });
+
+test("an installation already bound to another workspace is not moved", async () => {
+  // An installation id is not a secret — it is in a redirect URL and in
+  // GitHub's own UI. Before the conflict update was made conditional, quoting
+  // one back at the setup route moved somebody else's connected account onto
+  // the caller's workspace and cascaded away every app that shipped through it.
+  const { q, asked } = db([]);
+  const ok = await recordInstallation(
+    { installationId: 155650459, workspaceId: OTHER, accountLogin: "thebaycloud", accountType: "Organization", connectedBy: null },
+    q,
+  );
+  assert.equal(ok, false);
+  assert.match(asked[0].sql, /WHERE github_installations\.workspace_id = EXCLUDED\.workspace_id/);
+  // The workspace is never on the SET list, so even a row this workspace does
+  // own cannot have its owner rewritten by this statement.
+  const setList = asked[0].sql.split("DO UPDATE SET")[1].split("WHERE")[0];
+  assert.doesNotMatch(setList, /workspace_id/);
+});
+
+test("a re-install by the workspace that owns it still lands", async () => {
+  const { q } = db([{ installation_id: "155650459" }]);
+  assert.equal(
+    await recordInstallation(
+      { installationId: 155650459, workspaceId: W, accountLogin: "thebaycloud", accountType: "Organization", connectedBy: null },
+      q,
+    ),
+    true,
+  );
+});
