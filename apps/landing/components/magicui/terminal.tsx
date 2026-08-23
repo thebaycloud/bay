@@ -48,7 +48,7 @@ export const TypingAnimation = ({ children, className, duration = 55, delay = 0 
   return <div className={cn("term-type", className)}>{text}<span className="term-caret">▋</span></div>;
 };
 
-export const Terminal = ({ children, className, title = "supersonic" }: { children: React.ReactNode; className?: string; title?: string }) => (
+export const Terminal = ({ children, className, title = "bay" }: { children: React.ReactNode; className?: string; title?: string }) => (
   <div className={cn("terminal-frame", className)}>
     <div className="terminal-bar">
       <div className="terminal-dots"><span /><span /><span /></div>

@@ -1,14 +1,14 @@
-# Supersonic
+# Bay
 
-> A cloud for small software. One command turns an app on your user's computer into a real, live product on the internet — database, custom domain, and monitoring included. Supersonic is built to be operated by coding agents (Claude Code, Cursor, OpenAI Codex, opencode, Cline) on the user's behalf.
+> A cloud for small software. One command turns an app on your user's computer into a real, live product on the internet — database, custom domain, and monitoring included. Bay is built to be operated by coding agents (Claude Code, Cursor, OpenAI Codex, opencode, Cline) on the user's behalf.
 
-If you are a coding agent asked to publish a user's app to Supersonic, follow "Publish an app" below. Keep the user informed, getting the deploy green is your job rather than theirs, and take secret values from the project's local `.env` instead of asking. Never invent, hardcode, commit, or print a secret value.
+If you are a coding agent asked to publish a user's app to Bay, follow "Publish an app" below. Keep the user informed, getting the deploy green is your job rather than theirs, and take secret values from the project's local `.env` instead of asking. Never invent, hardcode, commit, or print a secret value.
 
 ## Publish an app
 
 From the project's root folder:
 
-    npm i -g supersonic-cli    # install the CLI (once)
+    npm i -g bay-cli    # install the CLI (once)
 
 Then deploy, and WAIT for the answer:
 
@@ -18,42 +18,42 @@ Then deploy, and WAIT for the answer:
     #      Flask   → gunicorn app:app --bind 0.0.0.0:$PORT
     #      Django  → gunicorn <proj>.wsgi --bind 0.0.0.0:$PORT
     #      Next    → next start        Node/Express → node server.js (must read process.env.PORT)
-    # 2. Pass it with --run. Supersonic reserves the URL immediately — the address is
+    # 2. Pass it with --run. Bay reserves the URL immediately — the address is
     #    live and shows the build happening — and runs the app there when it is ready.
-    supersonic deploy --wait
+    bay deploy --wait
 
-Supersonic reads the repo itself and works out how to install, build, and run the app —
+Bay reads the repo itself and works out how to install, build, and run the app —
 including the production run command (Python, Node, static SPAs, and databases all
-handled). You do NOT need to tell it how to run the app; `supersonic deploy --wait` with
+handled). You do NOT need to tell it how to run the app; `bay deploy --wait` with
 no other flags is the normal path.
 
 One optional flag, only if you want it:
 - `--run "<production command>"` — an OVERRIDE. Pass it only if you know a quirk the
   platform can't infer (an unusual monorepo entrypoint, a custom server). When present it
-  wins; when absent Supersonic decides. Example: `--run "uvicorn main:app --host 0.0.0.0 --port $PORT"`.
+  wins; when absent Bay decides. Example: `--run "uvicorn main:app --host 0.0.0.0 --port $PORT"`.
 
-`supersonic deploy`:
+`bay deploy`:
 
 - Signs the user in the FIRST time by opening a browser — a new account is free, with no card and no time limit. There is NO separate login/signup step to run.
 - Prints `✓ your app is live at <url>` immediately — that is the URL being RESERVED, not the app being built.
 - With `--wait` it stays attached and prints `✓ live: <url>` when the real build serves that URL. Report that.
 
-USE `--wait`. Without it the command returns as soon as the URL is reserved and the build finishes after you have stopped watching — so you would report success for a build that has not happened, and a failure would land in `~/.supersonic/deploys/<app>.log` where nobody looks.
+USE `--wait`. Without it the command returns as soon as the URL is reserved and the build finishes after you have stopped watching — so you would report success for a build that has not happened, and a failure would land in `~/.bay/deploys/<app>.log` where nobody looks.
 
-IMPORTANT: the deploy succeeded only when you see `✓ live:`. Anything else is not done. Run `supersonic logs <app>` to see what production actually saw and `supersonic diagnose <app>` for a fix-prompt, apply it, and deploy again.
+IMPORTANT: the deploy succeeded only when you see `✓ live:`. Anything else is not done. Run `bay logs <app>` to see what production actually saw and `bay diagnose <app>` for a fix-prompt, apply it, and deploy again.
 
 Every app is PRIVATE until the user says otherwise, so the URL asks them to sign in. That is the default, not a broken deploy — tell the user the app is live and private, and that they can make it public in the dashboard.
 
-If the user is over their plan's limit, `supersonic deploy` exits with a clear message telling them to pick a plan at https://app.supersonic.cv — relay that; it is not a build failure.
+If the user is over their plan's limit, `bay deploy` exits with a clear message telling them to pick a plan at https://app.thebay.cloud — relay that; it is not a build failure.
 
 The project's local `.env` / `.env.local` travels with the deploy automatically — the CLI
 reads it, holds the FILES back from the upload, and sends the values to be stored as
 secrets. You do not need to copy keys across. Use `env set` only for a value that is not
 in `.env` at all:
 
-    supersonic env <app> set KEY=VALUE
+    bay env <app> set KEY=VALUE
 
-Skip `DATABASE_URL` and anything pointing at localhost — Supersonic provisions the
+Skip `DATABASE_URL` and anything pointing at localhost — Bay provisions the
 database and injects that itself. Ask the user only for a key that is missing locally or
 is clearly a placeholder or test value (`sk_test_…`, `changeme`), and ask in one sentence:
 what it is and where to get it.
@@ -70,25 +70,25 @@ what it is and where to get it.
   and fails every request that touches data.
 - Common stacks (Next.js, Vite, Node, Python, Go, ...) work without a Dockerfile.
 - Next.js and other build-then-serve apps are built automatically before serving.
-- No git or GitHub required — deploys go straight from the local folder. Re-running `supersonic deploy` in the same folder redeploys the same app (same URL, same database).
+- No git or GitHub required — deploys go straight from the local folder. Re-running `bay deploy` in the same folder redeploys the same app (same URL, same database).
 
 ## CLI commands
 
-- `supersonic deploy` — URL-first: the live link now, showing the build as it happens; the real build lands on the same URL (auto sign-in the first time)
-- `supersonic deploy --github [--repo <url>]` — publish from a git URL instead
-- `supersonic deploy --prebuilt` — build locally and upload the result (old path)
-- `supersonic apps` — list the user's apps
-- `supersonic status <app>` — version, URL, database, environment
-- `supersonic logs <app>` — production logs (`--follow` to stream)
-- `supersonic errors <app>` — errors caught in production
-- `supersonic diagnose <app>` — an AI fix-prompt for the latest error
-- `supersonic env <app> set KEY=VALUE` — set environment variables
-- `supersonic exec <app> -- <command>` — run a command in a copy of the app's environment.
+- `bay deploy` — URL-first: the live link now, showing the build as it happens; the real build lands on the same URL (auto sign-in the first time)
+- `bay deploy --github [--repo <url>]` — publish from a git URL instead
+- `bay deploy --prebuilt` — build locally and upload the result (old path)
+- `bay apps` — list the user's apps
+- `bay status <app>` — version, URL, database, environment
+- `bay logs <app>` — production logs (`--follow` to stream)
+- `bay errors <app>` — errors caught in production
+- `bay diagnose <app>` — an AI fix-prompt for the latest error
+- `bay env <app> set KEY=VALUE` — set environment variables
+- `bay exec <app> -- <command>` — run a command in a copy of the app's environment.
   Not available for an app running on a node; it answers 501 and says so.
-- `supersonic rollback <app>` — roll back to the previous version. Same: not wired up for
+- `bay rollback <app>` — roll back to the previous version. Same: not wired up for
   an app on a node, which keeps one version rather than a history. Redeploy the commit you
   want instead.
-- `supersonic login` — sign in manually (deploy does this automatically)
+- `bay login` — sign in manually (deploy does this automatically)
 - Add `--json` to any command for machine-readable output.
 
 ## Plans
@@ -101,6 +101,6 @@ People the user shares an app with are never charged.
 
 ## Links
 
-- App: https://app.supersonic.cv
-- Sign up: https://app.supersonic.cv/signup
-- This manual: https://supersonic.cv/llms.txt
+- App: https://app.thebay.cloud
+- Sign up: https://app.thebay.cloud/signup
+- This manual: https://thebay.cloud/llms.txt

@@ -1,4 +1,4 @@
-// Supersonic brand mark — "the slash".
+// Bay brand mark — "the slash".
 //
 // Geometry is documented in docs/BRAND.md. There are three drawings, not one
 // drawing at three sizes: the master goes soft below 24px, and a knocked-out

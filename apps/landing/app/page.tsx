@@ -1,540 +1,450 @@
 "use client";
 
-// The landing page. The hero is one full-bleed picture with the headline left
-// and the copy right; the nav rides on the picture and turns into the usual
-// blurred bar once it scrolls off. Everything visual comes from the design
-// system in globals.css — `landing.css` only adds layout.
+// Bay — the landing page.
 //
-// Styles are scoped under `.ss` so globals.css stays the shared vocabulary
-// rather than something this page has quietly rewritten.
+// Written 19 Aug as /home, beside the page it was meant to replace, and moved
+// here on 24 Aug when the rename started for real. The old page is in git; it
+// is not worth a route.
+//
+// Everything visual lives in `home.css`; this file is structure and words.
+//
+// The shape is openwebui.com and cursor.com/home: left-aligned, small type, a
+// hero that is mostly empty space, and pictures that are their own blocks under
+// it rather than something the headline sits on top of. Geist throughout — no
+// second typeface. The accent is the brand red and it appears on the arrow
+// links and the brand chip, nowhere else.
 
-import { useEffect, useRef, useState } from "react";
-import "./landing.css";
-import {
-  Rocket, Database, Terminal, Bot, Activity, Link2,
-  Check, X, ArrowRight, Github, Crown, Palette, MessageSquare, ChevronDown, Copy,
-} from "lucide-react";
+import { useEffect, useLayoutEffect, useState } from "react";
+import "./home.css";
+import { ArrowRight, ArrowUpRight, Check, Copy } from "lucide-react";
 import { Mark } from "@/components/Mark";
-import { Globe } from "@/components/magicui/globe";
-import { Terminal as Term, AnimatedSpan } from "@/components/magicui/terminal";
+import { Terminal, AnimatedSpan } from "@/components/magicui/terminal";
 
-const APP = "https://app.supersonic.cv";
+// The four strings the rename turns on now live in lib/brand.ts, where the
+// control plane has the same seam. APP_URL still points at the old host on
+// purpose: app.thebay.cloud exists but its certificate is still being issued,
+// and a button that leads nowhere is worse than one that leads to the old name.
+import { BRAND, DOMAIN, CLI, APP_URL as APP, CONTACT_EMAIL } from "@/lib/brand";
 
-const roles = [
-  { icon: Crown, name: "Owner", desc: "Deploys the app, controls who's in, and manages everything from one place." },
-  { icon: Palette, name: "Designer", desc: "Tweaks the look and ships changes — no backend, no setup, just design and redeploy." },
-  { icon: MessageSquare, name: "Commenter", desc: "Opens the live app and pins feedback right on it, like leaving comments in a Google Doc." },
+// Product language, from CONTEXT.md. Every word is one a ten-year-old knows.
+const PAIRS = [
+  {
+    eyebrow: "Built for one person",
+    body: `Point ${BRAND} at the folder you are already standing in. It comes back with an address you can send to somebody, a database that was already running, and nothing for you to configure. No repository required.`,
+    link: { label: "How shipping works", href: "#ship" },
+  },
+  {
+    eyebrow: "Built for the team they hire",
+    body: `Sign in with your company domain, hand out roles, read the audit log. You pay for the people who build and never for the people who use — an internal tool that charges per viewer is a tool nobody opens.`,
+    link: { label: "See pricing", href: "#pricing" },
+  },
 ];
 
-const features = [
-  { icon: Rocket, name: "One-click publish", tag: "~40s", desc: "Point us at the app you built and we put it online — with its own web address — in about 40 seconds. No setup, nothing technical." },
-  { icon: Link2, name: "Custom domains", desc: "Start on a free yourapp.supersonic.cv address, or connect a domain you already own like yourapp.com. The secure padlock is set up for you, automatically." },
-  { icon: Database, name: "Database included", desc: "Your app's data is saved and backed up from the very first click — nothing to set up, no accounts to create, no settings to copy. It's just there." },
-  { icon: Activity, name: "Always watched", tag: "24/7", desc: "We keep an eye on your live app around the clock and tell you the moment something goes wrong — in plain words, not error codes." },
-  { icon: Terminal, name: "Runs itself through your AI", desc: "Your coding agent — Claude Code, Cursor, Codex — can publish, check on, and fix your app entirely on its own using our command-line tool. You don't have to lift a finger." },
-  { icon: Bot, name: "An agent on the inside", desc: "Supersonic runs its own AI inside your cloud. When something breaks it works out the fix — and on Pro, applies it and gets your app healthy again, by itself." },
+// These are product facts, not traction. Nothing here is a number we do not
+// have: swap them for downloads and stars the day those exist.
+const FIGURES = [
+  { n: "~40s", l: "from one command to a live address" },
+  { n: "1", l: "command to ship, and no config file to write" },
+  { n: "$0", l: "to keep three real apps online, with no clock on them" },
 ];
 
-// A free plan that never expires, then two paid ones. No trial: a countdown
-// turns a visitor into a lead somebody has to chase, where a free app turns
-// them into a live URL other people open.
-//
-// The rows are deliberately in the same order across all three so the eye can
-// run down a column — and every row that is FALSE on free is something we
-// actually charge for, not a feature withheld to make a table look full.
-const free = [
-  ["3 apps", true], ["Database & storage included", true], ["Share by email with anyone", true],
-  ["1 public app", true], ["Paste-ready fix prompts when something breaks", true],
-  ["One free auto-fix", true], ["Your own domain", false], ["Auto-fix every failed deploy", false],
-  ["Remove the Supersonic badge", false], ["Backups & restore", false],
-];
-const pro = [
-  ["Unlimited apps", true], ["Database & storage included", true], ["Share by email with anyone", true],
-  ["Unlimited public apps", true], ["Paste-ready fix prompts when something breaks", true],
-  ["One free auto-fix", true], ["Your own domain", true], ["Auto-fix every failed deploy", true],
-  ["Remove the Supersonic badge", true], ["Backups & restore", true],
-];
-const team = [
-  ["Everything in Pro", true], ["Sign in with your company domain", true], ["Roles & audit log", true],
-  ["Unlimited recipients, always free", true], ["Priority support", true],
-];
-
-const faqs = [
-  ["Do I need to change my code?", "No. Deploy your app exactly as you built it — we detect the stack and handle everything on the cloud side. The only thing we ever ask you for is a secret that only you should hold."],
-  ["Do I need a GitHub account?", "No. You can deploy straight from your computer — just run supersonic deploy in your project folder. GitHub is there as an option if you want it, not a requirement."],
-  ["What kinds of apps can I deploy?", "Anything that runs in a container — Next.js, Vite, Python, Go, Rust, whatever. Common stacks work out of the box; for anything unusual, your coding agent describes how to run it and we take it from there."],
-  ["What happens when my app breaks?", "We catch the error in production and write your coding agent a precise, paste-ready fix. On Pro, our agent applies it and redeploys to green automatically. Either way, we never edit your code without you."],
-  ["Where does my app actually run?", "On Google Cloud, on your own isolated infrastructure — a real production deployment that scales from one visitor to millions, with a secure custom domain."],
-];
-
-const AGENT_PROMPT = `You are publishing my app to Supersonic — a cloud for small software (agent manual: https://supersonic.cv/llms.txt). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
-
-1. Install the CLI if it isn't already:  npm i -g supersonic-cli
-
-2. Publish it, and WAIT for the answer:
-   supersonic deploy --wait
-   The first run opens a browser for me to sign in. Without --wait the command returns the moment the URL is reserved and finishes building after you have stopped watching, so you would report success for a build that has not happened yet.
-
-3. The deploy succeeded only when you see a line starting "✓ live:". Anything else is not done. Getting it green is your job, not mine:  supersonic logs <app>  shows what production actually saw and  supersonic diagnose <app>  hands you a fix. Fix the code, redeploy, repeat. Don't paste me an error and ask what to do.
-
-4. The URL will ask me to sign in — every app is private until I say otherwise. That is not a bug; tell me the app is live and private, and that I can make it public in the dashboard.
-
-My .env travels with the deploy automatically — you do not need to copy keys across. Use  supersonic env <app> set KEY=VALUE  only for a value that is NOT in my .env. Skip DATABASE_URL and anything pointing at localhost: Supersonic provisions the database and injects that itself.
-
-If my app has migrations and nothing in the repo says how to run them — no Procfile release line, nothing in compose.yml, fly.toml or package.json — say so and add one. An app deployed against an empty schema serves its homepage and fails everything else.
-
-If a key is missing or is obviously a placeholder (sk_test_…, "changeme"), ask me for the real one in one sentence: what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
-
-// One command, four package managers — the shadcn CLI docs block.
-const PMS = [
-  { id: "npm", cmd: "npx supersonic deploy" },
-  { id: "pnpm", cmd: "pnpm dlx supersonic deploy" },
-  { id: "yarn", cmd: "yarn dlx supersonic deploy" },
-  { id: "bun", cmd: "bunx supersonic deploy" },
+const PLANS = [
+  {
+    name: "Free",
+    price: "$0",
+    unit: "forever",
+    desc: "Three real apps with a database, an address, and the people you share them with.",
+    rows: ["3 apps", "Database and storage included", "Share with anyone by email", "One public app"],
+    cta: "Start free",
+    href: `${APP}/new`,
+    fill: false,
+  },
+  {
+    name: "Pro",
+    price: "$20",
+    unit: "per month",
+    desc: "Unlimited apps, a domain of your own, and a failed ship that fixes itself and goes back to green.",
+    rows: ["Everything in Free, unlimited", "Your own domain", "Auto-fix every failed build", `No ${BRAND} badge`, "Backups and undo"],
+    cta: "Go Pro",
+    href: `${APP}/new`,
+    fill: true,
+  },
+  {
+    name: "Team",
+    price: "Let's talk",
+    unit: "",
+    desc: "For a team whose internal tools all live in one place, with the people who use them free.",
+    rows: ["Everything in Pro", "Sign in with your company domain", "Roles and an audit log", "Unlimited recipients, always free"],
+    cta: "Talk to us",
+    href: `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(`${BRAND} Team plan`)}`,
+    fill: false,
+  },
 ];
 
-function CommandBlock() {
-  const [pm, setPm] = useState(0);
+// ── the command line ───────────────────────────────────────────────────────
+
+function CommandLine() {
   const [copied, setCopied] = useState(false);
-  const cmd = PMS[pm].cmd;
-  return (
-    <div className="cmdblock">
-      <div className="cmdblock-bar">
-        <div className="cmdblock-tabs" role="tablist" aria-label="Package manager">
-          {PMS.map((p, i) => (
-            <button
-              key={p.id}
-              role="tab"
-              aria-selected={i === pm}
-              className={"cmdblock-tab" + (i === pm ? " on" : "")}
-              onClick={() => setPm(i)}
-            >
-              {p.id}
-            </button>
-          ))}
-        </div>
-        <button
-          className="cmdblock-copy"
-          aria-label={copied ? "Copied" : "Copy command"}
-          onClick={() => {
-            navigator.clipboard?.writeText(cmd).catch(() => {});
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-          }}
-        >
-          {copied ? <Check size={14} /> : <Copy size={14} />}
-        </button>
-      </div>
-      <pre className="cmdblock-body"><code>{cmd}</code></pre>
-    </div>
-  );
-}
+  const cmd = `npx ${CLI} deploy`;
 
-// The machine-readable view, carried over unchanged: the same page written for
-// a coding agent rather than a person. The toggle is the only way in.
-function MachineView() {
-  return (
-    <div className="machine">
-      <h1>SUPERSONIC — machine-readable</h1>
-      <div className="m-sub">A cloud for small software. Built to be operated by coding agents.</div>
-
-      <div className="m-h">What it is</div>
-      <div>One command turns an app on a computer into a real, live product on the internet — database, custom domain and monitoring included.</div>
-
-      <div className="m-h">Publish an app · do this for your user</div>
-      <div className="step"><span className="n">1</span><div>Install the CLI — <span className="cmd">npm i -g supersonic-cli</span></div></div>
-      <div className="step"><span className="n">2</span><div>Create the account — <span className="cmd">supersonic signup</span> — opens a browser for your user to finish sign-up, then hands control back to you.</div></div>
-      <div className="step"><span className="n">3</span><div>Publish from the project folder, no git required — <span className="cmd">supersonic deploy --wait</span>. Without <span className="cmd">--wait</span> the command returns once the URL is reserved and the build finishes after you stop watching.</div></div>
-      <div className="step"><span className="n">4</span><div>It worked when you see <span className="cmd">✓ live:</span> and not before. Every app is private until the user says otherwise, so that URL asks them to sign in — say so rather than reporting it broken.</div></div>
-
-      <div className="m-h">The contract</div>
-      <div>A Dockerfile that listens on <span className="cmd">$PORT</span> ships any language. Common stacks (Next.js, Python, Go…) work without one. If the app has migrations, something in the repo has to say how to run them — a Procfile <span className="cmd">release:</span> line, a compose service others wait to finish, or <span className="cmd">fly.toml</span> / <span className="cmd">render.yaml</span> / <span className="cmd">package.json</span> — or it deploys against an empty schema.</div>
-
-      <div className="m-h">CLI</div>
-      <pre>supersonic deploy | status | logs | errors | diagnose | env | exec | rollback</pre>
-
-      <div className="m-foot">
-        <CopyPrompt />
-        <a href="/llms.txt">Full manual → /llms.txt</a>
-      </div>
-    </div>
-  );
-}
-
-function ModeToggle({ machine, onToggle }: { machine: boolean; onToggle: () => void }) {
-  return (
-    <button className="mode-toggle mode-fixed" onClick={onToggle} title="Machine-readable view">
-      <span className={"seg" + (!machine ? " on" : "")}>Human</span>
-      <span className={"seg" + (machine ? " on" : "")}>Machine</span>
-    </button>
-  );
-}
-
-// The staircase across the pricing table: it runs along the bottom of what each
-// plan covers, then steps down to where the next plan's coverage ends. Measured
-// rather than hard-coded, because row heights depend on how the labels wrap.
-function usePlanStep() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [d, setD] = useState("");
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const draw = () => {
-      const box = el.getBoundingClientRect();
-      const plans = Array.from(el.querySelectorAll<HTMLElement>(".plan"));
-      // top of each plan's first unavailable row — null when the plan has none
-      const ys = plans.map((p) => {
-        const off = p.querySelector<HTMLElement>(".row.off");
-        return off ? off.getBoundingClientRect().top - box.top : null;
-      });
-      const pts: [number, number][] = [];
-      plans.forEach((p, i) => {
-        const y = ys[i];
-        if (y == null) return;
-        const r = p.getBoundingClientRect();
-        if (!pts.length) pts.push([r.left - box.left, y]);
-        pts.push([r.right - box.left, y]);
-        pts.push([r.right - box.left, ys[i + 1] ?? box.height]);
-      });
-      setD(pts.map((p, i) => `${i ? "L" : "M"}${p[0]} ${p[1]}`).join(" "));
-    };
-    draw();
-    const ro = new ResizeObserver(draw);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return { ref, d };
-}
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(t);
+  }, [copied]);
 
-// Monochrome marks for the coding agents — same stand-ins as the live page.
-function ClaudeMark() {
   return (
-    <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden>
-      {Array.from({ length: 12 }).map((_, i) => {
-        const a = (i * 30 * Math.PI) / 180;
-        return (
-          <line key={i}
-            x1={12 + Math.cos(a) * 3.2} y1={12 + Math.sin(a) * 3.2}
-            x2={12 + Math.cos(a) * 10.4} y2={12 + Math.sin(a) * 10.4}
-            stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-        );
-      })}
-    </svg>
-  );
-}
-const CursorMark = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M5 3l14 8-6 1.5-1.6 6.5z" /></svg>
-);
-const CodexMark = () => (
-  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
-    {[0, 60, 120].map((a) => (
-      <ellipse key={a} cx="12" cy="12" rx="3.1" ry="8.4" transform={`rotate(${a} 12 12)`} />
-    ))}
-  </svg>
-);
-
-const HERO_AGENTS = [
-  { name: "Claude Code", mark: <ClaudeMark /> },
-  { name: "Codex", mark: <CodexMark /> },
-  { name: "Cursor", mark: <CursorMark /> },
-];
-
-// The live page's CTA, unchanged — design-system button + agent switcher.
-function CopyPrompt({ accent, switcher }: { accent?: boolean; switcher?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const [sel, setSel] = useState(0);
-  const [open, setOpen] = useState(false);
-  const current = HERO_AGENTS[sel];
-  const label = switcher ? "Setup for agents" : "Copy prompt for your AI";
-  const copiedLabel = switcher ? "Copied — paste it in" : "Copied — paste into your AI";
-  return (
-    <div className="promptcta">
+    <div className="b-cmd">
+      <code>
+        <span className="b-dollar">$ </span>
+        {cmd}
+      </code>
       <button
-        className={accent ? "btn accent" : "btn ghost"}
+        type="button"
+        className={"b-cmd-copy" + (copied ? " b-done" : "")}
+        aria-label={copied ? "Copied" : "Copy command"}
         onClick={() => {
-          navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
+          navigator.clipboard?.writeText(cmd).then(() => setCopied(true)).catch(() => {});
         }}
       >
-        {copied ? <><Check size={15} /> {copiedLabel}</> : <><Copy size={15} /> {label}</>}
+        {copied ? <Check size={14} strokeWidth={2.4} /> : <Copy size={13.5} strokeWidth={2} />}
       </button>
-      {switcher && (
-        <div className="agent-dd">
-          <button
-            type="button"
-            className="agent-trigger"
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            onClick={() => setOpen((o) => !o)}
-          >
-            <span className="as-mk">{current.mark}</span>
-            <span className="agent-name">{current.name}</span>
-            <ChevronDown size={13} className="agent-caret" />
-          </button>
-          {open && (
-            <>
-              <div className="agent-backdrop" onClick={() => setOpen(false)} />
-              <ul className="agent-menu" role="listbox">
-                {HERO_AGENTS.map((a, i) => (
-                  <li
-                    key={a.name}
-                    role="option"
-                    aria-selected={i === sel}
-                    className={"agent-item" + (i === sel ? " on" : "")}
-                    onClick={() => { setSel(i); setOpen(false); }}
-                  >
-                    <span className="as-mk">{a.mark}</span>{a.name}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }
 
-export default function Page() {
-  const [machine, setMachine] = useState(false);
-  const planStep = usePlanStep();
-  const artRef = useRef<HTMLElement>(null);
-  // The nav is knocked out while it sits on the picture and solid once it has
-  // scrolled off it. The observer watches the picture through a viewport whose
-  // top edge is pushed down by the nav's own height, so the flip lands exactly
-  // when the bar clears the artwork.
-  const [solid, setSolid] = useState(false);
-  useEffect(() => {
-    const el = artRef.current;
-    if (!el) return;
-    const navh = parseInt(getComputedStyle(el).getPropertyValue("--navh")) || 62;
+// ── reveal ─────────────────────────────────────────────────────────────────
+
+// The section is armed here rather than in the stylesheet. Hiding it in CSS
+// would mean a page that stays blank whenever this never runs, and that includes
+// a failed hydration and every crawler. Arming in a layout effect happens before
+// the first paint, so nothing flashes.
+function useRise() {
+  useLayoutEffect(() => {
+    const els = Array.from(document.querySelectorAll<HTMLElement>(".bay .b-rise"));
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || !("IntersectionObserver" in window)) return;
+
+    els.forEach((el) => el.classList.add("b-armed"));
+
     const io = new IntersectionObserver(
-      ([entry]) => setSolid(!entry.isIntersecting),
-      { rootMargin: `-${navh}px 0px 0px 0px` },
+      (entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          e.target.classList.add("b-in");
+          io.unobserve(e.target);
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.05 }
     );
-    io.observe(el);
-    return () => io.disconnect();
+    els.forEach((el) => io.observe(el));
+
+    // Last resort. If the observer has not fired after a couple of seconds, the
+    // reveal is no longer worth the risk of hiding real copy.
+    const failsafe = setTimeout(() => els.forEach((el) => el.classList.add("b-in")), 2500);
+
+    return () => {
+      io.disconnect();
+      clearTimeout(failsafe);
+    };
+  }, []);
+}
+
+// ── the page ───────────────────────────────────────────────────────────────
+
+export default function Home() {
+  const [stuck, setStuck] = useState(false);
+  useRise();
+
+  useEffect(() => {
+    const onScroll = () => setStuck(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  if (machine) {
-    return (
-      <div className="ss">
-        <MachineView />
-        <ModeToggle machine onToggle={() => setMachine(false)} />
-      </div>
-    );
-  }
+  const brand = (
+    <>
+      <span className="b-chip">
+        <Mark size={15} onDark />
+      </span>
+      <span className="b-word">{BRAND}</span>
+    </>
+  );
 
   return (
-    <div className="ss">
-      <main className="wrap">
-        {/* the nav, same markup as ever — knocked out while it's on the
-            picture, back to the blurred paper bar once it has left it */}
-        <nav className={"nav" + (solid ? " solid" : "")}>
-          <a className="brand" href="/"><span className="mk"><Mark size={15} onDark /></span>Supersonic</a>
-          <div className="links">
-            <a href="#features">Product</a>
+    <div className="bay">
+      <nav className={"b-nav" + (stuck ? " b-stuck" : "")}>
+        <div className="b-wrap">
+          <a className="b-brand" href="/home" aria-label={`${BRAND} home`}>
+            {brand}
+          </a>
+          <div className="b-nav-links">
+            <a href="#ship">Product</a>
+            <a href="#agents">For agents</a>
             <a href="#pricing">Pricing</a>
+            <a href="/llms.txt">Docs</a>
           </div>
-          <span className="spacer" />
-          <a className="btn ghost sm" href={APP}>Open app</a>
-          <a className="btn accent sm" href={`${APP}/signup`}>Sign up</a>
-        </nav>
+          <div className="b-spacer" />
+          <div className="b-nav-right">
+            <a className="b-btn b-btn-quiet b-btn-sm" href={APP}>
+              Sign in
+            </a>
+            <a className="b-btn b-btn-fill b-btn-sm" href={`${APP}/new`}>
+              Get started
+            </a>
+          </div>
+        </div>
+      </nav>
 
-        {/* HERO PICTURE — flush to the guide lines, running under the nav */}
-        <section className="ss-art" ref={artRef}>
-          <img src="/hero-sf.jpg" alt="San Francisco at sunset, seen across the bay from the Golden Gate" />
-        </section>
+      {/* ── hero ─────────────────────────────────────────────────────── */}
 
-        <section className="ss-headline">
+      <header className="b-hero">
+        <div className="b-wrap">
+          <h1>A cloud for small software.</h1>
+          <p className="b-body">
+            Point it at the app you built. It comes back a real product — its own address, a
+            database, a way in for the people you choose — in about forty seconds.
+          </p>
+          <div className="b-hero-cta">
+            <a className="b-btn b-btn-fill" href={`${APP}/new`}>
+              Get started <ArrowRight size={15} strokeWidth={2} />
+            </a>
+            <CommandLine />
+          </div>
+          <div className="b-hero-note">
+            <a className="b-arrow" href="#pricing">
+              Free plan, no card, no clock <ArrowRight size={15} strokeWidth={2} />
+            </a>
+          </div>
+        </div>
+      </header>
+
+      {/* ── the picture ──────────────────────────────────────────────── */}
+
+      <section>
+        <div className="b-wrap">
+          <div className="b-plate">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/hero-sf.jpg" alt="The Golden Gate and the city, from the bay." fetchPriority="high" />
+          </div>
+          <p className="b-caption">The Golden Gate, looking east toward the city.</p>
+        </div>
+      </section>
+
+      {/* ── what it is ───────────────────────────────────────────────── */}
+
+      <section className="b-sec">
+        <div className="b-wrap b-two b-rise">
+          <h2>Everything on, from the first ship.</h2>
           <div>
-            <h1>Domain, database, server<br />from one prompt</h1>
-          </div>
-          <div className="ss-aside">
-            <p>
-              The cloud for AI era. Point us at the app you built and we turn it
-              into a real, live product in one click
+            <p className="b-body">
+              There is no step where you go and set something up. Every app opens at a name you
+              can send to somebody, its database is saved and backed up from the first click, and
+              we watch the live thing around the clock and tell you what broke in words rather
+              than an error code.
             </p>
-            <div className="actions">
-              <CopyPrompt accent switcher />
+            <div className="b-two-links">
+              <a className="b-arrow" href="#ship">
+                How shipping works <ArrowRight size={15} strokeWidth={2} />
+              </a>
+              <a className="b-arrow" href="#agents">
+                Drive it from your agent <ArrowRight size={15} strokeWidth={2} />
+              </a>
             </div>
           </div>
-        </section>
+        </div>
+      </section>
 
-        {/* ——— everything below is the current page, untouched, for comparison ——— */}
-        <section className="sec cli-sec">
-          <div className="sec-head">
-            <h2>Ready in one CLI command</h2>
-            <p>One command, from your project folder. We work out how the app runs, build it, and hand back a live URL.</p>
-          </div>
-          <CommandBlock />
-        </section>
+      {/* ── figures ──────────────────────────────────────────────────── */}
 
-        <section className="sec" id="features">
-          <div className="sec-head">
-            <h2>Everything a real app needs,<br />handled by AI</h2>
-            <p>You bring the idea and the code. We bring the entire cloud — provisioned, connected, and looked after.</p>
-          </div>
-          <div className="cells">
-            {features.map((f) => (
-              <div className="cell" key={f.name}>
-                {f.tag && <span className="tag">{f.tag}</span>}
-                <span className="ic"><f.icon size={17} /></span>
-                <h3>{f.name}</h3>
-                <p>{f.desc}</p>
+      <section className="b-sec" style={{ paddingTop: 0 }}>
+        <div className="b-wrap b-rise">
+          <span className="b-eyebrow">The shape of it</span>
+          <div className="b-figures">
+            {FIGURES.map((f) => (
+              <div key={f.n}>
+                <div className="b-fig-n">{f.n}</div>
+                <p className="b-fig-l">{f.l}</p>
               </div>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section className="sec roles-sec" id="collaborate">
-          <div className="sec-head">
-            <h2>Share a working app<br />like a Google Doc.</h2>
-            <p>Supersonic isn&apos;t just hosting — it&apos;s where your team builds together. Everyone gets the right access, on the same live app.</p>
+      {/* ── ship ─────────────────────────────────────────────────────── */}
+
+      <section className="b-sec" id="ship">
+        <div className="b-wrap b-two b-rise">
+          <div>
+            <h2>One command, and it&apos;s out.</h2>
+            <p className="b-body" style={{ marginTop: 18 }}>
+              Run it in the folder you are already standing in. {BRAND} reads the app, works out
+              how to run it, and tells you the address when it answers. Your .env travels with
+              it, and every app is private until you say otherwise.
+            </p>
+            <div className="b-two-links">
+              <a className="b-arrow" href="/llms.txt">
+                Read the manual <ArrowUpRight size={15} strokeWidth={2} />
+              </a>
+            </div>
           </div>
-          <div className="roles">
-            {roles.map((r) => (
-              <div className="role" key={r.name}>
-                <span className="role-ic"><r.icon size={19} /></span>
-                <h3>{r.name}</h3>
-                <p>{r.desc}</p>
+          <div className="b-card">
+            <Terminal title={CLI}>
+              <AnimatedSpan delay={100} className="term-cmd">
+                $ {CLI} deploy
+              </AnimatedSpan>
+              <AnimatedSpan delay={600}>
+                reading the app <span className="term-key">next.js · node 22</span>
+              </AnimatedSpan>
+              <AnimatedSpan delay={1050}>
+                building <span className="term-key">41s</span>
+              </AnimatedSpan>
+              <AnimatedSpan delay={1500}>
+                database <span className="term-key">ready</span>
+              </AnimatedSpan>
+              <AnimatedSpan delay={1950}>
+                address <span className="term-key">reserved</span>
+              </AnimatedSpan>
+              <AnimatedSpan delay={2450} className="term-ok">
+                ✓ live: <span className="term-url">https://harbor.{DOMAIN}</span>
+              </AnimatedSpan>
+            </Terminal>
+          </div>
+        </div>
+      </section>
+
+      {/* ── who it is for ────────────────────────────────────────────── */}
+
+      <section className="b-sec" style={{ paddingTop: 0 }}>
+        <div className="b-wrap b-rise">
+          <h2>One person, or the team they hire.</h2>
+          <div className="b-cols">
+            {PAIRS.map((p) => (
+              <div key={p.eyebrow}>
+                <span className="b-eyebrow">{p.eyebrow}</span>
+                <p>{p.body}</p>
+                <a className="b-arrow" href={p.link.href}>
+                  {p.link.label} <ArrowRight size={15} strokeWidth={2} />
+                </a>
               </div>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section className="sec agent-sec">
-          <div className="agent-copy">
-            <h2>Something breaks at 2am?<br />It&apos;s already fixed.</h2>
-            <p>Supersonic runs its own AI inside your cloud. It watches your live app, and the moment something fails it <b>reads your code, writes the fix, and redeploys to green</b> — on its own. You wake up to a working app and a changelog.</p>
-            {/* <div className="agent-flow">
-              <span className="af">Detects the error</span><ArrowRight size={14} />
-              <span className="af">Reads the code</span><ArrowRight size={14} />
-              <span className="af">Writes the fix</span><ArrowRight size={14} />
-              <span className="af on">Redeploys ✓</span>
-            </div> */}
-          </div>
-          <div className="agent-term">
-            <Term className="hero-term">
-              <AnimatedSpan delay={200} className="term-red">✕ TypeError: cannot read &apos;map&apos; of undefined — Notes.jsx:42</AnimatedSpan>
-              <AnimatedSpan delay={900} className="term-cyan">◆ agent · reading the repo…</AnimatedSpan>
-              <AnimatedSpan delay={1600} className="term-cyan">◆ agent · notes is undefined before fetch resolves</AnimatedSpan>
-              <AnimatedSpan delay={2300} className="term-dim">◆ agent · patched Notes.jsx (useState([]))</AnimatedSpan>
-              <AnimatedSpan delay={3000} className="term-dim">▸ redeploying…</AnimatedSpan>
-              <AnimatedSpan delay={3700} className="term-green">✓ healthy again — 0 errors</AnimatedSpan>
-            </Term>
-          </div>
-        </section>
+      {/* ── agents ───────────────────────────────────────────────────── */}
 
-        <section className="sec globe-sec">
-          <div className="copy">
-            <h2>Deploy anywhere.<br />Live everywhere.</h2>
-            <p>Every app ships to Google&apos;s global network with a secure custom domain and auto-scaling — fast for the person next door and the one across the planet.</p>
-            <div className="cities">
-              <span>San Francisco</span><span>New York</span><span>London</span><span>Berlin</span><span>Tokyo</span><span>Singapore</span><span>Sydney</span>
+      <section className="b-sec" id="agents">
+        <div className="b-wrap b-two b-rise">
+          <div>
+            <h2>Your agent can drive it.</h2>
+            <p className="b-body" style={{ marginTop: 18 }}>
+              {BRAND} ships as a command and as an MCP server, so the thing writing your code can
+              also put it online, read what production actually saw, and go fix what it finds —
+              without handing you a stack trace and asking what to do.
+            </p>
+            <div className="b-two-links">
+              <a className="b-arrow" href="/llms.txt">
+                The agent manual <ArrowUpRight size={15} strokeWidth={2} />
+              </a>
             </div>
           </div>
-          <div className="stage"><Globe /></div>
-        </section>
-
-        <section className="sec" id="pricing">
-          <div className="sec-head">
-            <h2>Free forever.<br />No infrastructure bills.</h2>
-            <p>Your cloud is included and you never touch a Google Cloud invoice.</p>
-            <div className="trialbar">Free plan, no card, no time limit · your apps never sleep · cancel any time</div>
+          <div className="b-card-plain">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/bridge.jpg" alt="" aria-hidden />
           </div>
-          <div className="compare" ref={planStep.ref}>
-            <svg className="plan-step" width="100%" height="100%" aria-hidden>
-              <path d={planStep.d} />
-            </svg>
-            <div className="plan">
-              <div className="pname">Free</div>
-              <div className="pdesc">Three real apps with a database, a web address, and people you share them with. No card, no clock.</div>
-              <div className="price"><b>$0</b> / forever</div>
-              {free.map(([label, on]) => (
-                <div className={"row" + (on ? "" : " off")} key={String(label)}>
-                  <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
+        </div>
+      </section>
+
+      {/* ── pricing ──────────────────────────────────────────────────── */}
+
+      <section className="b-sec" id="pricing" style={{ paddingTop: 0 }}>
+        <div className="b-wrap b-two b-rise" style={{ alignItems: "end" }}>
+          <h2>Free forever. No infrastructure bill.</h2>
+          <p className="b-body">
+            Your cloud is included and you never see a Google Cloud invoice. Apps on the free
+            plan do not sleep and do not expire.
+          </p>
+        </div>
+        <div className="b-wrap b-rise">
+          <div className="b-plans">
+            {PLANS.map((p) => (
+              <div className="b-plan" key={p.name}>
+                <div className="b-plan-name">{p.name}</div>
+                <div className={"b-plan-price" + (p.unit ? "" : " b-plan-words")}>
+                  {p.price} {p.unit ? <span>/ {p.unit}</span> : null}
                 </div>
-              ))}
-              <div className="cta"><a className="btn ghost" href={`${APP}/new`}>Start free</a></div>
-            </div>
-            <div className="plan">
-              <div className="pname">Pro</div>
-              <div className="pdesc">Unlimited apps, your own domain, and Autopilot — failed deploys fix themselves and redeploy to green.</div>
-              <div className="price"><b>$20</b> / month</div>
-              {pro.map(([label, on]) => (
-                <div className={"row" + (on ? "" : " off")} key={String(label)}>
-                  <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
-                </div>
-              ))}
-              <div className="cta"><a className="btn accent" href={`${APP}/new`}>Go Pro <ArrowRight size={15} /></a></div>
-            </div>
-            <div className="plan">
-              <div className="pname">Team</div>
-              <div className="pdesc">For a team whose internal tools all live in one place. You pay for the people who build — never for the people who use.</div>
-              <div className="price"><b>Let&apos;s talk</b></div>
-              {team.map(([label, on]) => (
-                <div className={"row" + (on ? "" : " off")} key={String(label)}>
-                  <span className="mk">{on ? <Check size={15} strokeWidth={2.2} /> : <X size={14} />}</span>{label}
-                </div>
-              ))}
-              <div className="cta"><a className="btn ghost" href="mailto:founders@supersonic.cv?subject=Supersonic%20Team%20plan">Talk to us</a></div>
-            </div>
-          </div>
-        </section>
-
-        <section className="sec faq-sec">
-          <div className="lead">
-            <h2>Everything you need to know</h2>
-          </div>
-          <div className="faq-list">
-            {faqs.map(([q, a]) => (
-              <details className="faq-item" key={q}>
-                <summary><span className="q">{q}</span><span className="pm">+</span></summary>
-                <div className="a">{a}</div>
-              </details>
+                <p className="b-plan-desc">{p.desc}</p>
+                <ul>
+                  {p.rows.map((r) => (
+                    <li key={r}>
+                      <Check size={14} strokeWidth={2.2} />
+                      <span>{r}</span>
+                    </li>
+                  ))}
+                </ul>
+                <a className={"b-btn " + (p.fill ? "b-btn-fill" : "b-btn-line")} href={p.href}>
+                  {p.cta}
+                </a>
+              </div>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section className="sec final">
-          <h2 style={{ marginTop: 14 }}>Ship your first app today.</h2>
-          <div className="cta ss-final-cta"><CopyPrompt accent switcher /></div>
-        </section>
+      {/* ── closing ──────────────────────────────────────────────────── */}
 
-        <footer>
-          <div className="foot">
-            <div>
-              <div className="brand"><span className="mk"><Mark size={15} onDark /></span>SUPERSONIC</div>
-              <p style={{ color: "var(--ink-2)", fontSize: 13, marginTop: 12, maxWidth: "30ch" }}>The cloud for AI era. Deploy anything in one click.</p>
-            </div>
-            <div className="col">
-              <h4>Product</h4>
-              <a href="#features">Features</a><a href="#pricing">Pricing</a><a href={APP}>Open app</a>
-            </div>
-            <div className="col">
-              <h4>Company</h4>
-              <a href="#">About</a><a href="#">Blog</a><a href="#">Careers</a>
-            </div>
-            <div className="col">
-              <h4>Resources</h4>
-              <a href={APP}>Docs</a><a href="#"><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Github size={13} /> GitHub</span></a><a href="#">Status</a>
-            </div>
+      <section className="b-close">
+        <div className="b-wrap b-rise">
+          <h2>Bring it in to the bay.</h2>
+          <div className="b-hero-cta">
+            <a className="b-btn b-btn-fill" href={`${APP}/new`}>
+              Get started <ArrowRight size={15} strokeWidth={2} />
+            </a>
+            <CommandLine />
           </div>
-          <div className="foot-bar">
-            <span>© 2026 Supersonic Software, Inc.</span>
-            <span className="spacer" />
-            <span>London, UK</span>
+        </div>
+      </section>
+
+      {/* ── footer ───────────────────────────────────────────────────── */}
+
+      <footer className="b-foot">
+        <div className="b-wrap">
+          <div className="b-foot-brand">
+            <a className="b-brand" href="/home">
+              {brand}
+            </a>
+            <p>A cloud for small software.</p>
           </div>
-        </footer>
-      </main>
-
-      <ModeToggle machine={false} onToggle={() => setMachine(true)} />
-
-      <a className="ss-badge" href={APP} target="_blank" rel="noreferrer">
-        <Mark size={12} onDark />Runs on Supersonic
-      </a>
+          <div className="b-spacer" />
+          <div className="b-fcol">
+            <span className="b-eyebrow">Product</span>
+            <a href="#ship">How it works</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#agents">For agents</a>
+          </div>
+          <div className="b-fcol">
+            <span className="b-eyebrow">Build</span>
+            <a href="/llms.txt">Agent manual</a>
+            <a href={`${APP}/new`}>Ship an app</a>
+            <a href={APP}>Sign in</a>
+          </div>
+          <div className="b-fcol">
+            <span className="b-eyebrow">Company</span>
+            <a href={`mailto:${CONTACT_EMAIL}`}>Contact</a>
+            <a href="https://github.com/The-Red-Onion" rel="noreferrer">
+              GitHub
+            </a>
+          </div>
+          <div className="b-foot-bar">
+            <span>
+              © {new Date().getFullYear()} {BRAND} Cloud
+            </span>
+            <span>{DOMAIN}</span>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

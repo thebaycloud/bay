@@ -1,4 +1,4 @@
-# Supersonic landing site — build the Next.js app, then serve on $PORT.
+# Bay landing site — build the Next.js app, then serve on $PORT.
 FROM node:22-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1

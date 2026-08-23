@@ -233,6 +233,28 @@ The SQL **instances** keep their names under Decision A.
 service's secrets on 12 Aug. Every new service is created with its full env, and
 every update uses `--update-secrets`.
 
+### Cutover preconditions — none of these are optional
+
+The landing page and `llms.txt` now say **Bay**, `bay-cli` and
+`app.thebay.cloud`. All three are promises, and two of them are not yet true.
+Deploying `apps/landing` before they are would put a manual in front of coding
+agents telling them to `npm i -g bay-cli` — a package that does not exist — and
+an "Open app" button pointing at a host with no certificate.
+
+So, in order, and none skippable:
+
+1. `bay-cli` published to npm and installable
+2. `app.thebay.cloud` serving the control plane (its Cloud Run certificate issued)
+3. `apps/landing` deployed
+4. `ROOT_DOMAIN` flipped on the control plane, the worker and the job
+5. `COOKIE_DOMAIN` flipped — **this signs every user out once**
+6. `supersonic.cv` 301s to `thebay.cloud`
+
+Steps 4 and 5 are the same deploy. Splitting them leaves a window where the
+platform builds `thebay.cloud` links while the cookie only exists on
+`supersonic.cv`, and every one of those links lands on a sign-in gate that
+cannot be satisfied.
+
 ### Phase 7 — cutover (0.5 day)
 
 `ROOT_DOMAIN=thebay.cloud` becomes the default. New apps get
