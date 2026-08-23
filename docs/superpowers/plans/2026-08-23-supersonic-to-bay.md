@@ -149,6 +149,30 @@ provisions while Phase 3 is being written.
 **Done when** `https://l3sgp.thebay.cloud` and `https://l3sgp.supersonic.cv`
 both serve the same app.
 
+#### Two things found while building Phase 2 that the plan above did not know
+
+**The session cookie is scoped to `.supersonic.cv`.** `COOKIE_DOMAIN=.supersonic.cv`
+on the live control plane, and a cookie cannot be set for two domains. So while
+both roots answer, they are **two separate session realms**: somebody signed in
+at `supersonic.cv` is anonymous at `thebay.cloud`, and a private app on the new
+root will show them the sign-in gate.
+
+There is no clever fix and none is wanted. At cutover the cookie domain moves and
+**every user signs out once**. With 19 users that is a message, not a migration —
+and it is one more reason to do this at 19 users rather than at 1900. Until
+cutover, the new root is for public apps and for testing.
+
+**The wildcard certificate is authorized by DNS, not by the load balancer.**
+ADR 0004 describes load-balancer authorization, and that is right for a
+customer's attached domain — but a wildcard cannot be proved that way. The
+existing `supersonic-wildcard` uses a DNS authorization (`supersonic-dns-auth`),
+and `*.thebay.cloud` needs its own: `bay-dns-auth`, created 23 Aug, whose
+challenge CNAME is what `scripts/setup-bay-domain.sh` hands to whoever runs it.
+
+Cloud Run domain mappings need a **second, different** proof — Search Console
+verification of `thebay.cloud`, attached to the account that runs the mapping.
+Two proofs, two dashboards, and mistaking one for the other costs an afternoon.
+
 ### Phase 3 — the rename in code (1.5 days)
 
 Mechanical for the most part, and it is worth doing in three passes rather than
