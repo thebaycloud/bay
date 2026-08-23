@@ -17,7 +17,18 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/panel/toast";
-import { AlertCell, Avatars, Chips, Row, RowGroup, RowList, RowNest, StatusChip, TintRow } from "@/components/panel/atoms";
+import {
+  AlertCell,
+  Avatars,
+  Chips,
+  Row,
+  RowGroup,
+  RowList,
+  RowNest,
+  RowSection,
+  StatusChip,
+  TintRow,
+} from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { StoragePanel } from "@/components/StoragePanel";
 import { JobsPanel } from "@/components/JobsPanel";
@@ -170,18 +181,24 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
       ) : null}
 
-      <RowGroup title="Overview">
-        {/* A disclosure, not a door. Every address this app answers on is a
-            short list, and a screen of its own to hold four rows is a
-            navigation somebody has to come back from. */}
-        <Row
-          expanded={addrOpen}
-          icon={ICON.address}
-          onOpen={() => setAddrOpen((o) => !o)}
-          title="Address"
-        >
-          <TintRow value={d.addr} />
-        </Row>
+      {/* Overview is a group interrupted by a card, so its list breaks in two:
+          Address, then what Address opens, then the rest. The alternative — the
+          card nested inside one list — put the group's own border down both
+          sides of it, which is exactly what "still part of the block" means. */}
+      <RowSection title="Overview">
+        <RowList>
+          {/* A disclosure, not a door. Every address this app answers on is a
+              short list, and a screen of its own to hold four rows is a
+              navigation somebody has to come back from. */}
+          <Row
+            expanded={addrOpen}
+            icon={ICON.address}
+            onOpen={() => setAddrOpen((o) => !o)}
+            title="Address"
+          >
+            <TintRow value={d.addr} />
+          </Row>
+        </RowList>
 
         {addrOpen ? (
           <RowNest>
@@ -189,66 +206,68 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           </RowNest>
         ) : null}
 
-        <Row icon={ICON.access} onOpen={() => setView("access")} title="Access">
-          <Chips>
-            <Avatars initials={d.pInitials} />
-            <StatusChip
-              text={
-                d.who === "public"
-                  ? "anyone with the link"
-                  : d.who === "shared"
-                    ? "people you invited"
-                    : "only you"
-              }
-              tone={d.who === "public" ? "grey" : "green"}
-            />
-          </Chips>
-        </Row>
-
-        <Row icon={ICON.analytics} onOpen={() => setView("analytics")} title="Analytics">
-          <Chips>
-            {d.an ? (
+        <RowList>
+          <Row icon={ICON.access} onOpen={() => setView("access")} title="Access">
+            <Chips>
+              <Avatars initials={d.pInitials} />
               <StatusChip
-                text={`${d.an.visitors.toLocaleString()} ${d.an.visitors === 1 ? "visitor" : "visitors"} today`}
-                tone={d.an.dvUp ? "green" : "red"}
+                text={
+                  d.who === "public"
+                    ? "anyone with the link"
+                    : d.who === "shared"
+                      ? "people you invited"
+                      : "only you"
+                }
+                tone={d.who === "public" ? "grey" : "green"}
               />
-            ) : (
-              // Not zero. Nobody counted is a different fact from nobody came.
-              <StatusChip text="not counting yet" tone="grey" />
-            )}
-            {d.here.length ? (
-              <>
-                <Avatars initials={d.initials} />
-                <StatusChip text={`${d.here.length} here now`} tone="green" />
-              </>
-            ) : null}
-          </Chips>
-        </Row>
+            </Chips>
+          </Row>
 
-        {/* The right-hand fact carries the STATE, which is what the sub was
-            saying all along — a row does not need a label and a value when the
-            value already reads as a sentence. */}
-        <Row icon={ICON.ships} onOpen={() => setView("ships")} title="Ships">
-          <Chips>
-            {/* No re-ship button. There is no deploy-trigger route behind it, and a
-                dead control on the one screen about shipping is worse than none. */}
-            <StatusChip
-              text={d.shipping ? "shipping now" : `last shipped ${d.ships[0].when}`}
-              tone={d.shipping ? "red" : "green"}
-            />
-          </Chips>
-        </Row>
+          <Row icon={ICON.analytics} onOpen={() => setView("analytics")} title="Analytics">
+            <Chips>
+              {d.an ? (
+                <StatusChip
+                  text={`${d.an.visitors.toLocaleString()} ${d.an.visitors === 1 ? "visitor" : "visitors"} today`}
+                  tone={d.an.dvUp ? "green" : "red"}
+                />
+              ) : (
+                // Not zero. Nobody counted is a different fact from nobody came.
+                <StatusChip text="not counting yet" tone="grey" />
+              )}
+              {d.here.length ? (
+                <>
+                  <Avatars initials={d.initials} />
+                  <StatusChip text={`${d.here.length} here now`} tone="green" />
+                </>
+              ) : null}
+            </Chips>
+          </Row>
 
-        <Row icon={ICON.infra} onOpen={() => setView("infra")} title="Infra">
-          <Chips>
-            <StatusChip
-              text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
-              tone={broken ? "red" : "green"}
-            />
-            <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
-          </Chips>
-        </Row>
-      </RowGroup>
+          {/* The right-hand fact carries the STATE, which is what the sub was
+              saying all along — a row does not need a label and a value when the
+              value already reads as a sentence. */}
+          <Row icon={ICON.ships} onOpen={() => setView("ships")} title="Ships">
+            <Chips>
+              {/* No re-ship button. There is no deploy-trigger route behind it, and a
+                  dead control on the one screen about shipping is worse than none. */}
+              <StatusChip
+                text={d.shipping ? "shipping now" : `last shipped ${d.ships[0].when}`}
+                tone={d.shipping ? "red" : "green"}
+              />
+            </Chips>
+          </Row>
+
+          <Row icon={ICON.infra} onOpen={() => setView("infra")} title="Infra">
+            <Chips>
+              <StatusChip
+                text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
+                tone={broken ? "red" : "green"}
+              />
+              <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
+            </Chips>
+          </Row>
+        </RowList>
+      </RowSection>
 
       <RowGroup title="Resources">
         <Row icon={ICON.data} onOpen={() => setView("data")} title="Data">

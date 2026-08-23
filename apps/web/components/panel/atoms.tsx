@@ -245,17 +245,35 @@ export function Avatars({ initials }: { initials: string[] }) {
 /**
  * The card a disclosure opens into.
  *
- * Inset on all four sides and bordered, so it floats inside the list rather than
- * becoming part of it. Flush to the edges it read as three more rows of the
- * table that happened to be shaded — the fill alone was not enough to say "these
- * belong to the row above", and the strip's own rows then looked like siblings
- * of Address rather than its contents.
+ * A SIBLING of the list, not a child of it. Inset inside the list it was still
+ * inside the list — the group's outer border ran down both sides of it, so it
+ * read as a shaded region of one block rather than as something that opened.
+ * Detaching it properly means the list has to break in two: rows above, this,
+ * rows below. See `RowSection`.
+ *
+ * Filled rather than white, so that at a glance it is the thing that appeared
+ * and not another table.
  */
 export function RowNest({ children }: { children: ReactNode }) {
   return (
-    <div className="mx-3 my-3 overflow-hidden rounded-lg border border-border bg-ground">
-      {children}
-    </div>
+    <div className="overflow-hidden rounded-xl border border-border bg-ground">{children}</div>
+  );
+}
+
+/**
+ * A titled group whose contents the caller composes.
+ *
+ * `RowGroup` puts one list under a title, which is right for a group that is
+ * only rows. This one is for a group interrupted by something that is not a row
+ * — a disclosure's card between the row that opened it and the rows after it —
+ * and the 12px gap is what makes the interruption visible.
+ */
+export function RowSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2.5">
+      <h2 className="px-0.5 text-[15px] text-ink">{title}</h2>
+      <div className="flex flex-col gap-3">{children}</div>
+    </section>
   );
 }
 
