@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { wantsMarkdown } from "./lib/wants-markdown";
+import { legacyRedirect } from "./lib/legacy-domain";
 
 /**
  * One address, two audiences.
@@ -20,6 +21,15 @@ import { wantsMarkdown } from "./lib/wants-markdown";
  * will eventually hand a browser the manual, or a terminal the markup.
  */
 export function middleware(req: NextRequest) {
+  // The old domain, first and for every path. A person who followed a link to
+  // supersonic.cv/pricing should land on the new pricing page, not on the new
+  // home page — and certainly not on a page that says Bay at the old address.
+  const moved = legacyRedirect(req.headers.get("host"), req.nextUrl.pathname + req.nextUrl.search);
+  if (moved) return NextResponse.redirect(moved, 301);
+
+  // Below here: the root only, whatever the matcher lets through.
+  if (req.nextUrl.pathname !== "/") return NextResponse.next();
+
   if (!wantsMarkdown(req.headers.get("accept"), req.headers.get("user-agent"))) {
     return NextResponse.next();
   }
@@ -30,8 +40,15 @@ export function middleware(req: NextRequest) {
 }
 
 /**
- * The root only. Every other path on this site is already unambiguous, and the
- * manual keeps its own permanent address at /llms.txt for anyone who asks for
- * it by name.
+ * Everything except Next's own assets.
+ *
+ * It was `"/"` while the only job here was the markdown rewrite. The legacy
+ * redirect needs every path — somebody following a link to
+ * supersonic.cv/pricing has to arrive at the new pricing page — so the matcher
+ * widened and the rewrite grew an explicit `pathname !== "/"` guard instead of
+ * relying on the matcher to be its scope.
+ *
+ * `_next` and `favicon.ico` are excluded because redirecting a chunk request
+ * costs a round trip and buys nothing: nobody bookmarks a hashed asset.
  */
-export const config = { matcher: "/" };
+export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };
