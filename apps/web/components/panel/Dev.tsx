@@ -27,7 +27,6 @@ import {
   RowNest,
   RowSection,
   StatusChip,
-  TintRow,
 } from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { StoragePanel } from "@/components/StoragePanel";
@@ -190,14 +189,16 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           {/* A disclosure, not a door. Every address this app answers on is a
               short list, and a screen of its own to hold four rows is a
               navigation somebody has to come back from. */}
+          {/* No address on the row itself. It was there twice — as a value with an
+              open and a copy beside it, and again as the first line of what the
+              row opens — and the copy target you want is the one in the list, next
+              to the domains it is listed with. */}
           <Row
             expanded={addrOpen}
             icon={ICON.address}
             onOpen={() => setAddrOpen((o) => !o)}
             title="Address"
-          >
-            <TintRow value={d.addr} />
-          </Row>
+          />
         </RowList>
 
         {addrOpen ? (

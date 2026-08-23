@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Copy, Eye, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -218,6 +218,53 @@ export function DomainsPanel({
 
   const rows = (
     <>
+      {/* The address we issued, FIRST and always.
+          
+          It belongs in this list because it is one of the addresses this app
+          answers on — the one that works before any DNS exists and the one a
+          person falls back to. It has no state (it cannot be anything but live)
+          and no delete (it cannot be given up), so what it carries instead are
+          the two things anybody ever does with an address.
+          
+          `dns.cname` rather than a string built here: the API already answers
+          with the canonical `<slug>.<root>`, and building a second copy of it in
+          the browser is how the two come to disagree on cutover day. */}
+      {dns ? (
+        <Row
+          after={
+            <span className="flex items-center gap-0.5">
+              <Button
+                aria-label={`Open ${dns.cname}`}
+                className="size-7 text-ink-3 hover:text-ink"
+                onClick={() => window.open(`https://${dns.cname}`, "_blank", "noreferrer")}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <Eye className="size-3.5" />
+              </Button>
+              <Button
+                aria-label={`Copy ${dns.cname}`}
+                className="size-7 text-ink-3 hover:text-ink"
+                onClick={() => navigator.clipboard?.writeText(dns.cname).catch(() => {})}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <Copy className="size-3.5" />
+              </Button>
+            </span>
+          }
+          title={dns.cname}
+        >
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="size-1.5 shrink-0 rounded-full bg-[var(--green)]"
+            />
+            <span className="text-[13px] text-ink-2">live</span>
+          </span>
+        </Row>
+      ) : null}
+
       {domains.map((d) => (
         <Row
           key={d.hostname}
@@ -506,7 +553,7 @@ export function DomainsPanel({
   return (
     <div className="flex flex-col gap-2.5">
       <h2 className="px-0.5 text-[15px] text-ink">Your own domain</h2>
-      {domains.length > 0 ? <RowList>{rows}</RowList> : null}
+      <RowList>{rows}</RowList>
       {body}
       {modal}
     </div>

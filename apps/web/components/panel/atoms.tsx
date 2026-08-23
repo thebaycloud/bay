@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentType, ReactNode } from "react";
-import { Check, ChevronRight, Copy, Eye } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -169,38 +169,6 @@ export function AlertCell({
         </Button>
       </div>
     </Card>
-  );
-}
-
-/**
- * A machine value on a tinted row, with the two things you ever do to one.
- *
- * The value is mono and uses --red-ink rather than the brand red: #E63F2C on tint
- * measures 3.58:1 and fails, which is the whole reason two reds exist.
- */
-export function TintRow({ value }: { value: string }) {
-  return (
-    <div className="flex items-center gap-1">
-      <span className="min-w-0 truncate text-[13px] text-ink-2">{value}</span>
-      <Button
-        aria-label="Open"
-        className="size-7 shrink-0 rounded-md text-ink-3 hover:text-ink"
-        onClick={() => window.open(`https://${value}`, "_blank", "noreferrer")}
-        size="icon-sm"
-        variant="ghost"
-      >
-        <Eye className="size-3.5" />
-      </Button>
-      <Button
-        aria-label="Copy"
-        className="size-7 shrink-0 rounded-md text-ink-3 hover:text-ink"
-        onClick={() => navigator.clipboard?.writeText(value).catch(() => {})}
-        size="icon-sm"
-        variant="ghost"
-      >
-        <Copy className="size-3.5" />
-      </Button>
-    </div>
   );
 }
 
