@@ -7,6 +7,18 @@ WORKDIR /app/apps/web
 COPY apps/web/package*.json ./
 RUN npm ci
 COPY apps/web ./
+
+# The brand, at BUILD time — because Next inlines NEXT_PUBLIC_* into the client
+# bundle and strips everything else. A Cloud Run env var reaches the server and
+# never the browser, so the dashboard's own header would go on saying the old
+# name while every server-rendered link used the new one.
+#
+# Defaults are today's values: an image built without these is byte-identical in
+# behaviour to the one before they existed.
+ARG NEXT_PUBLIC_PRODUCT_NAME=Supersonic
+ARG NEXT_PUBLIC_ROOT_DOMAINS=supersonic.cv
+ENV NEXT_PUBLIC_PRODUCT_NAME=$NEXT_PUBLIC_PRODUCT_NAME
+ENV NEXT_PUBLIC_ROOT_DOMAINS=$NEXT_PUBLIC_ROOT_DOMAINS
 RUN npm run build
 # Drop what only the build needed. This is worth ~70 MB of an image that is
 # pulled on the critical path of EVERY deploy — `job-launch` is 116s p50, and it

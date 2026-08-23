@@ -23,6 +23,8 @@ steps:
         docker buildx build \
           --tag $_IMAGE:$_TAG \
           --tag $_IMAGE:latest \
+          --build-arg NEXT_PUBLIC_PRODUCT_NAME=$_PRODUCT_NAME \
+          --build-arg NEXT_PUBLIC_ROOT_DOMAINS=$_ROOT_DOMAINS \
           --cache-from type=registry,ref=$_IMAGE:cache \
           --cache-to type=registry,ref=$_IMAGE:cache,mode=max \
           --push \
@@ -318,6 +320,20 @@ substitutions:
   # passes whatever it likes. The default keeps a hand-run build from failing on an
   # unset substitution — it is never what lands from main.
   _TAG: manual
+  # The brand, baked into the client bundle. Next inlines NEXT_PUBLIC_* at build
+  # time and strips everything else, so these cannot be Cloud Run env vars: the
+  # dashboard's own header would keep saying the old name while every
+  # server-rendered link used the new one.
+  #
+  # ORDER IS MEANING in _ROOT_DOMAINS — the first root is canonical. See
+  # apps/web/lib/roots.ts.
+  #
+  # `--build-arg` is warned about above, and the warning is about SECRETS: those
+  # values stay readable in the history of an image pushed to a shared
+  # repository. A product name and a domain are printed on the page they build,
+  # so there is nothing here to leak.
+  _PRODUCT_NAME: Supersonic
+  _ROOT_DOMAINS: supersonic.cv
 
 # THE BUILD RUNS AS THE DEPLOYER, NOT AS THE DEFAULT COMPUTE ACCOUNT.
 #

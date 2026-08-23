@@ -6,6 +6,7 @@ import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRou
 import { Mark } from "@/components/Mark";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 import { DeployFilm } from "@/components/DeployFilm";
+import { productName } from "@/lib/brand";
 import { drive as advanceFilm, START as FILM_START, type FilmDrive } from "@/lib/deploy-film";
 
 // The 402 bodies carry a `reason`; anything unrecognised (an older server, a
@@ -356,7 +357,7 @@ export default function NewApp() {
       <header className="topbar">
         <Link href="/" className="topbrand">
           <span className="logo"><Mark size={14} onDark /></span>
-          SUPERSONIC
+          {productName().toUpperCase()}
         </Link>
         <div className="spacer" />
         <Link href="/" className="btn"><ArrowLeft size={13} />Apps</Link>
