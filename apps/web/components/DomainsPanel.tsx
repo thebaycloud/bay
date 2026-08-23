@@ -1,9 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, Eye, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Copy, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -80,6 +86,47 @@ function agentPrompt(hostname: string, dns: Dns): string {
     `  value  ${r.value}\n\n` +
     `Then tell me it is done. HTTPS turns itself on within about ten minutes of\n` +
     `the record going live — nothing needs redeploying.`
+  );
+}
+
+/**
+ * The hostname, which is also the copy button.
+ *
+ * Two icon buttons used to sit beside it — an eye and a copy — on every row,
+ * which is six controls for a list of three addresses, none of them labelled.
+ * The name is the thing you want on your clipboard, so the name is what you
+ * click; the tooltip says so on hover, and says "Copied" once it has happened.
+ *
+ * Not a link as well. Opening and copying from one element means one of the two
+ * has to be a modifier nobody discovers, and copying is what people came for —
+ * the address is in the row, so opening it is a paste away.
+ */
+function CopyName({ host }: { host: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            className="rounded-sm text-[15px] font-[450] text-ink transition-colors hover:text-ink-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red"
+            onClick={() => {
+              navigator.clipboard?.writeText(`https://${host}`).catch(() => {});
+              setDone(true);
+              setTimeout(() => setDone(false), 1600);
+            }}
+            type="button"
+          >
+            {host}
+          </button>
+        </TooltipTrigger>
+        {/* Ink, not `bg-primary`. The registry default is the brand red, and red
+            in this panel means something is wrong — a tooltip that says "Copy
+            URL" must not look like a warning. */}
+        <TooltipContent className="bg-ink text-[12px] text-white" side="top">
+          {done ? "Copied" : "Copy URL"}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -230,31 +277,7 @@ export function DomainsPanel({
           with the canonical `<slug>.<root>`, and building a second copy of it in
           the browser is how the two come to disagree on cutover day. */}
       {dns ? (
-        <Row
-          after={
-            <span className="flex items-center gap-0.5">
-              <Button
-                aria-label={`Open ${dns.cname}`}
-                className="size-7 text-ink-3 hover:text-ink"
-                onClick={() => window.open(`https://${dns.cname}`, "_blank", "noreferrer")}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <Eye className="size-3.5" />
-              </Button>
-              <Button
-                aria-label={`Copy ${dns.cname}`}
-                className="size-7 text-ink-3 hover:text-ink"
-                onClick={() => navigator.clipboard?.writeText(dns.cname).catch(() => {})}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <Copy className="size-3.5" />
-              </Button>
-            </span>
-          }
-          title={dns.cname}
-        >
+        <Row title={<CopyName host={dns.cname} />}>
           <span className="flex items-center gap-1.5">
             <span
               aria-hidden="true"
@@ -283,7 +306,7 @@ export function DomainsPanel({
               </Button>
             ) : null
           }
-          title={d.hostname}
+          title={<CopyName host={d.hostname} />}
         >
           {/* Only where there is nothing to do. A row waiting on the person has
               its button beside the name and needs no state as well — the button
