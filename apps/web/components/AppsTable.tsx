@@ -161,7 +161,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
                   >
                     <span
                       className={cn(
-                        "flex size-7 shrink-0 items-center justify-center rounded-md border border-border",
+                        "flex size-7 shrink-0 items-center justify-center rounded-sm border border-border",
                         b === "failed" ? "bg-tint text-red" : "bg-ground text-ink-2",
                       )}
                     >
