@@ -1,12 +1,18 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { getAppBySlug, setVisibility, listGrants, addGrant, removeGrant, type Visibility } from "@/lib/apps";
+import {
+  getAppBySlug, setVisibility,
+  listGrants, addGrant, removeGrant,
+  listDomainGrants, addDomainGrant, removeDomainGrant, workspaceDomainOfApp,
+  type Visibility,
+} from "@/lib/apps";
 import { listPending, resolveRequest } from "@/lib/requests";
 import { sendAccessGranted } from "@/lib/email";
 import { currentUserId } from "@/lib/session";
 import { entitlement, countPublicApps } from "@/lib/entitlements";
 import { publicLimitMessage, noAccountMessage } from "@/lib/plan-copy";
+import { normalizeDomain, isPublicEmailProvider } from "@/lib/workspace";
 import { corsFor, optionsHandler } from "@/lib/cors";
 
 const VISIBILITIES: Visibility[] = ["private", "shared", "public"];
@@ -25,13 +31,27 @@ async function ownedApp(slug: string) {
   return app;
 }
 
+/**
+ * Everything the panel draws, in one shape, so GET and POST cannot drift.
+ *
+ * `workspaceDomain` is the owner's own company domain (null for a personal
+ * account), and it is here for the one-click suggestion — "everyone at luwo.ai"
+ * is the rule people mean nine times out of ten, and typing it out is the part
+ * they get wrong.
+ */
+async function state(slug: string, visibility: Visibility | undefined) {
+  const [grants, domains, requests, workspaceDomain] = await Promise.all([
+    listGrants(slug), listDomainGrants(slug), listPending(slug), workspaceDomainOfApp(slug),
+  ]);
+  return { visibility, grants, domains, requests, workspaceDomain };
+}
+
 export async function GET(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
-  const [grants, requests] = await Promise.all([listGrants(slug), listPending(slug)]);
-  return Response.json({ visibility: app.visibility, grants, requests }, { headers: cors });
+  return Response.json(await state(slug, app.visibility), { headers: cors });
 }
 
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
@@ -101,10 +121,38 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     await resolveRequest(slug, email, "approved");
     await sendAccessGranted(email, slug);
   }
+  if (body.addDomain) {
+    const domain = normalizeDomain(String(body.addDomain));
+    if (!domain) {
+      return Response.json({ error: "that isn't a domain" }, { status: 400, headers: cors });
+    }
+    // A consumer provider is not an organisation. A rule for gmail.com admits
+    // everybody with a browser, which is `public` — and `public` is the one
+    // visibility that is counted, capped, and says so on the app. Letting it be
+    // spelled as a domain rule would route around all three.
+    if (isPublicEmailProvider(domain)) {
+      return Response.json(
+        { error: `${domain} is everyone's address, not an organisation. Choose Public if you mean anyone.` },
+        { status: 400, headers: cors }
+      );
+    }
+    const ent = await entitlement(app.owner_id);
+    if (ent.locked) {
+      return Response.json({ error: noAccountMessage(), paywall: true, reason: "no_account" }, { status: 402, headers: cors });
+    }
+    // No email is sent: a rule has no recipient. The people it admits find out
+    // by opening the link, which is the whole point of a rule over an invite.
+    await addDomainGrant(slug, domain);
+  }
   if (body.removeEmail) await removeGrant(slug, String(body.removeEmail));
+  // Normalised on the way out too, so removing a rule shown as "@luwo.ai"
+  // deletes the row stored as "luwo.ai".
+  if (body.removeDomain) {
+    const domain = normalizeDomain(String(body.removeDomain));
+    if (domain) await removeDomainGrant(slug, domain);
+  }
   if (body.denyEmail) await resolveRequest(slug, String(body.denyEmail), "denied");
 
   const fresh = await getAppBySlug(slug);
-  const [grants, requests] = await Promise.all([listGrants(slug), listPending(slug)]);
-  return Response.json({ visibility: fresh?.visibility, grants, requests }, { headers: cors });
+  return Response.json(await state(slug, fresh?.visibility), { headers: cors });
 }

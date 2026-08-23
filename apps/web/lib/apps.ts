@@ -350,3 +350,42 @@ export async function removeGrant(slug: string, email: string): Promise<void> {
     [slug, email.trim().toLowerCase()]
   );
 }
+
+// Domain rules — "anyone with an @luwo.ai address". Stored per app, beside the
+// people invited by name, and read by the edge with SQL equality (see
+// `normalizeDomain` in lib/workspace.ts for why equality and not a suffix).
+
+export async function listDomainGrants(slug: string): Promise<string[]> {
+  const r = await getPool(DB).query(
+    `SELECT g.domain FROM app_domain_grants g JOIN apps a ON a.id = g.app_id
+     WHERE a.slug = $1 ORDER BY g.domain`,
+    [slug]
+  );
+  return r.rows.map((x: { domain: string }) => x.domain);
+}
+
+export async function addDomainGrant(slug: string, domain: string): Promise<void> {
+  await getPool(DB).query(
+    `INSERT INTO app_domain_grants(app_id, domain)
+     SELECT a.id, $2 FROM apps a WHERE a.slug = $1
+     ON CONFLICT DO NOTHING`,
+    [slug, domain]
+  );
+}
+
+export async function removeDomainGrant(slug: string, domain: string): Promise<void> {
+  await getPool(DB).query(
+    `DELETE FROM app_domain_grants g USING apps a
+     WHERE g.app_id = a.id AND a.slug = $1 AND g.domain = $2`,
+    [slug, domain]
+  );
+}
+
+/** The domain of the workspace this app belongs to, or null for a personal one. */
+export async function workspaceDomainOfApp(slug: string): Promise<string | null> {
+  const r = await getPool(DB).query(
+    `SELECT w.domain FROM apps a JOIN workspaces w ON w.id = a.workspace_id WHERE a.slug = $1`,
+    [slug]
+  );
+  return r.rows[0]?.domain ?? null;
+}

@@ -66,3 +66,33 @@ export async function resolveWorkspaceForEmail(email: string, executor?: Queryab
   );
   return r.rows[0].id;
 }
+
+/**
+ * A domain typed by a person, as the value a rule is stored under — or "" when
+ * it is not a domain at all.
+ *
+ * Accepts the three spellings people actually type for the same thing:
+ * `@luwo.ai`, `luwo.ai`, and a whole address `boris@luwo.ai`. Everything else
+ * is refused rather than repaired, because a rule that silently became a
+ * different domain than the one on screen is a rule nobody can audit.
+ *
+ * The value is what the edge compares a visitor's domain to, with SQL equality.
+ * That equality is the point: matching with a suffix test would make a rule for
+ * `luwo.ai` also admit `evil-luwo.ai`, which anyone can register — the same
+ * mistake `lib/allowlist.ts` carries a comment about.
+ */
+export function normalizeDomain(input: string): string {
+  const raw = input.trim().toLowerCase();
+  if (!raw) return "";
+  // A whole address is the commonest paste; take the domain half through the
+  // same parser that refuses `boris@luwo.ai@evil.com`.
+  if (raw.includes("@")) return domainOf(raw.startsWith("@") ? `x${raw}` : raw);
+  // 253 is the maximum length of a hostname; a label is 1-63 of [a-z0-9-] and
+  // may not start or end with a hyphen. No wildcards: "*" is how the sign-in
+  // allowlist spells "everyone", and an app that means everyone is `public`.
+  if (raw.length > 253) return "";
+  const labels = raw.split(".");
+  if (labels.length < 2) return "";
+  const label = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+  return labels.every((l) => label.test(l)) ? raw : "";
+}

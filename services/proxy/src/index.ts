@@ -1,13 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config";
-import { lookupApp, lookupAppByHost, hasGrant, workspaceOfUser, workspaceDomainOf, registryStaleFor } from "./registry";
-import { page403, page404, pageGate, pageFailed, pageStalled, pageNoWeb } from "./pages";
+import { lookupApp, lookupAppByHost, hasGrant, hasDomainGrant, emailIsVerified, workspaceOfUser, workspaceDomainOf, registryStaleFor } from "./registry";
+import { page403, page404, pageGate, pageProve, pageFailed, pageStalled, pageNoWeb } from "./pages";
 import { pageRoom } from "./room-page";
 import { serveRoomEvents } from "./room";
 import { assembleReading, liveDeps } from "./reading";
 import { wantsHtml } from "./negotiate";
 import { viewerOnce, authUrls, hasCredential } from "./session";
-import { decideAccess } from "./access";
+import { decideAccess, domainOf } from "./access";
 import { decideEdge } from "./edge";
 import { doorFor, mustReturnToPlatform, platformUrl } from "./door";
 import { pickRoute, pickPrefix } from "./routes";
@@ -308,12 +308,25 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return html(res, 401, pageGate(loginUrl, signupUrl));
   }
 
-  const [visitorWorkspaceId, granted] = await Promise.all([
+  // A domain rule is only asked about for a `shared` app, and only then is the
+  // visitor's own verification read — an app with no rules pays for neither.
+  const visitorDomain = app.visibility === "shared" ? domainOf(visitor.email) : "";
+  const [visitorWorkspaceId, granted, domainRuleMatches, visitorEmailVerified] = await Promise.all([
     workspaceOfUser(visitor.userId),
     app.visibility === "shared" ? hasGrant(app.id, visitor.email) : Promise.resolve(false),
+    visitorDomain ? hasDomainGrant(app.id, visitorDomain) : Promise.resolve(false),
+    visitorDomain ? emailIsVerified(visitor.userId) : Promise.resolve(false),
   ]);
 
-  if (!decideAccess({ app, visitor, visitorWorkspaceId, hasGrant: granted })) {
+  if (!decideAccess({ app, visitor, visitorWorkspaceId, hasGrant: granted, domainRuleMatches, visitorEmailVerified })) {
+    // One case is not a refusal so much as an unfinished proof: this app admits
+    // everyone at their domain, and they are signed in with a password account,
+    // which proves nothing about the address. Saying "request access" there
+    // sends them to bother the owner for something they already have — so they
+    // are told the one move that opens it.
+    if (domainRuleMatches && !visitorEmailVerified) {
+      return html(res, 403, pageProve(visitorDomain, authUrls(req).loginUrl));
+    }
     return html(res, 403, page403(slug, "https://app.supersonic.cv"));
   }
 
