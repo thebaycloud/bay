@@ -2,11 +2,11 @@ export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { Suspense } from "react";
-import { Plus } from "lucide-react";
 import { CommandPalette } from "@/components/CommandPalette";
 import { Sidebar } from "@/components/Sidebar";
 import { AccountBanner } from "@/components/AccountBanner";
-import { AppsGrid, type App } from "@/components/AppsGrid";
+import { type App } from "@/components/AppsGrid";
+import { AppsTable } from "@/components/AppsTable";
 import { CardsSkeleton, RailSkeleton } from "@/components/Skeleton";
 import { currentUserId } from "@/lib/session";
 import { listOwnedApps, type AppSort } from "@/lib/apps";
@@ -81,15 +81,12 @@ async function AppsAndRail() {
             <div className="topbar-row">
               <CommandPalette apps={apps} />
               <div className="spacer" />
-              
-                <Link href="/new" className="btn primary"><Plus size={14} />New app</Link>
-              
             </div>
           </div>
         </header>
         <div className="content">
           <div className="wrap">
-            <AppsGrid initial={apps} initialError={error} />
+            <AppsTable initial={apps} initialError={error} />
           </div>
         </div>
       </div>

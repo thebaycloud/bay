@@ -1,0 +1,255 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import {
+  ArrowUpRight,
+  Box,
+  ChevronDown,
+  MoreHorizontal,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  TriangleAlert,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { App } from "@/components/AppsGrid";
+import { cn } from "@/lib/utils";
+
+/**
+ * The app list, as a list.
+ *
+ * Replaces the screenshot grid. That grid was a BROWSING surface — a picture per
+ * app, 132px tall, built for a product where the dashboard was the place you
+ * worked. Deploys happen in a terminal now, so this page is somewhere you check
+ * state, and a picture of a running app answers no question anybody arrives with.
+ *
+ * What a row carries is therefore the smallest set that answers "is it fine?":
+ * the name, its state, where it lives, when it last shipped. Everything else is
+ * behind the row (the workbench) or behind `…`, which is the only way a dense list
+ * stays dense — the previous rows grew to four visible buttons each.
+ */
+
+type SortKey = "recent" | "oldest" | "name";
+type Bucket = "live" | "building" | "failed";
+
+function bucketOf(a: App): Bucket {
+  if (a.status === "failed") return "failed";
+  if (a.status === "building" || a.status === "deploying" || a.status === "pending") return "building";
+  return "live";
+}
+
+/** The panel's words and the panel's rule: green is status, red is wrong. */
+const STATE: Record<Bucket, { label: string; dot: string }> = {
+  live: { label: "live", dot: "bg-[var(--green)]" },
+  building: { label: "shipping", dot: "bg-ink-3" },
+  failed: { label: "failed", dot: "bg-red" },
+};
+
+/** "2 days ago", and never a date nobody can subtract in their head. */
+function ago(iso?: string): string {
+  if (!iso) return "—";
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  const d = Math.round(s / 86400);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
+
+export function AppsTable({ initial, initialError }: { initial: App[]; initialError?: string }) {
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState<SortKey>("recent");
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const list = needle
+      ? initial.filter((a) => `${a.name ?? ""} ${a.slug}`.toLowerCase().includes(needle))
+      : [...initial];
+    const when = (a: App) => (a.deployedAt ? new Date(a.deployedAt).getTime() : Date.now());
+    if (sort === "name") list.sort((x, y) => (x.name || x.slug).localeCompare(y.name || y.slug));
+    else if (sort === "oldest") list.sort((x, y) => when(x) - when(y));
+    else list.sort((x, y) => when(y) - when(x));
+    return list;
+  }, [initial, q, sort]);
+
+  return (
+    <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-7 px-6 py-10">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-[26px] font-medium tracking-[-0.025em] text-ink">Your apps</h1>
+        <p className="text-sub text-ink-2">Ship one, and check on the ones that are running.</p>
+      </header>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-val text-ink">All apps</span>
+          <span className="font-mono text-micro text-ink-3">{initial.length}</span>
+
+          <div className="ml-auto flex items-center gap-2">
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-3"
+              />
+              <Input
+                aria-label="Find an app"
+                className="h-9 w-[190px] pl-8"
+                onChange={(e) => setQ(e.currentTarget.value)}
+                placeholder="Find an app…"
+                value={q}
+              />
+            </div>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button className="gap-1.5" size="sm" variant="outline">
+                  {sort === "name" ? "Name" : sort === "oldest" ? "Oldest" : "Last shipped"}
+                  <ChevronDown className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setSort("recent")}>Last shipped</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSort("oldest")}>Oldest first</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSort("name")}>Name</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* The one filled button on the page. Everything else on this screen is
+                looking; this is the only thing that makes something. */}
+            <Button asChild size="sm">
+              <Link href="/new">
+                <Plus className="size-3.5" />
+                Ship new
+              </Link>
+            </Button>
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
+            <span className="font-mono text-label uppercase text-ink-3">Name</span>
+            <span className="ml-auto font-mono text-label uppercase text-ink-3">Last shipped</span>
+            <span className="w-8" aria-hidden="true" />
+          </div>
+
+          {initialError ? (
+            <Row>
+              <p className="text-sub text-ink-2">
+                Your apps could not be read just now. {initialError}
+              </p>
+            </Row>
+          ) : shown.length === 0 ? (
+            <Row>
+              <p className="text-sub text-ink-2">
+                {initial.length === 0
+                  ? "Nothing here yet. Ship one and it appears in this list."
+                  : `Nothing matches “${q}”.`}
+              </p>
+            </Row>
+          ) : (
+            shown.map((a) => {
+              const b = bucketOf(a);
+              const state = STATE[b];
+              return (
+                <div
+                  className="group flex items-center gap-3 border-b border-border px-4 transition-colors last:border-0 hover:bg-tile"
+                  key={a.slug}
+                >
+                  {/* The row IS the link. A row with four buttons on it is how the
+                      last version got dense; the destination that matters is the
+                      workbench, so the whole row goes there. */}
+                  <Link
+                    className="flex min-w-0 flex-1 items-center gap-3 py-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red"
+                    href={`/apps/${a.slug}`}
+                  >
+                    <span
+                      className={cn(
+                        "flex size-7 shrink-0 items-center justify-center rounded-lg border border-border",
+                        b === "failed" ? "bg-tint text-red" : "bg-ground text-ink-2",
+                      )}
+                    >
+                      {b === "failed" ? <TriangleAlert className="size-3.5" /> : <Box className="size-3.5" />}
+                    </span>
+
+                    <span className="min-w-0 truncate text-val text-ink">{a.name || a.slug}</span>
+
+                    <Badge className="h-5 shrink-0 gap-1.5 rounded-full px-2 font-normal" variant="outline">
+                      <span aria-hidden="true" className={cn("size-1.5 rounded-full", state.dot)} />
+                      <span className="font-mono text-[10.5px] text-ink-2">{state.label}</span>
+                    </Badge>
+
+                    {/* The address, which is the fact people actually come for, and
+                        mono because it is a machine value. Hidden on narrow screens
+                        rather than wrapped — the state matters more. */}
+                    <span className="hidden min-w-0 truncate font-mono text-micro text-ink-3 sm:block">
+                      {a.slug}.supersonic.cv
+                    </span>
+                  </Link>
+
+                  <span className="shrink-0 font-mono text-micro text-ink-3 tabular-nums">
+                    {b === "building" ? a.stage || "shipping…" : ago(a.deployedAt)}
+                  </span>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        aria-label={`Actions for ${a.name || a.slug}`}
+                        className="size-8 shrink-0 rounded-lg text-ink-3 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <MoreHorizontal className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem asChild>
+                        <a href={`https://${a.slug}.supersonic.cv`} rel="noreferrer" target="_blank">
+                          <ArrowUpRight className="size-3.5" />
+                          Open the app
+                        </a>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href={`/apps/${a.slug}`}>
+                          <SlidersHorizontal className="size-3.5" />
+                          Open the workbench
+                        </Link>
+                      </DropdownMenuItem>
+                      {b === "failed" ? (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem asChild>
+                            <Link href={`/apps/${a.slug}`}>
+                              <TriangleAlert className="size-3.5" />
+                              See what happened
+                            </Link>
+                          </DropdownMenuItem>
+                        </>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <p className="font-mono text-micro text-ink-3">
+          Showing {shown.length} of {initial.length}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Row({ children }: { children: React.ReactNode }) {
+  return <div className="px-4 py-8 text-center">{children}</div>;
+}
