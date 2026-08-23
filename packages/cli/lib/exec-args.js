@@ -5,9 +5,9 @@
  *
  * Two shapes reach this, and joining them the same way breaks one of them:
  *
- *   supersonic exec app -- "ls | wc -l"           one argument, already a shell
+ *   bay exec app -- "ls | wc -l"           one argument, already a shell
  *                                                 snippet — the pipe is meant
- *   supersonic exec app -- python -c 'print(1)'   argv, and the local shell has
+ *   bay exec app -- python -c 'print(1)'   argv, and the local shell has
  *                                                 already removed the quotes
  *
  * A plain `.join(" ")` served the first and silently corrupted the second. The

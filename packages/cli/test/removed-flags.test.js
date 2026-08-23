@@ -48,6 +48,6 @@ test("a flag ship does not understand stops it, rather than being ignored", () =
 test("the flags ship does understand still work", () => {
   // The guard must not become the reason a real flag stops working.
   const { out } = deployWith("--help");
-  assert.match(out, /supersonic ship/);
+  assert.match(out, /bay ship/);
   assert.equal(/is not a flag/.test(out), false);
 });

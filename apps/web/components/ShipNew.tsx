@@ -95,7 +95,7 @@ export function ShipNew() {
   const prompt = useMemo(
     () =>
       `Install the Bay CLI and ship this folder as "${chosen}":\n\n` +
-      `  npm i -g supersonic-cli && supersonic deploy --name ${chosen} --wait\n\n` +
+      `  npm i -g bay-cli && bay ship --name ${chosen} --wait\n\n` +
       `It opens a browser once to sign you in, then prints the address the app is live on.\n` +
       `Without --wait it returns before the build has finished.`,
     [chosen],

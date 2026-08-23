@@ -66,14 +66,20 @@ test("each phase is printed as it would actually run", async () => {
   assert.match(site, /publish {3}web\/dist {2}· {2}unknown paths → index\.html/);
   assert.doesNotMatch(site, /start|health/);
 
-  // The buildpack lane, not the runner: this service pins `python3.12` and the
-  // runner has one Python. It used to say "runner", which is how an app asking
-  // for 3.12 was given 3.14 — parsed, validated, printed back right here, and
-  // ignored. `check` says what the deploy will actually do.
-  assert.match(api, /buildpack lane {2}· {2}\/api/);
+  // The container lane — the only one that runs a service now, since buildpack
+  // and runner were removed. What is pinned is not the lane's NAME: it is that
+  // this service asks for `python3.12` and `check` says so, because an app asking
+  // for 3.12 was once given 3.14 — parsed, validated, printed back right here,
+  // and ignored.
+  assert.match(api, /container lane {2}· {2}\/api/);
   assert.match(api, /runtime {3}python3\.12/);
   assert.match(api, /release {3}\(cd srv && alembic upgrade head\)/);
+  // There is no Dockerfile in this repository, so the start command is the one
+  // the config states — not "the Dockerfile's own CMD", which is what this said
+  // for every service between the buildpack lane's removal and the fix in
+  // lib/check.js. A deploy generates a Dockerfile whose CMD is exactly this.
   assert.match(api, /start {5}\(cd srv && uvicorn main:app --port \$PORT\)/);
+  assert.doesNotMatch(api, /Dockerfile's own CMD/);
   assert.match(api, /health {4}GET \/ → 200/);
   assert.match(api, /uses {6}database/);
 });
@@ -189,8 +195,8 @@ test("the report names its source, and never claims a file that is not there", a
   assert.match(inferred, /inferred — there is no supersonic\.json/);
 });
 
-test("problems are counted, and the report says nothing was deployed", () => {
+test("problems are counted, and the report says nothing was shipped", () => {
   const text = renderCheck("supersonic.json", null, ["✕ one\n  detail", "✕ two"], []).join("\n");
   assert.match(text, /^ {2}detail$/m);
-  assert.match(text, /2 problems — nothing was deployed, and nothing would be\./);
+  assert.match(text, /2 problems — nothing was shipped, and nothing would be\./);
 });

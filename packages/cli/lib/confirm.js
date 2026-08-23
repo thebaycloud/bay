@@ -27,19 +27,19 @@ function deletionRefusal(app, args) {
   if (said === true || (typeof said === "string" && said === app)) return null;
 
   // A DIFFERENT app name is refused rather than ignored, and this is the case
-  // worth having a branch for: `supersonic delete api --yes web` is somebody
+  // worth having a branch for: `bay delete api --yes web` is somebody
   // editing a previous command and changing one of the two names. Proceeding
   // would delete `api` on the strength of a confirmation that says `web`.
   if (typeof said === "string" && said !== app) {
-    return `refusing: you named ${app} but confirmed ${said}. If you mean ${app}, run\n  supersonic delete ${app} --yes`;
+    return `refusing: you named ${app} but confirmed ${said}. If you mean ${app}, run\n  bay delete ${app} --yes`;
   }
 
   return [
     `${app} would be deleted, and so would its DATA: the database, the storage`,
-    "bucket, the images and the deploy history all go with it.",
+    "bucket, the images and the ship history all go with it.",
     "",
     "This cannot be undone, and there is no prompt to say yes to — run",
-    `  supersonic delete ${app} --yes`,
+    `  bay delete ${app} --yes`,
   ].join("\n");
 }
 
