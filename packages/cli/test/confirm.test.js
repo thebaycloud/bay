@@ -8,10 +8,7 @@ test("deleting without saying yes is refused, and the refusal is the command to 
   // first" without saying HOW is a message that gets guessed at.
   const out = deletionRefusal("myapp", {});
   assert.ok(out);
-  // Built from the CLI's own name: the refusal has to name the command as it is
-  // actually invoked, and pinning the literal asserted the brand instead.
-  const { CLI } = require("../lib/brand");
-  assert.match(out, new RegExp(`${CLI} delete myapp --yes`));
+  assert.match(out, /bay delete myapp --yes/);
 });
 
 test("the refusal says the data goes too, because that is the part people get wrong", () => {

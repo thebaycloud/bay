@@ -99,10 +99,10 @@ function CliAuth() {
   return (
     <div style={{ position: "relative", zIndex: 1, maxWidth: 480, margin: "14vh auto 8vh", padding: "0 24px", fontFamily: "var(--mono, ui-monospace, monospace)" }}>
       <div style={{ border: line, background: "var(--card)", padding: 30 }}>
-        <div style={{ fontSize: 12, letterSpacing: 2, color: "var(--ink-2)", marginBottom: 8 }}>SUPERSONIC / CLI</div>
+        <div style={{ fontSize: 12, letterSpacing: 2, color: "var(--ink-2)", marginBottom: 8 }}>BAY / CLI</div>
         <h1 style={{ fontSize: 22, margin: "0 0 12px", color: "var(--ink)" }}>Authorize the CLI</h1>
         <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--ink-2)", margin: "0 0 18px" }}>
-          This connects <b style={{ color: "var(--ink)" }}>{name}</b> to your Supersonic account so your coding agent can deploy and manage apps from the terminal.
+          This connects <b style={{ color: "var(--ink)" }}>{name}</b> to your Bay account so your coding agent can ship and manage apps from the terminal.
         </p>
 
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, padding: "10px 12px", border: line, background: "var(--paper)", marginBottom: 22 }}>
@@ -135,7 +135,7 @@ function CliAuth() {
           <div>
             <p style={{ fontSize: 13, marginBottom: 8, color: "var(--ink)" }}>✓ Token created — paste this into your terminal:</p>
             <code style={{ display: "block", padding: 12, background: "var(--paper)", border: line, wordBreak: "break-all", fontSize: 12, color: "var(--ink)" }}>
-              supersonic login --token {token}
+              bay login --token {token}
             </code>
           </div>
         )}

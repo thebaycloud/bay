@@ -1,6 +1,6 @@
 "use strict";
 /**
- * What `supersonic init` writes, against real directories on disk.
+ * What `bay init` writes, against real directories on disk.
  *
  * Real trees rather than stubbed detector answers, because the thing under test is
  * exactly "does this read a repository correctly" — and the case that motivated
@@ -292,5 +292,5 @@ test("the output says it is a draft, and says what it could not determine", asyn
   // The sentence that makes the whole thing safe: this is a detector that has been
   // confidently wrong, and its answer is now reviewable rather than invisible.
   assert.match(text, /This is a draft, from a detector that has been confidently wrong before\./);
-  assert.match(text, /supersonic check/);
+  assert.match(text, /bay check/);
 });

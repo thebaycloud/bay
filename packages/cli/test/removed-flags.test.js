@@ -47,12 +47,7 @@ test("a flag ship does not understand stops it, rather than being ignored", () =
 
 test("the flags ship does understand still work", () => {
   // The guard must not become the reason a real flag stops working.
-  //
-  // Built from the CLI's own name rather than written out. Pinned to a literal
-  // this asserted "the command is called supersonic", which is a fact about the
-  // brand and not about the flag guard it is testing.
-  const { CLI } = require("../lib/brand");
   const { out } = deployWith("--help");
-  assert.match(out, new RegExp(`${CLI} ship`));
+  assert.match(out, /bay ship/);
   assert.equal(/is not a flag/.test(out), false);
 });

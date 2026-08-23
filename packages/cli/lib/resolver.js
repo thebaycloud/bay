@@ -11,8 +11,8 @@
  *
  * Loaded lazily and through a named function rather than at require() time: the
  * bundle is generated, an old global install can be missing it, and a missing
- * bundle must fail `supersonic check` with a sentence naming the fix rather than
- * crashing `supersonic logs`, which does not use it at all.
+ * bundle must fail `bay check` with a sentence naming the fix rather than
+ * crashing `bay logs`, which does not use it at all.
  */
 const path = require("node:path");
 

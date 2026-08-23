@@ -36,7 +36,7 @@ function deletionRefusal(app, args) {
 
   return [
     `${app} would be deleted, and so would its DATA: the database, the storage`,
-    "bucket, the images and the deploy history all go with it.",
+    "bucket, the images and the ship history all go with it.",
     "",
     "This cannot be undone, and there is no prompt to say yes to — run",
     `  bay delete ${app} --yes`,
