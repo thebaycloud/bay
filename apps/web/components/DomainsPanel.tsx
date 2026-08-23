@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Row, RowGroup, RowList, StatusChip } from "@/components/panel/atoms";
+import { recordFor } from "@/lib/dns-record";
 
 /**
  * Connecting a domain, from the person's side.
@@ -84,14 +85,12 @@ function pairFor(hostname: string): string | null {
  * `acme.co.uk` — so it states the rule and lets whoever runs it apply it.
  */
 function agentPrompt(hostname: string, dns: Dns): string {
+  const r = recordFor(hostname, dns);
   return (
-    `Point ${hostname} at my app on Bay by adding ONE DNS record for it:\n\n` +
-    `  if ${hostname} is a subdomain (shop.example.com):\n` +
-    `    CNAME  ${hostname}  ->  ${dns.cname}\n\n` +
-    `  if ${hostname} is the domain itself (example.com):\n` +
-    `    A      ${hostname}  ->  ${dns.ip}\n\n` +
-    `Create only one of them. A domain's root cannot be a CNAME, and a subdomain\n` +
-    `should be a CNAME so it survives our load balancer changing address.\n\n` +
+    `Add this DNS record for ${hostname} so it points at my app on Bay:\n\n` +
+    `  type   ${r.type}\n` +
+    `  name   ${r.name}\n` +
+    `  value  ${r.value}\n\n` +
     `Then tell me it is done. HTTPS turns itself on within about ten minutes of\n` +
     `the record going live — nothing needs redeploying.`
   );
@@ -334,6 +333,7 @@ export function DomainsPanel({
   );
 
   const prompt = records && dns ? agentPrompt(records, dns) : "";
+  const record = records && dns ? recordFor(records, dns) : null;
 
   /**
    * The records, as the thing you do next.
@@ -355,34 +355,33 @@ export function DomainsPanel({
           <DialogTitle className="min-w-0 truncate text-[17px] font-[450] tracking-[-0.01em]">
             Point {records} here
           </DialogTitle>
-          <DialogDescription className="text-[13px] text-ink-3">
-            Add one record in your DNS. HTTPS turns itself on within about ten minutes of
-            it going live — nothing to redeploy.
+          <DialogDescription className="sr-only">
+            The DNS record to add so {records} serves this app.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 px-5 pb-5">
-          <div className="overflow-hidden rounded-lg border border-border">
-            <Row
-              sub="if it is a subdomain — shop.yourapp.com"
-              title={<span className="font-mono text-[13px]">CNAME</span>}
-            >
-              <span className="font-mono text-[13px] text-ink-2">{dns?.cname}</span>
-            </Row>
-            <Row
-              sub="if it is the domain itself — yourapp.com"
-              title={<span className="font-mono text-[13px]">A</span>}
-            >
-              <span className="font-mono text-[13px] text-ink-2">{dns?.ip}</span>
-            </Row>
-          </div>
-
-          {/* Which one, said once. A root cannot be a CNAME and we do not guess
-              which this is — label counting is wrong for acme.co.uk. */}
-          <p className="text-[13px] leading-[1.6] text-ink-3">
-            One of them, not both. A domain’s root cannot be a CNAME, and a subdomain
-            should be one so it survives our load balancer changing address.
-          </p>
+          {/* ONE record, decided here rather than offered as a choice — an apex
+              cannot be a CNAME and a subdomain should be one, and that rule is
+              ours to apply. Type, Name, Value: the three fields every DNS panel
+              asks for, in that order, and the Name is the label alone because
+              panels append the zone themselves. */}
+          {record ? (
+            <div className="overflow-hidden rounded-lg border border-border">
+              <div className="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-3 border-b border-border px-4 py-2.5">
+                <span className="text-[13px] text-ink-3">Type</span>
+                <span className="font-mono text-[13px] text-ink">{record.type}</span>
+              </div>
+              <div className="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-3 border-b border-border px-4 py-2.5">
+                <span className="text-[13px] text-ink-3">Name</span>
+                <span className="font-mono text-[13px] text-ink">{record.name}</span>
+              </div>
+              <div className="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-3 px-4 py-2.5">
+                <span className="text-[13px] text-ink-3">Value</span>
+                <span className="truncate font-mono text-[13px] text-ink">{record.value}</span>
+              </div>
+            </div>
+          ) : null}
 
           <div className="flex items-center gap-2">
             <Button
