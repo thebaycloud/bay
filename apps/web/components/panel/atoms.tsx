@@ -95,6 +95,25 @@ export function RowList({ children }: { children: ReactNode }) {
 }
 
 /**
+ * A titled group of rows.
+ *
+ * Eight rows in one box is a list you read top to bottom every time. The groups
+ * are cut by how often a row changes ON ITS OWN — "Right now" changes while you
+ * are not looking, the other two change only when you change them — because that
+ * is the cut that tells you which rows you can skip today.
+ *
+ * The title sits in the same place and weight as "All apps" over the app list.
+ */
+export function RowGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2.5">
+      <h2 className="px-0.5 text-[15px] text-ink">{title}</h2>
+      <RowList>{children}</RowList>
+    </section>
+  );
+}
+
+/**
  * The alert, above the list.
  *
  * Tinted rather than bordered: it is the one thing on this screen that must be

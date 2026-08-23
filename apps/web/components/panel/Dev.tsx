@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/panel/toast";
-import { AlertCell, Avatars, Chips, Row, RowList, StatusChip, TintRow } from "@/components/panel/atoms";
+import { AlertCell, Avatars, Chips, Row, RowGroup, RowList, StatusChip, TintRow } from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { StoragePanel } from "@/components/StoragePanel";
 import { JobsPanel } from "@/components/JobsPanel";
@@ -158,13 +158,13 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
 
   return (
     <Screen>
-      {/* The alert stays a tinted card above the list. It is the one thing here
-          that must not look like the seven rows it sits over. */}
+      {/* The alert stays a tinted card above the groups. It is the one thing here
+          that must not look like the rows it sits over. */}
       {d.alert ? (
         <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
       ) : null}
 
-      <RowList>
+      <RowGroup title="Right now">
         <Row icon={ICON.address} sub="Where it lives" title="Address">
           <TintRow value={d.addr} />
         </Row>
@@ -197,6 +197,23 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           </Chips>
         </Row>
 
+        <Row
+          icon={ICON.infra}
+          onOpen={() => setView("infra")}
+          sub="What it is doing, and what runs on its own"
+          title="Infra"
+        >
+          <Chips>
+            <StatusChip
+              text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
+              tone={broken ? "red" : "green"}
+            />
+            <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
+          </Chips>
+        </Row>
+      </RowGroup>
+
+      <RowGroup title="What it holds">
         <Row icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
           <Chips>
             <StatusChip
@@ -225,22 +242,9 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             </Chips>
           ) : null}
         </Row>
+      </RowGroup>
 
-        <Row
-          icon={ICON.infra}
-          onOpen={() => setView("infra")}
-          sub="What it is doing, and what runs on its own"
-          title="Infra"
-        >
-          <Chips>
-            <StatusChip
-              text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
-              tone={broken ? "red" : "green"}
-            />
-            <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
-          </Chips>
-        </Row>
-
+      <RowGroup title="Who gets in">
         <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
           <Chips>
             <Avatars initials={d.pInitials} />
@@ -265,7 +269,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             <StatusChip text={d.mcp ? "mcp on" : "mcp not built"} tone="grey" />
           </Chips>
         </Row>
-      </RowList>
+      </RowGroup>
     </Screen>
   );
 }
@@ -276,7 +280,7 @@ function Screen({ children }: { children: React.ReactNode }) {
       {/* 1080px, the app list's measure. Dev mode is the full width now, and a
           list stretched across a 27" display puts the fact a metre from the name
           it belongs to. */}
-      <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-3 px-6 py-8">{children}</div>
+      <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-6 px-6 py-8">{children}</div>
     </div>
   );
 }
