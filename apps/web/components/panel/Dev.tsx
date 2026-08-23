@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/panel/toast";
-import { AlertCell, Avatars, Chips, Row, RowGroup, RowList, StatusChip, TintRow } from "@/components/panel/atoms";
+import { AlertCell, Avatars, Chips, Row, RowGroup, RowList, RowNest, StatusChip, TintRow } from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { StoragePanel } from "@/components/StoragePanel";
 import { JobsPanel } from "@/components/JobsPanel";
@@ -49,7 +49,6 @@ import { readPanel, type Reading } from "@/lib/panel/reading";
  */
 
 type View =
-  | "address"
   | "analytics"
   | "ships"
   | "data"
@@ -78,7 +77,6 @@ const ICON = {
 } as const;
 
 const TITLE: Record<View, string> = {
-  address: "Address",
   analytics: "Analytics",
   ships: "Ships",
   data: "Data",
@@ -92,6 +90,12 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
   const [d, setD] = useState<Reading | null>(null);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<View | null>(null);
+  /**
+   * Open, because the domains under Address are the answer to the question the
+   * row asks. A disclosure that starts shut makes somebody click to find out
+   * whether there is anything to find out.
+   */
+  const [addrOpen, setAddrOpen] = useState(true);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
@@ -167,17 +171,24 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
       ) : null}
 
       <RowGroup title="Overview">
-        {/* A door, because a custom domain is a fact about WHERE the app lives.
-            It was behind Access, which is about who may open it — a different
-            question that happens to share a screen with certificates. */}
+        {/* A disclosure, not a door. Every address this app answers on is a
+            short list, and a screen of its own to hold four rows is a
+            navigation somebody has to come back from. */}
         <Row
+          expanded={addrOpen}
           icon={ICON.address}
-          onOpen={() => setView("address")}
+          onOpen={() => setAddrOpen((o) => !o)}
           sub="Where it lives"
           title="Address"
         >
           <TintRow value={d.addr} />
         </Row>
+
+        {addrOpen ? (
+          <RowNest>
+            <DomainsPanel nested onToast={toast} slug={slug} />
+          </RowNest>
+        ) : null}
 
         <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
           <Chips>
@@ -315,20 +326,6 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
       <div className="flex flex-col gap-6">
         <SharePanel slug={slug} />
         <GitPanel onToast={toast} slug={slug} />
-      </div>
-    );
-  }
-  if (view === "address") {
-    return (
-      <div className="flex flex-col gap-6">
-        {/* The name we issued, first and always: it is the one address that works
-            before any DNS exists, and the one a person falls back to. */}
-        <RowList>
-          <Row sub="issued by Bay, always live" title="Platform address">
-            <TintRow value={d.addr} />
-          </Row>
-        </RowList>
-        <DomainsPanel onToast={toast} slug={slug} />
       </div>
     );
   }

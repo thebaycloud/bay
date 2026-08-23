@@ -38,6 +38,8 @@ export function Row({
   onOpen,
   /** A CHOICE, not a door: a tick when it is the current one, and no chevron. */
   picked,
+  /** A DISCLOSURE, not a door: the chevron turns and the rows open underneath. */
+  expanded,
   children,
 }: {
   /** ReactNode so a row about a hostname can set it in mono without a prop. */
@@ -47,6 +49,7 @@ export function Row({
   icon?: ComponentType<{ className?: string }>;
   onOpen?: () => void;
   picked?: boolean;
+  expanded?: boolean;
   /** The fact. Right-aligned, where "9 days ago" sits in the app list. */
   children?: ReactNode;
 }) {
@@ -62,7 +65,17 @@ export function Row({
           what the row is for. */}
       {sub ? <span className="hidden min-w-0 truncate text-[13px] text-ink-3 md:block">{sub}</span> : null}
       {children ? <span className="ml-auto flex shrink-0 items-center gap-2.5 pl-3">{children}</span> : null}
-      {picked !== undefined ? (
+      {expanded !== undefined ? (
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            "size-4 shrink-0 text-ink-3 transition-transform",
+            children ? "" : "ml-auto",
+            expanded && "rotate-90",
+          )}
+          strokeWidth={2}
+        />
+      ) : picked !== undefined ? (
         <Check
           aria-hidden="true"
           className={cn("size-4 shrink-0", children ? "" : "ml-auto", picked ? "text-ink" : "opacity-0")}
@@ -220,6 +233,17 @@ export function Avatars({ initials }: { initials: string[] }) {
       ))}
     </span>
   );
+}
+
+/**
+ * The strip a disclosure opens into.
+ *
+ * Filled rather than indented: an inset row on a white list reads as a
+ * mis-aligned row, and the fill says "these belong to the one above" without
+ * moving anything sideways.
+ */
+export function RowNest({ children }: { children: ReactNode }) {
+  return <div className="border-b border-border bg-ground last:border-0">{children}</div>;
 }
 
 /** A row of facts under a cell's sub. */

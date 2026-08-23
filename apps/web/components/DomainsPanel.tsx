@@ -68,7 +68,22 @@ function pairFor(hostname: string): string | null {
   return hostname.split(".").length === 2 ? `www.${hostname}` : null;
 }
 
-export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: string) => void }) {
+export function DomainsPanel({
+  slug,
+  onToast,
+  /**
+   * Rendered INSIDE another list — no heading, no box of its own.
+   *
+   * Address is a disclosure now, and a bordered list inside a bordered list is
+   * two boxes for one thing. Nested, this emits bare rows that share the parent
+   * list's hairlines.
+   */
+  nested,
+}: {
+  slug: string;
+  onToast: (m: string) => void;
+  nested?: boolean;
+}) {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [dns, setDns] = useState<Dns | null>(null);
   const [allowed, setAllowed] = useState(true);
@@ -166,13 +181,9 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
     .map((d) => pairFor(d.hostname))
     .find((h): h is string => Boolean(h) && !domains.some((d) => d.hostname === h));
 
-  return (
-    <div className="flex flex-col gap-2.5">
-      <h2 className="px-0.5 text-[15px] text-ink">Your own domain</h2>
-
-      {domains.length > 0 && (
-        <RowList>
-          {domains.map((d) => {
+  const rows = (
+    <>
+      {domains.map((d) => {
             const said = SAID[d.status] ?? SAID.pending_dns;
             return (
               <Row
@@ -212,10 +223,12 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
                 </Button>
               </Row>
             );
-          })}
-        </RowList>
-      )}
+      })}
+    </>
+  );
 
+  const body = (
+    <>
       {allowed ? (
         <>
           <form
@@ -257,7 +270,7 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
               so it cannot be behind a state they have already left. */}
           {dns && (domains.length === 0 || waiting) && (
             <>
-              <RowList>
+              <div className="overflow-hidden rounded-lg border border-border bg-card">
                 <Row
                   sub="for a subdomain — shop.yourapp.com"
                   title={<span className="font-mono text-[13px]">CNAME</span>}
@@ -270,7 +283,7 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
                 >
                   <span className="font-mono text-[13px] text-ink-2">{dns.ip}</span>
                 </Row>
-              </RowList>
+              </div>
               <p className="text-[13px] text-ink-3">
                 HTTPS turns on by itself, usually within ten minutes of the record going
                 live. Nothing to redeploy.
@@ -292,6 +305,26 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
           to point your own domain at it.
         </p>
       )}
+    </>
+  );
+
+  // Nested: the domains join the parent list's rows, and everything that is not
+  // a row (the add form, the DNS records, the notes) sits in one padded strip
+  // under them.
+  if (nested) {
+    return (
+      <>
+        {rows}
+        <div className="flex flex-col gap-2.5 px-4 py-3.5">{body}</div>
+      </>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <h2 className="px-0.5 text-[15px] text-ink">Your own domain</h2>
+      {domains.length > 0 ? <RowList>{rows}</RowList> : null}
+      {body}
     </div>
   );
 }
