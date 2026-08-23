@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ChevronLeft, Play, Table2 } from "lucide-react";
-import { Cell, Chips, StatusChip } from "@/components/panel/atoms";
+import { Chips, Row, RowList, StatusChip } from "@/components/panel/atoms";
 
 /**
  * The app's data, answering "did it land".
@@ -101,11 +101,11 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
       {tables.length === 0 ? (
         <Empty>no tables yet — nothing has written to this database</Empty>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
+        <RowList>
           {tables.map((t) => {
             const when = ago(t.lastWriteAt);
             return (
-              <Cell
+              <Row
                 key={t.name}
                 onOpen={() => setOpen(t.name)}
                 // The sub-line carries arrival when the table records one, and
@@ -116,10 +116,10 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
                 <Chips>
                   <StatusChip text={count(t.rows, t.rowsExact)} tone={t.rows > 0 ? "green" : "grey"} />
                 </Chips>
-              </Cell>
+              </Row>
             );
           })}
-        </div>
+        </RowList>
       )}
       <QueryBox slug={slug} />
     </div>

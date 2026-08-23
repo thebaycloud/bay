@@ -7,91 +7,95 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 /**
- * The panel's cell vocabulary, ported from services/proxy/panel/cells.js and
- * atoms.js.
+ * The panel's row vocabulary, ported from services/proxy/panel/cells.js and
+ * atoms.js and then rebuilt as a list.
  *
- * A cell is a title, a sub, and ONE live fact. That third part is the whole idea:
- * home is not a menu, it is eight facts you can act on, so a cell with nothing
+ * A row is a title, a sub, and ONE live fact. That third part is the whole idea:
+ * home is not a menu, it is eight facts you can act on, so a row with nothing
  * true to say says so in its sub rather than showing an empty slot.
  *
- * Built on shadcn's Card so the surface, border and radius come from one place,
- * with the panel's own rules on top: 14px/400 titles so the fact under a title
- * outweighs it, mono for machine values only, and green reserved for status.
+ * They are ROWS and not cards because the app list is rows, and this screen is
+ * opened from that list. Same tile, same 15px name, same dimmed machine value
+ * beside it, same right-aligned fact, same hover. Two products' worth of layout
+ * for one product's worth of information was the only thing wrong with the cards.
  */
 
-/** A title, a sub, and one fact. `onOpen` makes it a button with a chevron. */
-export function Cell({
+/**
+ * One block, as a row.
+ *
+ * The same row the app list draws: an icon tile, a name, a dimmer machine value
+ * beside it, the fact right-aligned, and a chevron. It was a two-column grid of
+ * 132px cards, which spent a screen's height on eight facts and looked like a
+ * different product from the list you arrive from.
+ *
+ * `onOpen` makes the whole row the button — not a chevron you have to hit —
+ * exactly as a row in the app list is the link.
+ */
+export function Row({
   title,
   sub,
   icon: Icon,
   onOpen,
-  wide,
   children,
 }: {
   title: string;
   sub: string;
-  /**
-   * The block's own mark, in the same tile the app list draws beside a row.
-   *
-   * Eight cells with the same three-line shape were told apart by reading their
-   * titles, which is the one thing a grid is supposed to save you from. The tile
-   * is what makes a cell findable by shape at a glance.
-   */
+  /** The block's own mark, in the tile the app list draws beside a row. */
   icon?: ComponentType<{ className?: string }>;
   onOpen?: () => void;
-  wide?: boolean;
-  /** The fact. Pushed to the bottom of the cell so a row of them lines up. */
+  /** The fact. Right-aligned, where "9 days ago" sits in the app list. */
   children?: ReactNode;
 }) {
   const body = (
     <>
-      <div className="flex items-center gap-2.5">
-        {Icon ? (
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-sm border border-border bg-ground text-ink-2">
-            <Icon className="size-3.5" />
-          </span>
-        ) : null}
-        {/* 14px/400. At 18px/500 a cell's title outweighed the fact under it, which
-            is backwards for a panel whose whole job is the fact. */}
-        <div className="text-val leading-tight tracking-[-0.011em] text-ink">{title}</div>
-      </div>
-      <div className="text-sub text-ink-2">{sub}</div>
-      {children ? <div className={cn("pt-3.5", wide ? "" : "mt-auto")}>{children}</div> : null}
+      {Icon ? (
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-sm border border-border bg-ground text-ink-2">
+          <Icon className="size-3.5" />
+        </span>
+      ) : null}
+      <span className="shrink-0 text-[15px] font-[450] text-ink">{title}</span>
+      {/* Hidden on narrow screens rather than wrapped — the fact on the right is
+          what the row is for. */}
+      <span className="hidden min-w-0 truncate text-[13px] text-ink-3 md:block">{sub}</span>
+      {children ? <span className="ml-auto flex shrink-0 items-center gap-2.5 pl-3">{children}</span> : null}
       {onOpen ? (
         <ChevronRight
           aria-hidden="true"
-          className="absolute right-4 top-[22px] size-4 text-ink-3"
+          className={cn("size-4 shrink-0 text-ink-3", children ? "" : "ml-auto")}
           strokeWidth={2}
         />
       ) : null}
     </>
   );
 
-  const shape = cn(
-    "relative flex flex-col gap-1.5 rounded-xl border-border bg-card p-4 pb-4.5 text-left shadow-none",
-    wide && "col-span-full",
-    !wide && "min-h-[132px]",
-    // hover:bg-tile, NOT bg-ground. Tailwind's `ground` is #E4E4E4 — it is the
-    // hairline colour ds/Blocks draws its grid rules in, not the page ground —
-    // so hovering a cell turned it mid-grey. The page ground is the --ground
-    // VARIABLE at #FAFAFA, which is too close to white to register as a hover,
-    // so the filled-surface grey is the right step: visible, and one step.
-    onOpen && "transition-colors hover:bg-tile focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red",
-  );
+  const shape =
+    "flex w-full items-center gap-3 border-b border-border px-4 py-3.5 text-left last:border-0";
 
-  if (!onOpen) return <Card className={shape}>{body}</Card>;
-  // Card has no asChild in this registry version, so the button IS the card: it
-  // takes the same classes rather than nesting a button inside a div, which would
-  // put a click target inside a non-interactive box.
+  if (!onOpen) return <div className={shape}>{body}</div>;
   return (
-    <button className={cn(shape, "border")} onClick={onOpen} type="button">
+    <button
+      className={cn(
+        shape,
+        "transition-colors hover:bg-tile focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-red",
+      )}
+      onClick={onOpen}
+      type="button"
+    >
       {body}
     </button>
   );
 }
 
+/** The bordered box the rows live in — the app list's table, with no header to
+ *  label columns that hold a different kind of fact in every row. */
+export function RowList({ children }: { children: ReactNode }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card">{children}</div>
+  );
+}
+
 /**
- * The alert, above the grid and always full width.
+ * The alert, above the list.
  *
  * Tinted rather than bordered: it is the one thing on this screen that must be
  * unmistakable, and red is already the accent, so the difference has to be the
@@ -110,7 +114,7 @@ export function AlertCell({
   onAct?: () => void;
 }) {
   return (
-    <Card className="col-span-full flex flex-col gap-1 rounded-xl border-transparent bg-tint p-4 shadow-none">
+    <Card className="flex flex-col gap-1 rounded-xl border-transparent bg-tint p-4 shadow-none">
       <div className="text-val leading-tight tracking-[-0.011em] text-red-ink">{title}</div>
       <div className="font-mono text-micro text-ink-2">{sub}</div>
       <div className="pt-3.5">
@@ -130,11 +134,11 @@ export function AlertCell({
  */
 export function TintRow({ value }: { value: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg bg-tint px-3.5 py-2.5">
-      <span className="min-w-0 flex-1 truncate font-mono text-val text-red-ink">{value}</span>
+    <div className="flex items-center gap-1">
+      <span className="min-w-0 truncate font-mono text-[13px] text-ink-2">{value}</span>
       <Button
         aria-label="Open"
-        className="size-7 shrink-0 rounded-md text-red-ink hover:bg-white"
+        className="size-7 shrink-0 rounded-md text-ink-3 hover:text-ink"
         onClick={() => window.open(`https://${value}`, "_blank", "noreferrer")}
         size="icon-sm"
         variant="ghost"
@@ -143,7 +147,7 @@ export function TintRow({ value }: { value: string }) {
       </Button>
       <Button
         aria-label="Copy"
-        className="size-7 shrink-0 rounded-md text-red-ink hover:bg-white"
+        className="size-7 shrink-0 rounded-md text-ink-3 hover:text-ink"
         onClick={() => navigator.clipboard?.writeText(value).catch(() => {})}
         size="icon-sm"
         variant="ghost"

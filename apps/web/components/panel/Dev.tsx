@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/panel/toast";
-import { AlertCell, Avatars, Cell, Chips, StatusChip, TintRow } from "@/components/panel/atoms";
+import { AlertCell, Avatars, Chips, Row, RowList, StatusChip, TintRow } from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { StoragePanel } from "@/components/StoragePanel";
 import { JobsPanel } from "@/components/JobsPanel";
@@ -127,13 +127,15 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
   if (!d) {
     return (
       <Screen>
-        <div className="grid grid-cols-2 gap-3">
-          <Skeleton className="col-span-full h-[86px] rounded-xl" />
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton className="h-[132px] rounded-xl" key={i} />
+        <RowList>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div className="flex items-center gap-3 border-b border-border px-4 py-3.5 last:border-0" key={i}>
+              <Skeleton className="size-7 shrink-0 rounded-sm" />
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="ml-auto h-4 w-28" />
+            </div>
           ))}
-          <Skeleton className="col-span-full h-[132px] rounded-xl" />
-        </div>
+        </RowList>
       </Screen>
     );
   }
@@ -156,16 +158,19 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
 
   return (
     <Screen>
-      <div className="grid grid-cols-2 gap-3">
-        {d.alert ? (
-          <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
-        ) : null}
+      {/* The alert stays a tinted card above the list. It is the one thing here
+          that must not look like the seven rows it sits over. */}
+      {d.alert ? (
+        <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
+      ) : null}
 
-        <Cell icon={ICON.address} sub="Where it lives" title="Address" wide>
+      <RowList>
+        <Row icon={ICON.address} sub="Where it lives" title="Address">
           <TintRow value={d.addr} />
-        </Cell>
+        </Row>
 
-        <Cell
+        <Row
+          icon={ICON.analytics}
           onOpen={() => setView("analytics")}
           sub={
             d.an
@@ -174,7 +179,6 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
                 ? `${d.here.length} here now`
                 : "Not counting yet"
           }
-          icon={ICON.analytics}
           title="Analytics"
         >
           {d.an ? (
@@ -183,41 +187,51 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
               <Avatars initials={d.initials} />
             </Chips>
           ) : null}
-        </Cell>
+        </Row>
 
-        <Cell icon={ICON.ships} onOpen={() => setView("ships")} sub={`Last shipped ${d.ships[0].when}`} title="Ships">
+        <Row icon={ICON.ships} onOpen={() => setView("ships")} sub={`Last shipped ${d.ships[0].when}`} title="Ships">
           <Chips>
             {/* No re-ship button. There is no deploy-trigger route behind it, and a
                 dead control on the one screen about shipping is worse than none. */}
             <StatusChip text={d.shipping ? "Shipping" : "Running"} tone={d.shipping ? "red" : "green"} />
           </Chips>
-        </Cell>
+        </Row>
 
-        <Cell icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
+        <Row icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
           <Chips>
             <StatusChip
               text={`${d.tables.length} ${d.tables.length === 1 ? "table" : "tables"} · ${d.files} ${d.files === 1 ? "file" : "files"}`}
               tone={d.missing ? "grey" : "green"}
             />
           </Chips>
-        </Cell>
+        </Row>
 
-        <Cell
-          onOpen={() => setView("keys")}
+        <Row
           icon={ICON.keys}
+          onOpen={() => setView("keys")}
           sub={d.keys.length ? "What it connects to" : "Nothing connected yet"}
           title="Keys"
         >
           {d.keys.length ? (
             <Chips>
-              {d.keys.slice(0, 3).map((k) => (
+              {/* Two, not three: a row has one line and the third name pushed the
+                  address column off the screen. The rest are behind the row. */}
+              {d.keys.slice(0, 2).map((k) => (
                 <StatusChip key={k.name} text={k.name} tone={k.tone === "bad" ? "red" : "green"} />
               ))}
+              {d.keys.length > 2 ? (
+                <span className="font-mono text-micro text-ink-3">+{d.keys.length - 2}</span>
+              ) : null}
             </Chips>
           ) : null}
-        </Cell>
+        </Row>
 
-        <Cell icon={ICON.infra} onOpen={() => setView("infra")} sub="What it is doing, and what runs on its own" title="Infra">
+        <Row
+          icon={ICON.infra}
+          onOpen={() => setView("infra")}
+          sub="What it is doing, and what runs on its own"
+          title="Infra"
+        >
           <Chips>
             <StatusChip
               text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
@@ -225,16 +239,16 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             />
             <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
           </Chips>
-        </Cell>
+        </Row>
 
-        <Cell icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
+        <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
           <Chips>
             <Avatars initials={d.pInitials} />
             <StatusChip text={d.who} tone={d.who === "public" ? "grey" : "green"} />
           </Chips>
-        </Cell>
+        </Row>
 
-        <Cell icon={ICON.agent} onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent" wide>
+        <Row icon={ICON.agent} onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent">
           <Chips>
             {/* Two states said differently on purpose: no token is something to
                 fix, a token never used is something to try. */}
@@ -250,14 +264,21 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             />
             <StatusChip text={d.mcp ? "mcp on" : "mcp not built"} tone="grey" />
           </Chips>
-        </Cell>
-      </div>
+        </Row>
+      </RowList>
     </Screen>
   );
 }
 
 function Screen({ children }: { children: React.ReactNode }) {
-  return <div className="h-full overflow-y-auto bg-background p-4">{children}</div>;
+  return (
+    <div className="h-full overflow-y-auto bg-background">
+      {/* 1080px, the app list's measure. Dev mode is the full width now, and a
+          list stretched across a 27" display puts the fact a metre from the name
+          it belongs to. */}
+      <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-3 px-6 py-8">{children}</div>
+    </div>
+  );
 }
 
 function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View }) {
