@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Copy, Github, Loader2, Plus, Terminal } from "lucide-react";
+import { ArrowRight, Check, Copy, Github, Loader2, Plus, Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,40 +13,49 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { slugify } from "@/lib/slug";
 import { cn } from "@/lib/utils";
 
 /**
- * Ship new — the whole creation flow, in a dialog.
+ * Ship new — name it, then choose where the code comes from.
  *
- * `/new` was a page: three doors, a detection step, a secrets step and the deploy
- * film. Choosing WHERE the code comes from is a two-option question, and a page
- * navigation to answer one is a page navigation too many.
+ * Two steps rather than two tabs. The name is the one question with the same answer
+ * whichever route you take, so it is asked once and first. The routes are then shown
+ * TOGETHER, because they are not modes to switch between: one is a prompt you paste
+ * into the agent you already have open, the other is a button you press. Anybody
+ * arriving already knows which of those they are doing.
  *
- * Two ways in, because there are only two:
+ * The name is optional. A generated one is offered and used when the field is left
+ * empty, so nobody is stopped at a text box on the way to shipping.
  *
- *   Local — the answer for a product whose deploys happen in a terminal. There is
- *   nothing to fill in: a prompt you paste into the agent you already have open.
- *   It is first because it is the common case, not because it is simpler.
- *
- *   GitHub — pick a repository the App can see. No URL typed, no token pasted.
- *
- * The deploy FILM stays on its own page. A modal cannot hold a live build log, and
- * watching the thing come up is the best part of this product, so choosing a source
- * hands off to /new?src=… and that page does the rest.
+ * The deploy FILM stays a page. A dialog cannot hold a live build log, and watching
+ * the thing come up is the best part of this product, so the GitHub route hands off
+ * to /new and that page does the rest.
  */
 
-const AGENT_PROMPT = `Install the Bay CLI and ship this folder:
-
-  npm i -g supersonic-cli && supersonic up --wait
-
-It will open a browser once to sign you in, then print the address the app is live on.`;
-
-/** Whose marks sit above the prompt. Files copied from apps/landing/public/logos. */
+/** Whose marks sit beside the prompt. Files copied from apps/landing/public/logos. */
 const AGENTS = [
   { name: "Claude Code", src: "/logos/claude.png" },
   { name: "Codex", src: "/logos/openai.png" },
   { name: "Cursor", src: "/logos/cursor.png" },
 ];
+
+/**
+ * A name to offer, in the shape the platform would have picked anyway.
+ *
+ * lib/slug's `randomSlug` is what /api/deploy already falls back to, but it is a
+ * letter and four characters — "as76d" — which makes a fine subdomain and a poor
+ * thing to find again in a list. This pairs a word with a number instead: still a
+ * legal Cloud Run name, and readable.
+ */
+const WORDS = [
+  "harbor", "ferry", "pier", "tide", "beacon", "anchor", "cove", "quay",
+  "lantern", "compass", "current", "drift", "haven", "keel", "mast", "reef",
+];
+function suggestName(): string {
+  const w = WORDS[Math.floor(Math.random() * WORDS.length)];
+  return `${w}-${Math.floor(Math.random() * 900 + 100)}`;
+}
 
 interface GhConnection {
   installationId: number;
@@ -60,7 +69,9 @@ interface GhRepo {
 export function ShipNew() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"local" | "github">("local");
+  const [step, setStep] = useState<"name" | "source">("name");
+  const [suggested, setSuggested] = useState(suggestName);
+  const [name, setName] = useState("");
   const [copied, setCopied] = useState(false);
 
   const [connections, setConnections] = useState<GhConnection[] | null>(null);
@@ -68,13 +79,40 @@ export function ShipNew() {
   const [installation, setInstallation] = useState<number | null>(null);
   const [repos, setRepos] = useState<GhRepo[] | null>(null);
   const [trouble, setTrouble] = useState("");
-  const [q, setQ] = useState("");
 
-  // Asked for only when the GitHub tab is opened, and only once. `null` means
-  // "not asked yet" and is a different state from an empty list — one is a
-  // spinner, the other is the connect button.
+  /**
+   * What it will actually be called: the field when filled, the offer when not.
+   *
+   * The emptiness test is on the raw field, not on the slug — `slugify("")` answers
+   * "app", so `slugify(name) || suggested` named every unnamed app "app" and never
+   * once used the suggestion it had just shown.
+   */
+  const chosen = name.trim() ? slugify(name.trim()) : suggested;
+
+  const prompt = useMemo(
+    () =>
+      `Install the Bay CLI and ship this folder as "${chosen}":\n\n` +
+      `  npm i -g supersonic-cli && supersonic deploy --name ${chosen} --wait\n\n` +
+      `It opens a browser once to sign you in, then prints the address the app is live on.\n` +
+      `Without --wait it returns before the build has finished.`,
+    [chosen],
+  );
+
+  // A second Ship-new is a fresh one, not the last attempt's half-finished state.
   useEffect(() => {
-    if (!open || tab !== "github" || connections !== null) return;
+    if (open) return;
+    setStep("name");
+    setName("");
+    setSuggested(suggestName());
+    setCopied(false);
+  }, [open]);
+
+  // Read when the source step opens, not when the dialog does: somebody shipping
+  // from their folder never needs their GitHub accounts. `null` means "not asked
+  // yet" and is a different state from an empty list — one is a spinner, the other
+  // is the connect button.
+  useEffect(() => {
+    if (!open || step !== "source" || connections !== null) return;
     let alive = true;
     fetch("/api/github/repos")
       .then((r) => r.json())
@@ -88,7 +126,7 @@ export function ShipNew() {
     return () => {
       alive = false;
     };
-  }, [open, tab, connections]);
+  }, [open, step, connections]);
 
   useEffect(() => {
     if (installation === null) return;
@@ -117,13 +155,10 @@ export function ShipNew() {
     };
   }, [installation]);
 
-  const shown = (repos ?? []).filter((r) =>
-    q.trim() ? r.fullName.toLowerCase().includes(q.trim().toLowerCase()) : true,
-  );
-
   function ship(fullName: string) {
-    // The film lives on its own page; this hands off with everything it needs.
-    const p = new URLSearchParams({ src: "github", repo: fullName });
+    // The chosen name travels with it, so /new reserves the slug this dialog just
+    // showed rather than minting a second one from the repository name.
+    const p = new URLSearchParams({ src: "github", repo: fullName, name: chosen });
     if (installation !== null) p.set("installation_id", String(installation));
     router.push(`/new?${p}`);
   }
@@ -138,162 +173,190 @@ export function ShipNew() {
       </DialogTrigger>
 
       <DialogContent className="w-[calc(100vw-2rem)] max-w-[520px] gap-0 overflow-hidden p-0">
-        <DialogHeader className="px-5 pb-3 pt-5">
-          <DialogTitle className="text-[17px] font-[450] tracking-[-0.01em]">Ship an app</DialogTitle>
+        <DialogHeader className="px-5 pb-4 pt-5">
+          <DialogTitle className="min-w-0 truncate text-[17px] font-[450] tracking-[-0.01em]">
+            {step === "name" ? "Name your app" : `${chosen} is empty`}
+          </DialogTitle>
           <DialogDescription className="sr-only">
-            Ship from the folder you have open, or from a GitHub repository.
+            Name the app, then ship it from the folder you have open or from a GitHub
+            repository.
           </DialogDescription>
         </DialogHeader>
 
-        {/* A recessed track with a raised thumb, the same control as everywhere
-            else. Two options, so it is a switch, not a nav. */}
-        <div className="px-5">
-          <div className="inline-flex gap-0.5 rounded-lg bg-tile p-[3px]">
-            {(["local", "github"] as const).map((t) => (
-              <button
-                className={cn(
-                  "inline-flex h-[30px] items-center gap-1.5 rounded-md px-3 text-[14px] transition-colors",
-                  tab === t ? "bg-white text-ink shadow-sm" : "text-ink-2 hover:text-ink",
-                )}
-                key={t}
-                onClick={() => setTab(t)}
+        {step === "name" ? (
+          <form
+            className="flex min-w-0 flex-col gap-3 px-5 pb-5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setStep("source");
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                aria-label="App name"
+                autoFocus
+                className="h-9"
+                onChange={(e) => setName(e.currentTarget.value)}
+                placeholder={suggested}
+                value={name}
+              />
+              <Button
+                aria-label="Suggest another name"
+                className="size-9 shrink-0"
+                onClick={() => setSuggested(suggestName())}
+                size="icon-sm"
                 type="button"
+                variant="outline"
               >
-                {t === "local" ? <Terminal className="size-3.5" /> : <Github className="size-3.5" />}
-                {t === "local" ? "From my folder" : "From GitHub"}
-              </button>
-            ))}
-          </div>
-        </div>
+                <Shuffle className="size-3.5" />
+              </Button>
+            </div>
 
-        <div className="min-w-0 px-5 pb-5 pt-4">
-          {tab === "local" ? (
-            <div className="flex min-w-0 flex-col gap-3">
-              {/* The agents this prompt is for, said with their own marks instead of
-                  a sentence naming them. The sentence was doing the same job and
-                  taking two lines to do it. */}
-              <div className="flex items-center justify-end gap-2.5">
-                {AGENTS.map((a) => (
-                  <img
-                    alt={a.name}
-                    className="size-[18px] object-contain opacity-80"
-                    key={a.name}
-                    src={a.src}
-                    title={a.name}
-                  />
-                ))}
+            {/* What the name IS and is not. It is the label in this list and the
+                one the next deploy is matched against, so a redeploy lands on the
+                same app. The address is not it: slugs are five random characters,
+                minted server-side, and saying otherwise here would print a URL
+                that never exists. */}
+            <p className="text-[13px] leading-[1.6] text-ink-3">
+              Optional — leave it blank and it ships as{" "}
+              <span className="text-ink-2">{suggested}</span>. Its address is generated
+              either way.
+            </p>
+
+            <Button className="mt-1 w-full" type="submit">
+              Continue
+              <ArrowRight className="size-4" />
+            </Button>
+          </form>
+        ) : (
+          <div className="flex min-w-0 flex-col gap-4 px-5 pb-5">
+            {/* Both routes at once. */}
+            <section className="flex min-w-0 flex-col gap-2.5">
+              <div className="flex items-center gap-3">
+                <span className="text-[14px] font-[450] text-ink">
+                  Ship the folder you have open
+                </span>
+                <span className="ml-auto flex shrink-0 items-center gap-2.5">
+                  {AGENTS.map((a) => (
+                    <img
+                      alt={a.name}
+                      className="size-[18px] object-contain opacity-80"
+                      key={a.name}
+                      src={a.src}
+                      title={a.name}
+                    />
+                  ))}
+                </span>
               </div>
 
-              <pre className="max-h-[220px] max-w-full overflow-auto rounded-lg border border-border bg-ground p-3.5 font-mono text-[12.5px] leading-[1.7] text-ink-2">
-                {AGENT_PROMPT}
+              <pre className="max-h-[180px] max-w-full overflow-auto rounded-lg border border-border bg-ground p-3.5 font-mono text-[12.5px] leading-[1.7] text-ink-2">
+                {prompt}
               </pre>
 
               <Button
                 className="w-full"
                 onClick={() => {
-                  navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
+                  navigator.clipboard?.writeText(prompt).catch(() => {});
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1600);
                 }}
+                variant="outline"
               >
                 {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
                 {copied ? "Copied" : "Copy prompt"}
               </Button>
+            </section>
+
+            <div className="flex items-center gap-3">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-[13px] text-ink-3">or</span>
+              <span className="h-px flex-1 bg-border" />
             </div>
-          ) : connections === null ? (
-            <p className="flex items-center gap-2 py-6 text-[14px] text-ink-2">
-              <Loader2 className="size-3.5 animate-spin" />
-              Looking for your GitHub accounts…
-            </p>
-          ) : connections.length === 0 ? (
-            <div className="flex flex-col items-start gap-3 py-2">
-              <p className="text-[14px] text-ink-2">
-                Connect GitHub once and your private code shows up here. We only ever
-                read it — and only the repositories you pick.
-              </p>
-              <Button asChild size="sm">
-                <a href={links?.installUrl ?? "#"}>
-                  <Github className="size-3.5" />
-                  Connect GitHub
-                </a>
-              </Button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {connections.length > 1 && (
-                <div className="inline-flex gap-0.5 self-start rounded-lg bg-tile p-[3px]">
-                  {connections.map((c) => (
-                    <button
-                      className={cn(
-                        "h-[28px] rounded-md px-2.5 text-[13px] transition-colors",
-                        installation === c.installationId
-                          ? "bg-white text-ink shadow-sm"
-                          : "text-ink-2 hover:text-ink",
-                      )}
-                      key={c.installationId}
-                      onClick={() => setInstallation(c.installationId)}
-                      type="button"
-                    >
-                      {c.accountLogin}
-                    </button>
-                  ))}
-                </div>
+
+            <section className="flex min-w-0 flex-col gap-2.5">
+              <span className="text-[14px] font-[450] text-ink">Ship from GitHub</span>
+
+              {connections === null ? (
+                <p className="flex items-center gap-2 py-1 text-[14px] text-ink-2">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Looking for your GitHub accounts…
+                </p>
+              ) : connections.length === 0 ? (
+                <Button asChild className="w-full" variant="outline">
+                  <a href={links?.installUrl ?? "#"}>
+                    <Github className="size-4" />
+                    Connect GitHub
+                  </a>
+                </Button>
+              ) : (
+                <>
+                  {connections.length > 1 && (
+                    <div className="inline-flex gap-0.5 self-start rounded-lg bg-tile p-[3px]">
+                      {connections.map((c) => (
+                        <button
+                          className={cn(
+                            "h-[28px] rounded-md px-2.5 text-[13px] transition-colors",
+                            installation === c.installationId
+                              ? "bg-white text-ink shadow-sm"
+                              : "text-ink-2 hover:text-ink",
+                          )}
+                          key={c.installationId}
+                          onClick={() => setInstallation(c.installationId)}
+                          type="button"
+                        >
+                          {c.accountLogin}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {trouble ? <p className="text-[14px] text-ink-2">{trouble}</p> : null}
+
+                  <div className="max-h-[176px] overflow-y-auto rounded-lg border border-border">
+                    {repos === null ? (
+                      <p className="flex items-center gap-2 px-3 py-5 text-[14px] text-ink-2">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        Reading what you picked…
+                      </p>
+                    ) : repos.length === 0 ? (
+                      <p className="px-3 py-5 text-[14px] text-ink-2">
+                        {trouble ? "" : "No repositories were shared with us yet."}
+                      </p>
+                    ) : (
+                      repos.map((r) => (
+                        <button
+                          className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-tile"
+                          key={r.fullName}
+                          onClick={() => ship(r.fullName)}
+                          type="button"
+                        >
+                          <Github className="size-3.5 shrink-0 text-ink-3" />
+                          <span className="min-w-0 truncate text-[14px] text-ink">
+                            {r.fullName}
+                          </span>
+                          {r.private && (
+                            <span className="ml-auto shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[11px] text-ink-3">
+                              private
+                            </span>
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  {links?.configureUrl ? (
+                    <p className="text-[13px] text-ink-3">
+                      Not seeing one?{" "}
+                      <a className="text-ink underline" href={links.configureUrl}>
+                        Choose which repositories we can see
+                      </a>
+                    </p>
+                  ) : null}
+                </>
               )}
-
-              <Input
-                aria-label="Find a repository"
-                className="h-9"
-                onChange={(e) => setQ(e.currentTarget.value)}
-                placeholder="Find a repository…"
-                value={q}
-              />
-
-              {trouble ? <p className="text-[14px] text-ink-2">{trouble}</p> : null}
-
-              <div className="max-h-[280px] overflow-y-auto rounded-lg border border-border">
-                {repos === null ? (
-                  <p className="flex items-center gap-2 px-3 py-6 text-[14px] text-ink-2">
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Reading what you picked…
-                  </p>
-                ) : shown.length === 0 ? (
-                  <p className="px-3 py-6 text-[14px] text-ink-2">
-                    {trouble
-                      ? ""
-                      : q
-                        ? `Nothing matches “${q}”.`
-                        : "This account is connected, but no repositories were shared with us yet."}
-                  </p>
-                ) : (
-                  shown.map((r) => (
-                    <button
-                      className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-tile"
-                      key={r.fullName}
-                      onClick={() => ship(r.fullName)}
-                      type="button"
-                    >
-                      <Github className="size-3.5 shrink-0 text-ink-3" />
-                      <span className="min-w-0 truncate text-[14px] text-ink">{r.fullName}</span>
-                      {r.private && (
-                        <span className="ml-auto shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-ink-3">
-                          private
-                        </span>
-                      )}
-                    </button>
-                  ))
-                )}
-              </div>
-
-              <p className="text-[13px] text-ink-3">
-                Not seeing one?{" "}
-                <a className="text-ink underline" href={links?.configureUrl ?? "#"}>
-                  Choose which repositories we can see
-                </a>
-                .
-              </p>
-            </div>
-          )}
-        </div>
+            </section>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

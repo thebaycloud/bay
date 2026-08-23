@@ -211,7 +211,12 @@ export async function POST(req: Request) {
   } else {
     const body = await req.json().catch(() => ({}));
     url = normalizeRepo(String(body.repo ?? ""));
-    friendlyName = cloudRunName(url);
+    // The repository names the app unless the caller named it. The Ship-new
+    // dialog asks for a name before it asks where the code is, so that name has
+    // to be what resolveSlug reuses on the next deploy — otherwise the app is
+    // called one thing in the list and resolved under another, and a redeploy
+    // mints a second slug beside it.
+    friendlyName = cloudRunName(String(body.name ?? "").trim() || url);
     secrets = (body.secrets ?? {}) as Record<string, string>;
     cloneToken = body.cloneToken ?? null;
     reservedSlug = String(body.slug ?? "").trim();

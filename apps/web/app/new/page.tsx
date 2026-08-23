@@ -88,6 +88,7 @@ export default function NewApp() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const r = q.get("repo");
+    wantedName.current = (q.get("name") ?? "").trim();
     if (r) { setRepo(r.replace(/^https?:\/\//, "")); setDoor("url"); }
     // Handed off from the Ship-new dialog, which already asked WHERE the code
     // comes from. This page's remaining job is the film, so it starts straight
@@ -178,6 +179,16 @@ export default function NewApp() {
    */
   const asked = useRef<{ repo: string; installationId: number | null }>({ repo: "", installationId: null });
 
+  /**
+   * What the Ship-new dialog called this app, if it called it anything.
+   *
+   * A ref rather than state for the same reason `asked` is one: the deploy can
+   * run minutes after the query string was read, and this has to be the value
+   * that arrived, not whatever a re-render left behind. Empty means "the server
+   * names it from the repository", which is what every deploy did before.
+   */
+  const wantedName = useRef("");
+
   // Kept in a ref so the query-param effect above can start a run without
   // being declared after the state it reads.
   beginRef.current = (r?: string) => { void begin(r); };
@@ -235,6 +246,9 @@ export default function NewApp() {
           installationId: asked.current.installationId,
           secrets,
           cloneToken: cloneToken.current,
+          // Omitted when nobody named it, so the server keeps naming apps after
+          // their repository exactly as it did.
+          ...(wantedName.current ? { name: wantedName.current } : {}),
         }),
       });
       // A billing gate returns a JSON 402 *before* the SSE stream — surface the
