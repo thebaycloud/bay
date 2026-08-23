@@ -98,6 +98,19 @@ export function ShipNew() {
     [chosen],
   );
 
+  /**
+   * Copy, from either the block or the button.
+   *
+   * One function because there are now two ways to ask for the same thing, and
+   * two copies of `writeText` + timer would eventually disagree about how long
+   * "Copied" lasts.
+   */
+  function copyPrompt() {
+    navigator.clipboard?.writeText(prompt).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
+
   // A second Ship-new is a fresh one, not the last attempt's half-finished state.
   useEffect(() => {
     if (open) return;
@@ -236,19 +249,27 @@ export function ShipNew() {
                 </span>
               </div>
 
-              <pre className="max-h-[180px] max-w-full overflow-auto rounded-lg border border-border bg-ground p-3.5 font-mono text-[12.5px] leading-[1.7] text-ink-2">
-                {prompt}
-              </pre>
+              {/* The prompt IS the button. Everybody's first instinct in front of a
+                  block of text they were told to paste somewhere is to click it,
+                  and `cursor-copy` is the one cursor that says what the click does
+                  before it happens. The button below stays for anyone who reads
+                  the label instead of trying the block.
 
-              <Button
-                className="w-full"
-                onClick={() => {
-                  navigator.clipboard?.writeText(prompt).catch(() => {});
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1600);
-                }}
-                variant="outline"
+                  It wraps rather than scrolls: half the command was off the right
+                  edge, and a copy target that hides what it copies is a copy
+                  target people check by pasting. */}
+              <button
+                aria-label="Copy the prompt"
+                className="cursor-copy rounded-lg border border-border bg-ground p-3.5 text-left transition-colors hover:border-ink-3 hover:bg-tile focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink-3"
+                onClick={copyPrompt}
+                type="button"
               >
+                <pre className="max-h-[200px] max-w-full overflow-y-auto whitespace-pre-wrap break-words font-mono text-[12.5px] leading-[1.7] text-ink-2">
+                  {prompt}
+                </pre>
+              </button>
+
+              <Button className="w-full" onClick={copyPrompt} variant="outline">
                 {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
                 {copied ? "Copied" : "Copy prompt"}
               </Button>
