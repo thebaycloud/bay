@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Check, Copy, Github, Loader2, Plus, Shuffle } from "lucide-react";
+import { ArrowRight, Check, Copy, Github, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -175,7 +175,7 @@ export function ShipNew() {
       <DialogContent className="w-[calc(100vw-2rem)] max-w-[520px] gap-0 overflow-hidden p-0">
         <DialogHeader className="px-5 pb-4 pt-5">
           <DialogTitle className="min-w-0 truncate text-[17px] font-[450] tracking-[-0.01em]">
-            {step === "name" ? "Name your app" : `${chosen} is empty`}
+            {step === "name" ? "New app" : `${chosen} is empty`}
           </DialogTitle>
           <DialogDescription className="sr-only">
             Name the app, then ship it from the folder you have open or from a GitHub
@@ -191,37 +191,18 @@ export function ShipNew() {
               setStep("source");
             }}
           >
-            <div className="flex items-center gap-2">
-              <Input
-                aria-label="App name"
-                autoFocus
-                className="h-9"
-                onChange={(e) => setName(e.currentTarget.value)}
-                placeholder={suggested}
-                value={name}
-              />
-              <Button
-                aria-label="Suggest another name"
-                className="size-9 shrink-0"
-                onClick={() => setSuggested(suggestName())}
-                size="icon-sm"
-                type="button"
-                variant="outline"
-              >
-                <Shuffle className="size-3.5" />
-              </Button>
-            </div>
-
-            {/* What the name IS and is not. It is the label in this list and the
-                one the next deploy is matched against, so a redeploy lands on the
-                same app. The address is not it: slugs are five random characters,
-                minted server-side, and saying otherwise here would print a URL
-                that never exists. */}
-            <p className="text-[13px] leading-[1.6] text-ink-3">
-              Optional — leave it blank and it ships as{" "}
-              <span className="text-ink-2">{suggested}</span>. Its address is generated
-              either way.
-            </p>
+            {/* The placeholder carries the whole instruction. "Optional" in the
+                field is what a paragraph under it was spending three lines to
+                say, and a generated name is used when nobody types one — which
+                is a thing to do quietly, not to explain. */}
+            <Input
+              aria-label="App name (optional)"
+              autoFocus
+              className="h-9 placeholder:text-ink-3"
+              onChange={(e) => setName(e.currentTarget.value)}
+              placeholder="Optional"
+              value={name}
+            />
 
             <Button className="mt-1 w-full" type="submit">
               Continue
