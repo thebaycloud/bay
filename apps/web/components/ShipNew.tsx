@@ -41,6 +41,13 @@ const AGENT_PROMPT = `Install the Bay CLI and ship this folder:
 
 It will open a browser once to sign you in, then print the address the app is live on.`;
 
+/** Whose marks sit above the prompt. Files copied from apps/landing/public/logos. */
+const AGENTS = [
+  { name: "Claude Code", src: "/logos/claude.png" },
+  { name: "Codex", src: "/logos/openai.png" },
+  { name: "Cursor", src: "/logos/cursor.png" },
+];
+
 interface GhConnection {
   installationId: number;
   accountLogin: string;
@@ -133,8 +140,8 @@ export function ShipNew() {
       <DialogContent className="w-[calc(100vw-2rem)] max-w-[520px] gap-0 overflow-hidden p-0">
         <DialogHeader className="px-5 pb-3 pt-5">
           <DialogTitle className="text-[17px] font-[450] tracking-[-0.01em]">Ship an app</DialogTitle>
-          <DialogDescription className="text-[14px] text-ink-2">
-            From the folder you have open, or straight from GitHub.
+          <DialogDescription className="sr-only">
+            Ship from the folder you have open, or from a GitHub repository.
           </DialogDescription>
         </DialogHeader>
 
@@ -162,23 +169,34 @@ export function ShipNew() {
         <div className="min-w-0 px-5 pb-5 pt-4">
           {tab === "local" ? (
             <div className="flex min-w-0 flex-col gap-3">
-              <p className="text-[14px] text-ink-2">
-                Paste this into Claude Code, Cursor or Codex. Your agent installs the
-                CLI, signs you in and ships the folder.
-              </p>
-              <pre className="max-w-full overflow-x-auto rounded-lg border border-border bg-ground p-3 font-mono text-[12.5px] leading-relaxed text-ink">
+              {/* The agents this prompt is for, said with their own marks instead of
+                  a sentence naming them. The sentence was doing the same job and
+                  taking two lines to do it. */}
+              <div className="flex items-center justify-end gap-2.5">
+                {AGENTS.map((a) => (
+                  <img
+                    alt={a.name}
+                    className="size-[18px] object-contain opacity-80"
+                    key={a.name}
+                    src={a.src}
+                    title={a.name}
+                  />
+                ))}
+              </div>
+
+              <pre className="max-h-[220px] max-w-full overflow-auto rounded-lg border border-border bg-ground p-3.5 font-mono text-[12.5px] leading-[1.7] text-ink-2">
                 {AGENT_PROMPT}
               </pre>
+
               <Button
-                className="self-start"
+                className="w-full"
                 onClick={() => {
                   navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1600);
                 }}
-                size="sm"
               >
-                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
                 {copied ? "Copied" : "Copy prompt"}
               </Button>
             </div>
