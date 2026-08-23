@@ -55,6 +55,12 @@ export async function GET(req: Request): Promise<Response> {
       accountLogin: account.login,
       accountType: account.type,
       connectedBy: userId,
+      // Only for a personal installation, where the account IS the person who
+      // installed it. GitHub does not say which member installed an
+      // organisation's App, so an org records null and every push through it
+      // answers `someone` — see `whoPushed` in lib/github-deploy.ts, and
+      // CONTEXT.md on why a wrong name there is worse than no name.
+      connectedLogin: account.type === "User" ? account.login : null,
     });
     return back(req, { connected: account.login });
   } catch (e) {

@@ -46,6 +46,7 @@ import { releaseId, releasePrefix, pointerPath, ASSETS_BUCKET } from "@/lib/stat
 import { listObjectNames, readObjectText, writeObject, describeServiceRest, resolveImageDigest, imageExposedPort, accessToken } from "@/lib/gcp-rest";
 import { take as takeClone } from "@/lib/clone-cache";
 import { cloneTokenFor } from "@/lib/github-clone";
+import { linkRepo, type RepoLink } from "@/lib/app-repos";
 import { staticBuildConfig } from "@/lib/static-build";
 import { verifyRelease } from "@/lib/verify-release";
 import { StageRecorder, ACTIVATION_STAGE } from "@/lib/stages";
@@ -1078,6 +1079,15 @@ export interface DeployInput {
    * the deploy job, and a check in one of them is a check the other two skip.
    */
   ghInstallationId: number | null;
+  /**
+   * The commit to build, or null for "whatever the branch points at".
+   *
+   * Null is every deploy that existed before pushes did — an upload, a CLI run,
+   * a public URL — and for those the clone is byte-for-byte what it always was.
+   */
+  commitSha: string | null;
+  /** The repository binding to write right after the app row exists, or null. */
+  connect: RepoLink | null;
   isUpload: boolean;
   isPrebuilt: boolean;
   prebuiltHash: string;
@@ -1133,6 +1143,16 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         repoUrl: redeployableRepo({ url, isUpload }),
         ghInstallationId: input.ghInstallationId,
       });
+      // Immediately after, and never before: `app_repos.slug` references
+      // `apps.slug`, so the row above is what makes this one legal. Best-effort
+      // on purpose — a deploy that built and went live must not be reported as
+      // failed because the thing that makes the NEXT one automatic could not be
+      // written. The person can connect it again from the app's own panel.
+      if (input.connect) {
+        await linkRepo({ slug, ...input.connect }).catch((e) => {
+          log(`Could not connect ${input.connect?.repoFullName} for future pushes: ${e instanceof Error ? e.message : String(e)}`);
+        });
+      }
     }
     // /api/detect already cloned this repo moments ago. Reuse that clone when
     // it is still around. A miss — a different control-plane instance, an
@@ -1186,7 +1206,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       dir,
       isUpload && archive ? { kind: "upload", archive }
         : reused ? { kind: "cached-clone" }
-        : { kind: "clone", url, token: gitToken },
+        : { kind: "clone", url, token: gitToken, sha: input.commitSha ?? undefined },
       { run: (cmd, args) => run(cmd, args, () => {}), log, stages },
     );
 

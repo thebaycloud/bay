@@ -411,12 +411,21 @@ export default function NewApp() {
                                 onClick={() => { setRepo(r.fullName); begin(r.fullName); }}
                               >
                                 <span className="name">{r.fullName}</span>
+                                {/* The branch that will ship from now on, said
+                                    here rather than asked for: picking one is a
+                                    second click on the screen whose whole job is
+                                    the first, and it is changeable afterwards in
+                                    the app's own panel. */}
+                                <span className="tag branch">{r.defaultBranch}</span>
                                 {r.private && <span className="tag">private</span>}
                               </button>
                             ))}
                           </div>
                         )}
                         <p className="lead" style={{ margin: "10px 0 0", fontSize: 12, opacity: 0.7 }}>
+                          Every push to that branch ships your app. You can change the branch, or turn it off, any time.
+                        </p>
+                        <p className="lead" style={{ margin: "4px 0 0", fontSize: 12, opacity: 0.7 }}>
                           Not seeing one? <a href={ghLinks?.configureUrl ?? "#"}>Choose which repositories we can see</a>.
                         </p>
                       </>

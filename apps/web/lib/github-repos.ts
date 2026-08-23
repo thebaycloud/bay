@@ -14,6 +14,15 @@ const API = "https://api.github.com";
 const PER_PAGE = 100;
 
 export interface Repo {
+  /**
+   * GitHub's id for the repository, and what a push is matched on.
+   *
+   * The name is what a person picks from and the id is what survives them
+   * renaming it afterwards, so the picker carries both: `app_repos.repo_id` is
+   * written from here, and a connection that outlives a rename is the reason
+   * the column exists at all.
+   */
+  id: number;
   fullName: string;
   private: boolean;
   defaultBranch: string;
@@ -62,6 +71,7 @@ export async function listRepos(installationId: number, deps: ReposDeps = live):
     const batch = body.repositories ?? [];
     for (const r of batch) {
       out.push({
+        id: Number(r.id),
         fullName: String(r.full_name),
         private: Boolean(r.private),
         defaultBranch: String(r.default_branch ?? "main"),
@@ -93,4 +103,57 @@ export function authenticatedCloneUrl(repoUrl: string, token: string): string {
 /** Mint for this installation and hand back a URL `git clone` can use. */
 export async function cloneUrlFor(installationId: number, repoUrl: string, deps: ReposDeps = live): Promise<string> {
   return authenticatedCloneUrl(repoUrl, await deps.token(installationId));
+}
+
+/**
+ * `owner/repo` out of whatever form the repository URL arrived in.
+ *
+ * Empty string when it is not a GitHub URL at all, which is a real case rather
+ * than an error: the URL door still accepts GitLab, a self-hosted git, and a
+ * `file://` path, and none of those can be connected to a push.
+ *
+ * The `.git` suffix and a trailing slash are both stripped because both are
+ * things people paste, and `owner/repo.git` is not a name any GitHub API path
+ * accepts.
+ */
+export function fullNameFromUrl(url: string): string {
+  const m = /^(?:https?:\/\/)?(?:[^@/]*@)?github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}` : "";
+}
+
+/**
+ * One repository, as this installation sees it.
+ *
+ * Exists so a connection is never written from a name and an id the CLIENT
+ * supplied. The picker knows both, and posting them would be faster — but an
+ * installation id in a request body is already only a claim (see
+ * lib/github-connections.ts), and a repository id beside it would be a second
+ * one, checked by nothing, written into the column that decides which pushes
+ * ship. Asking GitHub costs one request at connect time and makes the id a fact.
+ *
+ * Null when this installation cannot see the repository, which covers both "it
+ * does not exist" and "you were not given it" — GitHub answers 404 to each, on
+ * purpose, and the person's next step is the same for both: widen the
+ * installation's selection.
+ */
+export async function repoFor(installationId: number, fullName: string, deps: ReposDeps = live): Promise<Repo | null> {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return null;
+  const token = await deps.token(installationId);
+  const res = await deps.fetch(`${API}/repos/${fullName}`, {
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "supersonic",
+    },
+  });
+  if (!res.ok) return null;
+  const r = (await res.json()) as Record<string, unknown>;
+  return {
+    id: Number(r.id),
+    fullName: String(r.full_name),
+    private: Boolean(r.private),
+    defaultBranch: String(r.default_branch ?? "main"),
+    pushedAt: r.pushed_at == null ? null : String(r.pushed_at),
+  };
 }

@@ -47,7 +47,12 @@ export const authConfig = {
         (!PROD && (p.startsWith("/design") || p.startsWith("/landing"))) ||
         // Stripe calls this server-to-server with no cookie; it verifies its own
         // signature. The rest of /api/billing stays behind the cookie gate.
-        p.startsWith("/api/billing/webhook");
+        p.startsWith("/api/billing/webhook") ||
+        // GitHub, for the same reason and on the same terms: no cookie exists to
+        // send, and the route verifies an HMAC over the raw body before it
+        // touches anything. The rest of /api/github stays behind the gate —
+        // those routes answer a person, and a person has a session.
+        p.startsWith("/api/github/webhook");
       if (isPublic) return true;
       return !!auth?.user;
     },

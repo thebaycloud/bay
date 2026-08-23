@@ -31,12 +31,14 @@ function deps(pages: unknown[][], token = "ghs_tok"): ReposDeps & { calls: strin
 
 test("repositories come back with the fields the picker renders", async () => {
   const d = deps([[{
-    full_name: "thebaycloud/bay", private: true,
+    id: 1030493218, full_name: "thebaycloud/bay", private: true,
     default_branch: "main", pushed_at: "2026-08-22T10:00:00Z",
   }]]);
   const repos = await listRepos(155650459, d);
+  // The id rides along because a push is matched on it, not on the name — which
+  // is what makes a connection survive somebody renaming their repository.
   assert.deepEqual(repos, [{
-    fullName: "thebaycloud/bay", private: true,
+    id: 1030493218, fullName: "thebaycloud/bay", private: true,
     defaultBranch: "main", pushedAt: "2026-08-22T10:00:00Z",
   }]);
 });
@@ -46,8 +48,8 @@ test("every page is fetched, not just the first", async () => {
   // first page is the bug that produces "I can't see my repository" for exactly
   // the accounts that have the most of them.
   const d = deps([
-    Array.from({ length: 100 }, (_, i) => ({ full_name: `o/r${i}`, private: true, default_branch: "main", pushed_at: null })),
-    Array.from({ length: 30 }, (_, i) => ({ full_name: `o/s${i}`, private: true, default_branch: "main", pushed_at: null })),
+    Array.from({ length: 100 }, (_, i) => ({ id: i + 1, full_name: `o/r${i}`, private: true, default_branch: "main", pushed_at: null })),
+    Array.from({ length: 30 }, (_, i) => ({ id: 1000 + i, full_name: `o/s${i}`, private: true, default_branch: "main", pushed_at: null })),
   ]);
   const repos = await listRepos(1, d);
   assert.equal(repos.length, 130);

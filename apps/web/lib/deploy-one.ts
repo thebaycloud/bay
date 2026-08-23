@@ -2,6 +2,7 @@ import { runDeploy, type DeployInput } from "@/lib/deploy-pipeline";
 import { eventSink } from "@/lib/deploy-events";
 import { claimRun, finishRun } from "@/lib/deploy-runs";
 import { finishBuild, watchOutcome } from "@/lib/builds";
+import { reportOutcome } from "@/lib/github-deploy";
 import { setDeploy } from "@/lib/deploys";
 
 /**
@@ -56,6 +57,10 @@ export async function deployOne(runId: string, hooks: DeployOneHooks = {}): Prom
     // `?? null` rather than assumed present: rows written before this column
     // existed are still in the table and still get claimed.
     ghInstallationId: request.ghInstallationId ?? null,
+    // Same `?? null` and the same reason: every run row written before pushes
+    // existed is still claimable and carries no commit.
+    commitSha: request.commitSha ?? null,
+    connect: request.connect ?? null,
     isUpload: request.isUpload,
     isPrebuilt: request.isPrebuilt,
     prebuiltHash: request.prebuiltHash,
@@ -96,6 +101,16 @@ export async function deployOne(runId: string, hooks: DeployOneHooks = {}): Prom
     // outcome: null` forever — the app's timeline claims every build it ever ran
     // is still in flight, and a failure is indistinguishable from a success.
     await finishBuild(runId, watch.outcome);
+    // And on the commit, when a push is what caused this. Everything it needs
+    // is in the request row, so this costs no query — and it cannot throw, so
+    // it cannot replace the outcome above with an error about GitHub.
+    await reportOutcome({
+      installationId: request.ghInstallationId ?? null,
+      repoUrl: request.repoUrl,
+      commitSha: request.commitSha ?? null,
+      slug: request.slug,
+      outcome: watch.outcome,
+    }).catch(() => { /* best-effort, by contract */ });
   }
   return "deployed";
 }

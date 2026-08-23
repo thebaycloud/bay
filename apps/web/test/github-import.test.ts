@@ -40,11 +40,11 @@ test("an installation this workspace owns lists its repositories", async () => {
     installationId: 155650459,
     connections: async () => [],
     owns: async () => true,
-    repos: async () => [{ fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
+    repos: async () => [{ id: 1, fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
   });
   assert.equal(r.status, 200);
   assert.deepEqual(r.body, {
-    repos: [{ fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
+    repos: [{ id: 1, fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
   });
 });
 

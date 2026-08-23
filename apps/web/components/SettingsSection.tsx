@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2, KeyRound, Globe, AlertTriangle, Loader2 } from "lucide-react";
 import { DomainsPanel } from "./DomainsPanel";
+import { GitPanel } from "./GitPanel";
 
 export function SettingsSection({
   slug, name, liveHost, envKeys, onToast,
@@ -95,6 +96,11 @@ export function SettingsSection({
         </div>
         <DomainsPanel slug={slug} onToast={onToast} />
       </div>
+
+      {/* Source. Draws nothing at all when no repository is connected — an app
+          deployed from a folder has no connection to show, and an empty card
+          offering to make one would be a worse copy of the door on /new. */}
+      <GitPanel slug={slug} onToast={onToast} />
 
       {/* Danger zone */}
       <div className="set-card danger">
