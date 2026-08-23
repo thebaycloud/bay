@@ -86,7 +86,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
     <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-7 px-6 py-10">
       <header className="flex flex-col gap-1">
         <h1 className="text-[28px] font-[450] tracking-[-0.02em] text-ink">Your apps</h1>
-        <p className="text-[15px] text-ink-2">Ship one, and check on the ones that are running.</p>
+        <p className="text-[15px] text-ink-2">Create and browse your Bay apps.</p>
       </header>
 
       <div className="flex flex-col gap-3">
