@@ -117,7 +117,7 @@ export async function POST(req: Request) {
   // and a fleet mid-rollout has both kinds. It is never about a header that
   // contradicts the request, which is the one thing this mechanism exists to
   // catch.
-  const identity = await verifyNodeIdentity(req.headers.get("x-supersonic-node-identity") ?? "");
+  const identity = await verifyNodeIdentity(req.headers.get("x-bay-node-identity") ?? req.headers.get("x-supersonic-node-identity") ?? "");
   const check = identityVerdict(node, identity, identityMode(process.env));
   if (!check.ok) {
     console.error(`secret-broker: refused ${slug} — ${check.reason}`);

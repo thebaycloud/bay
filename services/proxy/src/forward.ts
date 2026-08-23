@@ -19,6 +19,9 @@ export async function forward(
 ): Promise<void> {
   const target = new URL(req.url ?? "/", targetBase);
   const headers = buildUpstreamHeaders(req.headers, visitor, config.sessionCookieName, inject?.slug, prefix);
+  // Both spellings, for as long as a node provisioned before the rename may
+  // be on the other end. See services/fleet/agent/router.go.
+  headers["x-bay-workspace"] = workspaceDomain;
   headers["x-supersonic-workspace"] = workspaceDomain;
 
   /**
@@ -84,6 +87,7 @@ export async function forward(
   // env var is read — see the note there for why a stray newline is a 502 for
   // every fleet app rather than a cosmetic problem.
   if (!cloudRun && config.edgeSecret) {
+    headers["x-bay-edge"] = config.edgeSecret;
     headers["x-supersonic-edge"] = config.edgeSecret;
   }
 

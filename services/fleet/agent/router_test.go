@@ -127,3 +127,55 @@ func TestTheSecretIsNeverForwardedToTheApp(t *testing.T) {
 		t.Fatalf("the app received the edge secret; it must be stripped before proxying")
 	}
 }
+
+// The edge signature has to be accepted under both spellings while the rename
+// is in flight. This agent runs on a VM image: a node provisioned before the
+// rename knows only the old header and keeps serving until somebody re-images
+// it, while a redeployed proxy may already be sending the new one. Getting it
+// wrong in either direction is not a degradation — every request becomes
+// "unsigned" and every app on the fleet returns 403.
+func TestEdgeSignatureAcceptsBothHeaderNames(t *testing.T) {
+	rt := &Router{edgeSecret: "s3cret"}
+
+	for _, tc := range []struct {
+		name   string
+		header string
+		value  string
+		want   bool
+	}{
+		{"new name", "x-bay-edge", "s3cret", true},
+		{"old name", "x-supersonic-edge", "s3cret", true},
+		{"new name, wrong value", "x-bay-edge", "nope", false},
+		{"old name, wrong value", "x-supersonic-edge", "nope", false},
+		{"no header at all", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := http.NewRequest("GET", "/", nil)
+			if tc.header != "" {
+				r.Header.Set(tc.header, tc.value)
+			}
+			if got := rt.edgeSignatureOK(r); got != tc.want {
+				t.Fatalf("edgeSignatureOK = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Both spellings are stripped before the tenant's app sees the request. A node
+// receives both while the proxy sends both, so deleting only the one that
+// matched would hand the app the secret it was just checked against — and with
+// it, the ability to reach every other app on the node.
+func TestBothEdgeHeadersAreStrippedFromTheApp(t *testing.T) {
+	r, _ := http.NewRequest("GET", "/", nil)
+	r.Header.Set(edgeHeader, "s3cret")
+	r.Header.Set(legacyEdgeHeader, "s3cret")
+
+	r.Header.Del(edgeHeader)
+	r.Header.Del(legacyEdgeHeader)
+
+	for _, h := range []string{edgeHeader, legacyEdgeHeader} {
+		if v := r.Header.Get(h); v != "" {
+			t.Fatalf("%s survived with %q — the app can read the edge secret", h, v)
+		}
+	}
+}

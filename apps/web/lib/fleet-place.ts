@@ -311,7 +311,11 @@ export async function fleetProbe(
   // with a newline, and a header value containing one throws rather than 403s.
   const edgeSecret = (process.env.FLEET_EDGE_SECRET ?? "").trim();
   const headers: Record<string, string> = { "x-supersonic-slug": slug };
-  if (edgeSecret) headers["x-supersonic-edge"] = edgeSecret;
+  if (edgeSecret) {
+    // Both, while nodes older than the rename are still on the fleet.
+    headers["x-bay-edge"] = edgeSecret;
+    headers["x-supersonic-edge"] = edgeSecret;
+  }
 
   let last: { code: number; router?: string } = { code: 0 };
   for (let i = 0; i < attempts; i++) {
@@ -323,7 +327,7 @@ export async function fleetProbe(
         // whatever the redirect points at instead.
         redirect: "manual",
       });
-      last = { code: res.status, router: res.headers.get("x-supersonic-router") ?? undefined };
+      last = { code: res.status, router: res.headers.get("x-bay-router") ?? res.headers.get("x-supersonic-router") ?? undefined };
     } catch {
       // A refused connection is not an answer. Recorded as such rather than
       // thrown, and the reason is no longer "the deploy already succeeded
