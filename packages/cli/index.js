@@ -2,7 +2,7 @@
 "use strict";
 
 /*
- * supersonic — the deploy/debug surface for a coding agent.
+ * bay — the deploy/debug surface for a coding agent.
  * Designed for agents, not humans: no interactive prompts, --json everywhere,
  * token auth (a human logs in once, the agent inherits the token), stdout=data,
  * stderr=logs, meaningful exit codes.
@@ -18,12 +18,19 @@ const { joinExecArgs } = require("./lib/exec-args");
 const { whoHeader } = require("./lib/who");
 const { deletionRefusal } = require("./lib/confirm");
 
-const CFG_DIR = path.join(os.homedir(), ".supersonic");
+const brand = require("./lib/brand");
+
+// Copy an existing sign-in across to the new path, once, before anything reads
+// it. See lib/brand.js: a published CLI lives on other people's machines until
+// they upgrade, so nothing here may simply be renamed.
+brand.migrateConfig();
+
+const CFG_DIR = brand.configDir();
 const CFG = path.join(CFG_DIR, "config.json");
-const DEFAULT_URL = "https://app.supersonic.cv";
+const DEFAULT_URL = brand.DEFAULT_URL;
 
 // ---------- output ----------
-// A reader that stops reading — `supersonic check | head -5`, an agent piping into
+// A reader that stops reading — `bay check | head -5`, an agent piping into
 // grep — closes the pipe under us, and Node turns that into an unhandled EPIPE:
 // twenty lines of stack trace printed over the output that was actually asked for,
 // and a non-zero exit that reads as the command having failed. It did not; the
@@ -34,7 +41,7 @@ const COLOR = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (n) => (s) => (COLOR ? `\x1b[${n}m${s}\x1b[0m` : String(s));
 const dim = c("2"), bold = c("1"), green = c("32"), red = c("31"), cyan = c("36"), yellow = c("33");
 // Set once a deploy knows its slug: every progress line is also appended to
-// ~/.supersonic/deploys/<slug>.log, so a build survives the terminal it was
+// ~/.bay/deploys/<slug>.log, so a build survives the terminal it was
 // started in. Best-effort — a log that cannot be written must never stop a deploy.
 let deployLog = null;
 function startDeployLog(slug) {
@@ -53,7 +60,12 @@ function print(s) { process.stdout.write(s + "\n"); }         // data -> stdout
 function die(s, code = 1) { process.stderr.write(red("✗ ") + s + "\n"); process.exit(code); }
 
 /** What the last green deploy decided, written beside the project. */
-const LOCKFILE = "supersonic.lock.json";
+// Written under the new name, read under either: a repository that already has
+// `supersonic.lock.json` must keep being understood, or the next deploy decides
+// everything again from scratch and quietly disagrees with the file sitting
+// next to it. See lib/brand.js.
+const LOCKFILE = "bay.lock.json";
+function lockfilePath() { return brand.projectFile(process.cwd(), "lock.json"); }
 
 /**
  * Record the decisions a successful deploy made.
@@ -81,11 +93,11 @@ function writeLockfile(decided, slug) {
   if (!decided || typeof decided !== "object") return;
   try {
     const body = JSON.stringify({
-      $comment: "Written by supersonic after a successful deploy. Safe to commit, safe to delete.",
+      $comment: "Written by bay after a successful deploy. Safe to commit, safe to delete.",
       slug: slug || undefined,
       decided,
     }, null, 2) + "\n";
-    const path = require("node:path").join(process.cwd(), LOCKFILE);
+    const path = lockfilePath();
     if (require("node:fs").existsSync(path) && require("node:fs").readFileSync(path, "utf8") === body) return;
     require("node:fs").writeFileSync(path, body);
     info(dim(`  wrote ${LOCKFILE} — what this deploy decided, so you can see it and change it`));
@@ -96,13 +108,13 @@ function json(o) { print(JSON.stringify(o, null, 2)); }
 // ---------- config ----------
 function loadCfg() { try { return JSON.parse(fs.readFileSync(CFG, "utf8")); } catch { return {}; } }
 function saveCfg(cfg) { fs.mkdirSync(CFG_DIR, { recursive: true }); fs.writeFileSync(CFG, JSON.stringify(cfg, null, 2)); }
-function baseUrl() { return (process.env.SUPERSONIC_URL || loadCfg().url || DEFAULT_URL).replace(/\/$/, ""); }
-function token() { return process.env.SUPERSONIC_TOKEN || loadCfg().token || ""; }
+function baseUrl() { return (brand.envAny("URL") || loadCfg().url || DEFAULT_URL).replace(/\/$/, ""); }
+function token() { return brand.envAny("TOKEN") || loadCfg().token || ""; }
 
 // ---------- api ----------
 async function api(pathname, { method = "GET", body, stream = false } = {}) {
   const tok = token();
-  if (!tok) die("not authenticated — run: supersonic login");
+  if (!tok) die("not authenticated — run: bay login");
   const res = await fetch(baseUrl() + pathname, {
     method,
     headers: {
@@ -112,7 +124,7 @@ async function api(pathname, { method = "GET", body, stream = false } = {}) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401) die("token invalid or expired — run: supersonic login");
+  if (res.status === 401) die("token invalid or expired — run: bay login");
   if (res.status === 403) die("forbidden — you don't own that app (or it doesn't exist)");
   if (stream) return res;
   const data = await res.json().catch(() => ({}));
@@ -130,7 +142,7 @@ function openBrowser(url) {
 
 // ---------- commands ----------
 async function login(args) {
-  const url = (args.url || process.env.SUPERSONIC_URL || DEFAULT_URL).replace(/\/$/, "");
+  const url = (args.url || brand.envAny("URL") || DEFAULT_URL).replace(/\/$/, "");
   // Explicit token (agents / CI / headless).
   if (args.token) {
     const ok = await validToken(url, String(args.token));
@@ -145,7 +157,7 @@ async function login(args) {
 // Create an account without leaving the terminal: opens the browser to sign up,
 // then the web hands a token back and the agent can continue straight to deploy.
 async function signup(args) {
-  const url = (args.url || process.env.SUPERSONIC_URL || DEFAULT_URL).replace(/\/$/, "");
+  const url = (args.url || brand.envAny("URL") || DEFAULT_URL).replace(/\/$/, "");
   await loopbackAuth(url, "/signup", "signed up");
 }
 
@@ -164,7 +176,7 @@ async function runLoopback(url, startPath) {
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
       const tok = u.searchParams.get("token") || "";
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end("<body style='font-family:monospace;text-align:center;padding-top:20vh'><h2>&#10003; Supersonic CLI connected</h2><p>You can close this tab and return to your terminal.</p></body>");
+      res.end("<body style='font-family:monospace;text-align:center;padding-top:20vh'><h2>&#10003; Bay CLI connected</h2><p>You can close this tab and return to your terminal.</p></body>");
       resolve(tok);
     });
   });
@@ -188,7 +200,7 @@ async function runLoopback(url, startPath) {
 // The `login`/`signup` wrapper: authenticate, then report and exit.
 async function loopbackAuth(url, startPath, verb) {
   const tok = await runLoopback(url, startPath);
-  if (!tok) return die(`${verb} timed out — try again, or use: supersonic login --token <token>`);
+  if (!tok) return die(`${verb} timed out — try again, or use: bay login --token <token>`);
   saveCfg({ ...loadCfg(), url, token: tok });
   print(green("✓ ") + `${verb} to ${url}`);
   process.exit(0);
@@ -201,7 +213,7 @@ async function ensureAuth() {
   const url = baseUrl();
   info(dim("Not signed in — opening a browser to sign in (just this once)…"));
   const tok = await runLoopback(url, "/cli");
-  if (!tok) die("sign-in timed out — run `supersonic login`, then `supersonic deploy` again");
+  if (!tok) die("sign-in timed out — run `bay login`, then `bay deploy` again");
   saveCfg({ ...loadCfg(), url, token: tok });
   info(green("✓ ") + "signed in — continuing…");
 }
@@ -221,9 +233,9 @@ async function whoami(args) {
   // just that a token exists.
   const res = await fetch(baseUrl() + "/api/account", { headers: { Authorization: "Bearer " + tok } });
   const acct = res.ok ? await res.json().catch(() => ({})) : {};
-  if (args.json) return json({ loggedIn: res.ok, url: baseUrl(), email: acct.email || null, plan: acct.plan || null, source: process.env.SUPERSONIC_TOKEN ? "env" : "config" });
-  if (!res.ok) return die("token invalid — run: supersonic login");
-  const src = process.env.SUPERSONIC_TOKEN ? "env token" : "saved token";
+  if (args.json) return json({ loggedIn: res.ok, url: baseUrl(), email: acct.email || null, plan: acct.plan || null, source: brand.envAny("TOKEN") ? "env" : "config" });
+  if (!res.ok) return die("token invalid — run: bay login");
+  const src = process.env.BAY_TOKEN ? "env token" : "saved token";
   const who = acct.email ? " as " + acct.email : "";
   const plan = acct.plan ? ` · ${acct.plan}` : "";
   print(`logged in to ${baseUrl()}${who}${plan} (${src})`);
@@ -238,7 +250,7 @@ async function apps(args) {
   const d = await api("/api/apps");
   const list = d.apps || [];
   if (args.json) return json(list);
-  if (!list.length) { info("no apps yet — deploy one with: supersonic deploy"); return; }
+  if (!list.length) { info("no apps yet — deploy one with: bay deploy"); return; }
   for (const a of list) {
     // The list endpoint has always sent `status: "building"` for a deploy in
     // flight and the CLI has always thrown it away, so an app that was building
@@ -247,7 +259,7 @@ async function apps(args) {
     const building = a.status === "building";
     const dot = a.ready ? green("●") : building ? yellow("◐") : red("○");
     const note = building ? dim(`  ${a.stage || "deploying…"}`) : "";
-    print(`${dot} ${bold(a.slug.padEnd(22))} ${dim(a.url || `${a.slug}.supersonic.cv`)}${note}`);
+    print(`${dot} ${bold(a.slug.padEnd(22))} ${dim(a.url || `${a.slug}.thebay.cloud`)}${note}`);
   }
 }
 
@@ -261,7 +273,7 @@ async function status(args) {
   // answer to a question it could not yet answer.
   const dot = d.ready ? green("● live") : d.deploying ? yellow("◐ deploying") : red("○ down");
   print(`${bold(app)}  ${dot}${d.deploying && d.stage ? dim(` · ${d.stage}`) : ""}`);
-  print(dim("  url      ") + `${app}.supersonic.cv`);
+  print(dim("  url      ") + `${app}.thebay.cloud`);
   print(dim("  revision ") + (d.revision || "—"));
   print(dim("  image    ") + (d.image ? d.image.split("/").pop() : "—"));
   print(dim("  region   ") + (d.region || "—"));
@@ -349,7 +361,7 @@ async function env(args) {
   if (sub === "set") {
     const set = {};
     for (const kv of rest) { const i = kv.indexOf("="); if (i > 0) set[kv.slice(0, i)] = kv.slice(i + 1); }
-    if (!Object.keys(set).length) die("usage: supersonic env <app> set KEY=VALUE [KEY2=VALUE2]");
+    if (!Object.keys(set).length) die("usage: bay env <app> set KEY=VALUE [KEY2=VALUE2]");
     const d = await api(`/api/apps/${app}/env`, { method: "POST", body: { set } });
     // "new revision" is Cloud Run's word, and an app on a node has none — its
     // process is restarted in place. Worse, it was printed unconditionally, so
@@ -360,7 +372,7 @@ async function env(args) {
     return;
   }
   if (sub === "unset") {
-    if (!rest.length) die("usage: supersonic env <app> unset KEY [KEY2]");
+    if (!rest.length) die("usage: bay env <app> unset KEY [KEY2]");
     const d = await api(`/api/apps/${app}/env`, { method: "POST", body: { unset: rest } });
     print(green("✓ ") + `unset ${rest.join(", ")}${d?.note ? ` — ${d.note}` : ""}`);
     if (args.json) json(d);
@@ -375,7 +387,7 @@ async function env(args) {
  * The agent's edits happen in the copy of the repo the server unpacked, which is
  * deleted when the deploy ends — so a rescued app left this folder still broken
  * and the next deploy shipped the same code again. Straight to stdout so it can
- * be piped: `supersonic patch <app> | git apply`. Every other word this command
+ * be piped: `bay patch <app> | git apply`. Every other word this command
  * says goes to stderr, so the pipe carries the patch alone.
  */
 async function patch(args) {
@@ -422,7 +434,7 @@ async function del(args) {
 async function exec(args) {
   const app = needApp(args);
   const command = joinExecArgs(args._raw || []);
-  if (!command) die('usage: supersonic exec <app> -- <command>   e.g. supersonic exec myapp -- node -v');
+  if (!command) die('usage: bay exec <app> -- <command>   e.g. bay exec myapp -- node -v');
   info(dim(`exec in ${app} (isolated instance, app env + db attached)`));
   info(dim("cold-starting a one-off container — can take ~30–60s…"));
   const d = await api(`/api/apps/${app}/exec`, { method: "POST", body: { command } });
@@ -434,7 +446,7 @@ async function exec(args) {
 
 async function open(args) {
   const app = needApp(args);
-  const url = `https://${app}.supersonic.cv`;
+  const url = `https://${app}.thebay.cloud`;
   info(`opening ${url}`);
   openBrowser(url);
 }
@@ -459,7 +471,7 @@ async function init(args) {
   // config is the ONE input the platform is required to obey, and replacing it
   // with a detector's guess would be this command undoing its own reason to exist.
   if (fs.existsSync(target) && !args.force) {
-    return die(`${r.CONFIG_FILENAME} already exists — read it, or \`supersonic init --force\` to overwrite it with a fresh draft`);
+    return die(`${r.CONFIG_FILENAME} already exists — read it, or \`bay init --force\` to overwrite it with a fresh draft`);
   }
 
   const { config, candidates } = await buildDraft(dir, { resolver: r, detect: detector() });
@@ -483,7 +495,7 @@ async function init(args) {
   const { problems } = await checkApp(dir, { resolver: r, detect: detector() });
   if (problems.length) {
     print("");
-    print(yellow("! ") + "and `supersonic check` would already fail on it:");
+    print(yellow("! ") + "and `bay check` would already fail on it:");
     for (const p of problems) print("  " + p);
   }
 }
@@ -561,13 +573,13 @@ async function deploy(args) {
   if (unknown.length) {
     die(
       `${unknown.map((f) => "--" + f).join(", ")} ${unknown.length > 1 ? "are not flags" : "is not a flag"} ` +
-      `supersonic ship understands.\n` +
+      `bay ship understands.\n` +
       `  It takes: ${SHIP_FLAGS.map((f) => "--" + f).join(", ")}\n` +
       "  Nothing was shipped. Fix the flag and run it again."
     );
   }
   // One command: sign in automatically the first time, then deploy. No separate
-  // `supersonic login` step required.
+  // `bay login` step required.
   await ensureAuth();
   // URL-first by default: a live link appears in ~0.1s — the address answers with
   // the room, which draws the build as it happens — while the real build runs on
@@ -598,7 +610,7 @@ async function deploy(args) {
   try { fs.unlinkSync(tgz); } catch { /* ignore */ }
   info(dim(`uploading ${(body.length / 1048576).toFixed(1)} MB`));
   const tok = token();
-  if (!tok) die("not authenticated — run: supersonic login");
+  if (!tok) die("not authenticated — run: bay login");
   const res = await fetch(baseUrl() + "/api/deploy", {
     method: "POST",
     headers: {
@@ -610,7 +622,7 @@ async function deploy(args) {
     },
     body,
   });
-  if (res.status === 401) die("token invalid or expired — run: supersonic login");
+  if (res.status === 401) die("token invalid or expired — run: bay login");
   if (res.status === 403) die("forbidden");
   if (!res.body) die("no response stream");
   return consumeDeploy(res, args);
@@ -640,11 +652,11 @@ async function urlFirstDeploy(args) {
   print(dim("⧗ ") + "deploying — your app will be live at " + bold(url));
 
   // Default: DON'T hold the caller hostage for the whole build. A coding agent
-  // that runs `supersonic deploy` should get the live URL and its prompt back in
+  // that runs `bay deploy` should get the live URL and its prompt back in
   // ~1s, not sit blocked for two minutes. So the build is handed to a detached
   // background worker that keeps the deploy connection open (the server keeps
   // building, CPU allocated, until it lands) and logs to
-  // ~/.supersonic/deploys/<slug>.log. Pass --wait to stay attached and stream the
+  // ~/.bay/deploys/<slug>.log. Pass --wait to stay attached and stream the
   // build here instead.
   if (!args.wait) {
     const logDir = path.join(CFG_DIR, "deploys");
@@ -675,7 +687,7 @@ async function urlFirstDeploy(args) {
       const candidates = Object.keys(selectEnv(readEnvFiles(process.cwd())).send);
       if (candidates.length) print(dim("  carrying from .env: ") + candidates.join(", ") + dim(" (vars already set on the app are left alone)"));
     }
-    print(dim("  build finishing in the background · watch: ") + bold(`supersonic logs ${slug} --follow`));
+    print(dim("  build finishing in the background · watch: ") + bold(`bay logs ${slug} --follow`));
     process.exit(0);
   }
 
@@ -743,7 +755,7 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
   // The log file used to be written only by the detached worker, because that is
   // where its stdout was redirected — so `--wait`, the mode where you are watching
   // and most likely to lose the terminal, was the one mode that kept no record.
-  // `supersonic logs` then reads from the server and shows the RUNNING app's logs,
+  // `bay logs` then reads from the server and shows the RUNNING app's logs,
   // which for a failed deploy is nothing at all.
   startDeployLog(slug);
 
@@ -783,7 +795,7 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
     // would surface later as an app that is broken for no visible reason.
     const envHeader = encodeEnvHeader(envVars);
     if (envHeader) headers["x-supersonic-env"] = envHeader;
-    else if (envKeys.length) info(red("! ") + ".env is too large to send with the build — set them after it lands: " + bold(`supersonic env ${slug} set KEY=VALUE`));
+    else if (envKeys.length) info(red("! ") + ".env is too large to send with the build — set them after it lands: " + bold(`bay env ${slug} set KEY=VALUE`));
 
     // The bytes go to the bucket, not through the API. Attempted for every size
     // rather than only over the cap, so the path a large project depends on is
@@ -803,7 +815,7 @@ async function runBuildAndWait({ slug, url, repo, folderName, args }) {
     } else {
       res = await fetch(baseUrl() + "/api/deploy", { method: "POST", headers, body });
     }
-    if (res.status === 401) { cleanup(); die("token invalid or expired — run: supersonic login"); }
+    if (res.status === 401) { cleanup(); die("token invalid or expired — run: bay login"); }
   }
   await consumeDeploy(res, args, slug);   // when the build goes live the proxy serves it on `url`
   print(green("✓ ") + "build is live at " + bold(url));
@@ -891,7 +903,7 @@ async function tryPrebuilt(appName, args) {
   info(dim(`uploading ${(body.length / 1048576).toFixed(1)} MB of built output`));
 
   const tok = token();
-  if (!tok) die("not authenticated — run: supersonic login");
+  if (!tok) die("not authenticated — run: bay login");
   const res = await fetch(baseUrl() + "/api/deploy", {
     method: "POST",
     headers: {
@@ -905,7 +917,7 @@ async function tryPrebuilt(appName, args) {
     },
     body,
   });
-  if (res.status === 401) die("token invalid or expired — run: supersonic login");
+  if (res.status === 401) die("token invalid or expired — run: bay login");
   if (res.status === 403) die("forbidden");
   if (!res.body) die("no response stream");
   return consumeDeploy(res, args);
@@ -938,7 +950,7 @@ function packageDir(dir) {
 async function redeploy(args) {
   const app = needApp(args);
   const d = await api(`/api/apps/${app}`);
-  if (!d.repo) die(`${app} was deployed from a computer — run \`supersonic deploy\` in its folder to ship an update`);
+  if (!d.repo) die(`${app} was deployed from a computer — run \`bay deploy\` in its folder to ship an update`);
   info(cyan("▸ ") + "redeploying " + bold(app));
   const res = await api("/api/deploy", { method: "POST", body: { repo: d.repo }, stream: true });
   return consumeDeploy(res, args, app);
@@ -983,7 +995,7 @@ const BODY_LIMIT = 32 * 1024 * 1024;
 function encryptSource(buf, pass) {
   const { createCipheriv, scryptSync } = require("node:crypto");
   const iv = require("node:crypto").randomBytes(16);
-  const cipher = createCipheriv("aes-256-cbc", scryptSync(pass, "supersonic-deploy-run", 32), iv);
+  const cipher = createCipheriv("aes-256-cbc", scryptSync(pass, "bay-deploy-run", 32), iv);
   return Buffer.concat([iv, cipher.update(buf), cipher.final()]);
 }
 
@@ -1001,7 +1013,7 @@ async function uploadSourceToBucket(body) {
       method: "POST",
       headers: { Authorization: "Bearer " + token(), "Content-Type": "application/json" },
     });
-    if (r.status === 401) die("token invalid or expired — run: supersonic login");
+    if (r.status === 401) die("token invalid or expired — run: bay login");
     if (!r.ok) return null;
     spot = await r.json();
   } catch { return null; }
@@ -1101,7 +1113,7 @@ async function consumeDeploy(res, args, knownSlug) {
   }
   // The server can answer with a plain JSON error instead of a stream — a plan limit,
   // a rejected request. That is not a build that timed out, and saying so sent someone
-  // to `supersonic logs` looking for a failure that never happened. If what arrived
+  // to `bay logs` looking for a failure that never happened. If what arrived
   // parses as an error object, report what it actually said.
   const trailing = (buf || "").trim();
   if (trailing) {
@@ -1118,7 +1130,7 @@ async function consumeDeploy(res, args, knownSlug) {
   if (slug) {
     const deploy = await followDeployOnServer(slug);
     if (deploy?.status === "live") {
-      const url = deploy.url || `https://${slug}.supersonic.cv`;
+      const url = deploy.url || `https://${slug}.thebay.cloud`;
       if (args.json) json({ ok: true, slug, url, runId });
       else print(green("✓ live: ") + url);
       process.exit(0);
@@ -1131,7 +1143,7 @@ async function consumeDeploy(res, args, knownSlug) {
     // Still building when we ran out of patience. Say that, rather than calling a
     // deploy failed that may be minutes from landing.
     if (args.json) json({ ok: false, slug, error: "still building — connection lost", pending: true, runId });
-    die(`lost contact with the build and it was still running after 3 minutes. It may still land — check: supersonic logs ${slug}`);
+    die(`lost contact with the build and it was still running after 3 minutes. It may still land — check: bay logs ${slug}`);
   }
 
   // No slug to ask about — the stream died before it named one, so there is
@@ -1139,11 +1151,11 @@ async function consumeDeploy(res, args, knownSlug) {
   // here: it is all the information there is.
   const lost = streamError ? ` (the connection failed: ${streamError})` : "";
   if (args.json) json({ ok: false, error: "deploy stream ended without a result", streamError });
-  die(`the deploy ended without confirming it went live${lost} — the build may have failed or timed out. Check: supersonic apps  ·  supersonic logs <app>`);
+  die(`the deploy ended without confirming it went live${lost} — the build may have failed or timed out. Check: bay apps  ·  bay logs <app>`);
 }
 
 // ---------- helpers ----------
-function needApp(args) { const a = args._[0]; if (!a) die("missing app name — usage: supersonic " + args._cmd + " <app>"); return a; }
+function needApp(args) { const a = args._[0]; if (!a) die("missing app name — usage: bay " + args._cmd + " <app>"); return a; }
 function gitOrigin() {
   return new Promise((resolve) => {
     const p = spawn("git", ["remote", "get-url", "origin"], { stdio: ["ignore", "pipe", "ignore"] });
@@ -1155,68 +1167,68 @@ function gitOrigin() {
 
 function usage(all = false) {
   if (!all) {
-    print(`${bold("supersonic")} — publish your app in one command
+    print(`${bold("bay")} — publish your app in one command
 
 ${bold("just run this in your project folder:")}
-  ${green("supersonic ship")}            publish this folder and print the live URL
+  ${green("bay ship")}            publish this folder and print the live URL
                              (opens a browser to sign in the first time;
                               ${dim("`deploy` is the same command")})
 
 ${bold("before you ship")} ${dim("(local, ~2s, no cloud)")}
-  supersonic init            write a draft supersonic.json from this repo
-  supersonic check           what each phase would run, and what would fail
+  bay init            write a draft supersonic.json from this repo
+  bay check           what each phase would run, and what would fail
 
 ${bold("when something's wrong")}
-  supersonic logs <app>      recent logs
-  supersonic diagnose <app>  AI fix-prompt for your coding agent
-  supersonic apps            list your apps
-  supersonic open <app>      open the app in a browser
-  supersonic login           sign in manually
+  bay logs <app>      recent logs
+  bay diagnose <app>  AI fix-prompt for your coding agent
+  bay apps            list your apps
+  bay open <app>      open the app in a browser
+  bay login           sign in manually
 
-${dim("more commands: supersonic help --all  ·  --json on any command for machine output")}`);
+${dim("more commands: bay help --all  ·  --json on any command for machine output")}`);
     return;
   }
-  print(`${bold("supersonic")} — deploy & debug from your coding agent
+  print(`${bold("bay")} — deploy & debug from your coding agent
 
 ${bold("setup")}
-  supersonic signup                            create an account (opens browser, one time)
-  supersonic login [--url <u>] [--token <t>]   authenticate (browser, one time)
-  supersonic logout
-  supersonic whoami
+  bay signup                            create an account (opens browser, one time)
+  bay login [--url <u>] [--token <t>]   authenticate (browser, one time)
+  bay logout
+  bay whoami
 
 ${bold("author")} ${dim("(local: no cloud, no build, no model — about two seconds)")}
-  supersonic init [dir] [--force]               write a DRAFT supersonic.json for an agent to correct
-  supersonic check [dir]                        resolve + validate it, and print what each phase would run
+  bay init [dir] [--force]               write a DRAFT supersonic.json for an agent to correct
+  bay check [dir]                        resolve + validate it, and print what each phase would run
 
 ${bold("ship")} ${dim("(URL-first: a live link in ~0.1s, the build drawn on it while it runs)")}
-  supersonic ship                               ship this folder — live URL now, build behind it
+  bay ship                               ship this folder — live URL now, build behind it
   ${dim("(`deploy` does the same thing and always will — every flag below works with either)")}
-  supersonic ship --run "<prod start cmd>"    how to run it in PROD — you know the stack
+  bay ship --run "<prod start cmd>"    how to run it in PROD — you know the stack
                                                   e.g. --run "uvicorn main:app --host 0.0.0.0 --port $PORT"
-  supersonic ship --wait                      stay attached and stream the build (default: returns once live)
-  supersonic ship --no-env                    don't carry .env up (default: sets vars your app doesn't have yet)
-  supersonic ship --github [--repo <url>]     deploy from GitHub / a git URL instead
-  supersonic ship --prebuilt                  old path: build here, upload the result
-  supersonic reship <app>                       rebuild from the app's source
-  supersonic patch <app>                        the repair agent's fix, to pipe into git apply
-  supersonic rollback <app>                     roll back to the previous version
-  supersonic delete <app> --yes                 delete an app (its database and bucket are kept)
+  bay ship --wait                      stay attached and stream the build (default: returns once live)
+  bay ship --no-env                    don't carry .env up (default: sets vars your app doesn't have yet)
+  bay ship --github [--repo <url>]     deploy from GitHub / a git URL instead
+  bay ship --prebuilt                  old path: build here, upload the result
+  bay reship <app>                       rebuild from the app's source
+  bay patch <app>                        the repair agent's fix, to pipe into git apply
+  bay rollback <app>                     roll back to the previous version
+  bay delete <app> --yes                 delete an app (its database and bucket are kept)
 
 ${bold("inspect")}
-  supersonic apps                               list your apps
-  supersonic status <app>                       revision, url, env, database
-  supersonic logs <app> [--severity error] [--limit 50] [--since 1h] [--follow]
-  supersonic errors <app>                       production errors (7d)
-  supersonic diagnose <app> [--error "..."]     AI fix-prompt for your agent
-  supersonic exec <app> -- <command>            run a command in the app's env (isolated)
+  bay apps                               list your apps
+  bay status <app>                       revision, url, env, database
+  bay logs <app> [--severity error] [--limit 50] [--since 1h] [--follow]
+  bay errors <app>                       production errors (7d)
+  bay diagnose <app> [--error "..."]     AI fix-prompt for your agent
+  bay exec <app> -- <command>            run a command in the app's env (isolated)
 
 ${bold("config")}
-  supersonic env <app>                          list env var keys
-  supersonic env <app> set KEY=VALUE            set env var(s)
-  supersonic env <app> unset KEY                remove env var(s)
-  supersonic open <app>                         open the app in a browser
+  bay env <app>                          list env var keys
+  bay env <app> set KEY=VALUE            set env var(s)
+  bay env <app> unset KEY                remove env var(s)
+  bay open <app>                         open the app in a browser
 
-${dim("global: --json for machine-readable output · $SUPERSONIC_TOKEN overrides login")}`);
+${dim("global: --json for machine-readable output · $BAY_TOKEN overrides login")}`);
 }
 
 // ---------- arg parsing ----------

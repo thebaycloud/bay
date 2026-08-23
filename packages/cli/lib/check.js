@@ -3,7 +3,7 @@
  * The local dry run: resolve, validate, and say what each phase would run.
  *
  * It fixes zero deploys directly, and it is the highest-leverage thing in this
- * package, because the author of a supersonic.json is always an agent and its loop
+ * package, because the author of a bay.json is always an agent and its loop
  * today is eleven minutes long — upload, provision, build, fail, read a log,
  * guess. Eleven attempts is two hours of wall clock and a Cloud Build bill for
  * every one. The same eleven attempts against this is twenty seconds, on the
@@ -143,7 +143,7 @@ async function checkApp(dir, { resolver: r, detect }) {
 function secretWarnings(r, app, available) {
   const missing = r.missingSecrets(app, available);
   if (!missing.length) return [];
-  return [`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} declared under \`secrets\` and set nowhere here — supersonic env <app> set, or a .env`];
+  return [`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} declared under \`secrets\` and set nowhere here — bay env <app> set, or a .env`];
 }
 
 const PHASE_WIDTH = 10;
@@ -251,11 +251,11 @@ function renderCheck(configFilename, app, problems, warnings) {
       app.resources.bucket ? "bucket" : null,
     ].filter(Boolean);
     // Which of the two sources this came from, always. "Plan ready:
-    // supersonic.json" printed for an inferred app sends someone looking for a
+    // bay.json" printed for an inferred app sends someone looking for a
     // file that is not there.
     const from = app.source === "config"
       ? configFilename
-      : `inferred — there is no ${configFilename} (\`supersonic init\` writes one)`;
+      : `inferred — there is no ${configFilename} (\`bay init\` writes one)`;
     const yours = external ? `, uses your own ${external.engine || "database"} from ${external.urlFrom}` : "";
     lines.push(`${from} — ${n} service${n === 1 ? "" : "s"}${provisioned.length ? `, provisions ${provisioned.join(" + ")}` : ""}${yours}`);
     lines.push("");

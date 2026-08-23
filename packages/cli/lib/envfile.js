@@ -37,7 +37,7 @@ const ALWAYS_SKIPPED = new Set(["STORAGE_BUCKET", "GOOGLE_CLOUD_PROJECT"]);
  * `databaseEnv()` writes. Worse than the drift is that the rule stopped being true:
  * whether DATABASE_URL belongs to the platform depends on whether the platform
  * provisions the database, and this file cannot know that on its own. So callers
- * that can resolve `supersonic.json` pass the real predicate in, and this remains
+ * that can resolve `bay.json` pass the real predicate in, and this remains
  * only for the ones that cannot — where over-refusing is the safe direction, since
  * a skipped variable is reported to the user and a wrongly-sent one silently
  * points a live app at a laptop.
@@ -122,7 +122,7 @@ function readEnvFiles(cwd, files = ENV_FILES) {
  * reimplemented — the same reason `draft.js` takes it. It has to be injected because
  * the answer is no longer a property of the NAME: an app that declares
  * `"provider": "external"` owns DATABASE_URL, and this file dropping it as "set by
- * Supersonic" would strip the one value that deploy cannot run without, before the
+ * Bay" would strip the one value that deploy cannot run without, before the
  * server ever sees it. The failure would then arrive as a crash loop about a
  * variable the user had, in fact, set.
  */
@@ -132,7 +132,7 @@ function selectEnv(vars, { existingKeys = [], platformOwned = (k) => PLATFORM_OW
   const skipped = [];
   for (const [key, value] of Object.entries(vars)) {
     if (!value) { skipped.push({ key, reason: "empty" }); continue; }
-    if (ALWAYS_SKIPPED.has(key) || platformOwned(key)) { skipped.push({ key, reason: "set by Supersonic" }); continue; }
+    if (ALWAYS_SKIPPED.has(key) || platformOwned(key)) { skipped.push({ key, reason: "set by Bay" }); continue; }
     if (LOCAL_HOSTS.some((h) => value.includes(h))) { skipped.push({ key, reason: "points at your machine" }); continue; }
     if (have.has(key)) { skipped.push({ key, reason: "already set on the app" }); continue; }
     send[key] = value;

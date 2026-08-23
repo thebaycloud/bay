@@ -1,8 +1,9 @@
 {
-  "name": "supersonic-cli",
-  "version": "0.12.1",
-  "description": "Deploy & debug Supersonic apps from your coding agent \u2014 the agent-native CLI.",
+  "name": "bay-cli",
+  "version": "1.0.0",
+  "description": "Deploy & debug Bay apps from your coding agent — the agent-native CLI.",
   "bin": {
+    "bay": "./index.js",
     "supersonic": "./index.js"
   },
   "type": "commonjs",
