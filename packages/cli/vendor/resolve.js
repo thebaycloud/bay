@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp d0c9c69afe9e0f91
+// supersonic-vendor-stamp d638cb7c23598653
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -74,7 +74,7 @@ var import_node_path = require("node:path");
 var CLOUD_RUN_DB = { host: "127.0.0.1", port: "5432" };
 
 // lib/lanes.ts
-var SERVICE_LANES = ["container", "buildpack"];
+var SERVICE_LANES = ["container"];
 var ALL_LANES = ["static", ...SERVICE_LANES];
 var DB_HOST = CLOUD_RUN_DB.host;
 var DB_PORT = CLOUD_RUN_DB.port;
@@ -1761,27 +1761,34 @@ var ResolveError = class extends Error {
 };
 function laneFor(i) {
   if (i.language === "static") return "static";
-  return i.dockerfile ? "container" : "buildpack";
+  return "container";
 }
 function deriveLane(s) {
   return laneFor({ language: s.language, runtime: s.runtime, dockerfile: s.dockerfile });
 }
 var LANE_CONSUMES = {
   static: ["install", "build", "outputDir", "spaFallback", "buildEnv", "env"],
-  // No `runtime`: the runner has exactly one version per language and cannot
-  // honour a declared one. Listing it here is what let `runtime: "python3.12"` be
-  // parsed, validated, printed back by `supersonic check` and silently ignored —
-  // the precise defect assert-consumed exists to catch, committed inside
-  // assert-consumed's own table. An app that pins a version is routed to the
-  // buildpack lane, which does implement it.
-  // No `start`: the Dockerfile's own CMD is the start command, and a second one
-  // in the config would be read by nobody.
-  container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"],
-  buildpack: ["install", "build", "release", "start", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "runtime", "framework"]
+  // No `start`: when the author committed the Dockerfile, its own CMD is the
+  // start command and a second one in the config would be read by nobody. That
+  // is still true, and it is the reason this list is not simply the union of the
+  // two lanes it replaces.
+  container: ["dockerfile", "context", "release", "processes", "env", "buildEnv", "secrets", "uses", "health", "scale", "framework"]
 };
+var GENERATED_DOCKERFILE_CONSUMES = [
+  "install",
+  "build",
+  "start",
+  "runtime"
+];
 var UNIVERSAL = ["name", "dir", "path", "lane", "envNeeded", "declared"];
 function assertConsumed(s) {
-  const allowed = /* @__PURE__ */ new Set([...LANE_CONSUMES[s.lane], ...UNIVERSAL]);
+  const allowed = /* @__PURE__ */ new Set([
+    ...LANE_CONSUMES[s.lane],
+    ...UNIVERSAL,
+    // An app whose Dockerfile the platform writes reads four more fields, because
+    // they are what it is written FROM. See GENERATED_DOCKERFILE_CONSUMES.
+    ...s.lane === "container" && !s.dockerfile ? GENERATED_DOCKERFILE_CONSUMES : []
+  ]);
   const ignored = s.declared.filter((f) => !allowed.has(f));
   if (!ignored.length) return;
   throw new ResolveError(
@@ -1928,9 +1935,9 @@ function validate(app, dir) {
       if (!s.build && s.outputDir && !(0, import_node_fs7.existsSync)((0, import_node_path7.join)(dir, s.outputDir))) {
         problems.push(`${where}: outputDir "${s.outputDir}" does not exist and no build command would create it`);
       }
-    } else if (s.lane !== "container" && !s.start && !s.processes.length) {
+    } else if (!s.dockerfile && !s.start && !s.processes.length) {
       problems.push(
-        `${where}: the ${s.lane} lane runs a server and this service has no \`start\` command
+        `${where}: this service has no \`start\` command and no Dockerfile of its own
   If this app is a worker, a bot or a scheduled job, declare "processes" instead.`
       );
     }
@@ -1960,9 +1967,6 @@ function missingSecrets(app, available) {
   return [...want].filter((n) => !have.has(n)).sort();
 }
 
-// lib/release-job.ts
-var RELEASE_TIMEOUT = 1800;
-
 // lib/processes.ts
 var PRIMITIVE = {
   web: "service",
@@ -1989,7 +1993,7 @@ function unemittable(p) {
   }
   return out;
 }
-var DEFAULT_TASK_TIMEOUT = RELEASE_TIMEOUT;
+var DEFAULT_TASK_TIMEOUT = 1800;
 var DEFAULT_RETRIES = 0;
 var DEFAULT_INSTANCES = 1;
 function deriveKind(name, c) {
@@ -2105,8 +2109,6 @@ function resolveProcesses(configs) {
   }
   return [...webs, ...resolved.filter((p) => p.kind !== "web")];
 }
-
-// lib/process-plan.ts
 function isServiceless(declared) {
   return declared.length > 0 && !declared.some((p) => p.kind === "web");
 }

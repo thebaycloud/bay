@@ -11,15 +11,11 @@
     "apps/web/lib/infer-services.ts",
     "apps/web/lib/lanes.ts",
     "apps/web/lib/plan-deps.ts",
-    "apps/web/lib/process-deploy.ts",
-    "apps/web/lib/process-plan.ts",
     "apps/web/lib/processes.ts",
     "apps/web/lib/procfile.ts",
-    "apps/web/lib/release-job.ts",
     "apps/web/lib/repo-facts.ts",
     "apps/web/lib/repo-runtime.ts",
     "apps/web/lib/resolve.ts",
-    "apps/web/lib/slug.ts",
     "packages/cli/src/resolver.entry.ts"
   ]
 }
