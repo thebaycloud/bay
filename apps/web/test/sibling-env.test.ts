@@ -81,3 +81,23 @@ test("a pair with no '=' is not silently treated as a name", () => {
   });
   assert.deepEqual(names(got.filter((p) => p.includes("="))), ["KEEP"]);
 });
+
+test("a code pointer is stripped under either spelling", () => {
+  // CODE_KEY decrypts the primary's source bundle. Matching only the old prefix
+  // while the platform emits BAY_CODE_KEY would hand a sibling the key to
+  // another service's code — the isolation this filter exists to keep.
+  const got = siblingEnv({
+    inherited: [
+      "BAY_CODE_KEY=secret-new", "SUPERSONIC_CODE_KEY=secret-old",
+      "BAY_CODE_OBJECT=gs://new", "SUPERSONIC_CODE_OBJECT=gs://old",
+      "BAY_RUN=cmd-new", "SUPERSONIC_RUN=cmd-old",
+      "DATABASE_URL=keep-me",
+    ],
+    own: [], deployment: {}, primaryDeclared: [],
+  });
+  const joined = got.join("\n");
+  for (const leak of ["secret-new", "secret-old", "cmd-new", "cmd-old", "gs://new", "gs://old"]) {
+    assert.ok(!joined.includes(leak), `leaked ${leak}: ${joined}`);
+  }
+  assert.deepEqual(got, ["DATABASE_URL=keep-me"], "an app's own variable must survive");
+});

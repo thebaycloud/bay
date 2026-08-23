@@ -25,9 +25,17 @@ const nameOf = (pair: EnvPair): string => {
 /**
  * The primary's own code pointers, which name a bundle and a command that are
  * not this service's.
+ *
+ * BOTH spellings, and this one is not cosmetic: CODE_KEY is the key that
+ * decrypts the primary's source bundle. Matching only the old prefix while the
+ * platform started emitting BAY_CODE_KEY would hand a sibling service the key
+ * to another service's code — the exact isolation this filter exists to keep.
+ *
+ * Written as a prefix pair rather than a rename, because the platform emits
+ * both for as long as images older than the rename are still running.
  */
 const CODE_POINTER = (pair: EnvPair): boolean =>
-  pair.startsWith("SUPERSONIC_CODE_") || pair.startsWith("SUPERSONIC_RUN=");
+  ["BAY_", "SUPERSONIC_"].some((p) => pair.startsWith(`${p}CODE_`) || pair.startsWith(`${p}RUN=`));
 
 export function siblingEnv(o: {
   /** The app's shared environment, computed for the PRIMARY. */

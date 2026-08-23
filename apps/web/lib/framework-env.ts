@@ -30,14 +30,35 @@ import type { DeploymentFacts } from "./resolve";
  * Phase 9.
  */
 
-/** Set on every app whatever its framework, because every app can read them. */
+/**
+ * Set on every app whatever its framework, because every app can read them.
+ *
+ * Emitted under BOTH names, and that is not a transition step that ends.
+ *
+ * These four are read by CODE WE DID NOT WRITE. Somebody's settings.py says
+ * `os.environ["SUPERSONIC_HOSTNAME"]`, and it says so in a repository we have
+ * no access to and no way to survey. Dropping the old name would break that app
+ * on its next deploy, with a KeyError that names our variable and gives its
+ * author no reason to connect it to a rebrand they were never told about.
+ *
+ * So the old names come out only when the people running apps have been told,
+ * given a version to move to, and had time — not when the code is tidy. Until
+ * then this costs four extra strings on a process environment.
+ */
 export function universalFacts(f: DeploymentFacts): Record<string, string> {
-  return {
-    SUPERSONIC_URL: `${f.scheme}://${f.hostname}${f.pathPrefix === "/" ? "" : f.pathPrefix}`,
-    SUPERSONIC_HOSTNAME: f.hostname,
-    SUPERSONIC_SCHEME: f.scheme,
-    SUPERSONIC_PATH_PREFIX: f.pathPrefix,
+  const url = `${f.scheme}://${f.hostname}${f.pathPrefix === "/" ? "" : f.pathPrefix}`;
+  const facts = {
+    URL: url,
+    HOSTNAME: f.hostname,
+    SCHEME: f.scheme,
+    PATH_PREFIX: f.pathPrefix,
   };
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(facts)) {
+    out[`BAY_${k}`] = v;
+    out[`SUPERSONIC_${k}`] = v;
+  }
+  return out;
 }
 
 const origin = (f: DeploymentFacts) => `${f.scheme}://${f.hostname}`;
