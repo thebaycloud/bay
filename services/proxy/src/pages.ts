@@ -40,6 +40,26 @@ b.onclick=function(){
 <div class="note" id="n"></div></div>`, script);
 }
 
+/**
+ * Shown to a visitor whose DOMAIN is admitted but whose address is not proven.
+ *
+ * They are signed in with a password account, which says nothing about who owns
+ * the address, so the rule cannot admit them. This is the one 403 that is not
+ * "ask the owner": the owner already said yes to everyone at this domain, and
+ * the missing half is a sign-in that proves it. Sending them to request access
+ * instead would have them wait on a person who has nothing left to decide.
+ *
+ * The domain is echoed because it is what makes the sentence make sense, and it
+ * is escaped because it reaches here from a database row.
+ */
+export function pageProve(domain: string, loginUrl: string): string {
+  return shell("Sign in to prove your address", `${MARK}<h1>Almost — prove your address</h1>
+<p>This app is open to everyone at <code>${escapeHtml(domain)}</code>. Your account signed up with a
+password, so we can&#39;t tell that the address is yours. Sign in with Google or GitHub on that
+address and you&#39;re in.</p>
+<div class="btns"><a class="btn" href="${escapeHtml(loginUrl)}">Sign in</a></div>`);
+}
+
 /** Shown to an anonymous visitor on a private app — a soft landing instead of an
  * abrupt redirect to login. Both links carry callbackUrl so they return here. */
 export function pageGate(loginUrl: string, signupUrl: string): string {

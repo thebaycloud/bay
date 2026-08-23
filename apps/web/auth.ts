@@ -4,7 +4,7 @@ import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
 import bcrypt from "bcryptjs";
 import { authConfig } from "./auth.config";
-import { findUserByEmailAndProvider, createUser } from "@/lib/users";
+import { findUserByEmailAndProvider, createUser, markEmailVerified } from "@/lib/users";
 import { resolveWorkspaceForEmail } from "@/lib/workspace";
 import { getPool } from "@/lib/db";
 
@@ -35,6 +35,19 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   providers.push(Google({
     clientId: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    // The default profile drops `email_verified`, and a domain rule needs it:
+    // "anyone at luwo.ai" may only admit somebody Google says holds that
+    // address. Google sets it false for an unverified alias on a consumer
+    // account, so it is read rather than assumed.
+    profile(profile) {
+      return {
+        id: profile.sub,
+        name: profile.name,
+        email: profile.email,
+        image: profile.picture,
+        emailVerified: profile.email_verified === true,
+      };
+    },
   }));
 }
 if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) {
@@ -47,6 +60,9 @@ if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) {
     // (the user:email scope, requested by default, authorizes this).
     async profile(profile, tokens) {
       let email = profile.email as string | null;
+      // GitHub only publishes an address on /user that the account has verified,
+      // so a public one is proof; the /user/emails path below decides for itself.
+      let verified = !!email;
       if (!email) {
         try {
           const res = await fetch("https://api.github.com/user/emails", {
@@ -54,11 +70,16 @@ if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) {
           });
           if (res.ok) {
             const emails = (await res.json()) as { email: string; primary: boolean; verified: boolean }[];
-            email = (emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified) ?? emails[0])?.email ?? null;
+            const proven = emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified);
+            // The unverified fallback still signs the person in — it is their
+            // account either way — but it is NOT evidence of the domain, so it
+            // is remembered as unverified and no domain rule will admit it.
+            email = (proven ?? emails[0])?.email ?? null;
+            verified = !!proven;
           }
         } catch { /* leave email null — signIn will reject with a clear path */ }
       }
-      return { id: profile.id.toString(), name: (profile.name ?? profile.login) as string, email, image: profile.avatar_url as string };
+      return { id: profile.id.toString(), name: (profile.name ?? profile.login) as string, email, image: profile.avatar_url as string, emailVerified: verified };
     },
   }));
 }
@@ -94,6 +115,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       if (account && account.provider !== "credentials") {
         await createUser(user.email, user.name ?? "", null, account.provider);
+        // Whether the provider PROVED this address, recorded on the row because
+        // the edge reads it long after this request: a domain rule ("anyone at
+        // luwo.ai") may only admit a proven address. Signup with a password
+        // proves nothing, so those rows stay false and are admitted by name
+        // only — which is safe, because there the owner typed the address.
+        //
+        // Only ever raised, never lowered. GitHub can answer "verified" once and
+        // fall back to an unverified address later; the proof already happened.
+        if ((user as { emailVerified?: boolean }).emailVerified) {
+          await markEmailVerified(user.email, account.provider);
+        }
       }
       // Only resolve a workspace for a user who doesn't have one yet.
       // resolveWorkspaceForEmail creates a row for personal addresses, so calling
