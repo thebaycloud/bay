@@ -174,8 +174,18 @@ export function ShipNew() {
 
       <DialogContent className="w-[calc(100vw-2rem)] max-w-[520px] gap-0 overflow-hidden p-0">
         <DialogHeader className="px-5 pb-4 pt-5">
-          <DialogTitle className="min-w-0 truncate text-[17px] font-[450] tracking-[-0.01em]">
-            {step === "name" ? "New app" : `${chosen} is empty`}
+          <DialogTitle className="flex min-w-0 items-baseline gap-2 text-[17px] font-[450] tracking-[-0.01em]">
+            {step === "name" ? (
+              <>
+                New app
+                {/* Beside the title, not under the field: it qualifies the one
+                    thing this step asks for, and it is the whole of what a
+                    paragraph down there used to say. */}
+                <span className="text-[14px] text-ink-3">Optional</span>
+              </>
+            ) : (
+              <span className="min-w-0 truncate">{chosen} is empty</span>
+            )}
           </DialogTitle>
           <DialogDescription className="sr-only">
             Name the app, then ship it from the folder you have open or from a GitHub
@@ -191,16 +201,14 @@ export function ShipNew() {
               setStep("source");
             }}
           >
-            {/* The placeholder carries the whole instruction. "Optional" in the
-                field is what a paragraph under it was spending three lines to
-                say, and a generated name is used when nobody types one — which
-                is a thing to do quietly, not to explain. */}
+            {/* The placeholder is the generated name, so the offer is visible
+                rather than described — leave it and that is what ships. */}
             <Input
               aria-label="App name (optional)"
               autoFocus
               className="h-9 placeholder:text-ink-3"
               onChange={(e) => setName(e.currentTarget.value)}
-              placeholder="Optional"
+              placeholder={suggested}
               value={name}
             />
 
