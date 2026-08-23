@@ -215,7 +215,34 @@ named `bay` with `supersonic` kept as an alias for one release.
 agent prompt in `/new` — the one people paste into Claude Code — is updated in
 the same commit, since it names the package.
 
-### Phase 6 — infrastructure, the renameable parts (1.5 days)
+### Phase 6 — SKIPPED, 24 Aug, and why
+
+Decided after tracing what actually holds the service names. The whole phase is
+invisible to every person and carries the only outage risk in the plan.
+
+- `supersonic-proxy` sits behind `url-map → supersonic-proxy-backend →
+  supersonic-proxy-neg`. Neither the backend nor the NEG can be renamed either,
+  so the "rename" is four new objects and a url-map edit.
+- `supersonic-control-plane` carries the domain mappings for `app.supersonic.cv`
+  and `app.thebay.cloud`. Moving them means Cloud Run issues fresh certificates
+  — measured on this very migration at up to an hour, with the dashboard down
+  for it.
+- `supersonic-deploy-job`'s name is read by `assertJobImageMatches`, which
+  refuses EVERY customer deploy when the job and the service disagree about
+  their image. Renaming it live is precisely the drift that guard exists to
+  catch.
+- `ALTER DATABASE supersonic_platform RENAME TO bay_platform` needs every
+  connection dropped.
+
+And the decisive part: under Decision A `supersonic-deploy-prod` stays in every
+image URL and every `gcloud` command regardless. The same word survives in the
+same places whether or not the services are renamed — so the risk buys nothing,
+not even tidiness.
+
+Revisit only if Decision B is ever taken, where it stops being a separate
+question.
+
+### Phase 6 — infrastructure, the renameable parts (1.5 days) — NOT DONE
 
 New Cloud Run services `bay-control-plane`, `bay-deploy-worker`, `bay-proxy`,
 `bay-landing`, `bay-static`, `bay-shot`, `bay-umami` and job `bay-deploy-job`,
@@ -264,7 +291,7 @@ an "Open app" button pointing at a host with no certificate.
 So, in order, and none skippable:
 
 1. `bay-cli` published to npm and installable
-2. `app.thebay.cloud` serving the control plane (its Cloud Run certificate issued)
+2. ~~`app.thebay.cloud` serving the control plane~~ — **done 24 Aug**: all three mappings Ready, apex/www/app answer 200/200/307
 3. `apps/landing` deployed
 4. `ROOT_DOMAIN` flipped on the control plane, the worker and the job
 5. `COOKIE_DOMAIN` flipped — **this signs every user out once**
