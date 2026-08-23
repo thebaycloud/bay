@@ -11,11 +11,17 @@
 -- be locked out of anything.
 --
 -- Note on ordering: migrations are re-applied in filename order on every run,
--- so 005_plans.sql re-asserts the old plan CHECK and 007_trials.sql re-asserts
--- the trialing default a few files before this one runs. That is fine and it is
--- deterministic — this file is the last word on both — but it is the reason the
--- statements below are written as unconditional corrections rather than as
+-- so 007_trials.sql re-asserts the trialing default a few files before this one
+-- runs. That is fine and deterministic — this file is the last word on it — and
+-- it is why the statements below are unconditional corrections rather than
 -- `IF NOT EXISTS` guards. Renumbering this file below 007 would silently undo it.
+--
+-- It was NOT fine for the plan CHECK, which 005_plans.sql used to re-assert with
+-- the old two values. A default or an UPDATE can be overwritten by a later file;
+-- ADD CONSTRAINT validates the rows that are already there, so it fails before
+-- this file gets to run at all. It killed every production deploy from the day
+-- this migration landed. 005 now only drops the constraint; the CHECK below is
+-- the only definition of what a plan may be.
 
 -- 1. The plan column. Migrate the data BEFORE the constraint, or the new CHECK
 --    fails against every row still saying 'basic'.
