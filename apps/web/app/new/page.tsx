@@ -18,7 +18,7 @@ function asReason(v: unknown): PaywallReason {
 
 const AGENT_PROMPT = `You are publishing my app to Bay — a cloud for small software (agent manual: https://thebay.cloud/llms.txt, or just curl thebay.cloud). Run everything from my project's root folder, and keep me posted in plain language — I don't read logs.
 
-1. Install the CLI if it isn't already:  npm i -g bay-cli
+1. Install the CLI if it isn't already:  npm i -g @thebaycloud/cli
 
 2. Publish it, and WAIT for the answer:
    bay ship --wait

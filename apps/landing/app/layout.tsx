@@ -1,3 +1,4 @@
+import { BRAND, DOMAIN } from "@/lib/brand";
 import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
@@ -16,12 +17,12 @@ const displaySerif = Bitter({
 
 export const viewport = { width: "device-width", initialScale: 1 };
 
-const TITLE = "Supersonic — Deploy your app in one click";
+const TITLE = `${BRAND} — Deploy your app in one click`;
 const DESCRIPTION =
   "A cloud for small software. Point us at the app you built and we turn it into a real, live product — database, domain, everything — in one command. No infra, no GitHub required.";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://supersonic.cv"),
+  metadataBase: new URL(`https://${DOMAIN}`),
   title: TITLE,
   description: DESCRIPTION,
   // Each entry is its own drawing, not one file scaled — see docs/BRAND.md.
@@ -37,7 +38,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "Supersonic",
+    siteName: BRAND,
     title: TITLE,
     description: DESCRIPTION,
     images: [{ url: "/og.png", width: 1200, height: 630 }],

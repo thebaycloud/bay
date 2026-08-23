@@ -3,7 +3,7 @@
  * The local dry run: resolve, validate, and say what each phase would run.
  *
  * It fixes zero deploys directly, and it is the highest-leverage thing in this
- * package, because the author of a supersonic.json is always an agent and its loop
+ * package, because the author of a bay.json is always an agent and its loop
  * today is eleven minutes long — upload, provision, build, fail, read a log,
  * guess. Eleven attempts is two hours of wall clock and a Cloud Build bill for
  * every one. The same eleven attempts against this is twenty seconds, on the
@@ -264,7 +264,7 @@ function renderCheck(configFilename, app, problems, warnings) {
       app.resources.bucket ? "bucket" : null,
     ].filter(Boolean);
     // Which of the two sources this came from, always. "Plan ready:
-    // supersonic.json" printed for an inferred app sends someone looking for a
+    // bay.json" printed for an inferred app sends someone looking for a
     // file that is not there.
     const from = app.source === "config"
       ? configFilename

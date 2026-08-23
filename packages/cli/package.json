@@ -1,7 +1,7 @@
 {
-  "name": "bay-cli",
-  "version": "0.12.1",
-  "description": "Ship & debug Bay apps from your coding agent \u2014 the agent-native CLI.",
+  "name": "@thebaycloud/cli",
+  "version": "1.0.0",
+  "description": "Ship & debug Bay apps from your coding agent — the agent-native CLI.",
   "bin": {
     "bay": "./index.js",
     "supersonic": "./index.js"
@@ -35,8 +35,14 @@
   "homepage": "https://thebay.cloud",
   "repository": {
     "type": "git",
-    "url": "https://github.com/The-Red-Onion/supersonic",
+    "url": "git+https://github.com/thebaycloud/bay.git",
     "directory": "packages/cli"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bugs": {
+    "url": "https://github.com/The-Red-Onion/supersonic/issues"
+  }
 }

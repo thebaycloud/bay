@@ -9,10 +9,41 @@
 #   4. exec the app's start command on $PORT.
 #
 # No framework detection lives here on purpose. How to build/run the app is
-# handed in via env ($SUPERSONIC_BUILD / $SUPERSONIC_RUN) — by the CLI/agent that
+# handed in via env ($BAY_BUILD / $BAY_RUN) — by the CLI/agent that
 # already knows the stack, by opencode for the weird 10%, or a language default
 # (Node → `npm start`). That is the whole point: the knowledge lives with the
 # agent, not in a detector matrix baked into our platform.
+
+# ── env names: BAY_* is what this script reads; SUPERSONIC_* is what it accepts ──
+#
+# This script is baked into every app image. Images built before the rename know
+# only SUPERSONIC_*, and they keep running and restarting until somebody
+# redeploys those apps — while a switched-over control plane sets BAY_*.
+#
+# Normalised HERE, once, so the body below has a single name to read. The
+# alternative — a two-name fallback at each use — was written first and had a
+# bug within the hour: the guard checked both names and the line under it read
+# only the old one, so setting only BAY_* passed the check and then used an
+# empty value.
+#
+# `:=` treats empty as unset, so an empty BAY_* falls back to SUPERSONIC_*.
+# That is the wanted direction here and not an accident: during the migration a
+# half-configured control plane setting BAY_RUN="" should keep running the app,
+# not stop being able to start it. Both names come from the same writer at the
+# same moment, so they cannot legitimately disagree.
+#
+# The _B64 pair is copied rather than defaulted, because those two distinguish
+# "set and empty" from "unset" — a plan that deliberately runs no install
+# command is set-and-empty — and `:=` would flatten that distinction.
+for _n in RUN BUILD INSTALL LANG OUT CODE_URL CODE_BUCKET CODE_OBJECT CODE_KEY \
+         CACHE_BUCKET CACHE_OBJECT PATH_PREFIX REPO; do
+  eval ": \"\${BAY_${_n}:=\${SUPERSONIC_${_n}:-}}\""
+done
+for _n in INSTALL_B64 BUILD_B64; do
+  eval "if [ -z \"\${BAY_${_n}+x}\" ] && [ -n \"\${SUPERSONIC_${_n}+x}\" ]; then BAY_${_n}=\$SUPERSONIC_${_n}; export BAY_${_n}; fi"
+done
+unset _n
+
 set -eu
 
 PORT="${PORT:-8080}"
@@ -23,8 +54,8 @@ log() { echo "[supersonic-run] $*"; }
 # the bundle is encrypted (see below), so decrypt first. A wrong/absent key can't
 # decrypt another app's bundle — that is the isolation guarantee.
 unpack() {
-  if [ -n "${SUPERSONIC_CODE_KEY:-}" ]; then
-    openssl enc -d -aes-256-cbc -pbkdf2 -pass "pass:$SUPERSONIC_CODE_KEY" -in /tmp/code.tgz -out /tmp/code.dec 2>/dev/null \
+  if [ -n "${BAY_CODE_KEY:-}" ]; then
+    openssl enc -d -aes-256-cbc -pbkdf2 -pass "pass:$BAY_CODE_KEY" -in /tmp/code.tgz -out /tmp/code.dec 2>/dev/null \
       || { log "FATAL: could not decrypt the code bundle (wrong key?)"; exit 1; }
     mv /tmp/code.dec /tmp/code.tgz
   fi
@@ -34,14 +65,14 @@ unpack() {
 
 # Pull the code bundle. Primary path: the runtime SA reads the ENCRYPTED bundle
 # from the bucket — safe because the bytes are encrypted and only this app holds
-# the key ($SUPERSONIC_CODE_KEY), so one app can never read another's source. A
+# the key ($BAY_CODE_KEY), so one app can never read another's source. A
 # per-object signed URL is also honoured if set (no bucket access needed). Both
 # routes fetch to /tmp/code.tgz and hand off to unpack().
 fetch_code() {
   mkdir -p "$APP"
-  if [ -n "${SUPERSONIC_CODE_URL:-}" ]; then
+  if [ -n "${BAY_CODE_URL:-}" ]; then
     log "fetching code (signed URL)"
-    code=$(curl -s -o /tmp/code.tgz -w '%{http_code}' "$SUPERSONIC_CODE_URL")
+    code=$(curl -s -o /tmp/code.tgz -w '%{http_code}' "$BAY_CODE_URL")
     if [ "$code" != "200" ]; then
       log "FATAL: signed-URL fetch failed — HTTP $code (the link may have expired; redeploy to refresh it)"
       exit 1
@@ -51,8 +82,8 @@ fetch_code() {
   fi
   # Fallback: read straight from GCS with the runtime SA's own token — no keys in
   # the image. Object names contain slashes, so percent-encode into the API path.
-  bucket="$SUPERSONIC_CODE_BUCKET"
-  object="$SUPERSONIC_CODE_OBJECT"
+  bucket="$BAY_CODE_BUCKET"
+  object="$BAY_CODE_OBJECT"
   log "fetching gs://$bucket/$object"
   token=$(curl -sf -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
@@ -76,7 +107,7 @@ fetch_code() {
   unpack
 }
 
-{ [ -n "${SUPERSONIC_CODE_URL:-}" ] || [ -n "${SUPERSONIC_CODE_BUCKET:-}" ]; } && fetch_code
+{ [ -n "${BAY_CODE_URL:-}" ] || [ -n "${BAY_CODE_BUCKET:-}" ]; } && fetch_code
 cd "$APP"
 
 # A Python bundle prepared at deploy ships a .venv — put it first on PATH so the
@@ -160,23 +191,23 @@ else
   fi
   # Build by convention (Node `build` script) — only on the fallback path; a
   # prepared bundle is already built.
-  if [ -z "${SUPERSONIC_BUILD:-}" ] && [ -f package.json ]; then
+  if [ -z "${BAY_BUILD:-}" ] && [ -f package.json ]; then
     if node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
-      SUPERSONIC_BUILD="npm run build"
+      BAY_BUILD="npm run build"
     fi
   fi
-  if [ -n "${SUPERSONIC_BUILD:-}" ]; then
-    log "build: $SUPERSONIC_BUILD"
-    sh -c "$SUPERSONIC_BUILD"
+  if [ -n "${BAY_BUILD:-}" ]; then
+    log "build: $BAY_BUILD"
+    sh -c "$BAY_BUILD"
   fi
 fi
 
-# Run. Default to the language's conventional start; override with $SUPERSONIC_RUN.
-# How to run the app. The RIGHT source is $SUPERSONIC_RUN — the production run
+# Run. Default to the language's conventional start; override with $BAY_RUN.
+# How to run the app. The RIGHT source is $BAY_RUN — the production run
 # command handed over by the deploying agent (which knows the stack). It's the
 # only reliable answer for Python (uvicorn vs gunicorn vs flask is unguessable).
 # Without it we fall back to a sensible default for Node only.
-RUN="${SUPERSONIC_RUN:-}"
+RUN="${BAY_RUN:-}"
 if [ -z "$RUN" ]; then
   if [ -f package.json ]; then
     # A BUILT Next app must run its production server, not the app's `start`

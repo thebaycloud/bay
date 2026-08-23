@@ -65,8 +65,14 @@ test("an unknown or absent framework still gets the universal facts and nothing 
   assert.deepEqual(frameworkEnv("cobol-on-cogs", root), {});
   assert.deepEqual(frameworkEnv(undefined, root), {});
   const e = deploymentEnv(undefined, root);
+  // Both names, and the count says eight rather than four for that reason.
+  // These four facts are read by code we did not write — somebody's settings.py
+  // says os.environ["SUPERSONIC_HOSTNAME"] in a repository we cannot survey —
+  // so dropping the old spelling is a decision about people, not about tidiness.
+  assert.equal(e.BAY_URL, "https://demo.supersonic.cv");
   assert.equal(e.SUPERSONIC_URL, "https://demo.supersonic.cv");
-  assert.equal(Object.keys(e).length, 4);
+  assert.equal(e.BAY_HOSTNAME, e.SUPERSONIC_HOSTNAME);
+  assert.equal(Object.keys(e).length, 8);
 });
 
 test("framework matching is case-insensitive and tolerates the detector's spellings", () => {

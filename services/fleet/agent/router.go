@@ -211,7 +211,7 @@ func NewRouter(rootDomain, edgeSecret string) *Router {
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("router: upstream %s: %v", r.Host, err)
-			w.Header().Set("X-Supersonic-Router", "upstream-error")
+			setRouterStatus(w, "upstream-error")
 			w.WriteHeader(http.StatusBadGateway)
 			io.WriteString(w, page(502, "This app is not answering.",
 				"It is placed on this node but did not respond. If it was just deployed, give it a moment."))
@@ -248,6 +248,39 @@ const fleetHealthPath = "/__fleet/healthz"
 // way in, and never trusted for anything else.
 const forwardedHeader = "X-Supersonic-Forwarded"
 
+// The edge signature, under both spellings.
+//
+// This agent runs on a VM image. A node provisioned before the rename knows
+// only the old header, and it keeps serving until somebody re-images it — while
+// a redeployed proxy may already be sending the new one. Getting this wrong in
+// either direction is not a degradation: every request becomes "unsigned" and
+// every app on the fleet returns 403.
+const (
+	edgeHeader       = "x-bay-edge"
+	legacyEdgeHeader = "x-supersonic-edge"
+)
+
+// edgeSignatureOK reports whether the request carries the shared secret under
+// either header name.
+//
+// Both are compared in constant time and both are always compared — no early
+// return on the first match — so the work done here does not depend on which
+// spelling arrived or on whether the first one was correct.
+func (rt *Router) edgeSignatureOK(r *http.Request) bool {
+	fresh := subtle.ConstantTimeCompare([]byte(r.Header.Get(edgeHeader)), []byte(rt.edgeSecret))
+	legacy := subtle.ConstantTimeCompare([]byte(r.Header.Get(legacyEdgeHeader)), []byte(rt.edgeSecret))
+	return fresh|legacy == 1
+}
+
+// setRouterStatus reports why the router did what it did, under both spellings.
+//
+// A response header, read by humans and by services/fleet/migrate.sh. Sending
+// both keeps that script working across the rename.
+func setRouterStatus(w http.ResponseWriter, status string) {
+	w.Header().Set("X-Bay-Router", status)
+	w.Header().Set("X-Supersonic-Router", status)
+}
+
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == fleetHealthPath {
 		// Healthy means "this node's router is serving", not "some app is up".
@@ -270,9 +303,8 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// without this anyone could reach a placed app around the proxy's session
 	// check, decideAccess, app_grants and workspace scoping.
 	if rt.edgeSecret != "" {
-		got := r.Header.Get("x-supersonic-edge")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(rt.edgeSecret)) != 1 {
-			w.Header().Set("X-Supersonic-Router", "unsigned")
+		if !rt.edgeSignatureOK(r) {
+			setRouterStatus(w, "unsigned")
 			w.WriteHeader(http.StatusForbidden)
 			io.WriteString(w, page(403, "Not through the front door.",
 				"This node serves the edge proxy only."))
@@ -281,7 +313,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// The tenant's app is the one party on this path that must not learn the
 	// secret: with it, an app could reach every other app on the node.
-	r.Header.Del("x-supersonic-edge")
+	//
+	// BOTH spellings are deleted, not just the one that matched. A node running
+	// this build receives both while the proxy sends both, and leaving the other
+	// behind would hand the app the secret it was checked against.
+	r.Header.Del(edgeHeader)
+	r.Header.Del(legacyEdgeHeader)
 
 	// `x-supersonic-slug` FIRST, Host second.
 	//
@@ -307,7 +344,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slug = slugFromHost(r.Host, rt.rootDomain)
 	}
 	if slug == "" {
-		w.Header().Set("X-Supersonic-Router", "no-slug")
+		setRouterStatus(w, "no-slug")
 		w.WriteHeader(http.StatusNotFound)
 		io.WriteString(w, page(404, "No app here.",
 			"Apps are served at &lt;name&gt;."+rt.rootDomain+"."))
@@ -320,7 +357,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// a response the app generated. Without this a routing miss and an app's
 		// own 404 are the same three digits — and the cutover script was using
 		// exactly that to decide whether an app was live on the fleet.
-		w.Header().Set("X-Supersonic-Router", "miss")
+		setRouterStatus(w, "miss")
 		// Not on this node. Once placement is fleet-wide this becomes a forward
 		// to the node that holds it; until then, saying so plainly beats a
 		// generic 404 that looks like the app does not exist.
@@ -335,7 +372,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// timeout is a much worse answer than a 404.
 	if route.Peer {
 		if r.Header.Get(forwardedHeader) != "" {
-			w.Header().Set("X-Supersonic-Router", "forward-loop")
+			setRouterStatus(w, "forward-loop")
 			w.WriteHeader(http.StatusNotFound)
 			io.WriteString(w, page(404, "Not on this node.",
 				"Another machine forwarded this here and this one does not hold it either."))
@@ -352,12 +389,13 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// not the edge's, and a node with no secret configured forwards unsigned
 		// and is refused — which is correct, because it should not be serving.
 		if rt.edgeSecret != "" {
-			r.Header.Set("x-supersonic-edge", rt.edgeSecret)
+			r.Header.Set(edgeHeader, rt.edgeSecret)
+			r.Header.Set(legacyEdgeHeader, rt.edgeSecret)
 		}
-		w.Header().Set("X-Supersonic-Router", "forwarded")
+		setRouterStatus(w, "forwarded")
 	}
 	if !route.Healthy {
-		w.Header().Set("X-Supersonic-Router", "unhealthy")
+		setRouterStatus(w, "unhealthy")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		io.WriteString(w, page(503, "This app is not healthy.",
 			"It is running but failing its health check."))

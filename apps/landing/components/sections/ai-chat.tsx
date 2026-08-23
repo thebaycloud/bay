@@ -1,5 +1,6 @@
 "use client";
 
+import { DOMAIN } from "@/lib/brand";
 import { useEffect, useRef, useState } from "react";
 import { Plus, ArrowUp, RotateCw, MessageSquareDashed, Check, Loader2 } from "lucide-react";
 
@@ -102,7 +103,7 @@ export function AiChat() {
                 </div>
                 {phase === "done" && (
                   <div className="s-live">
-                    <div className="s-live-row"><span className="s-dot" />Live at <b>as76d.supersonic.cv</b></div>
+                    <div className="s-live-row"><span className="s-dot" />Live at <b>as76d.{DOMAIN}</b></div>
                     <p className="s-say s-muted">Shared with your team and secured with SSL. Want me to invite anyone?</p>
                   </div>
                 )}

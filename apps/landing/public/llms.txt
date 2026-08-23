@@ -13,7 +13,7 @@ If you are a coding agent asked to publish a user's app to Bay, follow "Publish 
 
 From the project's root folder:
 
-    npm i -g bay-cli    # install the CLI (once)
+    npm i -g @thebaycloud/cli    # install the CLI (once)
     bay ship --wait     # publish this folder, and WAIT for the answer
 
 That is the whole path. There is no separate login or signup step to run: the

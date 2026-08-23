@@ -577,22 +577,28 @@ export function runnerPrepareConfig(opts: { image: string; bucket: string; slug:
   // overrides prepare.sh's `npm run build` convention. Base64 so any spaces/&&/quotes
   // ride the YAML env array untouched; prepare.sh decodes it. Present-but-empty means
   // "the planner decided there is no build step" — distinct from absent (use convention).
+  // Both spellings, because prepare.sh is baked into an image and the image
+  // running this build may predate the rename. A build container older than the
+  // switch reads only SUPERSONIC_*; one newer reads either. Sending both means
+  // the two do not have to be deployed in any particular order — see
+  // services/runner/prepare.sh, which normalises them on the way in.
+  const both = (name: string, value: string) => [`BAY_${name}=${value}`, `SUPERSONIC_${name}=${value}`];
   const env = [
-    `SUPERSONIC_OUT=${out}`,
-    `SUPERSONIC_CACHE_BUCKET=${opts.bucket}`,
-    `SUPERSONIC_CACHE_OBJECT=cache/${opts.slug}.tgz`,
-    `SUPERSONIC_CODE_KEY=${opts.codeKey}`,
+    ...both("OUT", out),
+    ...both("CACHE_BUCKET", opts.bucket),
+    ...both("CACHE_OBJECT", `cache/${opts.slug}.tgz`),
+    ...both("CODE_KEY", opts.codeKey),
   ];
-  if (opts.build !== undefined) env.push(`SUPERSONIC_BUILD_B64=${Buffer.from(opts.build).toString("base64")}`);
+  if (opts.build !== undefined) env.push(...both("BUILD_B64", Buffer.from(opts.build).toString("base64")));
   // The plan's install command, which the runner needs for any repo whose
   // manifests are not at the root. Without it prepare.sh falls back to inspecting
   // the root directory, and a monorepo matches none of its cases — so nothing is
   // installed and the app starts with no dependencies at all.
-  if (opts.install !== undefined) env.push(`SUPERSONIC_INSTALL_B64=${Buffer.from(opts.install).toString("base64")}`);
+  if (opts.install !== undefined) env.push(...both("INSTALL_B64", Buffer.from(opts.install).toString("base64")));
   // Tells prepare.sh to create the venv before running a plan-supplied install,
   // so a `pip install -r backend/requirements.txt` lands somewhere the serving
   // container will still have.
-  if (opts.language) env.push(`SUPERSONIC_LANG=${opts.language}`);
+  if (opts.language) env.push(...both("LANG", opts.language));
   // The per-app key encrypts the bundle before it lands in the shared bucket, so a
   // shared runtime SA that can read the bytes still can't read another app's source.
   //

@@ -1,9 +1,9 @@
-# bay-cli
+# @thebaycloud/cli
 
 Ship anything to [Bay](https://thebay.cloud) in one command.
 
 ```bash
-npm install -g bay-cli
+npm install -g @thebaycloud/cli
 ```
 
 The command is `bay`. It also installs as `supersonic`, which is the name it had

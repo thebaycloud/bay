@@ -23,6 +23,8 @@
  * nothing, which is the same silence in a new place.
  */
 const { test } = require("node:test");
+const { existsSync } = require("node:fs");
+const { join } = require("node:path");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -74,10 +76,16 @@ test("the stamp covers every file esbuild inlines, not a list somebody maintains
   const listed = new Set(readInputs(CLI_ROOT)["resolve.js"] ?? []);
   //
   // Three of the seven this listed are gone: process-plan.ts, process-deploy.ts
-  // and release-job.ts left with the Cloud Run lane, and slug.ts is no longer on
-  // the resolver's import graph. Asserting a deleted file is a test that can only
-  // be red, and this one was — which took `npm test` with it, and `prepublishOnly`
-  // runs npm test, so no CLI could be published while it stood.
+  // and release-job.ts left with the Cloud Run lane on 16 Aug (575549d), and
+  // slug.ts is no longer on the resolver's import graph — `grep cloudRunName
+  // vendor/resolve.js` finds nothing. Asserting a deleted file is a test that
+  // can only be red, and this one was, which took `npm test` with it — and
+  // prepublishOnly runs npm test, so no CLI could be published while it stood.
+  //
+  // The list outliving the files is the failure mode this test's own comment
+  // warns about, so it is now checked against the CHECKOUT as well as the
+  // stamp: a file that stops existing fails here by name instead of silently
+  // asserting nothing.
   for (const rel of [
     "apps/web/lib/repo-runtime.ts",
     "apps/web/lib/procfile.ts",
@@ -86,6 +94,10 @@ test("the stamp covers every file esbuild inlines, not a list somebody maintains
     "apps/web/lib/detect.ts",
     "apps/web/lib/app-config.ts",
   ]) {
+    assert.ok(
+      existsSync(join(REPO_ROOT, rel)),
+      `${rel} is named here but not in the checkout — the list is stale, not the stamp`,
+    );
     assert.ok(listed.has(rel), `${rel} is bundled into vendor/resolve.js but not covered by its stamp`);
   }
 });

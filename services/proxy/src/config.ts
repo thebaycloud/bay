@@ -25,6 +25,14 @@ export const config = {
    * read, because it is what this service is configured with today and a deploy
    * that ignores it takes the edge down.
    */
+  /**
+   * What a person calls us. Appears on the badge injected into every app, so a
+   * literal here is our old brand showing up on somebody else's live site.
+   *
+   * Separate from the roots above because the two move apart: thebay.cloud was
+   * added beside supersonic.cv without the name on the page changing at all.
+   */
+  productName: process.env.PRODUCT_NAME ?? "Supersonic",
   rootDomains: (process.env.ROOT_DOMAINS ?? process.env.ROOT_DOMAIN ?? "supersonic.cv")
     .split(",")
     .map((r) => r.trim().toLowerCase())

@@ -20,7 +20,7 @@
  *
  * Scoped under `.bay`, every class `b-` prefixed, because globals.css carries
  * UNSCOPED `.sec` `.sec-head` `.btn` `.nav` `.plan` `.foot` rules for the
- * Supersonic page which otherwise leak in for any property left undeclared.
+ * old landing page which otherwise leak in for any property left undeclared.
  */
 
 body:has(.bay) { background: #fafafa; }

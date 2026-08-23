@@ -41,6 +41,24 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
  */
 export const NODE_AUDIENCE = "https://supersonic.cv/fleet";
 
+/**
+ * Audiences a node token may carry, newest first.
+ *
+ * The audience is baked into the agent binary and the agent runs on a VM image.
+ * A node provisioned before the rename asks Google for a token with the old
+ * audience and will keep doing so until it is re-imaged; a node built after
+ * asks for the new one. A verifier that knows one audience refuses every node
+ * on the other side of that line — and a refused node is a node whose apps
+ * cannot fetch their secrets.
+ *
+ * So both are accepted. The old one goes when no node older than the rename is
+ * on the fleet, which is a thing to check rather than a date to pick.
+ */
+export const ACCEPTED_NODE_AUDIENCES = [
+  "https://thebay.cloud/fleet",
+  NODE_AUDIENCE,
+] as const;
+
 /** The only project whose instances are this fleet. */
 const PROJECT = "supersonic-deploy-prod";
 
@@ -65,7 +83,7 @@ export interface NodeIdentity {
 export function nodeFromClaims(claims: Record<string, unknown> | null | undefined): NodeIdentity | null {
   if (!claims) return null;
   if (claims.iss !== ISSUER) return null;
-  if (claims.aud !== NODE_AUDIENCE) return null;
+  if (!ACCEPTED_NODE_AUDIENCES.includes(claims.aud as (typeof ACCEPTED_NODE_AUDIENCES)[number])) return null;
 
   // `format=full` is what puts this block in the payload. A token requested
   // without it is still valid, still signed by Google, and says nothing about
