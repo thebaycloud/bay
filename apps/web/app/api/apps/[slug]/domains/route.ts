@@ -11,6 +11,7 @@ import {
 } from "@/lib/domains";
 import { reconcileAll, reconcileDomain, liveAttachDeps } from "@/lib/domain-attach";
 import { removeDomainCert, EDGE_IP } from "@/lib/domain-cert";
+import { rootDomain } from "@/lib/roots";
 
 /**
  * The domains attached to one app: read them, attach one, detach one.
@@ -56,7 +57,10 @@ function forPage(d: AppDomain) {
 function dnsInstructions(slug: string) {
   return {
     ip: EDGE_IP,
-    cname: `${slug}.supersonic.cv`,
+    // The CANONICAL root, always. Handing out a CNAME at a root we are retiring
+    // would have somebody point their own DNS at a name that 301s — a redirect
+    // loop on their domain, created by following our instructions.
+    cname: `${slug}.${rootDomain()}`,
   };
 }
 

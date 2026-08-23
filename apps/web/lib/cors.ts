@@ -35,7 +35,16 @@
  * get no CORS headers, exactly as before.
  */
 
-const ROOT = process.env.ROOT_DOMAIN ?? "supersonic.cv";
+import { rootDomains } from "./roots";
+
+/**
+ * Every root, because during the cutover an app answers on both and its own
+ * page is the caller. Still an EXACT match per root — `<slug>.<root>` and
+ * `app.<root>` and nothing else. A suffix test here would allow every tenant's
+ * own JavaScript to call every other tenant's API with the caller's session,
+ * which is a cross-tenant account takeover and the reason this file exists.
+ */
+const ROOTS = rootDomains();
 
 /**
  * The headers that permit this request, or an empty object.
@@ -58,7 +67,7 @@ export function corsFor(req: Request, slug: string): Record<string, string> {
     return {};
   }
 
-  const allowed = host === `${slug}.${ROOT}` || host === `app.${ROOT}`;
+  const allowed = ROOTS.some((r) => host === `${slug}.${r}` || host === `app.${r}`);
   if (!allowed) return {};
 
   return {

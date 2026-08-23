@@ -2,7 +2,7 @@
  * Which app a request is for, decided from its Host header alone.
  *
  * There are two kinds of address now and they are resolved in opposite
- * directions. An address we issued CARRIES the slug: `lilna.supersonic.cv` is
+ * directions. An address we issued CARRIES the slug: `lilna.thebay.cloud` is
  * the app `lilna`, derivable with a string operation and true even when the
  * database is unreachable. A domain its owner attached carries nothing at all —
  * `acme.com` is a name we did not choose, and the only thing that connects it to
@@ -34,27 +34,36 @@ export function hostnameOf(host: string | undefined): string {
   return name.endsWith(".") ? name.slice(0, -1) : name;
 }
 
-export function doorFor(host: string | undefined, rootDomain: string): Door {
+/**
+ * @param roots Every root we issue under, canonical first. A single string is
+ *   accepted for the many callers and tests that predate there being two.
+ */
+export function doorFor(host: string | undefined, roots: string | string[]): Door {
   const hostname = hostnameOf(host);
   if (!hostname) return { kind: "nowhere" };
-  if (hostname.endsWith("." + rootDomain)) {
-    const slug = hostname.slice(0, -(rootDomain.length + 1));
+  const all = typeof roots === "string" ? [roots] : roots;
+  for (const root of all) {
+    if (!hostname.endsWith("." + root)) continue;
+    const slug = hostname.slice(0, -(root.length + 1));
     // A label that is not a slug is not an app, and must not fall through to the
-    // attached-domain lookup: `evil.lilna.supersonic.cv` would otherwise become a
+    // attached-domain lookup: `evil.lilna.<root>` would otherwise become a
     // hostname somebody could attach, inside the namespace we issue.
+    //
+    // `return` and not `continue` on a bad label: the host IS under a root we
+    // own, so it is ours and malformed, never somebody's attachable domain.
     return /^[a-z0-9-]+$/.test(slug) ? { kind: "issued", slug } : { kind: "nowhere" };
   }
   return { kind: "attached", hostname };
 }
 
 /**
- * Whether this request has to be sent back to the app's own supersonic.cv
- * address before anything else happens.
+ * Whether this request has to be sent back to the app's own platform address
+ * before anything else happens.
  *
  * Only ever true on an attached domain, and only for an app that is not public.
  *
  * Everything that decides who a visitor is reads the session cookie, and that
- * cookie is scoped to `.supersonic.cv`. A browser will not send it to acme.com —
+ * cookie is scoped to `.<canonical root>`. A browser will not send it to acme.com —
  * correctly; that is what cookie scoping is for. So on an attached domain every
  * visitor is anonymous, the owner included: a private app would answer with the
  * sign-in gate, signing in would set a cookie on the wrong domain, and the
@@ -68,7 +77,13 @@ export function mustReturnToPlatform(door: Door, visibility: string): boolean {
   return door.kind === "attached" && visibility !== "public";
 }
 
-/** The app's own address, carrying the path and query the visitor asked for. */
+/**
+ * The app's own address, carrying the path and query the visitor asked for.
+ *
+ * Always the CANONICAL root: this is where a visitor is sent to sign in, and the
+ * session cookie exists on exactly one root. Sending them to a root the cookie
+ * does not cover is the loop this function exists to end.
+ */
 export function platformUrl(slug: string, rootDomain: string, path: string | undefined): string {
   const rest = path && path.startsWith("/") ? path : "/";
   return `https://${slug}.${rootDomain}${rest}`;

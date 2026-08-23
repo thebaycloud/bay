@@ -19,11 +19,13 @@
  */
 
 import { identityToken } from "./gcp-rest";
+import { rootDomain } from "./roots";
 
 const BASE = (process.env.UMAMI_URL ?? "").replace(/\/$/, "");
 const USER = process.env.UMAMI_USER ?? "admin";
 const PASSWORD = process.env.UMAMI_PASSWORD ?? "";
-const ROOT_DOMAIN = process.env.ROOT_DOMAIN ?? "supersonic.cv";
+/** The CANONICAL root: a website is registered under one name, not two. */
+const ROOT_DOMAIN = rootDomain();
 
 /**
  * The invoker credential, in the header that is NOT `Authorization`.

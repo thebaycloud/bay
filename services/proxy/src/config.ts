@@ -12,7 +12,23 @@ export const config = {
   /** Must match apps/web auth.config.ts exactly — it is also the decode salt. */
   sessionCookieName: PROD ? "__Secure-authjs.session-token" : "authjs.session-token",
   loginUrl: process.env.LOGIN_URL ?? "https://app.supersonic.cv/login",
-  rootDomain: process.env.ROOT_DOMAIN ?? "supersonic.cv",
+  /**
+   * Every root the platform issues addresses under, CANONICAL FIRST.
+   *
+   * Plural because the rebrand needs both to answer at once: three live apps and
+   * every installed CLI point at supersonic.cv, and thebay.cloud is the name from
+   * here on. With one root, `<slug>.thebay.cloud` is not recognised as a platform
+   * host at all — it falls through to the attached-domain lookup, finds no row,
+   * and the app is unreachable at its own new address.
+   *
+   * `ROOT_DOMAINS=thebay.cloud,supersonic.cv`. `ROOT_DOMAIN` singular is still
+   * read, because it is what this service is configured with today and a deploy
+   * that ignores it takes the edge down.
+   */
+  rootDomains: (process.env.ROOT_DOMAINS ?? process.env.ROOT_DOMAIN ?? "supersonic.cv")
+    .split(",")
+    .map((r) => r.trim().toLowerCase())
+    .filter(Boolean),
   /** Inject the "Runs on Supersonic" badge + owner toolbar into HTML pages. */
   injectOverlay: process.env.INJECT_OVERLAY !== "0",
   /**

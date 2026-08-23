@@ -46,7 +46,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // address we issued carries its slug in the name; a domain its owner attached
   // carries nothing and has to be looked up. See door.ts — nothing below this
   // point cares which of the two it was, except the return immediately after it.
-  const door = doorFor(req.headers.host, config.rootDomain);
+  const door = doorFor(req.headers.host, config.rootDomains);
   if (door.kind === "nowhere") return html(res, 404, page404());
   const app = door.kind === "issued" ? await lookupApp(door.slug) : await lookupAppByHost(door.hostname);
   if (!app) return html(res, 404, page404());
@@ -57,7 +57,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // the argument; this is the two lines that act on it.
   if (mustReturnToPlatform(door, app.visibility)) {
     res.writeHead(302, {
-      Location: platformUrl(slug, config.rootDomain, req.url),
+      // The canonical root — the only one the session cookie covers.
+      Location: platformUrl(slug, config.rootDomains[0], req.url),
       "Cache-Control": "private, no-store",
     });
     res.end();

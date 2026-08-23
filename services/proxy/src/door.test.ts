@@ -53,3 +53,34 @@ test("the return keeps the path and query the visitor asked for", () => {
   // be pasted into a Location header.
   assert.equal(platformUrl("lilna", ROOT, "http://evil.example/x"), "https://lilna.supersonic.cv/");
 });
+
+/* ------------------------------------------------------------ two roots */
+
+// The cutover: thebay.cloud is canonical and supersonic.cv still answers. With
+// one root the new address is not recognised as a platform host at all — it
+// falls through to the attached-domain lookup, finds no row, and the app is
+// unreachable at its own new name.
+const ROOTS = ["thebay.cloud", "supersonic.cv"];
+
+test("an app answers on every root, not only the canonical one", () => {
+  assert.deepEqual(doorFor("lilna.thebay.cloud", ROOTS), { kind: "issued", slug: "lilna" });
+  assert.deepEqual(doorFor("lilna.supersonic.cv", ROOTS), { kind: "issued", slug: "lilna" });
+});
+
+test("a bad label under ANY root is ours and malformed, never attachable", () => {
+  // The trap the loop has to avoid: `continue` here would carry
+  // `evil.lilna.thebay.cloud` past the root it belongs to and hand it back as a
+  // hostname somebody could attach, inside the namespace we issue.
+  assert.deepEqual(doorFor("evil.lilna.thebay.cloud", ROOTS), { kind: "nowhere" });
+  assert.deepEqual(doorFor("evil.lilna.supersonic.cv", ROOTS), { kind: "nowhere" });
+});
+
+test("somebody else's domain is still theirs", () => {
+  assert.deepEqual(doorFor("acme.com", ROOTS), { kind: "attached", hostname: "acme.com" });
+  // Ends with our name, is not under it.
+  assert.deepEqual(doorFor("notthebay.cloud", ROOTS), { kind: "attached", hostname: "notthebay.cloud" });
+});
+
+test("a visitor is sent back to the canonical root, where the cookie is", () => {
+  assert.equal(platformUrl("lilna", ROOTS[0], "/orders"), "https://lilna.thebay.cloud/orders");
+});
