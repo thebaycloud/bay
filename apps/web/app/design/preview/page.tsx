@@ -1,7 +1,7 @@
 "use client";
 // ВРЕМЕННО — снести после снимка.
 import { useEffect } from "react";
-import { Cell, Chips, StatusChip } from "@/components/panel/atoms";
+import { Chips, Row, RowList, StatusChip } from "@/components/panel/atoms";
 
 const TABLES = [
   { name: "orders", columns: 7, rows: 128, rowsExact: true, last: "4 minutes ago" },
@@ -16,18 +16,18 @@ export default function Preview() {
     <div className="fixed inset-0 overflow-auto bg-background p-8">
       <div className="mx-auto flex max-w-3xl flex-col gap-3">
         <div className="text-val text-ink">Data</div>
-        <div className="grid grid-cols-2 gap-3">
+        <RowList>
           {TABLES.map((t) => (
-            <Cell key={t.name} onOpen={() => {}} sub={t.last ? `last ${t.last}` : `${t.columns} columns`} title={t.name}>
+            <Row key={t.name} onOpen={() => {}} sub={t.last ? `last ${t.last}` : `${t.columns} columns`} title={t.name}>
               <Chips>
                 <StatusChip
                   text={`${t.rowsExact ? "" : "~"}${t.rows.toLocaleString()} ${t.rows === 1 && t.rowsExact ? "row" : "rows"}`}
                   tone={t.rows > 0 ? "green" : "grey"}
                 />
               </Chips>
-            </Cell>
+            </Row>
           ))}
-        </div>
+        </RowList>
       </div>
     </div>
   );

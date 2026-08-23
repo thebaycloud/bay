@@ -79,19 +79,42 @@ test("things that are not a name somebody can own are refused before anything is
   }
 });
 
-test("a name inside our own root is issued by us, never attached by a person", async () => {
-  const { refuseHostname, ROOT_DOMAIN } = await domains$;
-  // Built from ROOT_DOMAIN rather than written out, because the rule is "inside
-  // OUR root" and not "inside supersonic.cv". Pinned to the literal, this test
-  // passed for the wrong reason and would go green again the day the platform
-  // stopped refusing anything at all under a renamed root.
-  assert.ok(refuseHostname(`other-app.${ROOT_DOMAIN}`));
-  assert.ok(refuseHostname(ROOT_DOMAIN));
+test("a name inside a root we issue is never attached by a person", async () => {
+  const { refuseHostname } = await domains$;
+  assert.ok(refuseHostname("other-app.supersonic.cv"));
+  assert.ok(refuseHostname("supersonic.cv"));
   assert.ok(refuseHostname("printer.local"));
   assert.equal(refuseHostname("acme.com"), null);
   // The suffix test is on a label boundary, not a string: this is somebody
   // else's domain that merely ends in our name.
-  assert.equal(refuseHostname(`not${ROOT_DOMAIN}`), null);
+  assert.equal(refuseHostname("notsupersonic.cv"), null);
+});
+
+test("EVERY root is refused during the cutover, not just the canonical one", async () => {
+  const { refuseHostname } = await domains$;
+  const roots = ["thebay.cloud", "supersonic.cv"];
+  // The retiring root is the more dangerous of the two to leave open: it is the
+  // one already in DNS, so a name attached under it would be resolvable
+  // immediately and would fight the wildcard rule for the same host.
+  assert.ok(refuseHostname("other-app.supersonic.cv", roots));
+  assert.ok(refuseHostname("other-app.thebay.cloud", roots));
+  assert.ok(refuseHostname("thebay.cloud", roots));
+  assert.equal(refuseHostname("acme.com", roots), null);
+  assert.equal(refuseHostname("notthebay.cloud", roots), null);
+  // A single string still works — most callers predate there being two.
+  assert.ok(refuseHostname("x.thebay.cloud", "thebay.cloud"));
+});
+
+test("roots are read from one place, canonical first, and never empty", async () => {
+  const { rootDomains, rootDomain, isPlatformHost } = await import("@/lib/roots");
+  // Defaults to the legacy root, because that is what production answers to
+  // today and a module that defaulted to nothing would refuse no hostname at
+  // all — opening the namespace we issue for anyone to claim.
+  assert.deepEqual(rootDomains(), ["supersonic.cv"]);
+  assert.equal(rootDomain(), "supersonic.cv");
+  assert.ok(isPlatformHost("l3sgp.supersonic.cv"));
+  assert.ok(isPlatformHost("supersonic.cv"));
+  assert.ok(!isPlatformHost("notsupersonic.cv"));
 });
 
 /* ------------------------------------------------------- certificate naming */

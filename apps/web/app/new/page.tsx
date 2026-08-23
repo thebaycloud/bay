@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound } from "lucide-react";
+import { ArrowRight, ArrowLeft, Copy, Github, Link2, Terminal, RotateCcw, KeyRound, Search } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { Paywall, type PaywallReason } from "@/components/Paywall";
 import { DeployFilm } from "@/components/DeployFilm";
@@ -83,11 +83,28 @@ export default function NewApp() {
   const [ghRepos, setGhRepos] = useState<GhRepo[] | null>(null);
   const [ghLinks, setGhLinks] = useState<{ installUrl: string; configureUrl: string } | null>(null);
   const [ghTrouble, setGhTrouble] = useState("");
+  /** Narrows the repository list. Cleared whenever the account changes, so the
+      previous account's term never hides this one's rows off screen. */
+  const [ghQuery, setGhQuery] = useState("");
+
+  const beginRef = useRef<((repo?: string) => void) | null>(null);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const r = q.get("repo");
+    wantedName.current = (q.get("name") ?? "").trim();
     if (r) { setRepo(r.replace(/^https?:\/\//, "")); setDoor("url"); }
+    // Handed off from the Ship-new dialog, which already asked WHERE the code
+    // comes from. This page's remaining job is the film, so it starts straight
+    // away rather than showing the doors again with one already answered.
+    const inst = q.get("installation_id");
+    if (q.get("src") === "github" && r) {
+      setDoor("github");
+      if (inst) setGhInstallation(Number(inst));
+      // A frame later, so the state above is committed before begin() reads it.
+      setTimeout(() => beginRef.current?.(r), 0);
+      return;
+    }
     // Coming back from GitHub. `connected` re-asks rather than trusting the
     // name in the URL: the list is the truth and it was just changed.
     if (q.get("connected")) { setDoor("github"); setGhConnections(null); }
@@ -96,6 +113,7 @@ export default function NewApp() {
       setDoor("github");
       setGhTrouble(
         err === "no-installation" ? "That didn't finish connecting. Try again — it takes about a minute."
+        : err === "taken" ? "That GitHub account is already connected to another workspace here. Uninstall our App from it on GitHub, then connect it again."
         : err === "bad-credentials" ? "We can't reach GitHub right now. This one is on us — nothing you do will fix it."
         : err === "no-workspace" ? "Your account isn't set up yet. Ship something once and this will work."
         : "We couldn't finish connecting to GitHub. Try again in a moment.",
@@ -125,7 +143,7 @@ export default function NewApp() {
   useEffect(() => {
     if (ghInstallation === null) return;
     let alive = true;
-    setGhRepos(null); setGhTrouble("");
+    setGhRepos(null); setGhTrouble(""); setGhQuery("");
     fetch(`/api/github/repos?installation_id=${ghInstallation}`)
       .then(async (r) => ({ ok: r.ok, d: await r.json() }))
       .then(({ ok, d }) => {
@@ -143,6 +161,28 @@ export default function NewApp() {
       .catch(() => { if (alive) setGhTrouble("GitHub isn't answering. Try again in a moment."); });
     return () => { alive = false; };
   }, [ghInstallation]);
+
+  /**
+   * The install link, carrying whatever the app was already going to be called.
+   *
+   * GitHub gives `state` back to the setup redirect untouched, which is the
+   * only way a value survives a trip through github.com — see
+   * `nameFromCallback`. Empty when nothing named it, and then the link is
+   * exactly what it was.
+   */
+  function connectUrl(): string {
+    const base = ghLinks?.installUrl;
+    if (!base) return "#";
+    const name = wantedName.current.trim();
+    return name ? `${base}?state=${encodeURIComponent(name)}` : base;
+  }
+
+  /** The rows the search leaves, matched on the whole `owner/repo`. */
+  function shownRepos(): GhRepo[] {
+    const q = ghQuery.trim().toLowerCase();
+    if (!ghRepos) return [];
+    return q ? ghRepos.filter((r) => r.fullName.toLowerCase().includes(q)) : ghRepos;
+  }
 
   function reset() {
     setPhase("idle"); setLogs([]); setDetected(null); setSecretsNeeded([]); setSecretVals({});
@@ -165,6 +205,20 @@ export default function NewApp() {
    * given. Reading state there would deploy whatever the field says now.
    */
   const asked = useRef<{ repo: string; installationId: number | null }>({ repo: "", installationId: null });
+
+  /**
+   * What the Ship-new dialog called this app, if it called it anything.
+   *
+   * A ref rather than state for the same reason `asked` is one: the deploy can
+   * run minutes after the query string was read, and this has to be the value
+   * that arrived, not whatever a re-render left behind. Empty means "the server
+   * names it from the repository", which is what every deploy did before.
+   */
+  const wantedName = useRef("");
+
+  // Kept in a ref so the query-param effect above can start a run without
+  // being declared after the state it reads.
+  beginRef.current = (r?: string) => { void begin(r); };
 
   async function begin(pickedRepo?: string) {
     // From the picker the name is passed in: setRepo has not landed yet when
@@ -219,6 +273,9 @@ export default function NewApp() {
           installationId: asked.current.installationId,
           secrets,
           cloneToken: cloneToken.current,
+          // Omitted when nobody named it, so the server keeps naming apps after
+          // their repository exactly as it did.
+          ...(wantedName.current ? { name: wantedName.current } : {}),
         }),
       });
       // A billing gate returns a JSON 402 *before* the SSE stream — surface the
@@ -286,6 +343,15 @@ export default function NewApp() {
 
   const busy = phase === "deploying";
 
+  /* Nothing scrolls behind the cinema. The overlay covers the window, so a
+     wheel over it would otherwise move a page nobody can see. */
+  useEffect(() => {
+    if (phase !== "deploying" && phase !== "done") return;
+    const was = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = was; };
+  }, [phase]);
+
   return (
     <div className="shell">
       <header className="topbar">
@@ -346,7 +412,7 @@ export default function NewApp() {
                         </p>
                         {ghTrouble && <p className="lead" style={{ margin: "0 0 10px", fontSize: 13 }}>{ghTrouble}</p>}
                         <div className="deploy-cta">
-                          <a className="btn primary big" href={ghLinks?.installUrl ?? "#"}>
+                          <a className="btn primary big" href={connectUrl()}>
                             <Github size={13} />Connect GitHub<ArrowRight size={13} />
                           </a>
                           <span className="hint">takes about a minute</span>
@@ -354,17 +420,29 @@ export default function NewApp() {
                       </>
                     ) : (
                       <>
-                        {ghConnections.length > 1 && (
-                          <div className="doors" style={{ marginBottom: 10 }}>
-                            {ghConnections.map((c) => (
-                              <button
-                                key={c.installationId}
-                                className={"door" + (ghInstallation === c.installationId ? " on" : "")}
-                                onClick={() => setGhInstallation(c.installationId)}
-                              >{c.accountLogin}</button>
-                            ))}
-                          </div>
-                        )}
+                        {/* The accounts, and the way to add one.
+                            
+                            Shown at ONE account as well as at several, which it
+                            was not: a person who connected the wrong account —
+                            an organisation with one repository instead of the
+                            personal account with sixty — saw that account's
+                            short list, a link to widen its selection, and no way
+                            at all to connect the right one. The install link
+                            existed only on the screen for somebody with no
+                            connections, which is the one person who does not
+                            need it twice. */}
+                        <div className="doors" style={{ marginBottom: 10 }}>
+                          {ghConnections.map((c) => (
+                            <button
+                              key={c.installationId}
+                              className={"door" + (ghInstallation === c.installationId ? " on" : "")}
+                              onClick={() => setGhInstallation(c.installationId)}
+                            >{c.accountLogin}</button>
+                          ))}
+                          <a className="door" href={connectUrl()}>
+                            <Github size={12} />&nbsp;Add an account
+                          </a>
+                        </div>
                         {ghTrouble && <p className="lead" style={{ margin: "0 0 10px", fontSize: 13 }}>{ghTrouble}</p>}
                         {ghRepos === null ? (
                           <p className="lead" style={{ margin: "0 0 14px", fontSize: 13 }}>Reading what you picked…</p>
@@ -373,20 +451,49 @@ export default function NewApp() {
                             This account is connected, but no repositories were shared with us yet.
                           </p>
                         ) : (
-                          <div className="gh-repos">
-                            {ghRepos.map((r) => (
-                              <button
-                                key={r.fullName}
-                                className="gh-repo"
-                                onClick={() => { setRepo(r.fullName); begin(r.fullName); }}
-                              >
-                                <span className="name">{r.fullName}</span>
-                                {r.private && <span className="tag">private</span>}
-                              </button>
-                            ))}
-                          </div>
+                          <>
+                            {/* The search shows up once the list is long enough
+                                to scroll. Below that it is a second thing to
+                                read above rows already on screen. */}
+                            {ghRepos.length > 5 && (
+                              <div className="gh-search">
+                                <Search size={13} />
+                                <input
+                                  aria-label="Search repositories"
+                                  value={ghQuery}
+                                  onChange={(e) => setGhQuery(e.target.value)}
+                                  placeholder="Search repositories…"
+                                />
+                              </div>
+                            )}
+                            <div className="gh-repos">
+                              {shownRepos().length === 0 ? (
+                                <div className="gh-repo" style={{ opacity: 0.7 }}>
+                                  <span className="name">Nothing here matches “{ghQuery.trim()}”.</span>
+                                </div>
+                              ) : shownRepos().map((r) => (
+                                <button
+                                  key={r.fullName}
+                                  className="gh-repo"
+                                  onClick={() => { setRepo(r.fullName); begin(r.fullName); }}
+                                >
+                                  <span className="name">{r.fullName}</span>
+                                  {/* The branch that will ship from now on, said
+                                      here rather than asked for: picking one is a
+                                      second click on the screen whose whole job is
+                                      the first, and it is changeable afterwards in
+                                      the app's own panel. */}
+                                  <span className="tag branch">{r.defaultBranch}</span>
+                                  {r.private && <span className="tag">private</span>}
+                                </button>
+                              ))}
+                            </div>
+                          </>
                         )}
                         <p className="lead" style={{ margin: "10px 0 0", fontSize: 12, opacity: 0.7 }}>
+                          Every push to that branch ships your app. You can change the branch, or turn it off, any time.
+                        </p>
+                        <p className="lead" style={{ margin: "4px 0 0", fontSize: 12, opacity: 0.7 }}>
                           Not seeing one? <a href={ghLinks?.configureUrl ?? "#"}>Choose which repositories we can see</a>.
                         </p>
                       </>
@@ -464,17 +571,21 @@ export default function NewApp() {
               </div>
             )}
 
-            {(phase === "deploying" || phase === "done" || phase === "error") && (
+            {/* A deploy that is RUNNING is the whole screen — see `cinema` at
+                the bottom of this file. What is left here is the wreckage of one
+                that failed: the words, without the picture. The film's break and
+                its repair drone are worth watching while the agent is actually
+                working, which is in the cinema; by the time this screen is up the
+                story is over and the fix below is what has to be read. */}
+            {phase === "error" && (
               <div className="stage">
                 <div className="stage-head">
                   <span className="t">
-                    <span className="mono">{phase === "error" ? "✕" : "▸"}</span>
-                    {phase === "done" ? `Deployed ${slug}` : phase === "error" ? "Deploy failed" : `Deploying ${slug || "…"}`}
+                    <span className="mono">✕</span>
+                    Deploy failed
                   </span>
                   <span className="clock">{elapsed}s</span>
                 </div>
-
-                <DeployFilm drive={film} elapsed={elapsed} />
 
                 {detected && (
                   <div className="detected">
@@ -498,20 +609,6 @@ export default function NewApp() {
                     );
                   })}
                   {busy && <div className="ln show"><span className="arrow">▸</span><span className="tx muted">working…</span></div>}
-                </div>
-              </div>
-            )}
-
-            {phase === "done" && (
-              <div className="success">
-                <div className="success-live"><span className="d" />Live</div>
-                <div className="big">{liveUrl.replace(/^https?:\/\//, "")}</div>
-                <div className="u muted">deployed in {elapsed}s · Cloud Run · us-central1</div>
-                <div className="acts">
-                  <a className="btn" href={liveUrl} target="_blank" rel="noreferrer">Visit<ArrowRight size={13} /></a>
-                  
-                    <Link href={`/apps/${slug}`} className="btn primary">Open cockpit<ArrowRight size={13} /></Link>
-                  
                 </div>
               </div>
             )}
@@ -558,6 +655,54 @@ export default function NewApp() {
           </div>
         </div>
       </div>
+
+      {/* THE CINEMA — a deploy that is running, at the size it deserves.
+
+          A container deploy is 90 seconds during which this page has exactly
+          one thing on it worth looking at, and it was a 2.40:1 card in the
+          middle of a column of white. It gets the window now, the same way the
+          room does at the app's own address, and everything the page was
+          saying underneath is said over the picture: the name and the clock in
+          one corner, the build's last six lines in the other.
+
+          Fixed, and mounted HERE rather than inside `.newflow` — an ancestor
+          with a transform on it (the reveal animation) is a containing block
+          for `position: fixed`, and this would have been fixed to that column
+          rather than to the window.
+
+          It stays up when the deploy lands, because the ending is the point:
+          the sun comes up, she sails under the bridge, and the address is the
+          film's own endcard. These are what to do about it. */}
+      {(phase === "deploying" || phase === "done") && (
+        <div className={"cinema" + (phase === "done" ? " done" : "")}>
+          <DeployFilm drive={film} elapsed={elapsed} full />
+          <div className="cinema-bar">
+            <span className="nm">{slug || "…"}</span>
+            <span className="clock">{elapsed}s</span>
+          </div>
+          <div className="cinema-log">
+            {logs.slice(-6).map((l, i) => {
+              const ok = /^(Detected|Provision|Live at|Injecting|Agent fixed)/.test(l);
+              const agent = /^agent · /.test(l);
+              return (
+                <div key={`${i}-${l}`}>
+                  <span className={"k" + (ok ? " g" : agent ? " a" : "")}>{ok ? "✓" : agent ? "◆" : "·"}</span>
+                  <span className="m">{l}</span>
+                </div>
+              );
+            })}
+            {busy && <div><span className="k">▸</span><span className="m">working…</span></div>}
+          </div>
+          {phase === "done" && (
+            <div className="cinema-acts">
+              <a className="btn" href={liveUrl} target="_blank" rel="noreferrer">Visit<ArrowRight size={13} /></a>
+              <Link href={`/apps/${slug}`} className="btn primary">Open cockpit<ArrowRight size={13} /></Link>
+              {/* The way out of a picture that has finished playing. */}
+              <button className="btn" onClick={reset}><RotateCcw size={13} />Deploy another</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Always dismissable: there is no state a person can be in where the
           only thing behind this modal is a locked account. Free is always

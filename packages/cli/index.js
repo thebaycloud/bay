@@ -555,7 +555,26 @@ const REMOVED_DEPLOY_FLAGS = ["dev-cmd", "dev-port", "no-preview"];
  * "deploying — your app will be live at" and reports success for the thing it did
  * not ask for.
  */
-const SHIP_FLAGS = ["run", "wait", "no-env", "github", "repo", "prebuilt", "json", "help"];
+const SHIP_FLAGS = ["name", "run", "wait", "no-env", "github", "repo", "prebuilt", "json", "help"];
+
+/**
+ * What the app is called.
+ *
+ * The folder's name by default, which is right nearly always — you ship from the
+ * project's root and that is what the project is called. `--name` exists because
+ * the dashboard asks for a name before it hands you this command, and a name the
+ * user typed there has to survive into the deploy; without the flag the CLI would
+ * refuse the whole command (SHIP_FLAGS above is a hard list) and the name would be
+ * silently the folder's anyway.
+ *
+ * The server decides the SLUG from this — see resolveSlug — and reuses the one it
+ * already gave a deploy of the same name, which is what makes a redeploy land on
+ * the same address instead of creating a second app beside the first.
+ */
+function appNameFrom(args) {
+  const raw = typeof args.name === "string" && args.name.trim() ? args.name : path.basename(process.cwd());
+  return raw.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
+}
 
 async function deploy(args) {
   if (args.help) return usage(true);
@@ -594,7 +613,7 @@ async function deploy(args) {
     return consumeDeploy(res, args);
   }
   // Default: deploy this folder straight from your computer — no git, no setup.
-  const appName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
+  const appName = appNameFrom(args);
 
   // The fast path: your machine already has this project and builds it in seconds, so
   // build here and send only the result. Uploading sources and rebuilding them in the
@@ -639,10 +658,15 @@ async function deploy(args) {
 async function urlFirstDeploy(args) {
   let repo = args.repo;
   if (args.github && !repo) { repo = await gitOrigin(); }
-  const folderName = path.basename(process.cwd()).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "app";
+  const folderName = appNameFrom(args);
 
   // 1) reserve the slug → a URL right away (live immediately, any stack)
-  const r = await api("/api/deploy/reserve", { method: "POST", body: repo ? { repo } : { name: folderName } });
+  // The repo names the app when it is a repo deploy, exactly as before — a
+  // folder name sent alongside would change the slug every existing GitHub
+  // deploy resolves to. `--name` overrides either, because it was typed.
+  const reserveBody = repo ? { repo } : { name: folderName };
+  if (args.name) reserveBody.name = folderName;
+  const r = await api("/api/deploy/reserve", { method: "POST", body: reserveBody });
   const { slug, url } = r;
   // Not "✓ live". Nothing has been built yet — this is the moment the slug was
   // reserved, and the build can still fail. Eight agents in a row read that
@@ -952,7 +976,11 @@ async function redeploy(args) {
   const d = await api(`/api/apps/${app}`);
   if (!d.repo) die(`${app} was deployed from a computer — run \`bay deploy\` in its folder to ship an update`);
   info(cyan("▸ ") + "redeploying " + bold(app));
-  const res = await api("/api/deploy", { method: "POST", body: { repo: d.repo }, stream: true });
+  // The slug travels, because the server would otherwise resolve one from the
+  // repo URL — and an app created under a name of its own (the dashboard asks
+  // for one) does not answer to that name, so the redeploy would build a
+  // SECOND app beside the one being redeployed.
+  const res = await api("/api/deploy", { method: "POST", body: { repo: d.repo, slug: app }, stream: true });
   return consumeDeploy(res, args, app);
 }
 
@@ -1202,6 +1230,7 @@ ${bold("author")} ${dim("(local: no cloud, no build, no model — about two seco
 
 ${bold("ship")} ${dim("(URL-first: a live link in ~0.1s, the build drawn on it while it runs)")}
   bay ship                               ship this folder — live URL now, build behind it
+  bay ship --name <name>                 what to call it (default: this folder's name)
   ${dim("(`deploy` does the same thing and always will — every flag below works with either)")}
   bay ship --run "<prod start cmd>"    how to run it in PROD — you know the stack
                                                   e.g. --run "uvicorn main:app --host 0.0.0.0 --port $PORT"

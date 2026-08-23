@@ -2,6 +2,14 @@
 const nextConfig = {
   reactStrictMode: true,
 
+  // A build can be sent somewhere other than `.next`.
+  //
+  // `next build` and `next dev` share that directory, so building while the dev
+  // server is up overwrites what it is serving and every chunk URL the browser
+  // holds 404s — a blank page, with nothing in the log to say why. Setting
+  // NEXT_DIST_DIR lets a verification build run beside a live dev server.
+  ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
+
   async headers() {
     return [
       {

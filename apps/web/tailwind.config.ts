@@ -20,14 +20,18 @@ export default {
       colors: {
         // One near-black at four opacities. This single decision is most of
         // why the reference reads calm rather than stark.
+        /* Channel triplets, so `text-ink/60` works and the whole palette can be
+           swapped at once. The four fixed opacities these used to be are gone:
+           an alpha modifier expresses the same thing and does not need a name.
+           Same values as apps/landing, deliberately. */
         ink: {
-          DEFAULT: "#262626", // 15.13:1
-          2: "rgba(38,38,38,0.72)", //  6.01:1
-          3: "rgba(38,38,38,0.60)", //  4.62:1
-          4: "rgba(38,38,38,0.40)", //  2.38:1 — icons and rules only
+          DEFAULT: "rgb(var(--c-ink) / <alpha-value>)",
+          2: "rgb(var(--c-ink-2) / <alpha-value>)",
+          3: "rgb(var(--c-ink-3) / <alpha-value>)",
+          4: "rgb(var(--c-ink-3) / <alpha-value>)",
         },
         red: {
-          DEFAULT: "#E63F2C", // brand. Marks, fills, metal. Never small text.
+          DEFAULT: "rgb(var(--c-red) / <alpha-value>)", // brand. Marks, fills, metal. Never small text.
           btn: "#D6351F", // solid button ground
           ink: "#C9301B", // every word inside a tint
           deep: "#A32414", // bottom of the metal ramp
@@ -36,7 +40,7 @@ export default {
           DEFAULT: "rgba(230,63,44,0.039)", // Paper's 3.9%
           hi: "rgba(230,63,44,0.075)", // hover
         },
-        line: "#EDEDED",
+        line: "rgb(var(--c-line) / <alpha-value>)",
 
         // ---- the shadcn contract ----
         // Its components reference bg-background, border-input, ring-ring and so
@@ -85,12 +89,12 @@ export default {
         // wells are only as visible as this is different from the block, and at
         // #EDEDED (1.17:1 on white) the shape is technically present and
         // practically invisible.
-        ground: "#E4E4E4",
+        ground: "rgb(var(--c-ground) / <alpha-value>)",
         sunken: "#FBFBFB",
         // Points at the CSS variable rather than carrying a second value.
         // `bg-tile` was resolving to #F9F9F9 here while --tile was #F4F4F5 in
         // globals.css, so a filled input looked white and nobody could see why.
-        tile: "var(--tile)",
+        tile: "rgb(var(--c-tile) / <alpha-value>)",
         // Wet steel at low tide — the metal ramp.
         steel: {
           50: "#C4CCD0",
@@ -103,11 +107,14 @@ export default {
         },
       },
       borderRadius: {
-        // 8/6/4, which is shadcn's own ramp and already the panel's.
-        xl: "calc(var(--sh-radius) + 2px)",
-        lg: "var(--sh-radius)",
-        md: "calc(var(--sh-radius) - 2px)",
-        sm: "calc(var(--sh-radius) - 4px)",
+        /* Literal, and measured off apps/landing rather than derived from one
+           number. Deriving them meant a card and a button could not be 12px and
+           6px at the same time, which is exactly what the landing page is. */
+        sm: "4px",
+        md: "6px",
+        lg: "8px",
+        xl: "12px",
+        "2xl": "16px",
       },
       keyframes: {
         "accordion-down": {

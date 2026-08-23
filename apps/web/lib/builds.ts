@@ -26,12 +26,39 @@ export interface BuildRow {
   outcome: "ok" | "failed" | null;
 }
 
+/**
+ * The commit a build was of, when one caused it.
+ *
+ * Absent for a CLI deploy and for an upload, and that absence is the honest
+ * answer rather than a gap — those builds have no commit. Every field is
+ * written together or not at all, because a SHA with no branch beside it is a
+ * row nothing can render and nothing can report an outcome against.
+ */
+export interface Commit {
+  sha: string;
+  branch: string;
+  message: string;
+  author: string;
+}
+
 /** Split out from the write so the normalisation is testable without a database. */
-export function buildStartSql(runId: string, slug: string, who: string | null | undefined) {
+export function buildStartSql(runId: string, slug: string, who: string | null | undefined, commit?: Commit | null) {
+  // Four columns that are always null together. Written as one branch rather
+  // than four COALESCEs so the "no commit" case produces exactly the statement
+  // it produced before commits existed — a push cannot change what an upload
+  // records.
+  if (!commit) {
+    return {
+      text: `INSERT INTO builds(run_id, slug, who) VALUES($1,$2,$3)
+               ON CONFLICT (run_id) DO NOTHING`,
+      values: [runId, slug, normaliseWho(who)],
+    };
+  }
   return {
-    text: `INSERT INTO builds(run_id, slug, who) VALUES($1,$2,$3)
+    text: `INSERT INTO builds(run_id, slug, who, commit_sha, commit_branch, commit_message, commit_author)
+             VALUES($1,$2,$3,$4,$5,$6,$7)
              ON CONFLICT (run_id) DO NOTHING`,
-    values: [runId, slug, normaliseWho(who)],
+    values: [runId, slug, normaliseWho(who), commit.sha, commit.branch, commit.message, commit.author],
   };
 }
 
@@ -43,8 +70,8 @@ export function buildFinishSql(runId: string, outcome: "ok" | "failed") {
 }
 
 /** Best-effort, both of them: losing the record of a build must not fail the build. */
-export async function startBuild(runId: string, slug: string, who: string | null | undefined): Promise<void> {
-  const q = buildStartSql(runId, slug, who);
+export async function startBuild(runId: string, slug: string, who: string | null | undefined, commit?: Commit | null): Promise<void> {
+  const q = buildStartSql(runId, slug, who, commit);
   try { await getPool(DB).query(q.text, q.values); } catch { /* ignore */ }
 }
 

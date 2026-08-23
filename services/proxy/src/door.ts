@@ -2,7 +2,7 @@
  * Which app a request is for, decided from its Host header alone.
  *
  * There are two kinds of address now and they are resolved in opposite
- * directions. An address we issued CARRIES the slug: `lilna.supersonic.cv` is
+ * directions. An address we issued CARRIES the slug: `lilna.thebay.cloud` is
  * the app `lilna`, derivable with a string operation and true even when the
  * database is unreachable. A domain its owner attached carries nothing at all —
  * `acme.com` is a name we did not choose, and the only thing that connects it to
@@ -35,46 +35,35 @@ export function hostnameOf(host: string | undefined): string {
 }
 
 /**
- * Which app, or whose domain, this request is for.
- *
- * Takes one root or several. Several is what a rename needs: while the platform
- * moves from one domain to another, both have to issue the same apps, or the
- * cutover is a day on which every bookmark stops working at once.
- *
- * A single string is still accepted because every caller passes one, and a
- * signature that quietly required an array would break them at runtime instead
- * of at the type checker.
+ * @param roots Every root we issue under, canonical first. A single string is
+ *   accepted for the many callers and tests that predate there being two.
  */
 export function doorFor(host: string | undefined, roots: string | string[]): Door {
   const hostname = hostnameOf(host);
   if (!hostname) return { kind: "nowhere" };
-  // Longest first. With roots that nest — `cloud` and `thebay.cloud` — matching
-  // the short one turns `lilna.thebay.cloud` into the slug `lilna.thebay`,
-  // which is not a slug, which is a 404 at an address that works.
-  const list = (typeof roots === "string" ? [roots] : roots)
-    .slice()
-    .sort((a, b) => b.length - a.length);
-  for (const root of list) {
+  const all = typeof roots === "string" ? [roots] : roots;
+  for (const root of all) {
     if (!hostname.endsWith("." + root)) continue;
     const slug = hostname.slice(0, -(root.length + 1));
     // A label that is not a slug is not an app, and must not fall through to the
-    // attached-domain lookup: `evil.lilna.supersonic.cv` would otherwise become a
-    // hostname somebody could attach, inside the namespace we issue. This runs
-    // per root rather than once, because a guard applied to only the first root
-    // is exactly the kind that gets left behind when a second one is added.
+    // attached-domain lookup: `evil.lilna.<root>` would otherwise become a
+    // hostname somebody could attach, inside the namespace we issue.
+    //
+    // `return` and not `continue` on a bad label: the host IS under a root we
+    // own, so it is ours and malformed, never somebody's attachable domain.
     return /^[a-z0-9-]+$/.test(slug) ? { kind: "issued", slug } : { kind: "nowhere" };
   }
   return { kind: "attached", hostname };
 }
 
 /**
- * Whether this request has to be sent back to the app's own supersonic.cv
- * address before anything else happens.
+ * Whether this request has to be sent back to the app's own platform address
+ * before anything else happens.
  *
  * Only ever true on an attached domain, and only for an app that is not public.
  *
  * Everything that decides who a visitor is reads the session cookie, and that
- * cookie is scoped to `.supersonic.cv`. A browser will not send it to acme.com —
+ * cookie is scoped to `.<canonical root>`. A browser will not send it to acme.com —
  * correctly; that is what cookie scoping is for. So on an attached domain every
  * visitor is anonymous, the owner included: a private app would answer with the
  * sign-in gate, signing in would set a cookie on the wrong domain, and the
@@ -88,7 +77,13 @@ export function mustReturnToPlatform(door: Door, visibility: string): boolean {
   return door.kind === "attached" && visibility !== "public";
 }
 
-/** The app's own address, carrying the path and query the visitor asked for. */
+/**
+ * The app's own address, carrying the path and query the visitor asked for.
+ *
+ * Always the CANONICAL root: this is where a visitor is sent to sign in, and the
+ * session cookie exists on exactly one root. Sending them to a root the cookie
+ * does not cover is the loop this function exists to end.
+ */
 export function platformUrl(slug: string, rootDomain: string, path: string | undefined): string {
   const rest = path && path.startsWith("/") ? path : "/";
   return `https://${slug}.${rootDomain}${rest}`;

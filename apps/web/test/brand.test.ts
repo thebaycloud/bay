@@ -1,19 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rootDomain, productName, appHost, controlPlaneHost, _brandForTesting } from "../lib/brand";
+import { productName, appHost, controlPlaneHost, _brandForTesting } from "../lib/brand";
 
 /**
- * The two words the platform is named by.
+ * What the platform is CALLED.
  *
- * This module exists so a rename is a configuration change rather than a
- * find-and-replace across 374 files. Everything asserted here is about that one
- * property: the values come from the environment, the defaults are today's, and
- * there is exactly ONE answer to "what domain are we" no matter who asks.
- *
- * That last part is the bug this replaces. `lib/app-urls.ts` read
- * NEXT_PUBLIC_ROOT_DOMAIN and `lib/cors.ts` read ROOT_DOMAIN, both defaulting
- * to the same literal — so setting one and not the other produced a platform
- * that built links for one domain and refused requests from it.
+ * The domain half of this module was deleted when lib/roots.ts landed on main
+ * doing it better — a list with the canonical root first, rather than a single
+ * value. Two answers to "what domain are we" is the exact defect roots.ts
+ * exists to prevent, so what is left here is the other fact: the name, and the
+ * two hosts built from the canonical root.
  */
 
 function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
@@ -30,59 +26,40 @@ function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
   }
 }
 
-const NONE = { NEXT_PUBLIC_ROOT_DOMAIN: undefined, ROOT_DOMAIN: undefined, NEXT_PUBLIC_PRODUCT_NAME: undefined };
+const NONE = { NEXT_PUBLIC_PRODUCT_NAME: undefined, PRODUCT_NAME: undefined };
 
-test("today's values are the defaults, so nothing changes until something is set", () => {
-  withEnv(NONE, () => {
-    assert.equal(rootDomain(), "supersonic.cv");
-    assert.equal(productName(), "Supersonic");
-  });
+test("today's name is the default, so nothing moves until something is set", () => {
+  withEnv(NONE, () => assert.equal(productName(), "Supersonic"));
 });
 
 test("the public variable wins, because a client bundle can read only that one", () => {
-  // Next inlines NEXT_PUBLIC_* at build time and strips everything else from the
-  // browser bundle. If the server preferred ROOT_DOMAIN, the same function would
-  // answer two different things depending on where it ran.
-  withEnv({ ...NONE, NEXT_PUBLIC_ROOT_DOMAIN: "thebay.cloud", ROOT_DOMAIN: "supersonic.cv" }, () => {
-    assert.equal(rootDomain(), "thebay.cloud");
+  // Next inlines NEXT_PUBLIC_* at build time and strips the rest from the
+  // browser bundle. Preferring the server-only name would put the old brand on
+  // a page while the server used the new one.
+  withEnv({ NEXT_PUBLIC_PRODUCT_NAME: "Bay", PRODUCT_NAME: "Supersonic" }, () => {
+    assert.equal(productName(), "Bay");
   });
 });
 
 test("the server-only variable still works alone, for processes Next never built", () => {
-  // The proxy, the deploy job and the fleet agent are not Next builds and have
-  // no NEXT_PUBLIC_ anything.
-  withEnv({ ...NONE, ROOT_DOMAIN: "thebay.cloud" }, () => {
-    assert.equal(rootDomain(), "thebay.cloud");
-  });
+  withEnv({ ...NONE, PRODUCT_NAME: "Bay" }, () => assert.equal(productName(), "Bay"));
 });
 
-test("hosts are built from the one answer, never from a literal", () => {
-  withEnv({ ...NONE, ROOT_DOMAIN: "thebay.cloud" }, () => {
+test("an empty value is not a name", () => {
+  withEnv({ ...NONE, PRODUCT_NAME: "   " }, () => assert.equal(productName(), "Supersonic"));
+});
+
+test("hosts are built from the canonical root, never from a literal", () => {
+  withEnv({ ...NONE, NEXT_PUBLIC_ROOT_DOMAINS: "thebay.cloud,supersonic.cv" }, () => {
     assert.equal(appHost("l3sgp"), "l3sgp.thebay.cloud");
     assert.equal(controlPlaneHost(), "app.thebay.cloud");
   });
 });
 
-test("the product name is separate from the domain, because they rename apart", () => {
-  withEnv({ ...NONE, ROOT_DOMAIN: "thebay.cloud", NEXT_PUBLIC_PRODUCT_NAME: "Bay" }, () => {
-    assert.equal(productName(), "Bay");
-    assert.equal(rootDomain(), "thebay.cloud");
-  });
-});
-
-test("whitespace and a stray protocol do not become part of the domain", () => {
-  // These get set by hand, in a dashboard, by somebody in a hurry. A leading
-  // https:// silently produces https://https://app.… and a trailing space
-  // produces a hostname no DNS will answer.
-  for (const raw of ["  thebay.cloud  ", "https://thebay.cloud", "thebay.cloud/", "HTTPS://TheBay.Cloud"]) {
-    withEnv({ ...NONE, ROOT_DOMAIN: raw }, () => {
-      assert.equal(rootDomain(), "thebay.cloud", `not cleaned: ${JSON.stringify(raw)}`);
-    });
-  }
-});
-
-test("an empty value is not a domain and falls back rather than building https://.", () => {
-  withEnv({ ...NONE, ROOT_DOMAIN: "   " }, () => {
-    assert.equal(rootDomain(), "supersonic.cv");
+test("a second root does not become the one addresses are minted under", () => {
+  // ORDER IS MEANING in roots.ts. If this ever reads the wrong end of the list,
+  // people are told to point their own DNS at a name being retired.
+  withEnv({ ...NONE, NEXT_PUBLIC_ROOT_DOMAINS: "thebay.cloud,supersonic.cv" }, () => {
+    assert.ok(!appHost("x").endsWith("supersonic.cv"));
   });
 });

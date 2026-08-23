@@ -1,7 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Clock, Loader2, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Row, RowGroup, RowList, StatusChip } from "@/components/panel/atoms";
+import { recordFor } from "@/lib/dns-record";
 
 /**
  * Connecting a domain, from the person's side.
@@ -29,15 +40,78 @@ interface Domain {
 
 interface Dns { ip: string; cname: string }
 
-/** How the four states read to a person. Platform words never appear here. */
-const SAID: Record<Status, { label: string; tone: "wait" | "ok" | "bad" }> = {
-  pending_dns: { label: "Waiting for your DNS", tone: "wait" },
-  securing: { label: "Getting a certificate", tone: "wait" },
-  live: { label: "Live", tone: "ok" },
-  failed: { label: "Couldn't get a certificate", tone: "bad" },
+/**
+ * How the four states read to a person. Platform words never appear here.
+ *
+ * The tone is StatusChip's, so a domain's state is drawn by the same dot as
+ * every other state in the panel — green for arrived, red for something to fix,
+ * grey for still moving. Grey and not red while waiting: DNS taking an hour is
+ * not a fault.
+ */
+const SAID: Record<Status, { label: string; tone: "green" | "red" | "grey" }> = {
+  pending_dns: { label: "waiting for your DNS", tone: "grey" },
+  securing: { label: "getting a certificate", tone: "grey" },
+  live: { label: "live", tone: "green" },
+  failed: { label: "no certificate", tone: "red" },
 };
 
-export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: string) => void }) {
+/**
+ * The other half of a domain, when there obviously is one.
+ *
+ * `acme.com` and `www.acme.com` are one thing to a person and two hostnames to a
+ * certificate, and somebody who attaches only the first finds out when a visitor
+ * types the second. Offered rather than added silently: the www record is theirs
+ * to create in DNS, and attaching a name they have no plan for would leave a
+ * domain sitting in "waiting for your DNS" forever with no way to know why.
+ *
+ * Only the www pair, and nothing cleverer. Guessing an apex from label count is
+ * wrong for `acme.co.uk`, and telling somebody to put a CNAME on their root is a
+ * dead end their DNS provider refuses.
+ */
+function pairFor(hostname: string): string | null {
+  if (hostname.startsWith("www.")) {
+    const base = hostname.slice(4);
+    return base.split(".").length >= 2 ? base : null;
+  }
+  return hostname.split(".").length === 2 ? `www.${hostname}` : null;
+}
+
+/**
+ * The records to create, written so a coding agent can act on it.
+ *
+ * Names the CHOICE rather than both records flatly: an apex cannot be a CNAME
+ * and a subdomain should not be an A, and the one thing an agent must not do is
+ * create both. It does not guess which — label counting is wrong for
+ * `acme.co.uk` — so it states the rule and lets whoever runs it apply it.
+ */
+function agentPrompt(hostname: string, dns: Dns): string {
+  const r = recordFor(hostname, dns);
+  return (
+    `Add this DNS record for ${hostname} so it points at my app on Bay:\n\n` +
+    `  type   ${r.type}\n` +
+    `  name   ${r.name}\n` +
+    `  value  ${r.value}\n\n` +
+    `Then tell me it is done. HTTPS turns itself on within about ten minutes of\n` +
+    `the record going live — nothing needs redeploying.`
+  );
+}
+
+export function DomainsPanel({
+  slug,
+  onToast,
+  /**
+   * Rendered INSIDE another list — no heading, no box of its own.
+   *
+   * Address is a disclosure now, and a bordered list inside a bordered list is
+   * two boxes for one thing. Nested, this emits bare rows that share the parent
+   * list's hairlines.
+   */
+  nested,
+}: {
+  slug: string;
+  onToast: (m: string) => void;
+  nested?: boolean;
+}) {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [dns, setDns] = useState<Dns | null>(null);
   const [allowed, setAllowed] = useState(true);
@@ -46,6 +120,15 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
   const [host, setHost] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  /**
+   * The hostname whose records are being shown, if any.
+   *
+   * Opened by a successful add, and reopenable from the row — a person who
+   * closes it before saving the record has nowhere else to read it, and the
+   * records are the only part of this that cannot be worked out from the row.
+   */
+  const [records, setRecords] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -76,6 +159,29 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, [domains, loaded, load]);
 
+  /** Adds a hostname the person did not type — the www half of one they did. */
+  async function addPair(hostname: string) {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await (
+        await fetch(`/api/apps/${slug}/domains`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hostname }),
+        })
+      ).json();
+      if (r.error) {
+        setErr(r.error);
+        return;
+      }
+      setRecords(hostname);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function add() {
     const typed = host.trim();
     if (!typed) return;
@@ -87,7 +193,9 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
       })).json();
       if (r.error) { setErr(r.error); return; }
       setHost("");
-      onToast(`${r.domain.hostname} added — point its DNS here and it goes live on its own`);
+      // No toast: the modal IS the confirmation, and it carries the one thing
+      // that has to happen next.
+      setRecords(r.domain.hostname);
       await load();
     } finally { setBusy(false); }
   }
@@ -104,81 +212,225 @@ export function DomainsPanel({ slug, onToast }: { slug: string; onToast: (m: str
     } finally { setBusy(false); }
   }
 
-  const waiting = domains.some((d) => d.status !== "live");
+  // The first missing half, if any. One suggestion at a time: two of these would
+  // read as a list of things wrong rather than one thing to consider.
+  const suggestion = domains
+    .map((d) => pairFor(d.hostname))
+    .find((h): h is string => Boolean(h) && !domains.some((d) => d.hostname === h));
 
-  return (
-    <div className="dom-custom">
-      <span className="dom-lbl">Your own domain</span>
-
-      {domains.length > 0 && (
-        <div className="dom-list">
-          {domains.map((d) => {
+  const rows = (
+    <>
+      {domains.map((d) => {
             const said = SAID[d.status] ?? SAID.pending_dns;
             return (
-              <div className="dom-item" key={d.hostname}>
-                <span className="dom-host mono">{d.hostname}</span>
-                <span className={`dom-state ${said.tone}`}>
-                  {said.tone === "ok" ? <Check size={13} /> : said.tone === "bad" ? <AlertTriangle size={13} /> : <Clock size={13} />}
-                  {said.label}
-                </span>
-                <button className="ic-btn" title="Remove" disabled={busy} onClick={() => remove(d.hostname)}>
-                  <Trash2 size={14} />
-                </button>
-                {d.detail && d.status !== "live" && <div className="dom-detail">{d.detail}</div>}
-              </div>
+              <Row
+                key={d.hostname}
+                // The detail is part of the sub, not a line below the row: it says
+                // WHAT is being waited for, and "waiting" without it and "you
+                // pointed it somewhere else" look identical.
+                sub={d.status !== "live" ? d.detail ?? undefined : undefined}
+                title={<span className="font-mono text-[13px]">{d.hostname}</span>}
+              >
+                <StatusChip text={said.label} tone={said.tone} />
+                {/* A recheck is just another read — the GET reconciles, and the
+                    throttle is ten seconds. Worth a button because the poll is
+                    twelve seconds long and somebody who just saved a DNS record
+                    is watching this row. */}
+                {d.status !== "live" ? (
+                  <Button
+                    aria-label={`Records for ${d.hostname}`}
+                    className="h-7 px-2 text-[13px] text-ink-2 hover:text-ink"
+                    onClick={() => setRecords(d.hostname)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    Records
+                  </Button>
+                ) : null}
+                {d.status !== "live" ? (
+                  <Button
+                    aria-label={`Check ${d.hostname} now`}
+                    className="size-7 text-ink-3 hover:text-ink"
+                    disabled={busy}
+                    onClick={() => load()}
+                    size="icon-sm"
+                    variant="ghost"
+                  >
+                    <RefreshCw className="size-3.5" />
+                  </Button>
+                ) : null}
+                <Button
+                  aria-label={`Remove ${d.hostname}`}
+                  className="size-7 text-ink-3 hover:text-ink"
+                  disabled={busy}
+                  onClick={() => remove(d.hostname)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </Row>
             );
-          })}
-        </div>
-      )}
+      })}
+    </>
+  );
 
+  const body = (
+    <>
       {allowed ? (
         <>
-          <div className="dom-add">
-            <input
-              className="in mono" placeholder="yourapp.com" value={host} disabled={busy}
-              onChange={(e) => setHost(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              add();
+            }}
+          >
+            <Input
+              className="h-9 font-mono text-[13px]"
+              disabled={busy}
+              onChange={(e) => setHost(e.currentTarget.value)}
+              placeholder="yourapp.com"
+              value={host}
             />
-            <button className="btn primary" disabled={busy || !host.trim()} onClick={add}>
-              {busy ? <Loader2 size={13} className="spin" /> : <Plus size={13} />}Connect
-            </button>
-          </div>
-          {err && <div className="set-err">⚠ {err}</div>}
+            {/* h-9, matching the Input. The default button is 40px and the input
+                36px, which read as two controls that had not met. */}
+            <Button className="h-9 shrink-0" disabled={busy || !host.trim()} type="submit">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              Connect
+            </Button>
+          </form>
 
-          {/* Shown while anything is still waiting, and after adding — this is
-              the one place the records a person has to create are written down,
-              so it cannot be behind a state they have already left. */}
-          {dns && (domains.length === 0 || waiting) && (
-            <div className="dom-dns">
-              <div className="dom-rec">
-                <span className="dom-rec-k mono">CNAME</span>
-                <span className="dom-rec-v mono">{dns.cname}</span>
-                <span className="dom-rec-w">for a subdomain — shop.yourapp.com</span>
-              </div>
-              <div className="dom-rec">
-                <span className="dom-rec-k mono">A</span>
-                <span className="dom-rec-v mono">{dns.ip}</span>
-                <span className="dom-rec-w">for the domain itself — yourapp.com</span>
-              </div>
-              <span className="dom-note">
-                HTTPS turns on by itself, usually within ten minutes of the record going live.
-                Nothing to redeploy.
+          {err ? <p className="text-[14px] text-red">{err}</p> : null}
+
+          {suggestion ? (
+            <p className="flex flex-wrap items-center gap-2 text-[13px] text-ink-3">
+              <span>
+                Visitors will also type <span className="font-mono text-ink-2">{suggestion}</span>.
               </span>
-            </div>
-          )}
+              <Button disabled={busy} onClick={() => addPair(suggestion)} size="sm" variant="outline">
+                <Plus className="size-3.5" />
+                Add it too
+              </Button>
+            </p>
+          ) : null}
 
           {visibility !== "public" && (
-            <span className="dom-note">
-              This app is {visibility}, so visitors on your domain are sent to {slug}.supersonic.cv to sign in —
-              sign-in only works at that address. Make the app public to have your domain answer for it.
-            </span>
+            <p className="text-[13px] text-ink-3">
+              This app is {visibility}, so visitors on your domain are sent to{" "}
+              {slug}.supersonic.cv to sign in — sign-in only works at that address. Make
+              the app public to have your domain answer for it.
+            </p>
           )}
         </>
       ) : (
-        <span className="dom-note">
-          Custom domains are on Pro. Your app keeps its supersonic.cv address — upgrade to point your own domain at it.
-        </span>
+        <p className="text-[13px] text-ink-3">
+          Custom domains are on Pro. Your app keeps its supersonic.cv address — upgrade
+          to point your own domain at it.
+        </p>
       )}
+    </>
+  );
+
+  const prompt = records && dns ? agentPrompt(records, dns) : "";
+  const record = records && dns ? recordFor(records, dns) : null;
+
+  /**
+   * The records, as the thing you do next.
+   *
+   * A modal rather than a block under the form, because creating a DNS record
+   * happens in somebody else's control panel — a tab away — and a person comes
+   * back to this page to find out whether it worked. It is dismissable (the
+   * close in the corner) and reopenable from the row, so it is never the only
+   * copy of something they still need.
+   *
+   * Two ways out at the bottom, which are the two things that actually happen
+   * next: hand it to the agent that is already open, or come back having done
+   * it by hand and ask again.
+   */
+  const modal = (
+    <Dialog onOpenChange={(o) => !o && setRecords(null)} open={Boolean(records && dns)}>
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-[560px] gap-0 overflow-hidden p-0">
+        <DialogHeader className="px-5 pb-4 pt-5">
+          <DialogTitle className="min-w-0 truncate text-[17px] font-[450] tracking-[-0.01em]">
+            Point {records} here
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            The DNS record to add so {records} serves this app.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-4 px-5 pb-5">
+          {/* ONE record, decided here rather than offered as a choice — an apex
+              cannot be a CNAME and a subdomain should be one, and that rule is
+              ours to apply. Type, Name, Value: the three fields every DNS panel
+              asks for, in that order, and the Name is the label alone because
+              panels append the zone themselves. */}
+          {record ? (
+            <div className="overflow-hidden rounded-lg border border-border">
+              <div className="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-3 border-b border-border px-4 py-2.5">
+                <span className="text-[13px] text-ink-3">Type</span>
+                <span className="font-mono text-[13px] text-ink">{record.type}</span>
+              </div>
+              <div className="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-3 border-b border-border px-4 py-2.5">
+                <span className="text-[13px] text-ink-3">Name</span>
+                <span className="font-mono text-[13px] text-ink">{record.name}</span>
+              </div>
+              <div className="grid grid-cols-[80px_minmax(0,1fr)] items-center gap-3 px-4 py-2.5">
+                <span className="text-[13px] text-ink-3">Value</span>
+                <span className="truncate font-mono text-[13px] text-ink">{record.value}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex items-center gap-2">
+            <Button
+              className="flex-1"
+              onClick={() => {
+                navigator.clipboard?.writeText(prompt).catch(() => {});
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1600);
+              }}
+            >
+              {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+              {copied ? "Copied" : "Hand to my agent"}
+            </Button>
+            <Button
+              className="flex-1"
+              disabled={busy}
+              onClick={() => {
+                load();
+                setRecords(null);
+              }}
+              variant="outline"
+            >
+              <RefreshCw className="size-4" />
+              Reload
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+
+  // Nested: the domains join the parent list's rows, and everything that is not
+  // a row (the add form and the notes) sits in one padded strip under them.
+  if (nested) {
+    return (
+      <>
+        {rows}
+        <div className="flex flex-col gap-2.5 px-4 py-3.5">{body}</div>
+        {modal}
+      </>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <h2 className="px-0.5 text-[15px] text-ink">Your own domain</h2>
+      {domains.length > 0 ? <RowList>{rows}</RowList> : null}
+      {body}
+      {modal}
     </div>
   );
 }

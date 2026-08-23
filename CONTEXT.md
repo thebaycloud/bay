@@ -57,6 +57,14 @@ connections and one workspace.
 _Avoid_: integration, link, OAuth connection, GitHub account, token.
 Product language says *connected account*.
 
+**Connected repository**:
+The link between one **App** and one branch of one repository on GitHub. Its
+existence is what makes a `git push` a **Ship**: without it a repository is a
+URL somebody typed once, and with it every push to that branch is a **Build**.
+One app, one connected repository — a second repository is a second app.
+Product language says *your GitHub*.
+_Avoid_: integration, git provider, source control, repo link, auto deploy.
+
 **Deploy target**:
 Where an app's processes end up running. Today there are two — the **Fleet**, and
 Cloud Run. Naming the concept is what makes "which one" a decision rather than
@@ -163,6 +171,7 @@ it in the meantime.
 - An **App** may have a **Shadow**
 - An **App** may have any number of **Attached domains**; each belongs to one app
 - A workspace may hold any number of **Connections**; each belongs to one workspace
+- An **App** may follow one **Connected repository**; a push to its branch is a **Build**
 - An **App** deployed from a private repository names the **Connection** it came through
 
 ## Resolved ambiguities

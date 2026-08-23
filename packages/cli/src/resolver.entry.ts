@@ -67,10 +67,15 @@ export { DEFAULT_SCALE } from "../../../apps/web/lib/lanes";
 // perfectly good worker — the declared-but-not-reflected defect, in the tool built
 // to make that defect visible.
 export { readProcfile, parseProcfile, ProcfileError } from "../../../apps/web/lib/procfile";
-export { mergeProcfile, resolveProcesses, unemittable, PRIMITIVE, ProcessError } from "../../../apps/web/lib/processes";
-// From processes.ts, where it has lived since lib/process-plan.ts was deleted
-// with the Cloud Run lane on 16 Aug (575549d). The import was left pointing at
-// the dead module, which made this bundle unbuildable — and therefore the CLI
-// unpublishable — for eight days without anybody noticing, because nobody
-// published in that window. npm still had 0.10.0 while the repo said 0.12.1.
-export { isServiceless } from "../../../apps/web/lib/processes";
+// `isServiceless` came from lib/process-plan until the Cloud Run lane was deleted
+// and it moved in with the rest of the process code. The bundle could not be
+// rebuilt at all while this pointed at the old file, which also meant `npm test`
+// failed and `prepublishOnly` blocked every CLI release.
+export {
+  mergeProcfile,
+  resolveProcesses,
+  unemittable,
+  PRIMITIVE,
+  ProcessError,
+  isServiceless,
+} from "../../../apps/web/lib/processes";

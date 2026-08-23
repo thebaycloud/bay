@@ -7,7 +7,7 @@
  * hostname from "written down" to "serving HTTPS" is not here — it talks to DNS
  * and to Google, and it lives in lib/domain-attach.ts.
  *
- * The platform address is not affected by anything in this file. `<slug>.supersonic.cv`
+ * The platform address is not affected by anything in this file. `<slug>.<root>`
  * keeps answering for every app whatever domains are attached to it: it is the
  * address the room, the x-ray, the dashboard, the CLI and every share link are
  * built from, and it is the one address whose DNS we control. A custom domain is
@@ -15,15 +15,18 @@
  */
 import { getPool } from "./db";
 import { removeDomainCert } from "./domain-cert";
-import { rootDomain, productName } from "./brand";
+import { rootDomain, rootDomains } from "./roots";
 
 const DB = "supersonic_platform";
 
 /**
  * The domain we issue addresses under. A person may never attach a name inside it.
  *
- * Read through lib/brand rather than written here, so a rename is configuration
- * rather than an edit to a file about custom domains.
+ * A function, not a constant, and PLURAL underneath — see lib/roots.ts. It was a
+ * literal here while four other readers took it from the environment, which made
+ * this the one place a cutover could not reach: after it, `foo.thebay.cloud`
+ * would have been accepted as "a domain you own", issued a certificate, and then
+ * fought the wildcard rule in the edge for the same host.
  */
 export const ROOT_DOMAIN = rootDomain();
 
@@ -112,14 +115,22 @@ export function normalizeHostname(input: string): string | null {
  * it is, not about whether it is a name at all, and the two have different
  * answers for the person: one is a typo, the other is a rule.
  */
-export function refuseHostname(hostname: string, rootDomain: string = ROOT_DOMAIN): string | null {
-  if (hostname === rootDomain || hostname.endsWith("." + rootDomain)) {
-    // Not a technicality. Every app already answers on `<slug>.supersonic.cv`,
-    // and a person who attached `other-app.supersonic.cv` to their own app would
-    // be claiming a name the platform issues — a row in this table that the
-    // edge would have to resolve against the wildcard rule, with one of the two
-    // winning for reasons nobody could see from the dashboard.
-    return `${rootDomain} addresses are issued by ${productName()} — attach a domain you own instead`;
+export function refuseHostname(
+  hostname: string,
+  roots: string | string[] = rootDomains()
+): string | null {
+  // EVERY root, not just the canonical one. During the cutover both answer, so
+  // both are names we issue — and the retiring one is the more dangerous of the
+  // two to leave open, because it is the one already in DNS.
+  const all = (typeof roots === "string" ? [roots] : roots).map((r) => r.toLowerCase());
+  const mine = all.find((r) => hostname === r || hostname.endsWith("." + r));
+  if (mine) {
+    // Not a technicality. Every app already answers on `<slug>.<root>`, and a
+    // person who attached `other-app.<root>` to their own app would be claiming
+    // a name the platform issues — a row in this table that the edge would have
+    // to resolve against the wildcard rule, with one of the two winning for
+    // reasons nobody could see from the dashboard.
+    return `${mine} addresses are issued by us — attach a domain you own instead`;
   }
   if (hostname.endsWith(".local") || hostname.endsWith(".localhost") || hostname.endsWith(".internal")) {
     return "that name only exists inside a private network, so it can never get a certificate";

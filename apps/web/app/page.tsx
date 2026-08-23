@@ -2,12 +2,10 @@ export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { Suspense } from "react";
-import { Plus } from "lucide-react";
-import { CommandPalette } from "@/components/CommandPalette";
-import { Sidebar } from "@/components/Sidebar";
+import { TopBar } from "@/components/TopBar";
 import { AccountBanner } from "@/components/AccountBanner";
-import { AppsGrid, type App } from "@/components/AppsGrid";
-import { CardsSkeleton, RailSkeleton } from "@/components/Skeleton";
+import { type App } from "@/components/AppsGrid";
+import { AppsTable } from "@/components/AppsTable";
 import { currentUserId } from "@/lib/session";
 import { listOwnedApps, type AppSort } from "@/lib/apps";
 import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
@@ -25,6 +23,14 @@ import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
  * this page worse than the one it replaced.
  */
 async function initialApps(sort: AppSort): Promise<{ apps: App[]; error?: string }> {
+  // Sample rows, for looking at the list without a database behind it. Explicit
+  // flag, and refused in production: a list that invents rows when Postgres is
+  // unreachable is a dashboard that lies at the moment somebody most needs it not
+  // to. This is not a fallback for a failed read — the failed read still says so.
+  if (process.env.MOCK_APPS === "1" && process.env.NODE_ENV !== "production") {
+    const { mockApps } = await import("@/lib/mock-apps");
+    return { apps: mockApps() };
+  }
   const uid = await currentUserId();
   if (!uid) return { apps: [] };
   try {
@@ -67,68 +73,46 @@ async function initialApps(sort: AppSort): Promise<{ apps: App[]; error?: string
  * rows, and handing it the list the page already read is cheaper than letting
  * it fetch its own copy a moment later.
  */
-async function AppsAndRail() {
+/**
+ * No side panel.
+ *
+ * The rail carried an app switcher, a nav with four destinations, and a health
+ * summary. Two of those four are this page, one is settings and one is the CLI —
+ * 252px of permanent chrome to reach two screens, on a product whose deploys
+ * happen in a terminal. The account menu and the palette are what actually got
+ * used, so they move into a thin top bar and the page gets the width back.
+ */
+async function Apps() {
   // The default order — most recently deployed — computed in SQL. A different
   // one is asked for through /api/apps, not through the address bar.
   const { apps, error } = await initialApps("deployed");
   return (
     <>
-      <Sidebar active="apps" apps={apps} />
-      <div className="main">
-        <AccountBanner />
-        <header className="topbar topbar-flush">
-          <div className="topbar-wrap">
-            <div className="topbar-row">
-              <CommandPalette apps={apps} />
-              <div className="spacer" />
-              
-                <Link href="/new" className="btn primary"><Plus size={14} />New app</Link>
-              
-            </div>
-          </div>
-        </header>
-        <div className="content">
-          <div className="wrap">
-            <AppsGrid initial={apps} initialError={error} />
-          </div>
-        </div>
-      </div>
+      <AccountBanner />
+      <TopBar />
+      <AppsTable initial={apps} initialError={error} />
     </>
   );
 }
 
 export default function Home() {
   return (
-    <div className="shell shell-side">
+    <div className="min-h-screen bg-background">
       <Suspense fallback={<HomeShell />}>
-        <AppsAndRail />
+        <Apps />
       </Suspense>
     </div>
   );
 }
 
-/** The same page with nothing in it yet — see components/Skeleton.tsx. */
+/** The same page with nothing in it yet. */
 function HomeShell() {
   return (
     <>
-      <RailSkeleton />
-      <div className="main">
-        {/* The bar's shape, so the shell and the page have one silhouette:
-            search on the left, New app closing it on the right. */}
-        <header className="topbar topbar-flush">
-          <div className="topbar-wrap">
-            <div className="topbar-row">
-              <div className="kbar" style={{ minWidth: 156 }} />
-              <div className="spacer" />
-              <span className="btn primary" style={{ opacity: .55 }}>New app</span>
-            </div>
-          </div>
-        </header>
-        <div className="content">
-          <div className="wrap">
-            <CardsSkeleton />
-          </div>
-        </div>
+      <TopBar />
+      <div className="mx-auto w-full max-w-[1080px] px-6 py-10">
+        <div className="h-8 w-40 rounded-md bg-tile" />
+        <div className="mt-8 h-64 rounded-xl border border-border bg-card" />
       </div>
     </>
   );

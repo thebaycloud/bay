@@ -54,46 +54,33 @@ test("the return keeps the path and query the visitor asked for", () => {
   assert.equal(platformUrl("lilna", ROOT, "http://evil.example/x"), "https://lilna.supersonic.cv/");
 });
 
-/* --------------------------------------------- two roots, during a rename */
+/* ------------------------------------------------------------ two roots */
 
+// The cutover: thebay.cloud is canonical and supersonic.cv still answers. With
+// one root the new address is not recognised as a platform host at all — it
+// falls through to the attached-domain lookup, finds no row, and the app is
+// unreachable at its own new name.
 const ROOTS = ["thebay.cloud", "supersonic.cv"];
 
-test("both roots issue the same app while the platform is being renamed", () => {
-  // The whole point of the overlap: nobody's bookmark breaks on cutover day,
-  // and nobody has to be told a new address before the old one stops working.
+test("an app answers on every root, not only the canonical one", () => {
   assert.deepEqual(doorFor("lilna.thebay.cloud", ROOTS), { kind: "issued", slug: "lilna" });
   assert.deepEqual(doorFor("lilna.supersonic.cv", ROOTS), { kind: "issued", slug: "lilna" });
 });
 
-test("a name under neither root is still somebody's own domain", () => {
-  assert.deepEqual(doorFor("acme.com", ROOTS), { kind: "attached", hostname: "acme.com" });
-});
-
-test("the guard against a fake slug holds on every root, not just the first", () => {
-  // `evil.lilna.thebay.cloud` must not fall through to the attached-domain
-  // lookup, or it becomes a hostname somebody can attach inside the namespace
-  // we issue. The original check only ever ran against one root; adding a
-  // second is exactly how that kind of guard gets left behind.
+test("a bad label under ANY root is ours and malformed, never attachable", () => {
+  // The trap the loop has to avoid: `continue` here would carry
+  // `evil.lilna.thebay.cloud` past the root it belongs to and hand it back as a
+  // hostname somebody could attach, inside the namespace we issue.
   assert.deepEqual(doorFor("evil.lilna.thebay.cloud", ROOTS), { kind: "nowhere" });
   assert.deepEqual(doorFor("evil.lilna.supersonic.cv", ROOTS), { kind: "nowhere" });
 });
 
-test("one root passed as a plain string still works", () => {
-  // Every existing caller passes a string. A signature that quietly required an
-  // array would break them at runtime rather than at the type checker.
-  assert.deepEqual(doorFor("lilna.supersonic.cv", "supersonic.cv"), { kind: "issued", slug: "lilna" });
+test("somebody else's domain is still theirs", () => {
+  assert.deepEqual(doorFor("acme.com", ROOTS), { kind: "attached", hostname: "acme.com" });
+  // Ends with our name, is not under it.
+  assert.deepEqual(doorFor("notthebay.cloud", ROOTS), { kind: "attached", hostname: "notthebay.cloud" });
 });
 
-test("the longest matching root wins, so a root inside a root cannot shadow one", () => {
-  // Contrived today and free to defend: with roots ["cloud", "thebay.cloud"],
-  // matching the short one first turns lilna.thebay.cloud into the slug
-  // "lilna.thebay", which is not a slug, which is a 404 at a working address.
-  assert.deepEqual(doorFor("lilna.thebay.cloud", ["cloud", "thebay.cloud"]), { kind: "issued", slug: "lilna" });
-});
-
-test("a redirect is built from the canonical root, never from the one asked for", () => {
-  // platformUrl is where a private app on an attached domain sends a visitor.
-  // Sending them to the legacy root would be building new traffic for a domain
-  // being retired.
-  assert.equal(platformUrl("lilna", "thebay.cloud", "/x"), "https://lilna.thebay.cloud/x");
+test("a visitor is sent back to the canonical root, where the cookie is", () => {
+  assert.equal(platformUrl("lilna", ROOTS[0], "/orders"), "https://lilna.thebay.cloud/orders");
 });

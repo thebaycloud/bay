@@ -20,12 +20,19 @@
  * No `pg`, no server-only imports, nothing that cannot be bundled: these are
  * read from client components.
  */
+import { rootDomain } from "./roots";
 
-import { rootDomain } from "./brand";
+
+/**
+ * The CANONICAL root. An app answers on every root during the cutover, but a
+ * link we WRITE has to name one — and it must be the one we are keeping, or
+ * every share link minted today points at a name being retired.
+ */
+const ROOT = rootDomain();
 
 /** The app itself — what an owner shares with somebody. */
 export function appUrl(slug: string): string {
-  return `https://${slug}.${rootDomain()}`;
+  return `https://${slug}.${ROOT}`;
 }
 
 /**
@@ -35,7 +42,7 @@ export function appUrl(slug: string): string {
  * `<a>` rather than a Next `<Link>` — a client-side route to another host does
  * not navigate, it just does nothing, and the failure is silent.
  *
- * The session cookie is set on `.supersonic.cv` rather than host-only (see
+ * The session cookie is set on `.<root>` rather than host-only (see
  * docs/CUTOVER.md), so the owner arrives already signed in and the edge
  * recognises them. That is what makes this a link and not a login round-trip.
  */

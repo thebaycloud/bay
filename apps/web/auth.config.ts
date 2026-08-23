@@ -2,7 +2,19 @@ import type { NextAuthConfig } from "next-auth";
 
 const PROD = process.env.NODE_ENV === "production";
 
-/** ".supersonic.cv" in production; unset locally so cookies stay host-only. */
+/**
+ * ".<canonical root>" in production; unset locally so cookies stay host-only.
+ *
+ * ONE root, and it must be the canonical one. A cookie belongs to a single
+ * domain — there is no form of it that covers both supersonic.cv and
+ * thebay.cloud — so during the cutover this moves to the new root and everybody
+ * signs in once more. That is also why `platformUrl` in the proxy sends a
+ * visitor to the canonical root and not to whichever one they arrived on: the
+ * sign-in gate has to be shown where the cookie can be set.
+ *
+ * Changing this and `ROOT_DOMAINS` in the same deploy is the cutover. Changing
+ * one without the other is a sign-in loop.
+ */
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || undefined;
 
 export const SESSION_COOKIE_NAME = PROD
@@ -47,7 +59,12 @@ export const authConfig = {
         (!PROD && (p.startsWith("/design") || p.startsWith("/landing"))) ||
         // Stripe calls this server-to-server with no cookie; it verifies its own
         // signature. The rest of /api/billing stays behind the cookie gate.
-        p.startsWith("/api/billing/webhook");
+        p.startsWith("/api/billing/webhook") ||
+        // GitHub, for the same reason and on the same terms: no cookie exists to
+        // send, and the route verifies an HMAC over the raw body before it
+        // touches anything. The rest of /api/github stays behind the gate —
+        // those routes answer a person, and a person has a session.
+        p.startsWith("/api/github/webhook");
       if (isPublic) return true;
       return !!auth?.user;
     },
@@ -55,8 +72,10 @@ export const authConfig = {
       if (token.sub && session.user) (session.user as { id?: string }).id = token.sub;
       return session;
     },
-    // Allow returning to any *.supersonic.cv host after sign-in, so the proxy
-    // can bounce a visitor to /login and get them back to the tool they wanted.
+    // Allow returning to any host under the cookie's own root after sign-in, so
+    // the proxy can bounce a visitor to /login and get them back to the tool
+    // they wanted. Only that root: a return to a host the cookie does not cover
+    // would land them signed out at the address they started from.
     redirect({ url, baseUrl }) {
       try {
         const target = new URL(url, baseUrl);

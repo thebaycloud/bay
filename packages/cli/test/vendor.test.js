@@ -74,19 +74,25 @@ test("the stamp covers every file esbuild inlines, not a list somebody maintains
   // the day somebody swaps one file for another.
   const { readInputs } = await import("../scripts/stamp.mjs");
   const listed = new Set(readInputs(CLI_ROOT)["resolve.js"] ?? []);
-  // process-plan.ts, process-deploy.ts, release-job.ts and slug.ts were on this
-  // list and are not on it now. The first three went with the Cloud Run lane on
-  // 16 Aug (575549d); slug.ts followed, because cloudRunName was a Cloud Run
-  // concept and the resolver no longer reaches for it — `grep cloudRunName
-  // vendor/resolve.js` finds nothing.
-  // The list outlived them, which is the failure mode its own comment warns
-  // about — so it is now checked against the checkout as well as against the
-  // stamp, and a file that stops existing fails here loudly rather than
-  // silently asserting nothing.
+  //
+  // Three of the seven this listed are gone: process-plan.ts, process-deploy.ts
+  // and release-job.ts left with the Cloud Run lane on 16 Aug (575549d), and
+  // slug.ts is no longer on the resolver's import graph — `grep cloudRunName
+  // vendor/resolve.js` finds nothing. Asserting a deleted file is a test that
+  // can only be red, and this one was, which took `npm test` with it — and
+  // prepublishOnly runs npm test, so no CLI could be published while it stood.
+  //
+  // The list outliving the files is the failure mode this test's own comment
+  // warns about, so it is now checked against the CHECKOUT as well as the
+  // stamp: a file that stops existing fails here by name instead of silently
+  // asserting nothing.
   for (const rel of [
     "apps/web/lib/repo-runtime.ts",
     "apps/web/lib/procfile.ts",
     "apps/web/lib/processes.ts",
+    "apps/web/lib/resolve.ts",
+    "apps/web/lib/detect.ts",
+    "apps/web/lib/app-config.ts",
   ]) {
     assert.ok(
       existsSync(join(REPO_ROOT, rel)),

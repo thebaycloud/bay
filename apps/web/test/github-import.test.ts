@@ -40,11 +40,11 @@ test("an installation this workspace owns lists its repositories", async () => {
     installationId: 155650459,
     connections: async () => [],
     owns: async () => true,
-    repos: async () => [{ fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
+    repos: async () => [{ id: 1, fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
   });
   assert.equal(r.status, 200);
   assert.deepEqual(r.body, {
-    repos: [{ fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
+    repos: [{ id: 1, fullName: "thebaycloud/bay", private: true, defaultBranch: "main", pushedAt: null }],
   });
 });
 
@@ -116,6 +116,12 @@ test("the configure link ships with the list, not only with the failure", async 
     connections: async () => [], owns: async () => true, repos: async () => [],
   });
   const body = r.body as { installUrl: string; configureUrl: string };
-  assert.match(body.installUrl, /^https:\/\/github\.com\/apps\/the-bay-cloud\//);
-  assert.match(body.configureUrl, /^https:\/\/github\.com\/apps\/the-bay-cloud\//);
+  assert.equal(body.installUrl, INSTALL_URL);
+  assert.equal(body.configureUrl, CONFIGURE_URL);
+  // The shape, asserted once. The App's slug is named in lib/github-import.ts
+  // and must not be named again here — a test that hardcodes it becomes the
+  // second place to edit when the App changes, and the one nobody remembers.
+  for (const u of [INSTALL_URL, CONFIGURE_URL]) {
+    assert.match(u, /^https:\/\/github\.com\/apps\/[\w.-]+\/installations\/[\w_]+$/);
+  }
 });

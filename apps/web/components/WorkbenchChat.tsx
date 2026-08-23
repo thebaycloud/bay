@@ -233,7 +233,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                 <Message align="end">
                   <MessageContent>
                     <div
-                      className="max-w-[85%] rounded-2xl bg-tile px-3.5 py-2 text-ink"
+                      className="max-w-[85%] rounded-lg bg-tile px-3.5 py-2 text-ink"
                       data-slot="message-surface"
                     >
                       {turn.question}
@@ -327,7 +327,10 @@ export function WorkbenchChat({ slug }: { slug: string }) {
           // gave a 24px grey fill inside a 14px border — two different shapes,
           // one control. Everything visual is therefore addressed at the
           // input-group itself.
-          className="[&_[data-slot=input-group]]:rounded-3xl [&_[data-slot=input-group]]:border-transparent [&_[data-slot=input-group]]:bg-tile [&_[data-slot=input-group]]:shadow-none"
+          // rounded-xl, matching a card. 24px was a chat-app radius on a screen
+          // whose every other surface is 12, and it is what made the rail read as
+          // a different product from the list this app is opened from.
+          className="[&_[data-slot=input-group]]:rounded-xl [&_[data-slot=input-group]]:border-transparent [&_[data-slot=input-group]]:bg-tile [&_[data-slot=input-group]]:shadow-none"
           onSubmit={(_message, event) => {
             event.preventDefault();
             ask();
@@ -348,7 +351,7 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                   opened an empty file dialog would be the dead control this
                   codebase keeps refusing to ship. */}
               <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger className="size-8 shrink-0 rounded-full border border-line bg-white hover:bg-tile" />
+                <PromptInputActionMenuTrigger className="size-8 shrink-0 rounded-md border border-line bg-white hover:bg-tile" />
                 <PromptInputActionMenuContent>
                   {STARTERS.map((q) => (
                     <PromptInputActionMenuItem key={q} onClick={() => setText(q)}>
@@ -358,11 +361,12 @@ export function WorkbenchChat({ slug }: { slug: string }) {
                 </PromptInputActionMenuContent>
               </PromptInputActionMenu>
             </PromptInputTools>
-            {/* A filled circle, not the bare ↵ the default renders: the send
-                affordance is the one thing in this rail that should look like a
-                button you press. */}
+            {/* Filled, not the bare ↵ the default renders: the send affordance is
+                the one thing in this rail that should look like a button you
+                press. Square-cornered like every other button here — it was a
+                circle, which is a different product's grammar. */}
             <PromptInputSubmit
-              className="size-8 shrink-0 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-white disabled:text-ink-3 disabled:opacity-100"
+              className="size-8 shrink-0 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-white disabled:text-ink-3 disabled:opacity-100"
               disabled={!text.trim() || busy}
               status={busy ? "streaming" : "ready"}
               variant="default"

@@ -13,28 +13,30 @@ export const config = {
   sessionCookieName: PROD ? "__Secure-authjs.session-token" : "authjs.session-token",
   loginUrl: process.env.LOGIN_URL ?? "https://app.supersonic.cv/login",
   /**
-   * The root every URL we BUILD is built from. One value, deliberately: a
-   * redirect that sent people to a domain being retired would be manufacturing
-   * new traffic for it.
-   */
-  /** What a person calls us. Appears on the badge injected into every app. */
-  productName: process.env.PRODUCT_NAME ?? "Supersonic",
-  rootDomain: process.env.ROOT_DOMAIN ?? "supersonic.cv",
-  /**
-   * Every root we SERVE, canonical first.
+   * Every root the platform issues addresses under, CANONICAL FIRST.
    *
-   * During a rename both the old and the new domain issue the same apps, so
-   * nobody's bookmark breaks on cutover day. LEGACY_ROOT_DOMAINS is a
-   * comma-separated list and is empty in the steady state, which makes this
-   * exactly equal to [rootDomain] — the behaviour before it existed.
+   * Plural because the rebrand needs both to answer at once: three live apps and
+   * every installed CLI point at supersonic.cv, and thebay.cloud is the name from
+   * here on. With one root, `<slug>.thebay.cloud` is not recognised as a platform
+   * host at all — it falls through to the attached-domain lookup, finds no row,
+   * and the app is unreachable at its own new address.
+   *
+   * `ROOT_DOMAINS=thebay.cloud,supersonic.cv`. `ROOT_DOMAIN` singular is still
+   * read, because it is what this service is configured with today and a deploy
+   * that ignores it takes the edge down.
    */
-  servedRootDomains: [
-    process.env.ROOT_DOMAIN ?? "supersonic.cv",
-    ...(process.env.LEGACY_ROOT_DOMAINS ?? "")
-      .split(",")
-      .map((d) => d.trim().toLowerCase())
-      .filter(Boolean),
-  ],
+  /**
+   * What a person calls us. Appears on the badge injected into every app, so a
+   * literal here is our old brand showing up on somebody else's live site.
+   *
+   * Separate from the roots above because the two move apart: thebay.cloud was
+   * added beside supersonic.cv without the name on the page changing at all.
+   */
+  productName: process.env.PRODUCT_NAME ?? "Supersonic",
+  rootDomains: (process.env.ROOT_DOMAINS ?? process.env.ROOT_DOMAIN ?? "supersonic.cv")
+    .split(",")
+    .map((r) => r.trim().toLowerCase())
+    .filter(Boolean),
   /** Inject the "Runs on Supersonic" badge + owner toolbar into HTML pages. */
   injectOverlay: process.env.INJECT_OVERLAY !== "0",
   /**

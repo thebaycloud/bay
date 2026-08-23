@@ -1,17 +1,29 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronLeft, RefreshCw } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  ChartColumn,
+  ChevronLeft,
+  Database,
+  Globe,
+  KeyRound,
+  RefreshCw,
+  Ship,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/panel/toast";
-import { AlertCell, Avatars, Cell, Chips, StatusChip, TintRow } from "@/components/panel/atoms";
+import { AlertCell, Avatars, Chips, Row, RowGroup, RowList, RowNest, StatusChip, TintRow } from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { StoragePanel } from "@/components/StoragePanel";
 import { JobsPanel } from "@/components/JobsPanel";
 import { IssuesPanel } from "@/components/IssuesPanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
+import { GitPanel } from "@/components/GitPanel";
 import SharePanel from "@/components/SharePanel";
 import { readPanel, type Reading } from "@/lib/panel/reading";
 
@@ -45,6 +57,25 @@ type View =
   | "access"
   | "agent";
 
+/**
+ * A mark per block.
+ *
+ * Eight cells of identical shape, told apart by reading their titles — which is
+ * what a grid exists to save you from. Each is the plainest icon for the thing:
+ * Ships is a ship, Keys is a key. Address has no view behind it and still gets
+ * one, because the point is recognising the block, not that it is clickable.
+ */
+const ICON = {
+  address: Globe,
+  analytics: ChartColumn,
+  ships: Ship,
+  data: Database,
+  keys: KeyRound,
+  infra: Activity,
+  access: Users,
+  agent: Bot,
+} as const;
+
 const TITLE: Record<View, string> = {
   analytics: "Analytics",
   ships: "Ships",
@@ -59,6 +90,12 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
   const [d, setD] = useState<Reading | null>(null);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<View | null>(null);
+  /**
+   * Open, because the domains under Address are the answer to the question the
+   * row asks. A disclosure that starts shut makes somebody click to find out
+   * whether there is anything to find out.
+   */
+  const [addrOpen, setAddrOpen] = useState(true);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
@@ -84,7 +121,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           <p className="text-sub text-ink-2">Nothing could be read about this app just now.</p>
           {/* Never left spinning. A panel that says "Reading…" forever is
               indistinguishable from one that is broken, which is what this was. */}
-          <Button className="mt-1 rounded-full" onClick={() => setNonce((n) => n + 1)} size="sm" variant="outline">
+          <Button className="mt-1" onClick={() => setNonce((n) => n + 1)} size="sm" variant="outline">
             <RefreshCw className="size-3.5" />
             Try again
           </Button>
@@ -96,13 +133,15 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
   if (!d) {
     return (
       <Screen>
-        <div className="grid grid-cols-2 gap-3">
-          <Skeleton className="col-span-full h-[86px] rounded-xl" />
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton className="h-[132px] rounded-xl" key={i} />
+        <RowList>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div className="flex items-center gap-3 border-b border-border px-4 py-3.5 last:border-0" key={i}>
+              <Skeleton className="size-7 shrink-0 rounded-sm" />
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="ml-auto h-4 w-28" />
+            </div>
           ))}
-          <Skeleton className="col-span-full h-[132px] rounded-xl" />
-        </div>
+        </RowList>
       </Screen>
     );
   }
@@ -111,7 +150,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
     return (
       <Screen>
         <div className="flex items-center gap-1 pb-1">
-          <Button className="rounded-full" onClick={() => setView(null)} size="sm" variant="ghost">
+          <Button className="-ml-2" onClick={() => setView(null)} size="sm" variant="ghost">
             <ChevronLeft className="size-4" />
             {TITLE[view]}
           </Button>
@@ -125,16 +164,41 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
 
   return (
     <Screen>
-      <div className="grid grid-cols-2 gap-3">
-        {d.alert ? (
-          <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
+      {/* The alert stays a tinted card above the groups. It is the one thing here
+          that must not look like the rows it sits over. */}
+      {d.alert ? (
+        <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
+      ) : null}
+
+      <RowGroup title="Overview">
+        {/* A disclosure, not a door. Every address this app answers on is a
+            short list, and a screen of its own to hold four rows is a
+            navigation somebody has to come back from. */}
+        <Row
+          expanded={addrOpen}
+          icon={ICON.address}
+          onOpen={() => setAddrOpen((o) => !o)}
+          sub="Where it lives"
+          title="Address"
+        >
+          <TintRow value={d.addr} />
+        </Row>
+
+        {addrOpen ? (
+          <RowNest>
+            <DomainsPanel nested onToast={toast} slug={slug} />
+          </RowNest>
         ) : null}
 
-        <Cell sub="Where it lives" title="Address" wide>
-          <TintRow value={d.addr} />
-        </Cell>
+        <Row icon={ICON.access} onOpen={() => setView("access")} sub="Who can open this" title="Access">
+          <Chips>
+            <Avatars initials={d.pInitials} />
+            <StatusChip text={d.who} tone={d.who === "public" ? "grey" : "green"} />
+          </Chips>
+        </Row>
 
-        <Cell
+        <Row
+          icon={ICON.analytics}
           onOpen={() => setView("analytics")}
           sub={
             d.an
@@ -151,40 +215,22 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
               <Avatars initials={d.initials} />
             </Chips>
           ) : null}
-        </Cell>
+        </Row>
 
-        <Cell onOpen={() => setView("ships")} sub={`Last shipped ${d.ships[0].when}`} title="Ships">
+        <Row icon={ICON.ships} onOpen={() => setView("ships")} sub={`Last shipped ${d.ships[0].when}`} title="Ships">
           <Chips>
             {/* No re-ship button. There is no deploy-trigger route behind it, and a
                 dead control on the one screen about shipping is worse than none. */}
             <StatusChip text={d.shipping ? "Shipping" : "Running"} tone={d.shipping ? "red" : "green"} />
           </Chips>
-        </Cell>
+        </Row>
 
-        <Cell onOpen={() => setView("data")} sub="Its data and files" title="Data">
-          <Chips>
-            <StatusChip
-              text={`${d.tables.length} ${d.tables.length === 1 ? "table" : "tables"} · ${d.files} ${d.files === 1 ? "file" : "files"}`}
-              tone={d.missing ? "grey" : "green"}
-            />
-          </Chips>
-        </Cell>
-
-        <Cell
-          onOpen={() => setView("keys")}
-          sub={d.keys.length ? "What it connects to" : "Nothing connected yet"}
-          title="Keys"
+        <Row
+          icon={ICON.infra}
+          onOpen={() => setView("infra")}
+          sub="What it is doing, and what runs on its own"
+          title="Infra"
         >
-          {d.keys.length ? (
-            <Chips>
-              {d.keys.slice(0, 3).map((k) => (
-                <StatusChip key={k.name} text={k.name} tone={k.tone === "bad" ? "red" : "green"} />
-              ))}
-            </Chips>
-          ) : null}
-        </Cell>
-
-        <Cell onOpen={() => setView("infra")} sub="What it is doing, and what runs on its own" title="Infra">
           <Chips>
             <StatusChip
               text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
@@ -192,16 +238,40 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             />
             <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
           </Chips>
-        </Cell>
+        </Row>
+      </RowGroup>
 
-        <Cell onOpen={() => setView("access")} sub="Who can open this" title="Access">
+      <RowGroup title="Resources">
+        <Row icon={ICON.data} onOpen={() => setView("data")} sub="Its data and files" title="Data">
           <Chips>
-            <Avatars initials={d.pInitials} />
-            <StatusChip text={d.who} tone={d.who === "public" ? "grey" : "green"} />
+            <StatusChip
+              text={`${d.tables.length} ${d.tables.length === 1 ? "table" : "tables"} · ${d.files} ${d.files === 1 ? "file" : "files"}`}
+              tone={d.missing ? "grey" : "green"}
+            />
           </Chips>
-        </Cell>
+        </Row>
 
-        <Cell onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent" wide>
+        <Row
+          icon={ICON.keys}
+          onOpen={() => setView("keys")}
+          sub={d.keys.length ? "What it connects to" : "Nothing connected yet"}
+          title="Keys"
+        >
+          {d.keys.length ? (
+            <Chips>
+              {/* Two, not three: a row has one line and the third name pushed the
+                  address column off the screen. The rest are behind the row. */}
+              {d.keys.slice(0, 2).map((k) => (
+                <StatusChip key={k.name} text={k.name} tone={k.tone === "bad" ? "red" : "green"} />
+              ))}
+              {d.keys.length > 2 ? (
+                <span className="font-mono text-micro text-ink-3">+{d.keys.length - 2}</span>
+              ) : null}
+            </Chips>
+          ) : null}
+        </Row>
+
+        <Row icon={ICON.agent} onOpen={() => setView("agent")} sub="Give your coding agent a way in" title="Agent">
           <Chips>
             {/* Two states said differently on purpose: no token is something to
                 fix, a token never used is something to try. */}
@@ -217,14 +287,21 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             />
             <StatusChip text={d.mcp ? "mcp on" : "mcp not built"} tone="grey" />
           </Chips>
-        </Cell>
-      </div>
+        </Row>
+      </RowGroup>
     </Screen>
   );
 }
 
 function Screen({ children }: { children: React.ReactNode }) {
-  return <div className="h-full overflow-y-auto bg-background p-4">{children}</div>;
+  return (
+    <div className="h-full overflow-y-auto bg-background">
+      {/* 1080px, the app list's measure. Dev mode is the full width now, and a
+          list stretched across a 27" display puts the fact a metre from the name
+          it belongs to. */}
+      <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-6 px-6 py-8">{children}</div>
+    </div>
+  );
 }
 
 function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View }) {
@@ -246,9 +323,9 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
   }
   if (view === "access") {
     return (
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-6">
         <SharePanel slug={slug} />
-        <DomainsPanel onToast={toast} slug={slug} />
+        <GitPanel onToast={toast} slug={slug} />
       </div>
     );
   }

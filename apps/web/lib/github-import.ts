@@ -13,10 +13,21 @@ import type { Repo } from "./github-repos";
  * second half of the answer to a question the list itself provokes.
  */
 
+/**
+ * The App, named once.
+ *
+ * `baycloudcd` and not `the-bay-cloud`, which is what shipped in phase one and
+ * is being retired. The two differ in the only ways that matter to a push:
+ * `the-bay-cloud` is subscribed to NO events and holds no `statuses: write`, so
+ * nothing it is installed on can ever ship on a push or report an outcome.
+ *
+ * These two constants are the only place the App is named in code. Everything
+ * else follows from the credentials, which name it by id.
+ */
 /** Where a person goes to connect an account for the first time. */
-export const INSTALL_URL = "https://github.com/apps/the-bay-cloud/installations/new";
+export const INSTALL_URL = "https://github.com/apps/baycloudcd/installations/new";
 /** Where a person goes to change which repositories we can see. */
-export const CONFIGURE_URL = "https://github.com/apps/the-bay-cloud/installations/select_target";
+export const CONFIGURE_URL = "https://github.com/apps/baycloudcd/installations/select_target";
 
 export interface ImportDeps {
   workspaceId: string;

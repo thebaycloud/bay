@@ -19,12 +19,13 @@
  */
 
 import { identityToken } from "./gcp-rest";
+import { rootDomain } from "./roots";
 
 const BASE = (process.env.UMAMI_URL ?? "").replace(/\/$/, "");
-import { appHost } from "./brand";
 const USER = process.env.UMAMI_USER ?? "admin";
 const PASSWORD = process.env.UMAMI_PASSWORD ?? "";
-
+/** The CANONICAL root: a website is registered under one name, not two. */
+const ROOT_DOMAIN = rootDomain();
 
 /**
  * The invoker credential, in the header that is NOT `Authorization`.
@@ -157,7 +158,7 @@ export async function listWebsites(): Promise<Website[] | null> {
  */
 export async function ensureWebsite(slug: string): Promise<string | null> {
   if (!umamiConfigured()) return null;
-  const domain = appHost(slug);
+  const domain = `${slug}.${ROOT_DOMAIN}`;
 
   const existing = await listWebsites();
   if (existing === null) return null; // could not ask; do not create a duplicate

@@ -41,8 +41,12 @@ export type SourceOrigin =
    * authenticated string is a credential: the moment it arrives as `url`, every
    * line that already logs `origin.url` starts leaking it, and nothing about
    * those lines looks wrong.
+   *
+   * `sha` pins the clone to one commit. Set for a build a push caused, absent
+   * for every other kind — and when it is absent this is byte-for-byte the
+   * clone it has always been.
    */
-  | { kind: "clone"; url: string; token?: string };
+  | { kind: "clone"; url: string; token?: string; sha?: string };
 
 export type Log = (line: string) => void;
 
@@ -52,6 +56,54 @@ export interface FetchDeps {
   run: (cmd: string, args: string[]) => Promise<unknown>;
   log: Log;
   stages: Pick<StageRecorder, "around" | "skipped">;
+}
+
+/**
+ * The git commands that put one commit — or one branch tip — in `dir`.
+ *
+ * Returned as data rather than run here so the shape is testable without a
+ * repository, a network or a temp directory. The pinned form is the reason
+ * this function exists at all.
+ *
+ * **`git clone --branch` refuses a SHA.** It takes a branch or a tag and
+ * nothing else, so pinning cannot be expressed as a flag on the clone we
+ * already make. The four-step form below is the documented way to fetch one
+ * commit: init an empty repository, name the remote, `fetch --depth 1` the SHA
+ * itself, and check out what came back. It is still one commit's worth of
+ * bytes — the same as the shallow clone it replaces — and it is exact, which
+ * `--depth 1` of a branch is not once somebody pushes again mid-build.
+ *
+ * `--detach FETCH_HEAD` rather than a branch name: nothing downstream reads the
+ * branch, and creating one would invite a later reader to believe the checkout
+ * tracks it.
+ */
+export function cloneCommands(target: string, dir: string, sha?: string, clean?: string): Array<[string, string[]]> {
+  const cmds: Array<[string, string[]]> = sha
+    ? [
+        ["git", ["init", "--quiet", dir]],
+        ["git", ["-C", dir, "remote", "add", "origin", target]],
+        ["git", ["-C", dir, "fetch", "--depth", "1", "origin", sha]],
+        ["git", ["-C", dir, "checkout", "--detach", "FETCH_HEAD"]],
+      ]
+    : [["git", ["clone", "--depth", "1", target, dir]]];
+
+  // TAKE THE CREDENTIAL BACK OUT OF `.git/config`.
+  //
+  // Both forms above leave the URL they were given as `origin`, and for a
+  // private repository that URL contains an installation token. `.git` is not
+  // excluded from anything downstream: the build context is the whole directory
+  // (`buildctl --local context=<dir>`), and a Dockerfile that says `COPY . .`
+  // copies the token into a layer of an image pushed to a shared repository.
+  //
+  // The token lives an hour, which bounds the damage and does not remove it —
+  // an image layer is permanent and an hour is long enough to clone every
+  // repository the installation can see.
+  //
+  // Rewriting the remote is preferred over deleting `.git`, which some builders
+  // read for version metadata. A no-op when no token was used, so a public
+  // clone runs exactly the one command it always ran.
+  if (clean && clean !== target) cmds.push(["git", ["-C", dir, "remote", "set-url", "origin", clean]]);
+  return cmds;
 }
 
 /**
@@ -79,9 +131,9 @@ export async function fetchSource(dir: string, origin: SourceOrigin, deps: Fetch
     await stages.around("clone", async () => {
       // The clean url is logged; the authenticated one is built here, handed to
       // git, and never bound to anything a later line could reach for.
-      log(`Pulling ${origin.url}`);
+      log(origin.sha ? `Pulling ${origin.url} at ${origin.sha.slice(0, 7)}` : `Pulling ${origin.url}`);
       const target = origin.token ? authenticatedCloneUrl(origin.url, origin.token) : origin.url;
-      await run("git", ["clone", "--depth", "1", target, dir]);
+      for (const [cmd, args] of cloneCommands(target, dir, origin.sha, origin.url)) await run(cmd, args);
     });
   }
 

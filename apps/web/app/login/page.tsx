@@ -6,16 +6,25 @@ import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Github } from "lucide-react";
 import { Mark } from "@/components/Mark";
+import { isPlatformHost } from "@/lib/roots";
 import { GoogleIcon } from "@/components/BrandIcons";
 
 // The URL to return to after auth — read from ?callbackUrl and validated to be a
-// supersonic.cv address, so we never bounce a user to an attacker-supplied host.
+// host under one of our own roots, so we never bounce a user to an
+// attacker-supplied one. Asked of `rootDomains()` rather than a literal: during
+// the cutover both roots answer, and a literal here would refuse the new one.
+//
+// A same-origin path is allowed too (leading "/" but not "//", which the browser
+// reads as a protocol-relative host): that is how /cli sends you back to the
+// authorization it was in the middle of after you switch accounts, and it is the
+// only form that survives local development, where there is no public root.
 function safeCallback(): string {
   try {
     const cb = new URLSearchParams(window.location.search).get("callbackUrl");
     if (!cb) return "";
+    if (cb.startsWith("/") && !cb.startsWith("//")) return cb;
     const u = new URL(cb);
-    if (u.protocol === "https:" && (u.hostname === "supersonic.cv" || u.hostname.endsWith(".supersonic.cv"))) return cb;
+    if (u.protocol === "https:" && isPlatformHost(u.hostname)) return cb;
   } catch { /* malformed — fall through */ }
   return "";
 }

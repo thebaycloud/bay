@@ -347,6 +347,34 @@ export async function workspaceOfUser(userId: string): Promise<string | null> {
   return r.rows[0]?.workspace_id ?? null;
 }
 
+/**
+ * Did the identity provider prove this visitor's address?
+ *
+ * A missing row reads false, which is the safe direction: the only thing this
+ * gates is a DOMAIN rule, and a visitor we cannot find is not somebody we can
+ * say holds an address at luwo.ai.
+ */
+export async function emailIsVerified(userId: string): Promise<boolean> {
+  const r = await db().query(`SELECT email_verified FROM users WHERE id = $1`, [userId]);
+  return r.rows[0]?.email_verified === true;
+}
+
+/**
+ * Does this app carry a rule for this domain?
+ *
+ * Equality, in SQL, on a domain the caller took from the address with one split
+ * — never `LIKE` and never a suffix test, or a rule for luwo.ai would also admit
+ * evil-luwo.ai. Same reasoning as the sign-in allowlist in the control plane.
+ */
+export async function hasDomainGrant(appId: string, domain: string): Promise<boolean> {
+  if (!domain) return false;
+  const r = await db().query(
+    `SELECT 1 FROM app_domain_grants WHERE app_id = $1 AND domain = $2`,
+    [appId, domain.toLowerCase()]
+  );
+  return r.rowCount ? r.rowCount > 0 : false;
+}
+
 /** Domain of a workspace, or null if the workspace does not exist. */
 export async function workspaceDomainOf(workspaceId: string): Promise<string | null> {
   const r = await db().query(`SELECT domain FROM workspaces WHERE id = $1`, [workspaceId]);

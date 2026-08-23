@@ -31,7 +31,7 @@ import { railIndex, type FilmDrive } from "@/lib/deploy-film";
  * effect, so nothing about the deploy page's own weight changes for a person
  * who never deploys.
  */
-export function DeployFilm({ drive, elapsed }: { drive: FilmDrive; elapsed: number }) {
+export function DeployFilm({ drive, elapsed, full = false }: { drive: FilmDrive; elapsed: number; full?: boolean }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const film = useRef<FilmHandle | null>(null);
   // The latest instruction, kept in a ref as well as in props: the module
@@ -115,8 +115,12 @@ export function DeployFilm({ drive, elapsed }: { drive: FilmDrive; elapsed: numb
 
   useEffect(apply, [drive, elapsed]);
 
+  // `full` is the shape, not a second film: the picture takes the window and
+  // the card's own chrome goes. It changes a class, so a deploy that is already
+  // running is not remounted — the film watches its canvas with a
+  // ResizeObserver and re-frames itself for whatever box it ends up in.
   return (
-    <div className="dfilm" ref={rootRef}>
+    <div className={full ? "dfilm full" : "dfilm"} ref={rootRef}>
       <div className="dfilm-bar top">
         <span data-el="tagLane">deploying…</span>
         <span className="sp" />

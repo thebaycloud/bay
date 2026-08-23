@@ -58,3 +58,18 @@ export async function createUser(email: string, name: string, passwordHash: stri
   );
   return r.rows[0];
 }
+
+/**
+ * Record that the identity provider proved this address belongs to this person.
+ *
+ * Raised only — see the note at the call site in auth.ts. A password account
+ * never reaches here, which is the point: `users.email_verified` is what a
+ * domain rule on an app is allowed to trust.
+ */
+export async function markEmailVerified(email: string, provider: string): Promise<void> {
+  await getPool(DB).query(
+    `UPDATE users SET email_verified = true
+     WHERE email = $1 AND provider = $2 AND email_verified = false`,
+    [email.toLowerCase(), provider]
+  );
+}

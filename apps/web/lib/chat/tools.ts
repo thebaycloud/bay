@@ -2,7 +2,7 @@ import { getTenantPool, dbNameForSlug } from "@/lib/db";
 import { appLogs } from "@/lib/app-logs";
 import { describeService, getErrors } from "@/lib/gcloud";
 import { getDeploy } from "@/lib/deploys";
-import { getAppBySlug, listGrants } from "@/lib/apps";
+import { getAppBySlug, listGrants, listDomainGrants } from "@/lib/apps";
 import { listPending } from "@/lib/requests";
 import { envKeysFor } from "@/lib/env-keys";
 import { websiteStats } from "@/lib/umami";
@@ -186,8 +186,13 @@ export function toolsFor(slug: string, cookie?: string): Handler {
 
         case "access": {
           const app = await getAppBySlug(slug);
-          const [grants, requests] = await Promise.all([listGrants(slug), listPending(slug)]);
-          return { ok: true, data: { visibility: app?.visibility ?? "private", grants, requests } };
+          const [grants, domains, requests] = await Promise.all([
+            listGrants(slug), listDomainGrants(slug), listPending(slug),
+          ]);
+          // `domains` is people too — a rule for "luwo.ai" admits everyone there
+          // with a verified address, so an answer that listed only `grants`
+          // would under-report who can open the app.
+          return { ok: true, data: { visibility: app?.visibility ?? "private", grants, domains, requests } };
         }
 
         case "live": {
