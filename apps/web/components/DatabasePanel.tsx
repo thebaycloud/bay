@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ChevronLeft, Play, Table2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Chips, Row, RowList, StatusChip } from "@/components/panel/atoms";
 
 /**
@@ -72,6 +73,32 @@ function fmt(v: unknown): { text: string; dim?: boolean } {
   return { text: String(v) };
 }
 
+/**
+ * Postgres types that are read as quantities, and therefore set on the right.
+ *
+ * Right-alignment on numbers is most of what makes a grid legible: the digits
+ * line up, so two rows differing by an order of magnitude are obvious without
+ * reading either number. Matched on a PREFIX because `information_schema` says
+ * "numeric(10,2)" and "double precision", and on the whole string it would match
+ * neither.
+ */
+const NUMERIC = [
+  "int", "smallint", "bigint", "serial", "numeric", "decimal", "real", "double", "money",
+];
+function isNumeric(type: string): boolean {
+  const t = type.toLowerCase();
+  return NUMERIC.some((n) => t.startsWith(n));
+}
+
+/** A column of dates is narrow and fixed; a column of jsonb is not. */
+function widthFor(type: string): string {
+  const t = type.toLowerCase();
+  if (t.startsWith("bool")) return "56px";
+  if (t.includes("timestamp") || t.startsWith("date")) return "150px";
+  if (isNumeric(t)) return "88px";
+  return "auto";
+}
+
 export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean }) {
   const [tables, setTables] = useState<TableSummary[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -91,15 +118,22 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
     return () => { alive = false; };
   }, [slug, hasDb]);
 
-  if (!hasDb) return <Empty>this app has no database</Empty>;
-  if (err) return <Empty>⚠ {err.slice(0, 160)}</Empty>;
-  if (tables === null) return <Empty>reading…</Empty>;
+  // Three different facts, and they used to be one sentence.
+  //
+  // `hasDb` is false whenever /db returned ANY error, so a read that failed —
+  // an expired credential, a proxy that dropped the connection — was reported as
+  // "this app has no database". Somebody seeing that goes looking for why their
+  // database was never provisioned, which is the wrong afternoon. Same defect as
+  // analytics reporting 0 visitors when umami cannot be reached.
+  if (err) return <Empty>That could not be read. {err.slice(0, 160)}</Empty>;
+  if (!hasDb) return <Empty>This app has no database.</Empty>;
+  if (tables === null) return <Empty>Reading…</Empty>;
   if (open) return <TableView onBack={() => setOpen(null)} slug={slug} table={open} />;
 
   return (
     <div className="flex flex-col gap-3">
       {tables.length === 0 ? (
-        <Empty>no tables yet — nothing has written to this database</Empty>
+        <Empty>No tables yet — nothing has written to this database.</Empty>
       ) : (
         <RowList>
           {tables.map((t) => {
@@ -108,10 +142,19 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
               <Row
                 key={t.name}
                 onOpen={() => setOpen(t.name)}
-                // The sub-line carries arrival when the table records one, and
-                // the column count when it does not — never a hedge about time.
-                sub={when ? `last ${when}` : `${t.columns} column${t.columns === 1 ? "" : "s"}`}
-                title={t.name}
+                // Both facts, because they answer different halves of "did it
+                // land": the shape of the table, and when something last arrived.
+                // Arrival is omitted rather than hedged when the table records
+                // none — it does not say "never".
+                sub={
+                  <span className="tabular-nums">
+                    {t.columns} column{t.columns === 1 ? "" : "s"}
+                    {when ? ` · last ${when}` : ""}
+                  </span>
+                }
+                // Mono, because a table name is an identifier you type into a
+                // query — the one place on this screen that is not English.
+                title={<span className="font-mono text-[14px]">{t.name}</span>}
               >
                 <Chips>
                   <StatusChip text={count(t.rows, t.rowsExact)} tone={t.rows > 0 ? "green" : "grey"} />
@@ -149,47 +192,89 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <button className="flex items-center gap-1 text-sub text-ink-2 hover:text-ink" onClick={onBack} type="button">
-          <ChevronLeft size={14} />back
-        </button>
-        <Table2 className="text-ink-3" size={13} />
-        <span className="text-val text-ink">{table}</span>
+      <div className="flex items-center gap-2.5">
+        <Button className="-ml-2" onClick={onBack} size="sm" variant="ghost">
+          <ChevronLeft className="size-4" />
+          Tables
+        </Button>
+        <span className="flex items-center gap-2">
+          <Table2 className="size-3.5 text-ink-3" />
+          <span className="font-mono text-[14px] text-ink">{table}</span>
+        </span>
         {/* Said, not assumed: the route decides the ordering and reports it, so
             this line and the SQL behind it cannot disagree. */}
-        {page ? <span className="text-sub text-ink-3">· {page.orderedBy}</span> : null}
+        {page ? <span className="text-[13px] text-ink-3">{page.orderedBy}</span> : null}
       </div>
 
-      {err ? <Empty>⚠ {err.slice(0, 160)}</Empty> : null}
-      {!page && !err ? <Empty>reading…</Empty> : null}
+      {err ? <Empty>That could not be read. {err.slice(0, 160)}</Empty> : null}
+      {!page && !err ? <Empty>Reading…</Empty> : null}
 
       {page ? (
         page.rows.length === 0 ? (
-          <Empty>this table is empty</Empty>
+          <Empty>This table is empty.</Empty>
         ) : (
           <>
-            <div className="overflow-auto rounded-xl border border-border">
-              <table className="w-full border-collapse text-sub">
-                <thead>
-                  <tr className="bg-card">
+            {/* A data grid, not a layout table.
+                
+                Everything here is one decision: the values are MACHINE data, so
+                they are set the way machine data is read. Mono, because an id and
+                a timestamp are compared character by character and the UI font
+                gives 0 and O the same width but not the same shape. 28px rows,
+                so twice as many fit. Faint vertical rules, so a column can be
+                followed down without losing your place. A sticky header, because
+                scrolling past the names is how you end up guessing which column
+                you are reading.
+                
+                None of this contradicts "no mono anywhere else": everywhere else
+                the text is English. */}
+            <div className="max-h-[560px] overflow-auto rounded-xl border border-border">
+              <table className="w-full border-collapse font-mono text-[12.5px]">
+                <thead className="sticky top-0 z-10">
+                  <tr>
+                    {/* The ordinal gutter. Not the primary key and not pretending
+                        to be: it numbers the rows ON THIS PAGE against the total,
+                        which is what tells you where you are in 40 rows. */}
+                    <th className="w-[52px] border-b border-r border-border bg-tile px-2.5 py-2 text-right font-normal text-ink-3">
+                      #
+                    </th>
                     {page.columns.map((c) => (
-                      <th className="whitespace-nowrap px-3 py-2 text-left font-normal text-ink-2" key={c.name}>
-                        {c.name}
-                        {/* The type is here because a column of unreadable values
-                            needs it explained — not because the schema is the point. */}
-                        <span className="pl-1.5 text-ink-3">{c.type}</span>
+                      <th
+                        className={`border-b border-r border-border bg-tile px-2.5 py-2 font-normal last:border-r-0 ${
+                          isNumeric(c.type) ? "text-right" : "text-left"
+                        }`}
+                        key={c.name}
+                        style={{ width: widthFor(c.type) }}
+                      >
+                        <span className="whitespace-nowrap text-ink">{c.name}</span>
+                        {/* The type, dimmer and one size down. It is here because
+                            a column of unreadable values needs it explained — not
+                            because the schema is the point. */}
+                        <span className="whitespace-nowrap pl-2 text-[11px] text-ink-3">
+                          {c.type}
+                        </span>
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {page.rows.map((row, i) => (
-                    <tr className="border-t border-border" key={i}>
+                    <tr className="group" key={i}>
+                      <td className="border-b border-r border-border bg-ground px-2.5 py-[5px] text-right tabular-nums text-ink-3 group-hover:bg-tile">
+                        {page.offset + i + 1}
+                      </td>
                       {page.columns.map((c) => {
                         const v = fmt(row[c.name]);
+                        const num = isNumeric(c.type);
                         return (
                           <td
-                            className={`max-w-[22rem] truncate px-3 py-1.5 ${v.dim ? "text-ink-3" : "text-ink"}`}
+                            className={[
+                              "max-w-[22rem] truncate border-b border-r border-border px-2.5 py-[5px] last:border-r-0 group-hover:bg-tile",
+                              num ? "text-right tabular-nums" : "text-left",
+                              // `null` is dim AND italic. Dim alone reads as a
+                              // pale string, and "null" is a value people also
+                              // store as text.
+                              v.dim ? "italic text-ink-3" : "text-ink",
+                            ].join(" ")}
                             key={c.name}
                             title={v.text}
                           >
@@ -203,26 +288,31 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
               </table>
             </div>
 
-            <div className="flex items-center gap-3 text-sub text-ink-2">
-              <span>
-                {page.offset + 1}–{last} of {page.totalExact ? page.total.toLocaleString() : `~${page.total.toLocaleString()}`}
+            <div className="flex items-center gap-2">
+              {/* The count keeps its `~`: an estimate that looks exact is the one
+                  number on this screen somebody might act on. */}
+              <span className="text-[13px] tabular-nums text-ink-2">
+                {page.offset + 1}–{last} of{" "}
+                {page.totalExact ? page.total.toLocaleString() : `~${page.total.toLocaleString()}`}
               </span>
-              <button
-                className="rounded-md border border-border px-2 py-1 disabled:opacity-40"
+              <Button
+                className="ml-auto h-7 px-2.5 text-[13px]"
                 disabled={offset === 0}
                 onClick={() => setOffset(Math.max(0, offset - PAGE))}
-                type="button"
+                size="sm"
+                variant="outline"
               >
-                newer
-              </button>
-              <button
-                className="rounded-md border border-border px-2 py-1 disabled:opacity-40"
+                Newer
+              </Button>
+              <Button
+                className="h-7 px-2.5 text-[13px]"
                 disabled={last >= page.total}
                 onClick={() => setOffset(offset + PAGE)}
-                type="button"
+                size="sm"
+                variant="outline"
               >
-                older
-              </button>
+                Older
+              </Button>
             </div>
           </>
         )
@@ -295,5 +385,9 @@ function QueryBox({ slug }: { slug: string }) {
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-xl border border-border p-4 text-sub text-ink-3">{children}</div>;
+  return (
+    <div className="rounded-xl border border-border bg-card px-4 py-3.5 text-[14px] text-ink-2">
+      {children}
+    </div>
+  );
 }
