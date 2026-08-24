@@ -36,6 +36,17 @@ import { rootDomain } from "./roots";
 
 const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || "supersonic-deploy-prod";
 
+/**
+ * The Cloud Run service the edge runs as.
+ *
+ * Named here because the fourth filter arm has to be scoped to it: edge lines are
+ * claimed by a slug inside the payload, and without also pinning the writer, any
+ * tenant printing `{"slug":"someone-else","source":"edge"}` to its own stdout
+ * would appear in that app's log view. The slug is the claim; this is the proof
+ * of who made it.
+ */
+const EDGE_SERVICE = process.env.EDGE_SERVICE_NAME || "supersonic-proxy";
+
 /** Our own published streams live under one log name per app. */
 export function logNameFor(slug: string): string {
   return `bay.app.${slug}`;
@@ -145,6 +156,14 @@ export function filterFor(slug: string, q: Query = {}): string {
     `(resource.type="cloud_run_revision" AND resource.labels.service_name="${slug}")`,
     `(resource.type="gce_instance" AND labels."agent.googleapis.com/log_file_path"=~"^/srv/apps/${slug}/")`,
     `(logName="projects/${PROJECT}/logs/${logNameFor(slug)}")`,
+    // The edge. Its lines are written to the PROXY's stdout — its service account
+    // has `roles/cloudsql.client` and nothing else, so it cannot call the Logging
+    // API, and Cloud Run turns a JSON line into a structured entry for free. That
+    // puts them under the proxy's own service rather than the app's, so they are
+    // claimed by the slug in the payload. Scoped to the proxy's service name as
+    // well, so a tenant that happens to print `{"slug":"someone-else"}` on its own
+    // stdout cannot inject lines into another app's log view.
+    `(resource.type="cloud_run_revision" AND resource.labels.service_name="${EDGE_SERVICE}" AND jsonPayload.slug="${slug}")`,
   ];
   const parts = [`(${homes.join(" OR ")})`];
 
@@ -233,6 +252,23 @@ function processOf(path: string | undefined): string | null {
   return file === "app" ? "web" : file || null;
 }
 
+/**
+ * The node's account of what it did to an app.
+ *
+ * Named by the FILE, not by a field, and that is the whole trick. The ops agent
+ * already ships every `.log` under `/srv/apps/<slug>/` and the node arm of the
+ * filter already
+ * anchors on that slug, so the fleet agent writing `platform.log` beside `app.log`
+ * gets its lines labelled with the right app through plumbing that exists —
+ * no config change on the node, no new permission, no second pipeline.
+ *
+ * The trade is that the payload arrives as text rather than parsed, so the source
+ * is derived here instead of read from a field.
+ */
+function isPlatformFile(path: string | undefined): boolean {
+  return Boolean(path && path.endsWith("/platform.log"));
+}
+
 function timeOf(t: RawEntry["timestamp"]): string {
   if (!t) return "";
   if (typeof t === "string") return t;
@@ -305,9 +341,10 @@ export function isLibraryNoise(payload: unknown): boolean {
 export function normalise(e: RawEntry, decoded?: unknown): LogRow {
   const j = ((decoded && typeof decoded === "object" ? decoded : plain(e.jsonPayload)) ??
     {}) as Record<string, unknown>;
-  const ours = str(j.source) as Source | null;
-  const source: Source = ours && SOURCES.includes(ours) ? ours : "app";
   const filePath = e.labels?.["agent.googleapis.com/log_file_path"];
+  const ours = str(j.source) as Source | null;
+  const source: Source =
+    ours && SOURCES.includes(ours) ? ours : isPlatformFile(filePath) ? "platform" : "app";
 
   // PRESENCE, not truthiness. `str()` treats "" as absent, so a blank line — of
   // which npm prints plenty — fell through to the JSON blob and rendered as
@@ -315,7 +352,21 @@ export function normalise(e: RawEntry, decoded?: unknown): LogRow {
   const text = [j.msg, e.textPayload, j.message].find((v) => typeof v === "string") as
     | string
     | undefined;
-  const msg = text ?? (Object.keys(j).length ? JSON.stringify(j) : "");
+  let msg = text ?? (Object.keys(j).length ? JSON.stringify(j) : "");
+  let noted: { level?: string; msg?: string } | null = null;
+
+  // The node writes JSON into platform.log; the ops agent ships files as text and
+  // parses nothing, so what arrives is the JSON as a string. Unwrapped here —
+  // once, for the one file we know does this — rather than shown to somebody as
+  // a line of braces.
+  if (isPlatformFile(filePath) && msg.startsWith("{")) {
+    try {
+      const o = JSON.parse(msg) as { level?: string; msg?: string };
+      if (typeof o.msg === "string") { noted = o; msg = o.msg; }
+    } catch {
+      // Not ours, or half-written by a node that died mid-line. Shown as it is.
+    }
+  }
 
   const face = str(j.face);
   const status = num(j.status);
@@ -327,7 +378,12 @@ export function normalise(e: RawEntry, decoded?: unknown): LogRow {
     at: timeOf(e.timestamp),
     source,
     face: face === "frontend" || face === "backend" ? face : source === "app" ? "backend" : null,
-    level: levelOf(e.severity),
+    // The node's own word for it when it said one: these lines arrive as
+    // severity DEFAULT like everything else from a file, so without this a
+    // platform error would read as info.
+    level: (noted?.level && (LEVELS as string[]).includes(noted.level)
+      ? (noted.level as Level)
+      : levelOf(e.severity)),
     msg: msg.length > 4000 ? `${msg.slice(0, 4000)}…` : msg,
     process: str(j.process) ?? processOf(filePath),
     release: str(j.release),
