@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { watch } from "@/lib/log-hub";
-import { parseQuery } from "../query/route";
+import { parseQuery } from "@/lib/logs-query";
 
 /**
  * The live tail, as server-sent events.

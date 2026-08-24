@@ -29,6 +29,7 @@ import {
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { KeysPanel } from "@/components/KeysPanel";
 import { LogsPanel } from "@/components/LogsPanel";
+import { DeployLog } from "@/components/DeployLog";
 import { StoragePanel } from "@/components/StoragePanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
 import { GitPanel } from "@/components/GitPanel";
@@ -357,6 +358,11 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
             not on the screen: an owner reading this wants the ship, not our
             roadmap. */}
       </Card>
+
+      {/* Why it did what it did. A build is bounded — read top to bottom, jump to
+          the failure — which is a different shape from the log list next door and
+          so a different screen. */}
+      <DeployLog slug={slug} />
 
       {/* The repository, HERE and not under Access, which is where it was. "Every
           push to main ships this app" is a statement about deploys; it shared a

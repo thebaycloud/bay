@@ -1,6 +1,7 @@
 import { getTenantReadPool, dbNameForSlug } from "@/lib/db";
 import { allShapes, readStats } from "@/lib/db-catalog";
 import { appLogs } from "@/lib/app-logs";
+import { readLogs, ALL_SINCE, SOURCES, LEVELS, type Query, type Source, type Level } from "@/lib/logs";
 import {
   bucketForSlug, describeService, getErrors, listBucketObjectsCached, listJobs,
 } from "@/lib/gcloud";
@@ -30,6 +31,46 @@ import { appUrl } from "@/lib/brand";
  */
 
 const CAP = 200;
+
+/**
+ * `./logs <something>` — a filter, not a line count.
+ *
+ * Three shapes, because an agent should not have to learn a query language to
+ * ask "what broke": a bare level, `key=value` for a facet, and anything else as
+ * free text. Unknown keys are ignored rather than refused — an agent that guesses
+ * `severity=error` should get logs, not a lecture.
+ */
+export function parseAgentQuery(arg: string): Query {
+  const q: Query = { since: ALL_SINCE };
+  const words: string[] = [];
+
+  for (const token of String(arg ?? "").trim().split(/\s+/).filter(Boolean)) {
+    const eq = token.indexOf("=");
+    if (eq > 0) {
+      const key = token.slice(0, eq).toLowerCase();
+      const value = token.slice(eq + 1);
+      if (key === "source" && (SOURCES as string[]).includes(value)) {
+        q.sources = [...(q.sources ?? []), value as Source];
+        continue;
+      }
+      if (key === "level" && (LEVELS as string[]).includes(value)) { q.minLevel = value as Level; continue; }
+      if (key === "status") { q.status = Number(value) || null; continue; }
+      if (key === "path") { q.path = value; continue; }
+      if (key === "method") { q.method = value; continue; }
+      // Not a facet we know. It is probably what they are searching for.
+      words.push(token);
+      continue;
+    }
+    if ((LEVELS as string[]).includes(token.toLowerCase())) {
+      q.minLevel = token.toLowerCase() as Level;
+      continue;
+    }
+    words.push(token);
+  }
+
+  if (words.length) q.search = words.join(" ");
+  return q;
+}
 
 function trunc<T>(rows: T[], cap = CAP): { rows: T[]; note?: string } {
   if (rows.length <= cap) return { rows };
@@ -158,10 +199,47 @@ export function toolsFor(slug: string, ownerId: string, cookie?: string): Handle
           };
         }
 
+        /**
+         * The log, through the same reader the screen uses.
+         *
+         * A filter grammar rather than a line count, because "read me the last
+         * sixty lines" is the wrong question when an app prints a thousand an
+         * hour. `./logs error` narrows by level, `./logs source=edge` by stream,
+         * and anything else is free text — so an agent asking "what broke" reads
+         * the errors rather than reading everything and hoping.
+         *
+         * Same `Query`, same `readLogs`, so the agent and the screen cannot
+         * disagree about what a filter means.
+         */
         case "logs": {
-          const limit = Math.min(Math.max(Number(arg) || 60, 1), CAP);
-          const lines = await appLogs(slug, { limit });
-          return { ok: true, data: trunc(lines, limit) };
+          const q = parseAgentQuery(arg);
+          const page = await readLogs(slug, q, { limit: 80 });
+          if (page.rows.length === 0) {
+            // "Nothing since" and "no logs" are different facts. A file tail has
+            // no history, so an app that has printed nothing since we started
+            // watching has no lines and is not broken.
+            return {
+              ok: true,
+              data: {
+                lines: [],
+                note: `nothing matched since ${page.since} — an app that prints nothing has no lines, which is not the same as being broken`,
+              },
+            };
+          }
+          return {
+            ok: true,
+            data: {
+              lines: page.rows.map((r) => ({
+                at: r.at,
+                level: r.level,
+                source: r.source,
+                ...(r.http ? { request: `${r.http.method} ${r.http.path} -> ${r.http.status} in ${r.http.ms}ms` } : {}),
+                msg: r.msg,
+              })),
+              more: Boolean(page.cursor),
+              note: "newest first. `./logs error` for errors only, `./logs source=edge` for requests, anything else is a search",
+            },
+          };
         }
 
         case "errors": {

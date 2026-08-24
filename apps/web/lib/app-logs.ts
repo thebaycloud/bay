@@ -47,7 +47,7 @@ export function buildFailed(status: string): boolean {
 }
 
 /** The tail of this app's most recent Cloud Build, by the tag every deploy sets. */
-async function lastBuildLog(slug: string, limit: number): Promise<LogLine[]> {
+export async function lastBuildLog(slug: string, limit: number): Promise<LogLine[]> {
   const list = await capture([
     "builds", "list", "--region", REGION, "--project", PROJECT,
     "--filter", `tags=${appBuildTag(slug)}`, "--limit", "1",

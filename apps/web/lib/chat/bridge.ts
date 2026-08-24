@@ -66,7 +66,7 @@ export const HELP: Record<Op, string> = {
   // guesses wrong reports "there is no such table" as if it were a fact about the
   // app.
   tables: "./tables                — every table: columns, types, primary key, row count, last write.",
-  logs: "./logs [n]              — the app's most recent log lines.",
+  logs: "./logs [error|source=edge|<text>] — the log. A filter, not a count: level, source=app|edge|browser|build|deploy|platform, status=, path=, or free text.",
   errors: "./errors [n]            — recent errors only.",
   analytics: "./analytics [1d|7d|30d] — visitors, views, top pages, referrers.",
   deploys: "./deploys               — the latest deploy: status, stage, error, url.",

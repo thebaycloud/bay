@@ -328,40 +328,105 @@ async function status(args) {
   }
 }
 
+/**
+ * `bay logs` — the same reader the dashboard uses.
+ *
+ * A FILTER, not a line count. An app printing a thousand lines an hour makes
+ * "the last sixty" the wrong question, so: a bare level, `key=value` for a facet,
+ * and anything else is a search.
+ *
+ *   bay logs                      the last hundred, newest first
+ *   bay logs error                errors only
+ *   bay logs --source edge        requests
+ *   bay logs --follow             a live tail
+ *   bay logs checkout --follow    a live tail, filtered
+ *
+ * `--follow` is a real stream now. It used to poll every 2.5 seconds and
+ * de-duplicate against a Set of every line it had seen — which meant lines
+ * arrived in clumps, memory grew until the Set was thrown away wholesale, and a
+ * line could still be missed if it landed between two polls with the same text.
+ */
 async function logs(args) {
   const app = needApp(args);
   const qs = new URLSearchParams();
-  if (args.severity) qs.set("severity", args.severity);
+
+  // Free words are the search. `bay logs error` is the level, because that is
+  // what somebody means by it.
+  const words = (args._ || []).slice(1).filter((w) => w !== app);
+  const levels = ["debug", "info", "warn", "error"];
+  const text = [];
+  for (const w of words) {
+    if (levels.includes(String(w).toLowerCase())) qs.set("level", String(w).toLowerCase());
+    else text.push(w);
+  }
+  if (text.length) qs.set("q", text.join(" "));
+
+  if (args.source) qs.set("source", args.source);
+  if (args.level) qs.set("level", args.level);
+  // `--severity ERROR` is what this took before the log view existed.
+  if (args.severity) qs.set("level", String(args.severity).toLowerCase().replace("warning", "warn"));
+  if (args.status) qs.set("status", String(args.status));
+  if (args.path) qs.set("path", args.path);
+  if (args.face) qs.set("face", args.face);
+  if (args.window) qs.set("window", args.window);
+  if (args.since) qs.set("window", args.since);
   if (args.limit) qs.set("limit", String(args.limit));
-  if (args.since) qs.set("since", args.since);
-  const q = qs.toString() ? "?" + qs.toString() : "";
 
   if (args.follow) {
-    let seen = new Set();
     info(dim(`tailing ${app} — ctrl-c to stop`));
-    for (;;) {
-      const d = await api(`/api/apps/${app}/logs${q}`);
-      for (const l of d.logs || []) {
-        const key = l.time + l.message;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        print(logLine(l));
+    const res = await api(`/api/apps/${app}/logs/tail?${qs}`, { stream: true });
+    if (!res.ok || !res.body) die("could not open the tail");
+    // SSE by hand: frames are separated by a blank line, and a frame we do not
+    // recognise (the heartbeat comment) is skipped rather than parsed.
+    let buf = "";
+    for await (const chunk of res.body) {
+      buf += Buffer.from(chunk).toString("utf8");
+      let cut;
+      while ((cut = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, cut);
+        buf = buf.slice(cut + 2);
+        const ev = /^event: (.+)$/m.exec(frame);
+        const data = /^data: (.*)$/m.exec(frame);
+        if (!ev || !data) continue;
+        if (ev[1] === "row") { try { print(logLine(JSON.parse(data[1]))); } catch { /* not a row */ } }
+        else if (ev[1] === "broken") {
+          // A tail that stops silently looks exactly like an app that went quiet.
+          try { info(red("the tail stopped: " + JSON.parse(data[1]).why)); } catch { /* ignore */ }
+          return;
+        }
       }
-      if (seen.size > 2000) seen = new Set();
-      await new Promise((r) => setTimeout(r, 2500));
     }
+    return;
   }
 
-  const d = await api(`/api/apps/${app}/logs${q}`);
-  if (args.json) return json(d.logs || []);
-  if (!(d.logs || []).length) { info("no logs in that window"); return; }
-  for (const l of d.logs) print(logLine(l));
+  const d = await api(`/api/apps/${app}/logs/query?${qs}`);
+  const rows = d.rows || [];
+  if (args.json) return json(rows);
+  if (!rows.length) {
+    // "Nothing since" and "no logs" are different facts: a file tail has no
+    // history, so an app that has printed nothing has no lines and is not broken.
+    info(`nothing since ${(d.since || "").slice(0, 19).replace("T", " ")}`);
+    return;
+  }
+  // Oldest first on a terminal: you read down the page, and the newest line
+  // should be the one left above your prompt.
+  for (const r of rows.slice().reverse()) print(logLine(r));
+  if (d.cursor) info(dim("older lines exist — narrow with a filter, or raise --limit"));
 }
 
+/** One row, from the shared reader. Falls back to the old shape so an older
+ *  control plane still prints. */
 function logLine(l) {
-  const sev = (l.severity || "").toUpperCase();
-  const tag = sev === "ERROR" || sev === "CRITICAL" ? red(sev) : sev === "WARNING" ? cyan(sev) : dim(sev || "INFO");
-  return `${dim((l.time || "").slice(11, 19))} ${tag} ${l.message}`;
+  const at = dim(String(l.at || l.time || "").slice(11, 19));
+  const level = String(l.level || l.severity || "info").toLowerCase();
+  const tag = level.startsWith("err") || level === "critical" ? red("ERROR")
+    : level.startsWith("warn") ? cyan("WARN ")
+    : dim(level === "debug" ? "DEBUG" : "INFO ");
+  const src = l.source && l.source !== "app" ? dim(` ${l.source}`) : "";
+  const body = l.http
+    ? `${l.http.method} ${l.http.path} ${l.http.status} ${l.http.ms}ms`
+    : l.msg ?? l.message ?? "";
+  return `${at} ${tag}${src} ${body}`;
 }
 
 async function errors(args) {
