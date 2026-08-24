@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildUpstreamHeaders, scrubSetCookie, stripHopByHop, allowWorkbenchFraming } from "./headers";
 
-const visitor = { userId: "usr_1", email: "boris@acme.com", name: "Boris" };
+const visitor = { userId: "usr_1", email: "dana@acme.com", name: "Dana" };
 const COOKIE = "authjs.session-token";
 
 test("spoofed identity headers are replaced, not trusted", () => {
@@ -10,7 +10,7 @@ test("spoofed identity headers are replaced, not trusted", () => {
     { "x-supersonic-email": "ceo@acme.com", "x-supersonic-user-id": "usr_boss" },
     visitor, COOKIE
   );
-  assert.equal(out["x-supersonic-email"], "boris@acme.com");
+  assert.equal(out["x-supersonic-email"], "dana@acme.com");
   assert.equal(out["x-supersonic-user-id"], "usr_1");
 });
 
@@ -34,8 +34,8 @@ test("a cookie header containing only the session is removed entirely", () => {
 
 test("identity headers are injected", () => {
   const out = buildUpstreamHeaders({}, visitor, COOKIE);
-  assert.equal(out["x-supersonic-email"], "boris@acme.com");
-  assert.equal(out["x-supersonic-name"], "Boris");
+  assert.equal(out["x-supersonic-email"], "dana@acme.com");
+  assert.equal(out["x-supersonic-name"], "Dana");
   assert.equal(out["x-supersonic-user-id"], "usr_1");
 });
 

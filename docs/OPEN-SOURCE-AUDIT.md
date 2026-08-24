@@ -66,9 +66,9 @@ I run it?**
 
 ### 3. A real person's email, in a migration that runs on every install
 
-`apps/web/db/005_plans.sql` contained:
-
-    UPDATE users SET plan = 'pro' WHERE email = 'arsenfounder@gmail.com';
+`apps/web/db/005_plans.sql` pinned one account to `pro` by naming a founder's
+personal address in a `WHERE` clause. The address is not repeated here, for the
+same reason it was removed.
 
 Fine while the repository is ours; wrong the moment it is not. **Removed
 24 Aug.** The statement was a no-op on any fresh database, and the row it

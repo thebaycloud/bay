@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS allowed_signins (
 -- Both domains are confirmed Google Workspace (MX -> Google), so everyone on
 -- them can sign in with a verified address.
 INSERT INTO allowed_signins(domain, note) VALUES
-  ('luwo.ai',       'seed: Google Workspace domain'),
+  ('acme.com',       'seed: Google Workspace domain'),
   ('supersonic.cv', 'seed: Google Workspace domain')
 ON CONFLICT (domain) DO NOTHING;
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Only a Google-verified address that appears on an allowlist can sign in, closing the hole where registering as `boris@acme.com` joins Acme's workspace.
+**Goal:** Only a Google-verified address that appears on an allowlist can sign in, closing the hole where registering as `dana@acme.com` joins Acme's workspace.
 
 **Architecture:** One gate in the existing `signIn` callback, in front of every provider, checking a pure `isAllowed(email, entries)` against an `allowed_signins` table of addresses and domains. Because the gate covers the password provider too, deploy 1 closes the hole while passwords still work; deploy 2 deletes them as cleanup.
 
@@ -16,7 +16,7 @@
 - Database `supersonic_platform`, reached locally through `cloud-sql-proxy` on `127.0.0.1:5433`. This is the shared **production** database — additive, idempotent SQL only; never DROP, TRUNCATE, or DELETE existing rows.
 - `psql` is NOT installed. Use Node with `pg` for database checks.
 - Exactly one of `email` / `domain` is set on an `allowed_signins` row.
-- Matching is case-insensitive, and a domain entry matches only a **whole** domain — `evil-luwo.ai` must never match `luwo.ai`.
+- Matching is case-insensitive, and a domain entry matches only a **whole** domain — `evil-acme.com` must never match `acme.com`.
 - The gate **fails closed**: if the allowlist cannot be read, sign-in is denied.
 - Deploy 2 must not run until an operator has signed in with Google in production.
 - Never print the contents of `.env.local` or `.pg.json`.
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS allowed_signins (
 -- Both domains are confirmed Google Workspace (MX -> Google), so everyone on
 -- them can sign in with a verified address.
 INSERT INTO allowed_signins(domain, note) VALUES
-  ('luwo.ai',       'seed: Google Workspace domain'),
+  ('acme.com',       'seed: Google Workspace domain'),
   ('supersonic.cv', 'seed: Google Workspace domain')
 ON CONFLICT (domain) DO NOTHING;
 
@@ -173,27 +173,27 @@ import assert from "node:assert/strict";
 import { isAllowed, type AllowEntry } from "../lib/allowlist";
 
 const entries: AllowEntry[] = [
-  { email: null, domain: "luwo.ai" },
+  { email: null, domain: "acme.com" },
   { email: null, domain: "supersonic.cv" },
-  { email: "arsenfounder@gmail.com", domain: null },
+  { email: "owner@example.com", domain: null },
 ];
 
 test("an individually listed address is allowed", () => {
-  assert.equal(isAllowed("arsenfounder@gmail.com", entries), true);
+  assert.equal(isAllowed("owner@example.com", entries), true);
 });
 
 test("matching is case-insensitive and tolerates whitespace", () => {
-  assert.equal(isAllowed("  ArsenFounder@Gmail.COM  ", entries), true);
-  assert.equal(isAllowed("BORIS@LUWO.AI", entries), true);
+  assert.equal(isAllowed("  Owner@Example.COM  ", entries), true);
+  assert.equal(isAllowed("DANA@ACME.COM", entries), true);
 });
 
 test("any address on a listed domain is allowed", () => {
-  assert.equal(isAllowed("anyone@luwo.ai", entries), true);
+  assert.equal(isAllowed("anyone@acme.com", entries), true);
   assert.equal(isAllowed("someone@supersonic.cv", entries), true);
 });
 
 test("an address on an unlisted domain is denied", () => {
-  assert.equal(isAllowed("boris@acme.com", entries), false);
+  assert.equal(isAllowed("dana@acme.com", entries), false);
 });
 
 test("an unlisted gmail address is denied even though another gmail is listed", () => {
@@ -202,18 +202,18 @@ test("an unlisted gmail address is denied even though another gmail is listed", 
 
 test("a lookalike domain does not match", () => {
   // The bug an endsWith implementation would have.
-  assert.equal(isAllowed("boris@evil-luwo.ai", entries), false);
-  assert.equal(isAllowed("boris@luwo.ai.evil.com", entries), false);
+  assert.equal(isAllowed("dana@evil-acme.com", entries), false);
+  assert.equal(isAllowed("dana@acme.com.evil.com", entries), false);
 });
 
 test("malformed addresses are denied", () => {
-  for (const bad of ["", "   ", "no-at-sign", "@luwo.ai", "boris@"]) {
+  for (const bad of ["", "   ", "no-at-sign", "@acme.com", "dana@"]) {
     assert.equal(isAllowed(bad, entries), false, `${JSON.stringify(bad)} should be denied`);
   }
 });
 
 test("an empty allowlist denies everyone", () => {
-  assert.equal(isAllowed("arsenfounder@gmail.com", []), false);
+  assert.equal(isAllowed("owner@example.com", []), false);
 });
 ```
 
@@ -242,7 +242,7 @@ export interface AllowEntry {
  *
  * Pure: the caller supplies the entries. Deny is the default, and a domain
  * entry matches only a whole domain — comparing with endsWith would let
- * evil-luwo.ai through.
+ * evil-acme.com through.
  */
 export function isAllowed(email: string, entries: AllowEntry[]): boolean {
   const addr = email.trim().toLowerCase();
@@ -408,7 +408,7 @@ import bcrypt from "bcryptjs";
 import { getPool } from "./lib/db";
 const pool = getPool("supersonic_platform");
 const hash = await bcrypt.hash("probe-password", 10);
-const allowed = "gate-allowed@luwo.ai";      // domain is seeded
+const allowed = "gate-allowed@acme.com";      // domain is seeded
 const denied  = "gate-denied@acme.example";  // domain is not
 for (const e of [allowed, denied]) {
   await pool.query("INSERT INTO users(email,name,password_hash,provider) VALUES($1,$2,$3,$4) ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash", [e, "probe", hash, "credentials"]);

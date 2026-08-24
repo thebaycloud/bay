@@ -18,7 +18,7 @@ nowhere: not in `.env.local`, not in Secret Manager, not on the deployed control
 path is `app/api/signup/route.ts`, which accepts any email with no verification, gated only by an
 optional shared `SIGNUP_INVITE_CODE`.
 
-The consequence is direct: register as `boris@acme.com`, get auto-joined to Acme's company
+The consequence is direct: register as `dana@acme.com`, get auto-joined to Acme's company
 workspace, and open every app whose visibility is `workspace` — plus claim any pending grant for
 that address. The final whole-branch review rated this Critical.
 
@@ -110,7 +110,7 @@ present. Postgres treats NULLs as distinct in a unique index, so many domain row
 email rows.
 
 **Seeding is part of the migration, not a follow-up.** The seed contains every existing user's
-address plus `luwo.ai` and `supersonic.cv`, both confirmed Google Workspace domains (MX -> Google).
+address plus `acme.com` and `supersonic.cv`, both confirmed Google Workspace domains (MX -> Google).
 Without the seed in place before the check reaches production, the first deploy locks everyone out
 including the operators.
 
@@ -176,7 +176,7 @@ the check cannot run — turns a transient outage into an authentication bypass.
 3. an address on an unlisted domain is denied
 4. an empty or malformed address is denied
 5. a domain entry does not match an address that merely *contains* it
-   (`evil-luwo.ai` must not match `luwo.ai`)
+   (`evil-acme.com` must not match `acme.com`)
 6. every one of the nine existing addresses is allowed by the seeded list
 
 Case 5 is the same boundary bug the proxy's `slugFromHost` had to avoid, and it is the one an

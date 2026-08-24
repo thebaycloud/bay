@@ -16,7 +16,7 @@ import { Row, RowGroup, RowList } from "@/components/panel/atoms";
  * label, and a tinted pink band for the current choice.
  *
  * "Specific people" holds two kinds of row: a person, and a whole company —
- * "@luwo.ai" is one rule that stands for everyone there, and it is a row beside
+ * "@acme.com" is one rule that stands for everyone there, and it is a row beside
  * the people rather than a fourth option, so the list answers "who is in?" in
  * one place.
  *
@@ -37,7 +37,7 @@ const OPTIONS: { id: Visibility; icon: typeof Lock; label: string; desc: string 
 /**
  * Is what they typed a company, or a person?
  *
- * `@luwo.ai` and `luwo.ai` are the company; `boris@luwo.ai` is Boris. One field
+ * `@acme.com` and `acme.com` are the company; `dana@acme.com` is Dana. One field
  * for both because that is how people write it — nobody wants to pick a mode
  * before typing an address. The server normalises and refuses; this only decides
  * which name the value is sent under.
@@ -193,7 +193,7 @@ export default function SharePanel({ slug }: { slug: string }) {
                 setWho("");
               }}
             >
-              {/* Not type="email": the browser refuses "@luwo.ai" on its own,
+              {/* Not type="email": the browser refuses "@acme.com" on its own,
                   and the whole point of one field is that both spellings land. */}
               <Input
                 className="h-9"

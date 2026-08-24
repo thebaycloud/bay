@@ -4,7 +4,7 @@
  * What `bay share` was asked to do, decided before anything is sent.
  *
  * Access is the one command in this CLI where a misread argument does damage
- * that is not visible afterwards: `share app add luwo.ai` meant as "everyone at
+ * that is not visible afterwards: `share app add acme.com` meant as "everyone at
  * my company" and read as an email address would fail loudly, which is fine —
  * but read the other way round it would let a whole domain into an app the
  * owner meant to send to one person, and nothing on screen would look wrong.

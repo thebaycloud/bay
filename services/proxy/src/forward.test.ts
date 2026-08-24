@@ -24,7 +24,7 @@ const { forward } = await import("./forward");
 // one forward.ts already loaded. config.test.ts covers the env read itself.
 const { config } = await import("./config");
 
-const visitor: VisitorIdentity = { userId: "usr_1", email: "boris@acme.com", name: "Boris" };
+const visitor: VisitorIdentity = { userId: "usr_1", email: "dana@acme.com", name: "Dana" };
 
 // forward() decides both which credential to send AND where to actually
 // connect from the same targetBase string: isCloudRunTarget(targetBase) and

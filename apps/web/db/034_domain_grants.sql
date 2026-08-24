@@ -1,9 +1,9 @@
--- Access by ORGANISATION: "anyone with an @luwo.ai address", as a rule on the
+-- Access by ORGANISATION: "anyone with an @acme.com address", as a rule on the
 -- app rather than a row per person.
 --
 -- A rule is not a person, so it is not a row in app_grants: that table's key is
 -- an address, every reader of it treats a value as somebody who was invited by
--- name, and `email = 'luwo.ai'` would have been a lie in both directions.
+-- name, and `email = 'acme.com'` would have been a lie in both directions.
 CREATE TABLE IF NOT EXISTS app_domain_grants (
   app_id     uuid NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
   domain     text NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS app_domain_grants (
 -- Whether the identity provider proved this address belongs to this person.
 --
 -- Signup with a password asks for an address and never checks it, so a domain
--- rule read off an unverified row would mean "anyone who TYPED @luwo.ai" —
+-- rule read off an unverified row would mean "anyone who TYPED @acme.com" —
 -- which is not a boundary at all, it is `public` with extra steps. Only a
 -- verified row may satisfy a domain rule; invitations by name are unaffected,
 -- because there the owner named the address themselves.

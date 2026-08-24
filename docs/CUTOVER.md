@@ -124,7 +124,7 @@ in with a Google account that is not on the allowlist and confirm the readable
 Adding someone is one row, no redeploy:
 
 ```sql
-INSERT INTO allowed_signins(email, note)  VALUES ('boris@acme.com', 'invited by arsen');
+INSERT INTO allowed_signins(email, note)  VALUES ('dana@acme.com', 'invited by arsen');
 INSERT INTO allowed_signins(domain, note) VALUES ('acme.com',       'partner company');
 ```
 

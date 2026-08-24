@@ -24,7 +24,7 @@ one `PG_CONN` for two Postgres instances after the 12 Aug split. Fixed, deployed
 and verified against production on 16 Aug. The fifteen are now genuinely gone.
 
 **"`apps` … at zero" — false.** One app exists: `l3sgp`, created 14 Aug 11:36,
-owned by `arsenfounder@gmail.com`. It is LIVE — fleet-lab-2 reports its `web`
+owned by `owner@example.com`. It is LIVE — fleet-lab-2 reports its `web`
 process running and healthy, all three nodes sync every few seconds, and the
 reconciler has no failures. A 403 on its address is its `visibility: private`,
 not a fault. **Do not treat it as leftover.**
