@@ -103,9 +103,11 @@ const WINDOW_MS = 24 * 60 * 60 * 1000;
 const CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; value: Audience | null }>();
 
-/** Test seam, and the module's whole state. */
+/** Test seam, and the module's whole state — the cache AND the login. */
 export function resetAudience(): void {
   cache.clear();
+  token = null;
+  logging = null;
 }
 
 let token: { value: string; until: number } | null = null;
@@ -125,34 +127,80 @@ const TOKEN_MS = 6 * 60 * 60 * 1000;
  */
 let logging: Promise<string> | null = null;
 
-async function authToken(): Promise<string | null> {
-  if (token && Date.now() < token.until) return token.value;
-  if (logging) return logging;
+/**
+ * LONGER THAN ANY READ WILL EVER WAIT, AND THAT IS THE POINT.
+ *
+ * Umami is a Next.js app on Cloud Run, and a login is a container start plus a
+ * database connection plus one bcrypt. Measured against the running instance on
+ * 24 Aug: 13, 20, 25 and 26 seconds cold; 90–440ms warm. The old deadline here
+ * was ten seconds, so EVERY cold login aborted — and since the panel is opened
+ * by someone who has not looked at analytics recently, cold was the common case,
+ * not the edge one. The proxy logged "could not read … aborted due to timeout"
+ * and the owner was told their app might have no visitors.
+ *
+ * The fix is not a bigger deadline on the request path — a person waiting 26
+ * seconds for a number is its own failure. It is that the login no longer HAPPENS
+ * on the request path: see `warm` below.
+ */
+const LOGIN_MS = 60_000;
+
+async function login(): Promise<string> {
   const u = umami();
-  logging = (async () => {
-    const r = await fetch(`${u.url}/api/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await invoker(u.url)) },
-      body: JSON.stringify({ username: u.user, password: u.password }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!r.ok) throw new Error(`umami login ${r.status}`);
-    const j = (await r.json()) as { token?: string };
-    if (!j.token) throw new Error("umami login returned no token");
-    token = { value: j.token, until: Date.now() + TOKEN_MS };
-    return j.token;
-  })();
-  try {
-    return await logging;
-  } finally {
-    // Cleared either way: holding a rejected promise here would make one failed
-    // login the permanent answer for every caller after it.
-    logging = null;
-  }
+  const r = await fetch(`${u.url}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await invoker(u.url)) },
+    body: JSON.stringify({ username: u.user, password: u.password }),
+    signal: AbortSignal.timeout(LOGIN_MS),
+  });
+  if (!r.ok) throw new Error(`umami login ${r.status}`);
+  const j = (await r.json()) as { token?: string };
+  if (!j.token) throw new Error("umami login returned no token");
+  token = { value: j.token, until: Date.now() + TOKEN_MS };
+  return j.token;
 }
 
-async function get<T>(path: string, timeoutMs = 5000): Promise<T> {
-  const t = await authToken();
+/**
+ * Start a login if one is not already running, and DO NOT WAIT FOR IT.
+ *
+ * The panel polls every three seconds. So a read that finds no token can say
+ * "unreadable" now and be right three seconds later, which is a far better
+ * shape than holding one request open for the length of a container start. The
+ * next poll finds the token and answers in 90ms.
+ *
+ * The single-flight guard is unchanged and still load-bearing: the detail read
+ * makes twenty calls in one Promise.all, and twenty simultaneous logins are
+ * twenty bcrypts on an instance sized for a 2 KB tracker.
+ */
+function warm(): Promise<string> {
+  if (!logging) {
+    logging = login().finally(() => {
+      // Cleared either way: holding a rejected promise here would make one failed
+      // login the permanent answer for every caller after it.
+      logging = null;
+    });
+    // Nothing awaits the background copy, and an unhandled rejection would take
+    // the proxy down with it — for a failed analytics login.
+    logging.catch(() => {});
+  }
+  return logging;
+}
+
+/**
+ * The token, for a caller that will not wait.
+ *
+ * `wait: true` is for the owner-facing detail read, where a person has opened
+ * the Analytics screen on purpose and a slow answer beats no answer. Everything
+ * on the polled path takes the default and gets a refusal it can retry.
+ */
+async function authToken(wait = false): Promise<string> {
+  if (token && Date.now() < token.until) return token.value;
+  const p = warm();
+  if (wait) return p;
+  throw new Error("umami is waking up");
+}
+
+async function get<T>(path: string, timeoutMs = 5000, wait = false): Promise<T> {
+  const t = await authToken(wait);
   const base = umami().url;
   const r = await fetch(`${base}${path}`, {
     headers: { Authorization: `Bearer ${t}`, ...(await invoker(base)) },
@@ -241,10 +289,10 @@ function rank(rows: Rank | null | undefined, blank: string): [string, number][] 
  * headline numbers is a worse reading, not an unreadable one: the visitor count
  * is still true and the panel should still show it.
  */
-async function metric(websiteId: string, q: string, types: string[], timeoutMs?: number): Promise<Rank> {
+async function metric(websiteId: string, q: string, types: string[], timeoutMs?: number, wait = false): Promise<Rank> {
   for (const type of types) {
     try {
-      return await get<Rank>(`/api/websites/${websiteId}/metrics?${q}&type=${type}&limit=10`, timeoutMs);
+      return await get<Rank>(`/api/websites/${websiteId}/metrics?${q}&type=${type}&limit=10`, timeoutMs, wait);
     } catch {
       continue;
     }
@@ -492,14 +540,18 @@ export async function analyticsDetail(
   // asked for by a person who has just opened a screen and is willing to wait a
   // moment — and it may be waking a Cloud Run instance that scaled to zero, on
   // top of twenty queries it has to answer.
-  const BUDGET = 12_000;
+  const BUDGET = 30_000;
   let value: Detail | null = null;
   try {
     const [stats, series, active, ...ranked] = await Promise.all([
-      get<Stats>(`/api/websites/${websiteId}/stats?${q}`, BUDGET),
-      get<Series>(`/api/websites/${websiteId}/pageviews?${q}&unit=${encodeURIComponent(unit)}`, BUDGET).catch(() => null),
-      get<unknown>(`/api/websites/${websiteId}/active`, BUDGET).catch(() => null),
-      ...DIMENSIONS.map(([, names]) => metric(websiteId, q, names, BUDGET)),
+      // `wait` — the third argument — is the difference between this read and the
+      // polled one. Somebody opened this screen and is looking at it; waiting out
+      // a cold login here is the right trade, and the single-flight guard means
+      // these twenty-three calls cause one login between them.
+      get<Stats>(`/api/websites/${websiteId}/stats?${q}`, BUDGET, true),
+      get<Series>(`/api/websites/${websiteId}/pageviews?${q}&unit=${encodeURIComponent(unit)}`, BUDGET, true).catch(() => null),
+      get<unknown>(`/api/websites/${websiteId}/active`, BUDGET, true).catch(() => null),
+      ...DIMENSIONS.map(([, names]) => metric(websiteId, q, names, BUDGET, true)),
     ]);
 
     const visitors = num(stats.visitors ?? stats.uniques);

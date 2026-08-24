@@ -8,8 +8,15 @@ import { config } from "./config";
 // Read from the same root the rest of the edge uses. This markup is injected
 // into other people's pages, so a stale literal here is our old brand showing
 // up on somebody's live site after the rename.
-const APP = `https://app.${config.rootDomain}`;
-const SITE = `https://${config.rootDomain}`;
+//
+// `rootDomains[0]` — CANONICAL, and the singular `config.rootDomain` this said
+// until now does not exist on config at all. TypeScript had been reporting it
+// since the multi-root cutover; at runtime it is `undefined`, so every badge and
+// every toolbar link injected into somebody else's page pointed at
+// `https://app.undefined`. Two dead links on other people's live sites, from a
+// property name that changed under a module nobody typechecked in CI.
+const APP = `https://app.${config.rootDomains[0]}`;
+const SITE = `https://${config.rootDomains[0]}`;
 
 /**
  * Everything only an owner may see — as SOURCE, not as a runtime branch.

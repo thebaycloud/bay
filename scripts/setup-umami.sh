@@ -120,15 +120,29 @@ say "cloud run service $SERVICE"
 # admin/umami password has to be changed. Two gates are only better than one
 # when both let the right callers through.
 #
-# min-instances 0: this is a background service with no latency budget of its
-# own. The tracker POST is fire-and-forget from the page's point of view, and the
-# panel's read is cached for a minute. A cold start costs nobody a render.
+# min-instances 1, AND THE REASONING THAT SAID 0 WAS WRONG.
+#
+# It said: a background service with no latency budget of its own — the tracker
+# POST is fire-and-forget and the panel's read is cached for a minute, so a cold
+# start costs nobody a render. Both halves of that are true and the conclusion
+# did not follow, because the read is not the only thing that has to happen
+# first. A cold umami has to LOG IN, and a login here is a container start plus a
+# Prisma connection plus one bcrypt: 13, 20, 25 and 26 seconds, measured against
+# this service on 24 Aug (warm: 90–440ms). Nothing that a person is waiting on
+# can absorb that, so the edge gave up at ten seconds and told owners their
+# visitors could not be counted — and because analytics is looked at rarely, the
+# cold path was the ONLY path most owners ever took.
+#
+# The edge no longer waits for a login (services/proxy/src/analytics.ts), which
+# is the half of the fix that belongs in code. This is the other half: an
+# instance that is already up has nothing to wake. ~$8/month for a service whose
+# entire job is to be readable when somebody looks.
 gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --region "$REGION" --project "$PROJECT" \
   --ingress all \
   --no-allow-unauthenticated \
-  --min-instances 0 --max-instances 4 \
+  --min-instances 1 --max-instances 4 \
   --memory 1Gi --cpu 1 \
   --set-cloudsql-instances "$CONN" \
   --set-env-vars "DATABASE_TYPE=postgresql,TRACKER_SCRIPT_NAME=a,COLLECT_API_ENDPOINT=/a" \
