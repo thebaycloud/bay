@@ -5,6 +5,7 @@ import { BRAND } from "@/lib/brand";
 import { plans } from "@/lib/plans";
 import { getMessages, localePath } from "@/lib/i18n";
 import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
+import { alternatesFor } from "@/lib/i18n/alternates";
 import { SiteChrome } from "@/components/SiteChrome";
 import { BackLink } from "@/components/BackLink";
 import "../changelog/changelog.css";
@@ -24,7 +25,8 @@ export function generateMetadata({ params }: { params: { locale: string } }): Me
   const t = getMessages(locale);
   return {
     // A middle dot, not a dash: em dashes are out everywhere on this project.
-    title: `${t.pricing.metaTitle} · ${BRAND}`,
+    title: t.pricing.metaTitle,
+    alternates: alternatesFor("/pricing", params.locale),
     description: t.pricing.metaDescription,
   };
 }

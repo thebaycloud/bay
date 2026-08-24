@@ -103,16 +103,16 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.015
 .hero .cta { display: flex; gap: 12px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
 .hero .grid-fade { position: absolute; inset: 0; z-index: 0; }
 
-/* hero art — golden gate, full size */
+/* hero art: golden gate, full size */
 .hero .art { position: relative; margin: 24px auto 0; max-width: 860px; overflow: visible; }
 /* bridge sits above the decorative GridPattern (which is absolute inset:0) so the
    grid stays a background texture instead of painting over the artwork/card. */
 .hero .art img { display: block; width: 100%; height: auto; position: relative; z-index: 1; }
 
-/* floating terminal — absolute inside the hero art, above everything, scrolls
+/* floating terminal: absolute inside the hero art, above everything, scrolls
    away with the page. Sits over the top-left of the bridge so it's in view on load. */
 .art-term { position: absolute; right: -90px; top: -6px; width: min(360px, 42vw); z-index: 40; text-align: left; }
-/* stacked below the bridge on mobile — relative (not static) so its z-index keeps
+/* stacked below the bridge on mobile, relative (not static) so its z-index keeps
    it above the GridPattern, and the card's white bg hides the grid behind it. */
 @media (max-width: 820px) { .art-term { position: relative; z-index: 2; right: auto; top: auto; width: 100%; margin: 20px auto 0; max-width: 380px; } }
 
@@ -120,7 +120,7 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.015
 .ss-badge { position: fixed; bottom: 16px; right: 16px; z-index: 60; display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: var(--accent-fg); font-family: var(--sans); font-weight: 600; font-size: 12px; padding: 9px 13px; border-radius: 8px; text-decoration: none; box-shadow: 0 2px 12px rgba(0,0,0,.18); }
 .ss-badge:hover { opacity: .92; }
 
-/* ===== AI chat (hero) — shadcn message-scroller ===== */
+/* ===== AI chat (hero): shadcn message-scroller ===== */
 .scard { background: #fff; border: 1px solid #e6e6e3; border-radius: 18px; box-shadow: 0 24px 70px rgba(20,20,16,.16); overflow: hidden; display: flex; flex-direction: column; color: #18181b; }
 .scard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid #ececea; }
 .scard-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; color: #18181b; }

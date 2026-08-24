@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { APP_URL, BRAND, GITHUB_REPO } from "@/lib/brand";
+import { APP_URL, BRAND, GITHUB_URL } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 import { fill, localePath, type Locale, type Messages } from "@/lib/i18n";
 import { Stars } from "./Stars";
@@ -47,9 +47,11 @@ function resourceItems(t: Messages): Item[] {
     // link is deliberately not run through localePath.
     { label: t.nav.changelog, href: "/changelog" },
     { label: t.nav.docs, href: "/llms.txt" },
-    // PLACEHOLDER, like GITHUB_REPO itself: this points at a repo that is not
-    // ours until the code is public. See lib/brand.ts.
-    { label: t.nav.community, href: `https://github.com/${GITHUB_REPO}/discussions` },
+    // Issues, not Discussions. Discussions is switched off on the repo, so
+    // /discussions is a 404, and a menu item that leads nowhere is worse than one
+    // that leads somewhere plainer. Point this back at /discussions the day it is
+    // turned on.
+    { label: t.nav.community, href: `${GITHUB_URL}/issues` },
   ];
 }
 

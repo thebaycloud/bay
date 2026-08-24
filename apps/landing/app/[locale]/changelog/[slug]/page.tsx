@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
-import { BRAND } from "@/lib/brand";
 import { allEntries, entryBySlug, formatDate } from "@/lib/changelog";
 import { SiteChrome } from "@/components/SiteChrome";
 import { getMessages } from "@/lib/i18n";
@@ -20,7 +19,7 @@ export function generateStaticParams() {
 export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
   const e = entryBySlug(params.slug);
   if (!e) return {};
-  return { title: `${e.title} — ${BRAND}`, description: e.summary };
+  return { title: e.title, description: e.summary };
 }
 
 export default function ChangelogEntry({

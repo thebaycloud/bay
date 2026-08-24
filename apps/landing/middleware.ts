@@ -44,6 +44,9 @@ import { DEFAULT_LOCALE, isLocale } from "./lib/i18n/locales";
  * is a duplicate a crawler will find. That one redirects, permanently, to the
  * unprefixed form.
  */
+/** The image routes Next generates from page metadata. */
+const META_IMAGE = /\/(opengraph-image|twitter-image|icon|apple-icon)(-[A-Za-z0-9]+)?$/;
+
 export function middleware(req: NextRequest) {
   const moved = legacyRedirect(req.headers.get("host"), req.nextUrl.pathname + req.nextUrl.search);
   if (moved) return NextResponse.redirect(moved, 301);
@@ -71,6 +74,11 @@ export function middleware(req: NextRequest) {
   const first = segments[1] ?? "";
 
   if (first === DEFAULT_LOCALE) {
+    // Metadata images are the exception. Next builds og:image from the route it
+    // lives on, so the tag says /en/opengraph-image, and redirecting that costs a
+    // hop on every scrape and loses the preview entirely for a scraper that does
+    // not follow one. An image answering at two URLs costs nothing.
+    if (META_IMAGE.test(pathname)) return NextResponse.next();
     const bare = pathname.slice(`/${DEFAULT_LOCALE}`.length) || "/";
     return NextResponse.redirect(new URL(bare, req.url), 308);
   }

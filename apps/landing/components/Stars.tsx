@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { Star } from "lucide-react";
-import { GITHUB_REPO } from "@/lib/brand";
+import { GITHUB_URL } from "@/lib/brand";
 
 /**
  * The GitHub star pill.
  *
  * Renders the mark and the word immediately and slots the number in when it
  * arrives, rather than holding the whole pill back on a network call. If the
- * count never comes — rate limit, offline, GitHub down — the pill is simply a
+ * count never comes (rate limit, offline, GitHub down) the pill is simply a
  * GitHub link, which is a true thing to be.
  *
  * `1234` reads as `1.2k`: at this size the exact number is noise, and a pill
@@ -40,7 +40,7 @@ export function Stars({ className }: { className?: string }) {
 
   return (
     <a
-      href={`https://github.com/${GITHUB_REPO}`}
+      href={GITHUB_URL}
       target="_blank"
       rel="noreferrer"
       aria-label={stars === null ? "GitHub repository" : `${stars} stars on GitHub`}

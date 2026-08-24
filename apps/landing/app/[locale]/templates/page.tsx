@@ -6,6 +6,7 @@ import { BRAND, CLI } from "@/lib/brand";
 import { TEMPLATES } from "@/lib/templates";
 import { fill, getMessages, localePath } from "@/lib/i18n";
 import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
+import { alternatesFor } from "@/lib/i18n/alternates";
 import { SiteChrome } from "@/components/SiteChrome";
 import { BackLink } from "@/components/BackLink";
 
@@ -19,7 +20,8 @@ export function generateMetadata({ params }: { params: { locale: string } }): Me
   const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
   const t = getMessages(locale);
   return {
-    title: `${t.templatesPage.metaTitle} · ${BRAND}`,
+    title: t.templatesPage.metaTitle,
+    alternates: alternatesFor("/templates", params.locale),
     description: t.templatesPage.metaDescription,
   };
 }

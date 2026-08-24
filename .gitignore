@@ -53,3 +53,4 @@ apps/web/public/film/
 # three.js inlined, because it is published as an artifact and an artifact
 # fetches nothing. Generated; the source is the two files it is built from.
 apps/web/.film-studio.html
+.cache/

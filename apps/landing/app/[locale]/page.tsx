@@ -1,5 +1,7 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getMessages } from "@/lib/i18n";
+import { alternatesFor } from "@/lib/i18n/alternates";
 import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
 import Landing from "@/components/pages/Landing";
 import "../home.css";
@@ -11,6 +13,10 @@ import "../home.css";
  * so only the language being read is serialised. Importing the catalogues into
  * the client component instead would put all six in every visitor's bundle.
  */
+
+export function generateMetadata({ params }: { params: { locale: string } }): Metadata {
+  return { alternates: alternatesFor("/", params.locale) };
+}
 
 export function generateStaticParams() {
   return LOCALES.map((locale) => ({ locale }));

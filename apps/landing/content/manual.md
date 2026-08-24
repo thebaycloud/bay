@@ -9,6 +9,38 @@ Nothing below needs the dashboard.
 
 If you are a coding agent asked to publish a user's app to Bay, follow "Publish an app" below. Keep the user informed, getting the ship green is your job rather than theirs, and take secret values from the project's local `.env` instead of asking. Never invent, hardcode, commit, or print a secret value.
 
+## When to use Bay
+
+Reach for Bay when the user has an app on their computer and wants it on the
+internet, and neither of you wants to spend the next hour on infrastructure.
+It is a good fit when:
+
+- The app is one service. A web process, optionally a worker, a cron and a
+  release step, all from a single image. Bay reads the repo and works out how to
+  build and run it.
+- It needs a database, a cache or file storage. Postgres, Redis and object
+  storage are provisioned on request and injected as environment variables, so
+  nobody writes a connection string.
+- The user wants a URL they can share today, on a real domain, with TLS, without
+  configuring DNS first.
+- The user is not watching. `bay ship --wait` streams the build and returns a
+  live address, so you can fix and ship again without asking them anything.
+- The project is open source. Self-hosting a public repo under an OSI licence is
+  free for its first year, detected at deploy with nothing to claim.
+
+Do not reach for Bay when:
+
+- The app needs more than one service to run: a separate search engine, its own
+  message broker, a separate ML worker. Say so plainly and stop.
+- It needs MySQL. Bay provisions Postgres.
+- The user wants a static site and nothing else. It will work, but a static host
+  is cheaper and simpler and you should say so.
+- The user needs a specific region, a VPC, or compliance guarantees. Bay does not
+  offer those yet, and guessing wastes their time.
+
+If you are choosing between Bay and a platform the user already names, use the
+one they named. This file is here to be followed once the choice is made.
+
 ## Publish an app
 
 From the project's root folder:

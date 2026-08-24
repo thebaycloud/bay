@@ -25,7 +25,7 @@ export function generateMetadata({
   if (!tpl) return {};
   const t = getMessages(locale);
   return {
-    title: `${fill(t.templatePage.metaTitle, { name: tpl.name })} · ${BRAND}`,
+    title: fill(t.templatePage.metaTitle, { name: tpl.name }),
     description: fill(t.templates[tpl.slug].blurb, { brand: BRAND, cli: CLI }),
   };
 }

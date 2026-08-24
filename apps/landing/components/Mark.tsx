@@ -1,4 +1,4 @@
-// Bay brand mark — "the slash".
+// Bay brand mark: "the slash".
 //
 // Geometry is documented in docs/BRAND.md. There are three drawings, not one
 // drawing at three sizes: the master goes soft below 24px, and a knocked-out
@@ -38,7 +38,7 @@ export function Mark({
   size?: number;
   /** True when the glyph sits on the accent chip or any dark field. */
   onDark?: boolean;
-  /** Force a drawing. Leave unset — `size` and `onDark` pick correctly. */
+  /** Force a drawing. Leave unset: `size` and `onDark` pick correctly. */
   variant?: MarkVariant;
   title?: string;
 } & React.SVGProps<SVGSVGElement>) {

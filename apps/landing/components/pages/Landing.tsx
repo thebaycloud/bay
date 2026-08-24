@@ -19,7 +19,7 @@ import { ArrowRight, Check, Copy, Lock, Terminal } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { cn } from "@/lib/utils";
 import { Dithering, MeshGradient } from "@paper-design/shaders-react";
-import { APP_URL, BRAND, CLI, CONTACT_EMAIL, DOMAIN, GITHUB_REPO, PKG } from "@/lib/brand";
+import { APP_URL, BRAND, CLI, CONTACT_EMAIL, DOMAIN, GITHUB_REPO, GITHUB_URL, PKG } from "@/lib/brand";
 import { TEMPLATES } from "@/lib/templates";
 import { onboardPrompt, selfhostPrompt } from "@/lib/prompts";
 import { Stars } from "@/components/Stars";
@@ -487,7 +487,7 @@ function Backdrop() {
 
   return (
     <div className="pointer-events-none absolute inset-0 z-0" aria-hidden>
-      {/* Layer 1 — the permanent floor, on the mark's own 7px pitch. */}
+      {/* Layer 1: the permanent floor, on the mark's own 7px pitch. */}
       <div
         className="absolute inset-0"
         style={{
@@ -498,7 +498,7 @@ function Backdrop() {
         }}
       />
 
-      {/* Layer 2 — the shader, where WebGL exists. */}
+      {/* Layer 2: the shader, where WebGL exists. */}
       {shader ? (
         <div className="absolute inset-0" style={DITHER_MASK_STYLE}>
           <Dithering
@@ -576,7 +576,7 @@ function OssBackdrop() {
 // and comes back when you scroll above it OR past it. The observer gives both
 // ends for free: intersecting is the only state that is dark.
 //
-// The inset rootMargin is what makes it feel deliberate rather than twitchy — it
+// The inset rootMargin is what makes it feel deliberate rather than twitchy: it
 // fires when the section actually occupies the screen, not when its first pixel
 // appears. The attribute lands on <html> so <body> can read the palette too.
 function useNight<T extends HTMLElement>(ref: React.RefObject<T | null>) {
@@ -1209,11 +1209,7 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
 
       {/* Full bleed, centred, and almost no words. Both claims are made by the
           things on the page rather than by sentences about them: the star pill IS
-          the "we are open source" claim, and the button IS the offer.
-
-          NOTE: the repo is private today and GITHUB_REPO is a PLACEHOLDER
-          pointing at someone else's repository. Do not ship this before ours is
-          public. */}
+          the "we are open source" claim, and the button IS the offer. */}
 
       <section
         className="relative overflow-hidden border-t border-line py-[clamp(80px,10vw,140px)]"
@@ -1302,7 +1298,7 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
               head: t.footer.company,
               links: [
                 [t.footer.contact, `mailto:${CONTACT_EMAIL}`],
-                [t.footer.github, "https://github.com/The-Red-Onion"],
+                [t.footer.github, GITHUB_URL],
               ],
             },
           ].map((col) => (

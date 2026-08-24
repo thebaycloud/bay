@@ -3,16 +3,22 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 import { allEntries, formatDate } from "@/lib/changelog";
+import { alternatesFor } from "@/lib/i18n/alternates";
 import { SiteChrome } from "@/components/SiteChrome";
 import { getMessages } from "@/lib/i18n";
 import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
 import { BackLink } from "@/components/BackLink";
 import "./changelog.css";
 
-export const metadata: Metadata = {
-  title: `Changelog — ${BRAND}`,
-  alternates: { types: { "application/rss+xml": "/changelog.xml" } },
-};
+export function generateMetadata({ params }: { params: { locale: string } }): Metadata {
+  return {
+    title: "Changelog",
+    alternates: {
+      ...alternatesFor("/changelog", params.locale),
+      types: { "application/rss+xml": "/changelog.xml" },
+    },
+  };
+}
 
 const WRAP = "mx-auto w-full max-w-[1040px] px-[22px] min-[900px]:px-10";
 
