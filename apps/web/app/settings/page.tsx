@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { TopBar } from "@/components/TopBar";
 import { Row, RowGroup } from "@/components/panel/atoms";
 import { Billing, type BillingAccount } from "@/components/Billing";
+import { RowSkeleton } from "@/components/Skeleton";
 
 /**
  * Settings, on the product's own design system.
@@ -137,11 +138,18 @@ export default function Settings() {
         </header>
 
         <RowGroup title="Account">
-          <Row sub="how you sign in" title={acct?.email ?? "…"}>
-            <span className="text-[13px] text-ink-2">
-              {acct ? (providerLabel[acct.provider] ?? acct.provider) : "…"}
-            </span>
-          </Row>
+          {/* A skeleton, not `acct?.email ?? "…"`. An ellipsis beside the words
+              "how you sign in" reads as a value that IS an ellipsis, and the row
+              then jumps to a different width when the real one lands. */}
+          {acct ? (
+            <Row sub="how you sign in" title={acct.email}>
+              <span className="text-[13px] text-ink-2">
+                {providerLabel[acct.provider] ?? acct.provider}
+              </span>
+            </Row>
+          ) : (
+            <RowSkeleton tile={false} w={196} />
+          )}
 
           {/* The form is a row of the list rather than a block under it: the
               name being edited belongs beside the account it names. */}
@@ -176,7 +184,12 @@ export default function Settings() {
         <Billing acct={acct} />
 
         <RowGroup title="CLI access">
-          {tokens === null ? <Row sub="reading your tokens…" title="CLI access" /> : null}
+          {tokens === null ? (
+            <>
+              <RowSkeleton tile={false} w={168} />
+              <RowSkeleton tile={false} w={148} />
+            </>
+          ) : null}
 
           {tokens?.length === 0 ? (
             <Row sub="run `bay login` on a machine to create one" title="Nothing authorized yet" />

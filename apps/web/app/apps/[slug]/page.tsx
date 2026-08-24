@@ -1,10 +1,12 @@
 import { Suspense } from "react";
 import { Dev } from "@/components/panel/Dev";
+import { WorkbenchSkeleton } from "@/components/Skeleton";
 import { Workbench, type AppState } from "@/components/Workbench";
 import { describeService, type ServiceInfo } from "@/lib/gcloud";
 import { getAppBySlug } from "@/lib/apps";
 import { getDeploy } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
+import { appHost, productName } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +47,7 @@ function stateOf(status: string | null | undefined, ready: boolean): AppState {
 /** What the cockpit needs for an app whose facts live in our database, not in Cloud Run. */
 function fromRecord(slug: string, name: string, uid: string, ready: boolean): ServiceInfo {
   return {
-    slug, name, url: `https://${slug}.supersonic.cv`, ready,
+    slug, name, url: `https://${appHost(slug)}`, ready,
     region: "us-central1", created: "", revision: "", image: "",
     envKeys: [], cloudsql: "", repo: "", storageBucket: "", owner: uid,
   };
@@ -56,12 +58,13 @@ function fromRecord(slug: string, name: string, uid: string, ready: boolean): Se
  *
  * Everything below this boundary waits on Postgres and, for an app with its own
  * Cloud Run service, on Cloud Run — a second or more before there is anything to
- * look at. Streaming means the rail and the frame are on screen while that
- * happens, instead of a blank tab.
+ * look at. Streaming means the workbench's geometry is on screen while that
+ * happens, instead of a blank tab. The fallback used to be a bare
+ * `bg-background`, which is a blank tab with extra steps.
  */
 export default function AppPage({ params }: { params: { slug: string } }) {
   return (
-    <Suspense fallback={<div className="fixed inset-0 bg-background" />}>
+    <Suspense fallback={<WorkbenchSkeleton />}>
       <AppData params={params} />
     </Suspense>
   );
@@ -83,8 +86,8 @@ async function AppData({ params }: { params: { slug: string } }) {
     try { data = await describeService(slug); } catch { data = null; }
     if (data && data.owner === uid) {
       return (
-        <Workbench slug={slug} address={`${slug}.supersonic.cv`} state={stateOf(app.status, data.ready)}>
-          <Dev address={`${slug}.supersonic.cv`} slug={slug} />
+        <Workbench slug={slug} address={appHost(slug)} state={stateOf(app.status, data.ready)}>
+          <Dev address={appHost(slug)} slug={slug} />
         </Workbench>
       );
     }
@@ -98,8 +101,8 @@ async function AppData({ params }: { params: { slug: string } }) {
     const name = dep?.name || app?.slug || slug;
     const ready = app?.status === "live";
     return (
-      <Workbench slug={slug} address={`${slug}.supersonic.cv`} state={stateOf(app?.status ?? dep?.status, ready)}>
-        <Dev address={`${slug}.supersonic.cv`} slug={slug} />
+      <Workbench slug={slug} address={appHost(slug)} state={stateOf(app?.status ?? dep?.status, ready)}>
+        <Dev address={appHost(slug)} slug={slug} />
       </Workbench>
     );
   }
@@ -111,7 +114,7 @@ function notYours() {
   return (
     <div className="authpage">
       <div className="authbox">
-        <div className="authbrand">SUPERSONIC</div>
+        <div className="authbrand">{productName()}</div>
         <h1>Not found</h1>
         <p className="authalt">This app doesn&apos;t exist or isn&apos;t yours. <a href="/">Back to your apps</a></p>
       </div>

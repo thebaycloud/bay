@@ -6,6 +6,7 @@ import { signOut } from "next-auth/react";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Row, RowGroup, RowList } from "@/components/panel/atoms";
+import { RowSkeleton } from "@/components/Skeleton";
 import { productName } from "@/lib/brand";
 
 /**
@@ -146,20 +147,27 @@ function CliAuth() {
       </header>
 
       <RowList>
-        <Row sub="signed in as" title={acct?.email ?? "…"}>
-          <Button
-            className="h-7 px-2.5 text-[13px] text-ink-2 hover:text-ink"
-            onClick={switchAccount}
-            size="sm"
-            variant="ghost"
-          >
-            Not you?
-          </Button>
-        </Row>
+        {/* The account, or its shape. `?? "…"` put an ellipsis where an email
+            goes, which reads as an address nobody has — on the one screen whose
+            job is telling you WHICH account you are about to authorize. */}
+        {acct ? (
+          <Row sub="signed in as" title={acct.email}>
+            <Button
+              className="h-7 px-2.5 text-[13px] text-ink-2 hover:text-ink"
+              onClick={switchAccount}
+              size="sm"
+              variant="ghost"
+            >
+              Not you?
+            </Button>
+          </Row>
+        ) : (
+          <RowSkeleton tile={false} w={208} />
+        )}
       </RowList>
 
       {state !== "done" ? (
-        <Button className="w-full" disabled={state === "working"} onClick={authorize}>
+        <Button className="w-full" disabled={state === "working" || !acct} onClick={authorize}>
           {state === "working" ? <Loader2 className="size-4 animate-spin" /> : null}
           {state === "working" ? "Authorizing…" : "Authorize"}
         </Button>
@@ -210,7 +218,12 @@ function CliAuth() {
       {/* Everything already holding a key to this account. A machine you no
           longer use, or one you don't recognize, is revoked from here. */}
       <RowGroup title="Authorized machines">
-        {tokens === null ? <Row sub="reading them…" title="Authorized machines" /> : null}
+        {tokens === null ? (
+          <>
+            <RowSkeleton tile={false} w={176} />
+            <RowSkeleton tile={false} w={152} />
+          </>
+        ) : null}
 
         {tokens?.length === 0 ? (
           <Row sub="this will be the first" title="Nothing is authorized yet" />

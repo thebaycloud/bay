@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { getAppBySlug, setAnalyticsEnabled } from "@/lib/apps";
-import { websiteStats } from "@/lib/umami";
+import { websiteStatsCached } from "@/lib/umami";
 import { currentUserId } from "@/lib/session";
 import { corsFor, optionsHandler } from "@/lib/cors";
 
@@ -56,7 +56,7 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
       // screen says them differently — which it can only do if this stays null rather
       // than collapsing to a count.
       stats: app.umami_website_id && app.analytics_enabled !== false
-        ? await websiteStats(app.umami_website_id, "30d")
+        ? await websiteStatsCached(app.umami_website_id, "30d")
         : null,
     },
     { headers: cors }

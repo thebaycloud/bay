@@ -20,6 +20,7 @@
 
 import { identityToken } from "./gcp-rest";
 import { rootDomain } from "./roots";
+import { memo } from "./memo";
 
 const BASE = (process.env.UMAMI_URL ?? "").replace(/\/$/, "");
 const USER = process.env.UMAMI_USER ?? "admin";
@@ -216,6 +217,18 @@ export interface WebsiteStats {
  * to say those differently: "nobody came" and "we could not count" are opposite
  * answers, and reading unreachable as zero is how a dashboard lies.
  */
+/**
+ * Visitor counts, remembered for a minute.
+ *
+ * Umami aggregates on its own schedule and its own numbers are already minutes
+ * behind the event that produced them, so a cached minute adds nothing to the
+ * error — and this is the read that reaches another service over HTTP, which is
+ * the slowest of the nine on the Dev screen after the ones that spawn processes.
+ */
+export function websiteStatsCached(websiteId: string, range = "1d") {
+  return memo(`umami:${websiteId}:${range}`, 60_000, () => websiteStats(websiteId, range));
+}
+
 export async function websiteStats(
   websiteId: string,
   range = "1d",

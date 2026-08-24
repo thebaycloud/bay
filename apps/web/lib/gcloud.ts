@@ -16,6 +16,7 @@ import { runIdsForSlug } from "./deploy-runs";
 import { SCHEDULER_SA } from "./identities";
 import { appLogFilter } from "./log-filter";
 import { TENANT_PG_INSTANCE } from "./pg-config";
+import { memo } from "./memo";
 
 const PROJECT = "supersonic-deploy-prod";
 // The one shared Cloud SQL instance every app's database lives on. Imported
@@ -267,6 +268,17 @@ async function accessToken(): Promise<string> {
   return (await capture(["auth", "print-access-token"])).trim();
 }
 
+/**
+ * A bucket's contents, remembered for a minute.
+ *
+ * Nobody uploads a file and then opens this screen to find out whether it
+ * worked — the app did the upload, and the app knows. A minute-old listing is
+ * the same listing.
+ */
+export function listBucketObjectsCached(bucket: string) {
+  return memo(`bucket:${bucket}`, 60_000, () => listBucketObjects(bucket));
+}
+
 export async function listBucketObjects(bucket: string): Promise<{ name: string; size: number; updated: string; contentType: string }[]> {
   const t = await accessToken();
   const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${bucket}/o?maxResults=200`, {
@@ -289,11 +301,15 @@ export async function listBucketObjects(bucket: string): Promise<{ name: string;
 export interface Job { id: string; label: string; schedule: string; uri: string; state: string; lastAttempt: string; }
 
 export async function listJobs(slug: string): Promise<Job[]> {
+  // Memoised for 20s on the LIST, not per slug: the API call fetches every job
+  // in the region and each caller filters its own out, so two apps' panels
+  // opened together share one request.
+  //
   // REST first, gcloud only if it refuses. This is the read the whole Dev screen
   // used to wait behind: spawning the CLI cost about a second with warm
   // credentials and more in a container, for a list this filters down to the
   // handful of jobs belonging to one app.
-  const rest = await listSchedulerJobsRest(REGION);
+  const rest = await memo("scheduler:jobs", 20_000, () => listSchedulerJobsRest(REGION));
   const arr =
     rest ??
     (JSON.parse(

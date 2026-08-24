@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Bot,
@@ -149,7 +149,9 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
     });
   }, [slug, address, nonce]);
 
-  const d = deriveReading(slug, address, raw);
+  // Memoised: nine `setState` calls means nine renders, and this walks every
+  // answer to build the whole Reading each time.
+  const d = useMemo(() => deriveReading(slug, address, raw), [slug, address, raw]);
   /** Whether this row's own read has come back — skeleton until it has. */
   const has = (...parts: Part[]) => parts.every((p) => done.has(p));
 

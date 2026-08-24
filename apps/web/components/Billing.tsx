@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, ExternalLink, Infinity as InfinityIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Row, RowGroup } from "@/components/panel/atoms";
+import { RowSkeleton } from "@/components/Skeleton";
 import { resetsOn } from "@/lib/billing-period";
 import { productName } from "@/lib/brand";
 import { cn } from "@/lib/utils";
@@ -127,30 +128,50 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
   return (
     <div className="flex flex-col gap-3">
       <RowGroup title="Plan">
-        <Row
-          sub={
-            plan === "free"
-              ? "no card, no time limit"
-              : "manage or cancel any time"
-          }
-          title={LABEL[plan]}
-        >
-          <span className="text-[13px] text-ink-2">{PRICE[plan]}</span>
-          {/* A subscriber manages their own subscription through Stripe's portal
-              — cancelling, changing card, invoices. We do not rebuild any of
-              that, and a Team account without a Stripe customer falls back to
-              email, which is how it was sold in the first place. */}
-          {paid ? (
-            <Button disabled={busy} onClick={() => go("/api/billing/portal")} size="sm" variant="outline">
-              Manage billing
-              <ExternalLink className="size-3.5" />
-            </Button>
-          ) : (
-            <Button disabled={busy} onClick={() => go("/api/billing/checkout", { plan: "pro" })} size="sm">
-              Upgrade to Pro
-            </Button>
-          )}
-        </Row>
+        {/* Skeletons until the account answers. Rendering the free plan's row
+            while the answer is unknown tells a Pro subscriber they are on Free
+            for as long as the request takes — a placeholder that is wrong is
+            worse than one that is blank. */}
+        {!acct ? (
+          <>
+            <RowSkeleton tile={false} w={120} />
+            <RowSkeleton tile={false} w={96} />
+            <RowSkeleton tile={false} w={132} />
+            <RowSkeleton tile={false} w={148} />
+          </>
+        ) : null}
+
+        {acct ? (
+          <Row
+            sub={plan === "free" ? "no card, no time limit" : "manage or cancel any time"}
+            title={LABEL[plan]}
+          >
+            <span className="text-[13px] text-ink-2">{PRICE[plan]}</span>
+            {/* A subscriber manages their own subscription through Stripe's
+                portal — cancelling, changing card, invoices. We do not rebuild
+                any of that, and a Team account without a Stripe customer falls
+                back to email, which is how it was sold in the first place. */}
+            {paid ? (
+              <Button
+                disabled={busy}
+                onClick={() => go("/api/billing/portal")}
+                size="sm"
+                variant="outline"
+              >
+                Manage billing
+                <ExternalLink className="size-3.5" />
+              </Button>
+            ) : (
+              <Button
+                disabled={busy}
+                onClick={() => go("/api/billing/checkout", { plan: "pro" })}
+                size="sm"
+              >
+                Upgrade to Pro
+              </Button>
+            )}
+          </Row>
+        ) : null}
 
         {u ? (
           <>
@@ -184,7 +205,7 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
 
       {/* What upgrading buys, only where there is something to buy. On Pro this
           block would be a list of things the reader already has. */}
-      {plan === "free" ? (
+      {acct && plan === "free" ? (
         <div className="flex flex-col gap-2 rounded-xl border border-border bg-ground px-4 py-3.5">
           <span className="text-[14px] font-[450] text-ink">Pro adds</span>
           <ul className="flex flex-col gap-1.5">
@@ -204,6 +225,7 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
         </div>
       ) : null}
 
+      {acct ? (
       <p className="px-0.5 text-[13px] text-ink-3">
         {plan === "team" ? (
           <>
@@ -223,6 +245,7 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
           </>
         )}
       </p>
+      ) : null}
 
       {note ? <p className="px-0.5 text-[14px] text-red">{note}</p> : null}
     </div>

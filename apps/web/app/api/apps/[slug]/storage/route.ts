@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { listBucketObjects, bucketForSlug } from "@/lib/gcloud";
+import { listBucketObjectsCached, bucketForSlug } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { withCors, optionsHandler } from "@/lib/cors";
@@ -12,7 +12,7 @@ async function getHandler(_req: Request, { params }: { params: { slug: string } 
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden", objects: [] }, { status: 403 });
   const bucket = bucketForSlug(slug);
   try {
-    return Response.json({ bucket, objects: await listBucketObjects(bucket) });
+    return Response.json({ bucket, objects: await listBucketObjectsCached(bucket) });
   } catch (e) {
     return Response.json({ bucket, objects: [], error: e instanceof Error ? e.message : String(e) });
   }
