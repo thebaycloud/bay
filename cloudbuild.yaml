@@ -79,6 +79,7 @@ steps:
         fi
         gcloud run jobs update supersonic-deploy-job \
           --image=$_IMAGE:$_TAG --update-env-vars=$_LANE_ENV \
+          --update-secrets=UMAMI_PASSWORD=umami-admin-password:latest \
           --region=us-central1 --project=$PROJECT_ID --quiet
 
   # The warm deploy worker is the same image again, with a third command, and it
@@ -122,12 +123,26 @@ steps:
         # even though `gcloud run deploy` preserves the live value: this file is
         # what recreates the service after `setup-deploy-worker.sh` is rerun or
         # the service is deleted. See docs/HANDOFF-deploy-agent-sandbox.md.
+        # UMAMI_PASSWORD, and it is here because of what its absence did.
+        #
+        # An app gets its analytics site from `createAppRecord`, which runs
+        # wherever the deploy runs — the control plane, this worker, or the job.
+        # Only the control plane was ever given UMAMI_URL and the password: these
+        # two were configured by copying the control plane's environment ONCE,
+        # before analytics existed, and a copy taken once is a copy that drifts.
+        # So an app got analytics or did not according to which of three services
+        # happened to deploy it, and the code returned in silence either way. Two
+        # live apps had no site at all on 24 Aug and nothing anywhere said so.
+        #
+        # `--update-secrets` merges, exactly like --update-env-vars: the other
+        # secrets this service carries are untouched.
         gcloud run deploy supersonic-deploy-worker \
           --image=$_IMAGE:$_TAG \
           --region=us-central1 --project=$PROJECT_ID \
           --execution-environment=gen2 \
           --update-env-vars=$_LANE_ENV \
           --update-env-vars=IMAGE_TAG=$_TAG \
+          --update-secrets=UMAMI_PASSWORD=umami-admin-password:latest \
           --quiet
 
   # Never env vars: the live service carries AUTH_SECRET, PG_PASSWORD, the Stripe
@@ -258,6 +273,10 @@ steps:
       # assertJobImageMatches states, for the same reason: this check exists to
       # catch a stale worker, not to become a fresh way for a deploy to fail.
       - --update-env-vars=IMAGE_TAG=$_TAG
+      # Set by hand on this service in July and by nothing since. Written down
+      # here for the same reason as the worker's: three services read it and one
+      # of them having it is indistinguishable, from the outside, from all three.
+      - --update-secrets=UMAMI_PASSWORD=umami-admin-password:latest
       - --quiet
 
 substitutions:
@@ -314,7 +333,7 @@ substitutions:
   #
   # Ours, throwaway, and its downtime belongs to nobody, which is the same reason
   # the entries it replaces were chosen.
-  _LANE_ENV: ^~~^PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~NODE_IDENTITY=enforce~~BUILDER=railpack~~BUILDKIT_HOST=tcp://10.128.0.5:1234~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com
+  _LANE_ENV: ^~~^PLANNER=1~~SEAL_APPS=1~~DEPLOY_ENGINE=opencode~~DEPLOY_JOB=1~~NODE_IDENTITY=enforce~~BUILDER=railpack~~BUILDKIT_HOST=tcp://10.128.0.5:1234~~BUILDKIT_IMAGE=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub/moby/buildkit:buildx-stable-1~~DOCKER_MIRROR=us-central1-docker.pkg.dev/supersonic-deploy-prod/docker-hub~~CLOUD_BUILD_RUN_AS=supersonic-build@supersonic-deploy-prod.iam.gserviceaccount.com~~UMAMI_URL=https://supersonic-umami-uyuwsbguuq-uc.a.run.app~~UMAMI_USER=admin
   _IMAGE: us-central1-docker.pkg.dev/supersonic-deploy-prod/supersonic/control-plane
   # The commit being deployed. A trigger passes $SHORT_SHA; a manual `builds submit`
   # passes whatever it likes. The default keeps a hand-run build from failing on an

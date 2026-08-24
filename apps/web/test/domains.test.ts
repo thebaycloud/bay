@@ -375,16 +375,16 @@ test("a certificate Google calls ACTIVE is not live until the edge serves it", a
 
 test("a certificate covers a name, or it does not — never nearly", async () => {
   const { certCovers } = await attach$;
-  assert.equal(certCovers("DNS:arsen.wtf", "arsen.wtf"), true);
+  assert.equal(certCovers("DNS:acme.com", "acme.com"), true);
   // The substring match this function exists to not be.
-  assert.equal(certCovers("DNS:notarsen.wtf", "arsen.wtf"), false);
-  assert.equal(certCovers("DNS:arsen.wtf.evil.com", "arsen.wtf"), false);
+  assert.equal(certCovers("DNS:notacme.com", "acme.com"), false);
+  assert.equal(certCovers("DNS:acme.com.evil.com", "acme.com"), false);
   // A wildcard covers one label under its own parent, and nothing else.
   assert.equal(certCovers("DNS:*.acme.com", "shop.acme.com"), true);
   assert.equal(certCovers("DNS:*.acme.com", "a.b.acme.com"), false);
   assert.equal(certCovers("DNS:*.acme.com", "acme.com"), false);
-  assert.equal(certCovers("DNS:*.supersonic.cv", "arsen.wtf"), false);
-  assert.equal(certCovers(undefined, "arsen.wtf"), false);
+  assert.equal(certCovers("DNS:*.supersonic.cv", "acme.com"), false);
+  assert.equal(certCovers(undefined, "acme.com"), false);
   // Several names, one of which matches, and case is not significant in DNS.
   assert.equal(certCovers("DNS:www.acme.com, DNS:Acme.com", "acme.com"), true);
 });

@@ -33,6 +33,9 @@ import { DeployLog } from "@/components/DeployLog";
 import { StoragePanel } from "@/components/StoragePanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
 import { GitPanel } from "@/components/GitPanel";
+// SharePanel's import is not restored: access moved to the workbench header as a
+// popover, and the file went with it. AnalyticsScreen is theirs and is used below.
+import { AnalyticsScreen } from "@/components/panel/Analytics";
 import { useQueryState } from "@/lib/use-query-state";
 import {
   deriveReading,
@@ -381,33 +384,11 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
     return <KeysPanel managedDatabase={!d.missing} onToast={toast} slug={slug} />;
   }
   // analytics
-  return (
-    <Card className="flex flex-col gap-2 rounded-xl border-border bg-card p-4 shadow-none">
-      {d.an ? (
-        <div className="grid grid-cols-2 gap-4">
-          <Stat label="visitors" value={d.an.visitors.toLocaleString()} />
-          <Stat label="views" value={d.an.views.toLocaleString()} />
-          <Stat label="bounce" value={d.an.returning} />
-          <Stat label="change" value={d.an.dv || "—"} />
-        </div>
-      ) : (
-        <p className="text-sub text-ink-2">
-          {!d.anOn
-            ? "Analytics is off, so nobody is being counted."
-            : !d.anReady
-              ? "Analytics is still being set up for this app."
-              : "The count could not be read just now — which is not the same as nobody having visited."}
-        </p>
-      )}
-    </Card>
-  );
+  //
+  // Its own component, and its own read: this screen asks umami twenty-odd
+  // questions for the window a person chose, which has no business on a poll
+  // that runs every three seconds. See components/panel/Analytics.tsx.
+  return <AnalyticsScreen slug={slug} enabled={d.anOn} provisioned={d.anReady} />;
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <div className="text-section text-ink tabular-nums">{value}</div>
-      <div className="text-[13px] text-ink-3">{label}</div>
-    </div>
-  );
-}
+

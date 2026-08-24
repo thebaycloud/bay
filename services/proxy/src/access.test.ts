@@ -18,7 +18,7 @@ const app = {
   visibility: "private" as const,
 };
 const owner = { userId: "user-owner", email: "anna@acme.com" };
-const colleague = { userId: "user-boris", email: "boris@acme.com" };
+const colleague = { userId: "user-dana", email: "dana@acme.com" };
 const outsider = { userId: "user-eve", email: "eve@other.com" };
 
 test("owner can always open their own private app", () => {
@@ -115,7 +115,7 @@ test("a verified address at a granted domain opens a shared app", () => {
 
 // The failure this pins: signup with a password asks for an address and never
 // checks it. If an unproven address satisfied a domain rule, anyone could type
-// boris@acme.com into our own signup form and walk into every app acme shares
+// dana@acme.com into our own signup form and walk into every app acme shares
 // with its own staff — the rule would be `public` wearing a domain.
 test("an unverified address at a granted domain is refused", () => {
   assert.equal(allows({
@@ -154,17 +154,17 @@ test("a domain rule does not open a private app", () => {
 });
 
 test("domainOf takes the domain half, lowercased", () => {
-  assert.equal(domainOf("Boris@Acme.COM"), "acme.com");
+  assert.equal(domainOf("Dana@Acme.COM"), "acme.com");
 });
 
 // The one that matters: mail for this address routes to evil.com, and reading
-// the last field would hand it a rule written for luwo.ai.
+// the last field would hand it a rule written for acme.com.
 test("domainOf refuses an address with two @", () => {
-  assert.equal(domainOf("boris@luwo.ai@evil.com"), "");
+  assert.equal(domainOf("dana@acme.com@evil.com"), "");
 });
 
 test("domainOf refuses what is not a deliverable domain", () => {
-  for (const bad of ["", "boris", "boris@", "@acme.com", "boris@acme", "boris@.com", "boris@acme."]) {
+  for (const bad of ["", "dana", "dana@", "@acme.com", "dana@acme", "dana@.com", "dana@acme."]) {
     assert.equal(domainOf(bad), "", `${JSON.stringify(bad)} is not a domain`);
   }
 });

@@ -7,15 +7,25 @@
     "app/**/{error,loading,not-found,template,default}.tsx",
     "middleware.ts",
     "auth.ts",
-    "instrumentation.ts",
     "next.config.{js,mjs,ts}",
     "scripts/*.ts",
     "bench/*.ts",
     "db/*.ts",
-    "test/**/*.test.ts"
+    "test/**/*.test.ts",
+    "components/film/ship-it.js",
+    "scripts/film-studio/studio.js"
   ],
-  "project": ["**/*.{ts,tsx}"],
-  "ignore": ["node_modules/**", ".next/**"],
-  "ignoreDependencies": ["tsx"],
+  "project": [
+    "**/*.{ts,tsx,js}"
+  ],
+  "ignore": [
+    ".next/**",
+    "components/ai-elements/**",
+    "components/ui/**",
+    "node_modules/**"
+  ],
+  "ignoreDependencies": [
+    "tsx"
+  ],
   "includeEntryExports": true
 }

@@ -102,7 +102,7 @@ export function Empty({ children }: { children: React.ReactNode }) {
  * defect: "column deploys.finished_at does not exist" is actionable in a way
  * that "something went wrong" is not.
  */
-export function PanelError({ message }: { message: string }) {
+function PanelError({ message }: { message: string }) {
   return (
     <div className="an-panel-error">
       <div className="an-panel-error-head">This panel could not be read.</div>
@@ -313,7 +313,7 @@ export function shortDate(d: Date | null | undefined): string {
  * text, never the only one, and the same word appears in the funnel above so the
  * two can be checked against each other.
  */
-export function StallTag({ stall, label }: { stall: string; label: string }) {
+function StallTag({ stall, label }: { stall: string; label: string }) {
   return <span className={`an-stall an-stall-${stall}`}>{label}</span>;
 }
 

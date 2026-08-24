@@ -34,6 +34,6 @@ export function stripQualityGates(buildScript: string): string {
 }
 
 /** True when `stripQualityGates` would change the script. */
-export function hasQualityGate(buildScript: string): boolean {
+function hasQualityGate(buildScript: string): boolean {
   return stripQualityGates(buildScript) !== buildScript.trim();
 }

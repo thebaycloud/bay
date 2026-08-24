@@ -396,7 +396,7 @@ export function toolsFor(slug: string, ownerId: string, cookie?: string): Handle
           const [grants, domains, requests] = await Promise.all([
             listGrants(slug), listDomainGrants(slug), listPending(slug),
           ]);
-          // `domains` is people too — a rule for "luwo.ai" admits everyone there
+          // `domains` is people too — a rule for "acme.com" admits everyone there
           // with a verified address, so an answer that listed only `grants`
           // would under-report who can open the app.
           return { ok: true, data: { visibility: app?.visibility ?? "private", grants, domains, requests } };

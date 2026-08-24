@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { isPublicEmailProvider, domainOf, normalizeDomain } from "../lib/workspace";
 
 test("domainOf lowercases and takes the part after @", () => {
-  assert.equal(domainOf("Boris@Acme.COM"), "acme.com");
+  assert.equal(domainOf("Dana@Acme.COM"), "acme.com");
 });
 
 test("company domains are not public providers", () => {
@@ -22,33 +22,33 @@ test("public provider matching is case-insensitive", () => {
 });
 
 test("domainOf refuses anything that is not exactly local@domain", () => {
-  // Taking split("@")[1] here would return "luwo.ai" and hand an outsider a
+  // Taking split("@")[1] here would return "acme.com" and hand an outsider a
   // company workspace.
-  assert.equal(domainOf("boris@luwo.ai@evil.com"), "");
-  assert.equal(domainOf("boris@evil.com@luwo.ai"), "");
+  assert.equal(domainOf("dana@acme.com@evil.com"), "");
+  assert.equal(domainOf("dana@evil.com@acme.com"), "");
   assert.equal(domainOf("no-at-sign"), "");
-  assert.equal(domainOf("@luwo.ai"), "");
-  assert.equal(domainOf("boris@"), "");
-  assert.equal(domainOf("boris@luwo.ai."), "");
-  assert.equal(domainOf("boris@localhost"), "");
-  assert.equal(domainOf("Boris@Luwo.AI"), "luwo.ai");
+  assert.equal(domainOf("@acme.com"), "");
+  assert.equal(domainOf("dana@"), "");
+  assert.equal(domainOf("dana@acme.com."), "");
+  assert.equal(domainOf("dana@localhost"), "");
+  assert.equal(domainOf("Dana@Acme.COM"), "acme.com");
 });
 
-// normalizeDomain — the value an app's "anyone at luwo.ai" rule is stored under.
+// normalizeDomain — the value an app's "anyone at acme.com" rule is stored under.
 
 test("normalizeDomain accepts the three spellings people type", () => {
-  for (const typed of ["luwo.ai", "@luwo.ai", "boris@luwo.ai", "  @LUWO.ai  "]) {
-    assert.equal(normalizeDomain(typed), "luwo.ai", `${JSON.stringify(typed)} is luwo.ai`);
+  for (const typed of ["acme.com", "@acme.com", "dana@acme.com", "  @ACME.com  "]) {
+    assert.equal(normalizeDomain(typed), "acme.com", `${JSON.stringify(typed)} is acme.com`);
   }
 });
 
-// The address routes to evil.com, so it must not become a rule for luwo.ai.
+// The address routes to evil.com, so it must not become a rule for acme.com.
 test("normalizeDomain refuses an address with two @", () => {
-  assert.equal(normalizeDomain("boris@luwo.ai@evil.com"), "");
+  assert.equal(normalizeDomain("dana@acme.com@evil.com"), "");
 });
 
 test("normalizeDomain refuses what is not a domain", () => {
-  for (const bad of ["", "   ", "luwo", "luwo.", ".ai", "lu wo.ai", "luwo..ai", "-luwo.ai", "luwo-.ai", "https://luwo.ai", "luwo.ai/apps"]) {
+  for (const bad of ["", "   ", "acme", "acme.", ".ai", "ac me.com", "acme..com", "-acme.com", "luwo-.ai", "https://acme.com", "acme.com/apps"]) {
     assert.equal(normalizeDomain(bad), "", `${JSON.stringify(bad)} is not a domain`);
   }
 });
@@ -56,7 +56,7 @@ test("normalizeDomain refuses what is not a domain", () => {
 // "*" is how the sign-in allowlist spells "everyone". An app that means everyone
 // is `public` — which is counted and capped — so it must not be spellable here.
 test("normalizeDomain refuses a wildcard", () => {
-  for (const bad of ["*", "*.luwo.ai", "@*"]) {
+  for (const bad of ["*", "*.acme.com", "@*"]) {
     assert.equal(normalizeDomain(bad), "", `${JSON.stringify(bad)} is not a domain`);
   }
 });

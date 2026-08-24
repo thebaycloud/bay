@@ -1,5 +1,5 @@
 /**
- * Compile the deploy-agent's stack detector into the CLI package.
+ * Compile the stack detector into the CLI package.
  *
  * The CLI has to know what a project is before it can build it, and the control plane
  * has to know the same thing. A second implementation would drift within a month, and
@@ -22,9 +22,9 @@ import { INPUTS_PATH, prependStamp, repoInputs, stampSources, writeInputs } from
 const here = dirname(fileURLToPath(import.meta.url));
 const cliRoot = resolve(here, "..");
 const repoRoot = resolve(cliRoot, "../..");
-const agentSrc = resolve(repoRoot, "services/deploy-agent/src/index.ts");
+const agentSrc = resolve(repoRoot, "packages/detector/src/index.ts");
 const out = join(cliRoot, "vendor", "detector.js");
-const esbuildCwd = resolve(repoRoot, "services/deploy-agent");
+const esbuildCwd = resolve(repoRoot, "packages/detector");
 
 mkdirSync(dirname(out), { recursive: true });
 const scratch = mkdtempSync(join(tmpdir(), "supersonic-bundle-"));
@@ -52,7 +52,7 @@ try {
   // that behaviour out of our way because we only ever call the exported function.
   writeFileSync(join(cliRoot, "vendor", "README.md"),
     "Generated. Do not edit — `npm run bundle` rebuilds all of it.\n\n" +
-    "- detector.js — scripts/bundle-detector.mjs, from services/deploy-agent\n" +
+    "- detector.js — scripts/bundle-detector.mjs, from packages/detector\n" +
     "- resolve.js  — scripts/bundle-resolver.mjs, from apps/web/lib\n" +
     "- inputs.json — every repository file esbuild inlined into each bundle, from its metafile.\n" +
     "                test/vendor.test.js hashes these to prove the bundles are not stale.\n");

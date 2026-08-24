@@ -13,7 +13,7 @@ export interface AllowEntry {
  *
  * Pure: the caller supplies the entries. Deny is the default, and a domain
  * entry matches only a whole domain — comparing with endsWith would let
- * evil-luwo.ai through.
+ * evil-acme.com through.
  */
 export function isAllowed(email: string, entries: AllowEntry[]): boolean {
   const addr = email.trim().toLowerCase();
@@ -31,7 +31,7 @@ export function isAllowed(email: string, entries: AllowEntry[]): boolean {
   return false;
 }
 
-export async function listAllowEntries(): Promise<AllowEntry[]> {
+async function listAllowEntries(): Promise<AllowEntry[]> {
   const r = await getPool(DB).query(`SELECT email, domain FROM allowed_signins`);
   return r.rows;
 }

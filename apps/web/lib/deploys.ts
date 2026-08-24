@@ -36,7 +36,7 @@ function ensure(): Promise<void> {
 }
 
 /** The states a deploy can end in. Anything else means it is still running. */
-export const TERMINAL_STATUSES = new Set(["live", "failed"]);
+const TERMINAL_STATUSES = new Set(["live", "failed"]);
 
 export interface DeployRow {
   slug: string;

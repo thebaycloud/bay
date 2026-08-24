@@ -2,7 +2,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { getAppBySlug, setAnalyticsEnabled } from "@/lib/apps";
-import { websiteStatsCached } from "@/lib/umami";
+import { websiteStatsCached, websiteDetail } from "@/lib/umami";
+import { memo } from "@/lib/memo";
 import { currentUserId } from "@/lib/session";
 import { corsFor, optionsHandler } from "@/lib/cors";
 
@@ -30,11 +31,47 @@ async function ownedApp(slug: string) {
   return app;
 }
 
+/** Windows the screen may ask for, chosen from a list and never parsed. */
+const RANGES = new Set(["1d", "7d", "30d"]);
+
 export async function GET(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
   if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
+
+  const url = new URL(req.url);
+  const range = RANGES.has(url.searchParams.get("range") ?? "") ? url.searchParams.get("range")! : "7d";
+
+  /**
+   * THE WHOLE PICTURE, ONLY WHEN A PERSON ASKED FOR IT.
+   *
+   * `?detail=1` is twenty-odd queries against umami — every dimension, the time
+   * series, who is on the site now, the last eight visitors — and it is what the
+   * Analytics screen opens with. Everything else on this route stays the cheap
+   * six-number read, because that one is on a path the panel POLLS and this one
+   * is not.
+   *
+   * Cached for a minute, per app AND per window: a person switching 24h → 7d →
+   * 24h must not pay for the first window twice, and umami's own aggregates are
+   * already minutes behind the event that produced them.
+   */
+  if (url.searchParams.get("detail") === "1") {
+    const on = app.umami_website_id && app.analytics_enabled !== false;
+    return Response.json(
+      {
+        enabled: app.analytics_enabled !== false,
+        provisioned: Boolean(app.umami_website_id),
+        range,
+        detail: on
+          ? await memo(`umami:detail:${app.umami_website_id}:${range}`, 60_000, () =>
+              websiteDetail(app.umami_website_id as string, range))
+          : null,
+      },
+      { headers: cors }
+    );
+  }
+
   return Response.json(
     {
       // Two facts, not one. "Off" is the owner's decision; "no site" is ours —

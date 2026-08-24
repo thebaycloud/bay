@@ -92,7 +92,7 @@ export function requirementNames(requirements: string): Set<string> {
 }
 
 /** Names declared in a package.json's dependencies and devDependencies. */
-export function packageJsonNames(pkg: unknown): Set<string> {
+function packageJsonNames(pkg: unknown): Set<string> {
   const p = (pkg ?? {}) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
   return new Set([...Object.keys(p.dependencies ?? {}), ...Object.keys(p.devDependencies ?? {})]);
 }
@@ -169,7 +169,7 @@ export function checkPlanDeps(
  * What the runner images actually provide — the one place any code states it.
  *
  * There were four, and they disagreed: the two runner Dockerfiles said 3.14 and
- * 24, this said 3.14 and 24, and services/deploy-agent said `python:3.12`, which
+ * 24, this said 3.14 and 24, and packages/detector said `python:3.12`, which
  * is the number that ends up in the generated `FROM python:…-slim`. So a repo
  * declaring `requires-python = ">=3.14"` was built on 3.12 and failed at pip with
  * "requires a different Python: 3.12.13 not in '<4.0,>=3.14'" — a build log that
@@ -178,14 +178,14 @@ export function checkPlanDeps(
  * NOT parsed from the Dockerfiles at module load, which was the first instinct.
  * The control-plane image copies exactly two directories (root Dockerfile:
  * `COPY --from=webbuild /app/apps/web` and `COPY --from=agentdeps
- * /app/services/deploy-agent`); services/runner is not in it. A read of
- * ../../services/runner at import would work on every laptop and throw in
+ * /app/packages/detector`); infra/runner is not in it. A read of
+ * ../../infra/runner at import would work on every laptop and throw in
  * production — the same bug in a shape that is harder to see. Next also traces
  * lib/ into the server bundle and would not carry a file outside apps/web.
  *
  * So the constant stays and is pinned two ways instead: plan-deps.test.ts parses
  * both runner Dockerfiles and fails if either moves without this line moving, and
- * services/deploy-agent imports this rather than repeating it. Drift now has to
+ * packages/detector imports this rather than repeating it. Drift now has to
  * break a test to land.
  */
 export const RUNTIME_VERSIONS = { python: "3.14", node: "24" } as const;
@@ -233,8 +233,8 @@ export function runtimeMismatch(manifests: { pyproject?: string | null; packageJ
   if (py) {
     const need = lowestAccepted(py);
     if (need && below(RUNTIME_VERSIONS.python, need)) {
-      return `this app needs Python ${py} and the runner has ${RUNTIME_VERSIONS.python}`
-        + ` — widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the runner to move.`
+      return `this app needs Python ${py} and the platform has ${RUNTIME_VERSIONS.python}`
+        + ` — widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the platform to move.`
         + ` Nothing in the code can fix this one.`;
     }
   }
@@ -242,8 +242,8 @@ export function runtimeMismatch(manifests: { pyproject?: string | null; packageJ
   if (engines) {
     const need = lowestAccepted(engines);
     if (need && below(RUNTIME_VERSIONS.node, need)) {
-      return `this app needs Node ${engines} and the runner has ${RUNTIME_VERSIONS.node}`
-        + ` — widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the runner to move.`
+      return `this app needs Node ${engines} and the platform has ${RUNTIME_VERSIONS.node}`
+        + ` — widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the platform to move.`
         + ` Nothing in the code can fix this one.`;
     }
   }

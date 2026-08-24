@@ -293,7 +293,7 @@ const SCRATCH = [TARBALL, MARKER, KEYFILE, SKIP, BUILD_START, OUTDIR];
  * (What this does NOT cover: `node_modules` itself, still in `/workspace` on a
  * cache-hit build with outputDir `.`. Removing it before the upload would break
  * nothing today but is not this step's business, and no detector path currently
- * emits outputDir `.` together with a build command — services/deploy-agent's
+ * emits outputDir `.` together with a build command — packages/detector's
  * `staticSite()` returns `.` only with a null install and build command, which
  * routes around Cloud Build entirely.)
  */

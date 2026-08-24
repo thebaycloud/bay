@@ -90,8 +90,31 @@ export async function createAppRecord(o: {
  * the control plane deploys ahead of migrations, and a deploy must not start
  * failing in the window between the two.
  */
+let saidUnconfigured = false;
+
 async function provisionAnalytics(slug: string): Promise<void> {
-  if (!umamiConfigured()) return;
+  if (!umamiConfigured()) {
+    // ONCE PER PROCESS, AND IT IS THE LOG THIS FUNCTION WAS MISSING.
+    //
+    // `createAppRecord` runs wherever a deploy runs, and a deploy runs in three
+    // services: the control plane, the warm deploy worker and the deploy job.
+    // Only the first had UMAMI_URL — the other two were configured by copying
+    // the control plane's env once, before analytics existed, and env copied
+    // once is env that drifts. So an app got analytics or did not according to
+    // which service happened to deploy it, and this branch returned in silence
+    // either way: two live apps had no site at all and nothing anywhere said so.
+    //
+    // cloudbuild.yaml now carries UMAMI_URL/UMAMI_USER in _LANE_ENV and the
+    // password as a secret on all three, which is the fix. This line is what
+    // makes the next drift of this shape audible instead of invisible.
+    if (!saidUnconfigured) {
+      saidUnconfigured = true;
+      console.error(
+        `analytics: UMAMI_URL/UMAMI_PASSWORD are not set in this service — ${slug} and everything it deploys will have no site`
+      );
+    }
+    return;
+  }
   try {
     const cur = await getPool(DB).query(
       `SELECT umami_website_id FROM apps WHERE slug = $1`,
@@ -99,7 +122,14 @@ async function provisionAnalytics(slug: string): Promise<void> {
     );
     if (cur.rows[0]?.umami_website_id) return;
     const id = await ensureWebsite(slug);
-    if (!id) return;
+    // `ensureWebsite` already logs WHY it could not answer; this says which app
+    // paid for it. It used to be a bare `return`, so the one outcome an owner
+    // actually feels — this app has no analytics — was the one outcome that
+    // wrote nothing anywhere.
+    if (!id) {
+      console.error(`analytics: no site for ${slug} — umami did not answer`);
+      return;
+    }
     await getPool(DB).query(
       `UPDATE apps SET umami_website_id = $2 WHERE slug = $1 AND umami_website_id IS NULL`,
       [slug, id]
@@ -352,7 +382,7 @@ export async function removeGrant(slug: string, email: string): Promise<void> {
   );
 }
 
-// Domain rules — "anyone with an @luwo.ai address". Stored per app, beside the
+// Domain rules — "anyone with an @acme.com address". Stored per app, beside the
 // people invited by name, and read by the edge with SQL equality (see
 // `normalizeDomain` in lib/workspace.ts for why equality and not a suffix).
 

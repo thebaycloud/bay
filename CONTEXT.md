@@ -1,4 +1,4 @@
-# Supersonic
+# Bay
 
 The ubiquitous language of this platform. A glossary and nothing else — no
 implementation details, no decisions, no plans. Those live in `docs/`.
@@ -94,7 +94,7 @@ _Avoid_: route, endpoint, path, ingress.
 
 **Attached domain**:
 A domain a person owns, pointed at their app. An additional **Door**, never a
-replacement one: the app keeps answering at `<slug>.supersonic.cv`, which is the
+replacement one: the app keeps answering at `<slug>.thebay.cloud`, which is the
 address every share link, log line and rebuild is still built from. Product
 language says *your own domain*.
 _Avoid_: custom domain (in front of a person), vanity URL, CNAME, domain mapping.

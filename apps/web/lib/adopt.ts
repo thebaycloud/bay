@@ -78,7 +78,7 @@ export interface AdoptionInput {
 }
 
 /** Cloud Run writes `2Gi`, `512Mi`, `1G`. Bytes, or 0 when it says nothing. */
-export function memoryToBytes(limit: string | undefined): number {
+function memoryToBytes(limit: string | undefined): number {
   if (!limit) return 0;
   const m = /^(\d+(?:\.\d+)?)\s*([GMK]i?)?B?$/i.exec(limit.trim());
   if (!m) return 0;
@@ -91,7 +91,7 @@ export function memoryToBytes(limit: string | undefined): number {
 }
 
 /** Cloud Run writes `1`, `2`, `500m`. One CPU is 1024 shares, as the agent counts. */
-export function cpuToShares(limit: string | undefined): number {
+function cpuToShares(limit: string | undefined): number {
   if (!limit) return 0;
   const t = limit.trim();
   const milli = t.endsWith("m");

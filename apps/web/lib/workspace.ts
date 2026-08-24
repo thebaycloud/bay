@@ -14,7 +14,7 @@ const PUBLIC_PROVIDERS = new Set([
  * The domain an address actually delivers to, or "" if the address is malformed.
  *
  * A valid address has exactly one "@". Reading the *second* field instead would
- * make `boris@luwo.ai@evil.com` look like the luwo.ai domain, while mail really
+ * make `dana@acme.com@evil.com` look like the acme.com domain, while mail really
  * routes to evil.com — enough to pass an allowlist and join someone else's
  * company workspace. Anything that is not exactly local@domain is refused here,
  * and every caller treats "" as "no domain".
@@ -72,20 +72,20 @@ export async function resolveWorkspaceForEmail(email: string, executor?: Queryab
  * it is not a domain at all.
  *
  * Accepts the three spellings people actually type for the same thing:
- * `@luwo.ai`, `luwo.ai`, and a whole address `boris@luwo.ai`. Everything else
+ * `@acme.com`, `acme.com`, and a whole address `dana@acme.com`. Everything else
  * is refused rather than repaired, because a rule that silently became a
  * different domain than the one on screen is a rule nobody can audit.
  *
  * The value is what the edge compares a visitor's domain to, with SQL equality.
  * That equality is the point: matching with a suffix test would make a rule for
- * `luwo.ai` also admit `evil-luwo.ai`, which anyone can register — the same
+ * `acme.com` also admit `evil-acme.com`, which anyone can register — the same
  * mistake `lib/allowlist.ts` carries a comment about.
  */
 export function normalizeDomain(input: string): string {
   const raw = input.trim().toLowerCase();
   if (!raw) return "";
   // A whole address is the commonest paste; take the domain half through the
-  // same parser that refuses `boris@luwo.ai@evil.com`.
+  // same parser that refuses `dana@acme.com@evil.com`.
   if (raw.includes("@")) return domainOf(raw.startsWith("@") ? `x${raw}` : raw);
   // 253 is the maximum length of a hostname; a label is 1-63 of [a-z0-9-] and
   // may not start or end with a hyphen. No wildcards: "*" is how the sign-in

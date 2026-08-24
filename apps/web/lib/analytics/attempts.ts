@@ -131,8 +131,8 @@ export function coveredMs(stages: RawStage[]): number {
   return total;
 }
 
-export type AttemptOutcome = "ok" | "failed" | "unknown";
-export type RepairVerdict = "none" | "helped" | "did-not-help";
+type AttemptOutcome = "ok" | "failed" | "unknown";
+type RepairVerdict = "none" | "helped" | "did-not-help";
 
 export interface Attempt {
   slug: string;

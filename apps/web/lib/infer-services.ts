@@ -329,7 +329,7 @@ export function detectorFromFiles(repoRoot: string): Detect {
  * The repository's apps, or null when there is only one.
  *
  * `detect` is injected rather than imported: the detector runs as a subprocess
- * out of `services/deploy-agent`, and a module that spawns one is a module that
+ * out of `packages/detector`, and a module that spawns one is a module that
  * cannot be tested without spawning four. `detectorFromFiles` above is the
  * deterministic implementation of the same interface.
  */

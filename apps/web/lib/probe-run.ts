@@ -35,7 +35,7 @@ const cache = new Map<string, { at: number; probe: Probe }>();
  * is deterministic, which also fixes something: those apps have never been
  * probed at all, and reported "we could not ask" forever.
  */
-export interface ProbeTarget { url: string; authed: boolean }
+interface ProbeTarget { url: string; authed: boolean }
 
 /**
  * Which address belongs to THIS app, decided from the four shapes `run_url`
@@ -57,7 +57,7 @@ export interface ProbeTarget { url: string; authed: boolean }
  * platform rather than by the app, which is the class of lie this whole
  * endpoint exists to stop telling.
  */
-export function probeTarget(slug: string, runUrl: string | null | undefined): ProbeTarget {
+function probeTarget(slug: string, runUrl: string | null | undefined): ProbeTarget {
   const own = (() => {
     if (!runUrl) return false;
     try {

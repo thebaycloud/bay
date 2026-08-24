@@ -21,6 +21,16 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id text;
 -- latest one.
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_plan_check;
 
--- The founder account already runs many apps; keep it on pro so flipping gating
--- on never locks it out. Safe no-op if the row doesn't exist yet.
-UPDATE users SET plan = 'pro' WHERE email = 'arsenfounder@gmail.com';
+-- One account was pinned to `pro` here by email, so that flipping gating on
+-- could not lock out the person who had to flip it. That address was a real
+-- person's, in a file that runs on every install of this repository — which is
+-- fine while the repository is ours and wrong the moment it is not.
+--
+-- Removed rather than parameterised: the row it targeted has been `pro` since
+-- August and migrations re-run from the top every time, so deleting the
+-- statement changes nothing about this database. A future install that wants a
+-- seeded owner should say so in its own migration, with its own address.
+--
+-- FOUNDER_EMAIL is deliberately not read here either. A migration that behaves
+-- differently depending on the environment is one nobody can reason about from
+-- the file.

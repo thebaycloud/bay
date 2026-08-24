@@ -90,7 +90,7 @@ test("a caller who is not an operator gets 404 and costs production no read", as
 // ─── what gets past it ────────────────────────────────────────────────────────
 
 test("an operator gets the snapshot, and it carries no credential from the spec", async () => {
-  const res = await get("ops@luwo.ai", realSnapshot());
+  const res = await get("ops@acme.com", realSnapshot());
   assert.equal(res.status, 200);
   assert.equal(readCalls, 1);
 
@@ -117,20 +117,20 @@ test("an operator gets the snapshot, and it carries no credential from the spec"
 });
 
 test("the body names apps by slug and nobody by identity", async () => {
-  const res = await get("ops@luwo.ai", realSnapshot());
+  const res = await get("ops@acme.com", realSnapshot());
   const text = await res.text();
   assert.match(text, /"slug":"myapp"/);
   // No owner id, no email, no session. This surface answers "what is the fleet
   // holding", which needs none of them.
   assert.doesNotMatch(text, /owner/i);
-  assert.doesNotMatch(text, /@luwo\.ai/);
+  assert.doesNotMatch(text, /@acme\.com/);
   assert.doesNotMatch(text, /"email"/);
 });
 
 // ─── a failed read ────────────────────────────────────────────────────────────
 
 test("a failed read is a visible failure, never a clean fleet", async () => {
-  const res = await get("ops@luwo.ai", {
+  const res = await get("ops@acme.com", {
     ok: false,
     at: "2026-08-05T12:00:00.000Z",
     staleAfterSeconds: 90,
@@ -156,7 +156,7 @@ test("a failed read is a visible failure, never a clean fleet", async () => {
 });
 
 test("an empty fleet and a broken read do not look alike", async () => {
-  const empty = await get("ops@luwo.ai", {
+  const empty = await get("ops@acme.com", {
     ok: true,
     ...buildFleetView({ at: new Date("2026-08-05T12:00:00Z"), nodes: [], placements: [], faults: [] }),
   });
@@ -166,7 +166,7 @@ test("an empty fleet and a broken read do not look alike", async () => {
   assert.deepEqual(emptyBody.nodes, []);
   assert.deepEqual(emptyBody.counts, { nodes: 0, heartbeating: 0, placements: 0, faults: 0, shielding: 0 });
 
-  const broken = await get("ops@luwo.ai", {
+  const broken = await get("ops@acme.com", {
     ok: false,
     at: "2026-08-05T12:00:00.000Z",
     staleAfterSeconds: 90,

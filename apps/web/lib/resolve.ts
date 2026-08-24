@@ -411,7 +411,7 @@ export async function resolve(dir: string, detect?: Detect): Promise<ResolvedApp
  * built on buildpacks by the server, which is the one-rule-two-readers failure
  * this module is named after, in the module named after it.
  */
-export function repoPinsRuntime(dir: string): boolean {
+function repoPinsRuntime(dir: string): boolean {
   const read = (f: string) => {
     try { return existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : null; } catch { return null; }
   };

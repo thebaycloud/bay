@@ -1,5 +1,5 @@
 /**
- * Supersonic deploy-agent — deterministic stack detection + build planning.
+ * Deterministic stack detection and build planning.
  *
  * This is the reliable core the Gemini agent builds on: it reads a repo, figures
  * out what it is, what backend it needs, and how to containerize it. The LLM agent

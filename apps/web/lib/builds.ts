@@ -20,7 +20,7 @@ export function normaliseWho(declared: string | null | undefined): Who {
 
 const DB = "supersonic_platform";
 
-export interface BuildRow {
+interface BuildRow {
   run_id: string; slug: string; who: Who;
   started_at: string; ended_at: string | null;
   outcome: "ok" | "failed" | null;

@@ -54,7 +54,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
-import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, proxyWait, type DbAddress } from "@/lib/db-address";
 import { databaseEnv, databaseEnvNames, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { appHost, appUrl } from "@/lib/brand";
@@ -149,18 +149,18 @@ const APP_RUNTIME_SA = process.env.APP_RUNTIME_SERVICE_ACCOUNT ?? "";
 
 /** The one Cloud Run service that fronts every static app. */
 const STATIC_SERVICE = process.env.STATIC_SERVICE ?? "supersonic-static";
-const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
+const AGENT = join(process.cwd(), "..", "..", "packages", "detector");
 
 /**
  * The prebuilt-runner lane. Instead of building a container image per app
  * (install → docker build → push → deploy, the slow path), the app's code is
  * uploaded to GCS and a Cloud Run revision is pointed at a shared base image that
- * ALREADY carries the popular packages (services/runner). The runner fetches the
+ * ALREADY carries the popular packages (infra/runner). The runner fetches the
  * code and runs it — no per-app build. Language is a two-way Node/Python fork,
  * not a framework matrix; the weird 10% still falls to the opencode repair loop.
  *
  * Behind RUNNER=1 so it ships dark and the current build path is untouched until
- * the runner base images exist in Artifact Registry (see services/runner/build.sh).
+ * the runner base images exist in Artifact Registry (see infra/runner/build.sh).
  */
 // Agent planner: opencode reads the repo and decides how to install/build/run,
 // replacing the hardcoded stack detector's recipes. Dark until proven; the

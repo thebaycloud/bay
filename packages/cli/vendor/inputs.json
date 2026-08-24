@@ -1,7 +1,7 @@
 {
   "detector.js": [
     "apps/web/lib/plan-deps.ts",
-    "services/deploy-agent/src/index.ts"
+    "packages/detector/src/index.ts"
   ],
   "resolve.js": [
     "apps/web/lib/app-config.ts",

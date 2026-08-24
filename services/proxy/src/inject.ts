@@ -9,15 +9,14 @@ import { config } from "./config";
 // into other people's pages, so a stale literal here is our old brand showing
 // up on somebody's live site after the rename.
 //
-// `rootDomains[0]`, and it said `rootDomain` — a field the config object does not
-// have. So both of these were the string "https://app.undefined" and
-// "https://undefined": the badge on every hosted app pointing nowhere. The
-// rename removed the literal here and put nothing real in its place, which is a
-// worse failure than the literal was, and a silent one — an undefined host in a
-// template throws nothing.
-const ROOT = config.rootDomains[0];
-const APP = `https://app.${ROOT}`;
-const SITE = `https://${ROOT}`;
+// `rootDomains[0]` — CANONICAL, and the singular `config.rootDomain` this said
+// until now does not exist on config at all. TypeScript had been reporting it
+// since the multi-root cutover; at runtime it is `undefined`, so every badge and
+// every toolbar link injected into somebody else's page pointed at
+// `https://app.undefined`. Two dead links on other people's live sites, from a
+// property name that changed under a module nobody typechecked in CI.
+const APP = `https://app.${config.rootDomains[0]}`;
+const SITE = `https://${config.rootDomains[0]}`;
 
 /**
  * Everything only an owner may see — as SOURCE, not as a runtime branch.

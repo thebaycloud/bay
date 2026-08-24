@@ -36,7 +36,7 @@ async function ownedApp(slug: string) {
  * Everything the panel draws, in one shape, so GET and POST cannot drift.
  *
  * `workspaceDomain` is the owner's own company domain (null for a personal
- * account), and it is here for the one-click suggestion — "everyone at luwo.ai"
+ * account), and it is here for the one-click suggestion — "everyone at acme.com"
  * is the rule people mean nine times out of ten, and typing it out is the part
  * they get wrong.
  */
@@ -171,8 +171,8 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     await addDomainGrant(slug, domain);
   }
   if (body.removeEmail) await removeGrant(slug, String(body.removeEmail));
-  // Normalised on the way out too, so removing a rule shown as "@luwo.ai"
-  // deletes the row stored as "luwo.ai".
+  // Normalised on the way out too, so removing a rule shown as "@acme.com"
+  // deletes the row stored as "acme.com".
   if (body.removeDomain) {
     const domain = normalizeDomain(String(body.removeDomain));
     if (domain) await removeDomainGrant(slug, domain);

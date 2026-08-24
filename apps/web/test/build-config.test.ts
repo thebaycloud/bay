@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   cachedBuildConfig, kanikoBuildConfig, buildkitBuildConfig, selectedBuilder, RAILPACK_PLAN, mountsBuildSecrets, laneForBuild,
   buildkitImage, buildLogLine, CACHE_MISS_NOISE, cloudBuildIdFrom, appBuildTag,
-  runnerPrepareConfig,
 } from "../lib/build-config";
 
 const IMAGE = "us-central1-docker.pkg.dev/supersonic-deploy-prod/cloud-run-source-deploy/demo-app";
@@ -343,7 +342,6 @@ test("every config we generate is tagged with its app", () => {
     ["buildkit", buildkitBuildConfig(IMAGE, null, "demo-app")],
     ["cached/kaniko", cachedBuildConfig(IMAGE, "kaniko", "demo-app")],
     ["cached/buildkit", cachedBuildConfig(IMAGE, "buildkit", "demo-app")],
-    ["runner prepare", runnerPrepareConfig({ image: "r", bucket: "b", slug: "demo-app", release: "rel", codeKey: "k" })],
   ] as const) {
     assert.match(yaml, /^tags:\n  - supersonic-app-demo-app$/m, `${lane} must tag its build`);
   }

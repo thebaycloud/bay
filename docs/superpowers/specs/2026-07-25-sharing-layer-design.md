@@ -50,7 +50,7 @@ becomes blocking on the day self-serve deploy signup opens — not before.
 One wildcard front door replaces per-app domain mappings.
 
 ```
-Boris → sprint.supersonic.cv
+Dana → sprint.supersonic.cv
           │
    [ Global External LB — wildcard cert *.supersonic.cv, serverless NEG ]
           │
@@ -187,8 +187,8 @@ In `app/api/deploy/route.ts`:
 The proxy injects four headers into every forwarded request:
 
 ```
-X-Supersonic-Email       boris@acme.com
-X-Supersonic-Name        Boris
+X-Supersonic-Email       dana@acme.com
+X-Supersonic-Name        Dana
 X-Supersonic-User-Id     usr_...
 X-Supersonic-Workspace   acme.com
 ```

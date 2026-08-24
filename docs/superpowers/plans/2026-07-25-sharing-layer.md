@@ -212,7 +212,7 @@ import assert from "node:assert/strict";
 import { isPublicEmailProvider, domainOf } from "../lib/workspace";
 
 test("domainOf lowercases and takes the part after @", () => {
-  assert.equal(domainOf("Boris@Acme.COM"), "acme.com");
+  assert.equal(domainOf("Dana@Acme.COM"), "acme.com");
 });
 
 test("company domains are not public providers", () => {
@@ -1118,7 +1118,7 @@ const app = {
   visibility: "private" as const,
 };
 const owner = { userId: "user-owner", email: "anna@acme.com" };
-const colleague = { userId: "user-boris", email: "boris@acme.com" };
+const colleague = { userId: "user-dana", email: "dana@acme.com" };
 const outsider = { userId: "user-eve", email: "eve@other.com" };
 
 test("owner can always open their own private app", () => {
@@ -1295,7 +1295,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildUpstreamHeaders, scrubSetCookie } from "./headers";
 
-const visitor = { userId: "usr_1", email: "boris@acme.com", name: "Boris" };
+const visitor = { userId: "usr_1", email: "dana@acme.com", name: "Dana" };
 const COOKIE = "authjs.session-token";
 
 test("spoofed identity headers are replaced, not trusted", () => {
@@ -1303,7 +1303,7 @@ test("spoofed identity headers are replaced, not trusted", () => {
     { "x-supersonic-email": "ceo@acme.com", "x-supersonic-user-id": "usr_boss" },
     visitor, COOKIE
   );
-  assert.equal(out["x-supersonic-email"], "boris@acme.com");
+  assert.equal(out["x-supersonic-email"], "dana@acme.com");
   assert.equal(out["x-supersonic-user-id"], "usr_1");
 });
 
@@ -1327,8 +1327,8 @@ test("a cookie header containing only the session is removed entirely", () => {
 
 test("identity headers are injected", () => {
   const out = buildUpstreamHeaders({}, visitor, COOKIE);
-  assert.equal(out["x-supersonic-email"], "boris@acme.com");
-  assert.equal(out["x-supersonic-name"], "Boris");
+  assert.equal(out["x-supersonic-email"], "dana@acme.com");
+  assert.equal(out["x-supersonic-name"], "Dana");
   assert.equal(out["x-supersonic-user-id"], "usr_1");
 });
 

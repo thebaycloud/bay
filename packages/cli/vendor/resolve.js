@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 28f80cdd930034fb
+// supersonic-vendor-stamp 60282bc736f6efbe
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -578,14 +578,14 @@ function runtimeMismatch(manifests) {
   if (py) {
     const need = lowestAccepted(py);
     if (need && below(RUNTIME_VERSIONS.python, need)) {
-      return `this app needs Python ${py} and the runner has ${RUNTIME_VERSIONS.python} \u2014 widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the runner to move. Nothing in the code can fix this one.`;
+      return `this app needs Python ${py} and the platform has ${RUNTIME_VERSIONS.python} \u2014 widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the platform to move. Nothing in the code can fix this one.`;
     }
   }
   const engines = manifests.packageJson?.engines?.node;
   if (engines) {
     const need = lowestAccepted(engines);
     if (need && below(RUNTIME_VERSIONS.node, need)) {
-      return `this app needs Node ${engines} and the runner has ${RUNTIME_VERSIONS.node} \u2014 widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the runner to move. Nothing in the code can fix this one.`;
+      return `this app needs Node ${engines} and the platform has ${RUNTIME_VERSIONS.node} \u2014 widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the platform to move. Nothing in the code can fix this one.`;
     }
   }
   return null;

@@ -55,7 +55,7 @@ export function isAdmin(email: string, entries: AllowEntry[]): boolean {
  * CLOSED — nobody is an admin — rather than 500 on a page that is meant to be
  * unreachable anyway.
  */
-export async function listAdminEntries(): Promise<AllowEntry[]> {
+async function listAdminEntries(): Promise<AllowEntry[]> {
   const fromEnv = envAdminEntries(process.env.ADMIN_EMAILS);
   try {
     const r = await getPool(DB).query(`SELECT email, domain FROM platform_admins`);

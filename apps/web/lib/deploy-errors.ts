@@ -17,7 +17,7 @@
  * repository could fix it. Not "unlikely to be their fault" — impossible.
  */
 
-export type Blame = "platform" | "app";
+type Blame = "platform" | "app";
 
 export interface Classified {
   blame: Blame;
@@ -109,7 +109,7 @@ const PLATFORM: Array<{ re: RegExp; reason: string }> = [
  */
 const RUNTIME_UNRESOLVED = /failed to resolve version matching:\s*(\S+)\s+against\s+\[([^\]]*)\]/i;
 
-export function builderRuntimeError(text: string): string | null {
+function builderRuntimeError(text: string): string | null {
   const m = RUNTIME_UNRESOLVED.exec(text);
   if (!m) return null;
   const [, wanted, availableRaw] = m;

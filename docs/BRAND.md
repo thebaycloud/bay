@@ -1,8 +1,18 @@
 # The mark
 
-Supersonic's mark is **two leaning bars** — the slash out of `supersonic.cv`, and
-the comment marker our users type all day. It leans forward, so it reads as pace
-without illustrating anything.
+The mark is **two leaning bars** — the comment marker our users type all day. It
+leans forward, so it reads as pace without illustrating anything.
+
+**Its reasoning did not survive the rename, and that is recorded rather than
+patched over.** The bars were drawn as the slash out of `supersonic.cv`, and
+"pace" was the point of a product named after the speed of sound. `thebay.cloud`
+has neither a slash nor a reason to lean. The mark still works and nobody has
+argued for a different one; what is gone is the argument FOR it.
+
+So this is an open question for whoever owns the brand: keep the bars and give
+them a reason that fits the new name, or draw something a bay suggests. Every
+rule below is about how an icon is CUT, not about what it depicts, and all of it
+holds either way.
 
 ## The one rule
 

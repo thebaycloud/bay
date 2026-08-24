@@ -39,7 +39,7 @@ function capture(args: string[]): Promise<string> {
   });
 }
 
-export interface AppSummary {
+interface AppSummary {
   slug: string;
   name: string;
   url: string;
@@ -463,7 +463,7 @@ export const IMAGE_REPO = "cloud-run-source-deploy";
  * merely starts with the same five characters. The slug space is small; treating
  * `ab12x` as a prefix of `ab12xy` would delete a live app's images.
  */
-export async function appPackages(slug: string): Promise<string[]> {
+async function appPackages(slug: string): Promise<string[]> {
   try {
     const out = await capture(["artifacts", "packages", "list",
       "--repository", IMAGE_REPO, "--location", REGION, "--project", PROJECT, "--format=value(name)"]);
@@ -659,7 +659,7 @@ export async function deleteApp(slug: string): Promise<void> {
  * carrying those ids. Best-effort throughout: a deploy that cannot be cancelled
  * must not stop the app from being deleted.
  */
-export async function cancelDeploysFor(slug: string): Promise<void> {
+async function cancelDeploysFor(slug: string): Promise<void> {
   try {
     const runIds = await runIdsForSlug(slug);
     if (!runIds.length) return;
@@ -761,7 +761,7 @@ async function execLogs(jobName: string, execName: string): Promise<string[]> {
 }
 
 /** One cron as the dashboard states it: a path on the app, on a schedule. */
-export interface AppPing {
+interface AppPing {
   /** The Cloud Scheduler job's own id. */
   id: string;
   schedule: string;
@@ -801,7 +801,7 @@ export interface AppPing {
  * describe different services — a caller holding a uri and an audience holds two
  * strings that must agree, and this is not a disagreement anyone would notice.
  */
-export function appPingScheduleArgs(a: AppPing): string[] {
+function appPingScheduleArgs(a: AppPing): string[] {
   const base = a.serviceUrl.replace(/\/+$/, "");
   const uri = base + (a.path.startsWith("/") ? a.path : `/${a.path}`);
   return [

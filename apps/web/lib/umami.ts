@@ -19,7 +19,7 @@
  */
 
 import { identityToken } from "./gcp-rest";
-import { rootDomain } from "./roots";
+import { rootDomain, rootDomains } from "./roots";
 import { memo } from "./memo";
 
 const BASE = (process.env.UMAMI_URL ?? "").replace(/\/$/, "");
@@ -163,7 +163,22 @@ export async function ensureWebsite(slug: string): Promise<string | null> {
 
   const existing = await listWebsites();
   if (existing === null) return null; // could not ask; do not create a duplicate
-  const hit = existing.find((w) => w.domain === domain);
+  // MATCHED AGAINST EVERY ROOT, NOT ONLY THE CANONICAL ONE.
+  //
+  // A website is created under whichever root was canonical that day, and the
+  // canonical root CHANGED — every site in the running instance is registered
+  // as `<slug>.supersonic.cv` while new ones would be `<slug>.thebay.cloud`.
+  // Looking up by the canonical name alone therefore misses every existing site
+  // the moment a rename lands, and this function's answer to "not found" is to
+  // CREATE ONE: a second site for the same app, which the panel would then read
+  // while the app's real visitors went on arriving in the first. Silent, and
+  // indistinguishable from an app nobody visits.
+  //
+  // The name is matched too, because that is what an operator sees in umami and
+  // what the backfill wrote; the roots are matched because that is what this
+  // function itself wrote. Either is proof the app already has a site.
+  const names = new Set(rootDomains().map((r) => `${slug}.${r}`));
+  const hit = existing.find((w) => names.has(w.domain) || w.name === slug);
   if (hit) return hit.id;
 
   const r = await api(`/api/websites`, {
@@ -199,8 +214,96 @@ export interface WebsiteStats {
   visits: number;
   bounces: number;
   totalTime: number;
-  pages: { x: string; y: number }[];
-  referrers: { x: string; y: number }[];
+  /**
+   * The same window, one window earlier — so a caller can say "up 40%" without
+   * asking twice. Zero when this umami offers no comparison at all, which is a
+   * reason to show no change rather than to show a change of nothing.
+   */
+  prevVisitors: number;
+  prevViews: number;
+  /**
+   * `null` means the list could not be read, and that is NOT an empty list.
+   *
+   * This is the distinction whose absence hid the metric rename for weeks: a
+   * 400 was turned into `[]` here and rendered as "no pages", so the panel said
+   * nobody had visited any page of an app with 179 page views. Every caller has
+   * to tell the two apart, which it can only do if this stays nullable.
+   */
+  pages: { x: string; y: number }[] | null;
+  referrers: { x: string; y: number }[] | null;
+}
+
+/**
+ * THREE SHAPES OF /stats, AND THIS IS NOT DEFENSIVENESS FOR ITS OWN SAKE.
+ *
+ * Umami has rewritten this response twice and every version is deployed
+ * somewhere:
+ *
+ *   flat      {"pageviews":179,"visitors":10,"comparison":{"visitors":0}}
+ *   paired    {"pageviews":{"value":179,"prev":22}}
+ *   delta     {"pageviews":{"value":179,"change":157}}
+ *
+ * The instance running in front of us today is the FLAT one — verified against
+ * it on 24 Aug: `{"pageviews":179,"visitors":10,"visits":35,...}`. This module
+ * read `m.value` and nothing else, and `.value` on a number is `undefined`, so
+ * every figure came back 0 and the panel drew a confident "0 visitors" over an
+ * app with ten of them. That is the failure the `null`-versus-zero rule exists
+ * to prevent, arriving through the one door it does not cover: a read that
+ * SUCCEEDS and means nothing.
+ *
+ * The edge parses the same three shapes for the same reason
+ * (services/proxy/src/analytics.ts). Two copies because the two run in different
+ * services with no shared package between them; they are kept identical on
+ * purpose, and a change to one belongs in both.
+ */
+type Metric = number | { value?: number; prev?: number; change?: number } | undefined;
+
+const num = (m: Metric): number => (typeof m === "number" ? Math.round(m) : Math.round(m?.value ?? 0));
+
+/** The same metric over the window BEFORE this one, however this build reports it. */
+function before(m: Metric, comparison: Record<string, number> | undefined, key: string): number {
+  // Flat: the previous window is a sibling object under the same name, and it
+  // is reported as the previous VALUE, not as a delta.
+  if (typeof m === "number") return Math.round(comparison?.[key] ?? 0);
+  if (typeof m?.prev === "number") return Math.round(m.prev);
+  // The delta shape reports the CHANGE, so the previous window is value − change.
+  if (typeof m?.change === "number" && typeof m?.value === "number") return Math.round(m.value - m.change);
+  return 0;
+}
+
+interface Stats {
+  pageviews?: Metric; visitors?: Metric; uniques?: Metric;
+  visits?: Metric; bounces?: Metric; totaltime?: Metric;
+  comparison?: Record<string, number>;
+}
+
+/**
+ * One ranked list, under whichever name this umami calls it.
+ *
+ * Tries the names in order and returns the first that ANSWERS. An empty list is
+ * an answer and stops the search; only a refusal moves on. `null` when none of
+ * them answered — see WebsiteStats.pages for why that is not `[]`.
+ *
+ * `type=path` first, `type=url` behind it: umami renamed this metric and the
+ * old name is not deprecated but REJECTED — `type=url` answers 400 on the
+ * instance running today while `type=path` returns the data. Neither name is
+ * right on every version, so both are tried rather than one being guessed at.
+ */
+async function metricList(
+  websiteId: string,
+  q: string,
+  types: string[],
+): Promise<{ x: string; y: number }[] | null> {
+  for (const type of types) {
+    const r = await api(`/api/websites/${websiteId}/metrics?${q}&type=${type}&limit=10`);
+    if (r && r.ok) {
+      const j = (await r.json().catch(() => null)) as { x: string; y: number }[] | null;
+      if (Array.isArray(j)) return j;
+      return null;
+    }
+    if (r) console.error(`umami: metrics type=${type} for ${websiteId} — ${r.status}`);
+  }
+  return null;
 }
 
 /**
@@ -238,39 +341,234 @@ export async function websiteStats(
   const startAt = endAt - span;
   const q = `startAt=${startAt}&endAt=${endAt}`;
 
-  const [statsRes, pagesRes, refsRes] = await Promise.all([
+  const [statsRes, pages, referrers] = await Promise.all([
     api(`/api/websites/${websiteId}/stats?${q}`),
-    // `path`, not `url`. Umami renamed this metric type, and the old name is not
-    // deprecated — it is rejected: `type=url` answers 400 Bad request while
-    // `type=path` returns the data. Verified against the running instance
-    // (`postgresql-latest`) on 24 Aug: url 400, path [{"x":"/","y":2}].
-    //
-    // The 400 was invisible because `list()` below turns any non-ok response
-    // into `[]`, which is indistinguishable from "this site has no pages yet".
-    // So the pages panel has been empty for every app for as long as this ran,
-    // and nothing anywhere said why. Every other type — referrer, browser, os,
-    // device, country — was and is fine.
-    api(`/api/websites/${websiteId}/metrics?${q}&type=path&limit=10`),
-    api(`/api/websites/${websiteId}/metrics?${q}&type=referrer&limit=10`),
+    metricList(websiteId, q, ["path", "url"]),
+    metricList(websiteId, q, ["referrer"]),
   ]);
-  if (!statsRes || !statsRes.ok) return null;
+  if (!statsRes || !statsRes.ok) {
+    if (statsRes) console.error(`umami: stats for ${websiteId} — ${statsRes.status}`);
+    return null;
+  }
 
-  // umami answers each figure as { value, prev }; only the value is wanted here.
-  const s = (await statsRes.json().catch(() => null)) as Record<string, { value?: number }> | null;
+  const s = (await statsRes.json().catch(() => null)) as Stats | null;
   if (!s) return null;
-  const n = (k: string) => Number(s[k]?.value ?? 0);
 
-  const list = async (r: Response | null) =>
-    r && r.ok ? (((await r.json().catch(() => [])) as { x: string; y: number }[]) ?? []) : [];
-
+  const visitors = num(s.visitors ?? s.uniques);
   return {
     range,
-    visitors: n("visitors"),
-    views: n("pageviews"),
-    visits: n("visits"),
-    bounces: n("bounces"),
-    totalTime: n("totaltime"),
-    pages: await list(pagesRes),
-    referrers: await list(refsRes),
+    visitors,
+    views: num(s.pageviews),
+    visits: num(s.visits),
+    bounces: num(s.bounces),
+    totalTime: num(s.totaltime),
+    prevVisitors: before(s.visitors ?? s.uniques, s.comparison, s.visitors !== undefined ? "visitors" : "uniques"),
+    prevViews: before(s.pageviews, s.comparison, "pageviews"),
+    pages,
+    referrers,
   };
 }
+
+/* ==========================================================================
+   EVERYTHING UMAMI HAS, FOR THE SCREEN THAT ASKED FOR IT
+
+   `websiteStats` above is the CHEAP read: six numbers and two lists, on a path
+   that is polled. This is the other one — every dimension the instance will
+   answer for, the time series, who is on the site this second, and the last few
+   visitors — and it happens once, when somebody opens the Analytics screen, for
+   the window that screen asked for.
+
+   Two reads rather than one because they have different budgets and different
+   lifetimes, not because the data differs.
+   ========================================================================== */
+
+/**
+ * What can be asked for, and what to call it where a person reads it.
+ *
+ * The names are tried IN ORDER and the first that answers wins — `path` is what
+ * this instance calls the pages metric and `url` is what an older one calls it,
+ * and neither is right on both. A dimension the instance refuses (this one
+ * refuses `host`) is simply absent from the answer, because a missing column
+ * beside a true visitor count is a worse reading, not an unreadable one.
+ *
+ * Verified against the running instance on 25 Aug: path, title, referrer, query,
+ * browser, os, device, screen, country, region, city, language, event, tag,
+ * channel, entry and exit all answer; url and host are 400.
+ */
+export const DIMENSIONS: [string, string[]][] = [
+  ["pages", ["path", "url"]],
+  ["entry", ["entry", "entry_url"]],
+  ["exit", ["exit", "exit_url"]],
+  ["titles", ["title"]],
+  ["from", ["referrer"]],
+  ["channel", ["channel"]],
+  ["query", ["query"]],
+  ["country", ["country"]],
+  ["region", ["region"]],
+  ["city", ["city"]],
+  ["language", ["language"]],
+  ["browser", ["browser"]],
+  ["os", ["os"]],
+  ["device", ["device"]],
+  ["screen", ["screen"]],
+  ["event", ["event"]],
+];
+
+/** One point of the time series. `t` is the start of the bucket, in ms. */
+export interface Point { t: number; views: number; visitors: number }
+
+/** One visitor, as umami remembers them. No name, no id that means anything. */
+export interface Visitor {
+  id: string;
+  firstAt: string;
+  lastAt: string;
+  visits: number;
+  views: number;
+  country: string | null;
+  city: string | null;
+  device: string | null;
+  browser: string | null;
+  os: string | null;
+}
+
+export interface WebsiteDetail extends WebsiteStats {
+  startAt: number;
+  endAt: number;
+  /** hour for a day, day for anything longer — what the series is bucketed by. */
+  unit: string;
+  /** People on the site right now, or null when umami would not say. */
+  active: number | null;
+  series: Point[];
+  /** Keyed by the names in DIMENSIONS. A dimension this instance refuses is absent. */
+  dims: Record<string, [string, number][]>;
+  visitors_recent: Visitor[];
+}
+
+/** Ranked rows, trimmed, with the nameless bucket given a name. */
+function rank(rows: { x: string | null; y: number }[] | null, blank: string, keep = 8): [string, number][] {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((r) => typeof r?.y === "number" && r.y > 0)
+    .slice(0, keep)
+    .map((r) => [r.x && String(r.x).trim() ? String(r.x) : blank, Math.round(r.y)] as [string, number]);
+}
+
+/**
+ * Two series into one, on the buckets umami actually returned.
+ *
+ * Umami answers pageviews and sessions as SEPARATE arrays and omits the buckets
+ * with nothing in them — from either one independently. Zipping by index would
+ * therefore pair a Tuesday's views with a Thursday's visitors as soon as one
+ * quiet day appeared in one array and not the other. Keyed by timestamp, and the
+ * gaps are filled with zeroes so a chart drawn from this has an x-axis that is
+ * time rather than a list of the days something happened.
+ */
+export function zip(
+  views: { x: string; y: number }[] | undefined,
+  sessions: { x: string; y: number }[] | undefined,
+  startAt: number,
+  endAt: number,
+  unit: string,
+): Point[] {
+  const step = unit === "hour" ? 3600_000 : 86400_000;
+  const at = (x: string) => {
+    const ms = Date.parse(x.endsWith("Z") || x.includes("+") ? x : `${x}Z`);
+    return Number.isFinite(ms) ? Math.floor(ms / step) * step : NaN;
+  };
+  const v = new Map<number, number>();
+  const p = new Map<number, number>();
+  for (const r of views ?? []) { const t = at(r.x); if (!Number.isNaN(t)) v.set(t, Math.round(Number(r.y) || 0)); }
+  for (const r of sessions ?? []) { const t = at(r.x); if (!Number.isNaN(t)) p.set(t, Math.round(Number(r.y) || 0)); }
+
+  const first = Math.floor(startAt / step) * step;
+  const last = Math.floor(endAt / step) * step;
+  const out: Point[] = [];
+  // Bounded: 30 days of hours would be 720 points, and nothing asks for that —
+  // but a clock skew or a bad range must not turn into a million-point loop.
+  for (let t = first; t <= last && out.length < 800; t += step) {
+    out.push({ t, views: v.get(t) ?? 0, visitors: p.get(t) ?? 0 });
+  }
+  return out;
+}
+
+/** People on the site this second. Null, not 0, when umami would not say. */
+function activeCount(raw: unknown): number | null {
+  if (typeof raw === "number") return Math.round(raw);
+  if (Array.isArray(raw)) return raw.length;
+  if (raw && typeof raw === "object") {
+    const o = raw as { visitors?: number; x?: number };
+    if (typeof o.visitors === "number") return Math.round(o.visitors);
+    if (typeof o.x === "number") return Math.round(o.x);
+  }
+  return null;
+}
+
+function visitorRow(r: Record<string, unknown>): Visitor {
+  const str = (k: string) => (typeof r[k] === "string" && r[k] ? (r[k] as string) : null);
+  return {
+    id: String(r.id ?? ""),
+    firstAt: String(r.firstAt ?? ""),
+    lastAt: String(r.lastAt ?? ""),
+    visits: Math.round(Number(r.visits) || 0),
+    views: Math.round(Number(r.views) || 0),
+    country: str("country"),
+    city: str("city"),
+    device: str("device"),
+    browser: str("browser"),
+    os: str("os"),
+  };
+}
+
+/**
+ * The whole picture for one app over one window.
+ *
+ * Every query goes out together, so the wall clock is the slowest one rather
+ * than the sum — about twenty of them, which is why this is not on the polled
+ * path. A dimension that fails is absent; the reading survives. Only `/stats`
+ * failing makes the whole thing null, because without the headline numbers
+ * there is nothing to draw a screen around.
+ */
+export async function websiteDetail(websiteId: string, range = "7d"): Promise<WebsiteDetail | null> {
+  const span = WINDOWS[range] ?? WINDOWS["7d"];
+  const endAt = Date.now();
+  const startAt = endAt - span;
+  const unit = span <= WINDOWS["1d"] ? "hour" : "day";
+  const q = `startAt=${startAt}&endAt=${endAt}`;
+
+  const json = async <T,>(r: Response | null): Promise<T | null> =>
+    r && r.ok ? ((await r.json().catch(() => null)) as T | null) : null;
+
+  const [base, seriesRes, activeRes, sessionsRes, ...ranked] = await Promise.all([
+    websiteStats(websiteId, range),
+    api(`/api/websites/${websiteId}/pageviews?${q}&unit=${encodeURIComponent(unit)}`),
+    api(`/api/websites/${websiteId}/active`),
+    api(`/api/websites/${websiteId}/sessions?${q}&pageSize=8&page=1`),
+    ...DIMENSIONS.map(([, names]) => metricList(websiteId, q, names)),
+  ]);
+  if (!base) return null;
+
+  const series = await json<{ pageviews?: { x: string; y: number }[]; sessions?: { x: string; y: number }[] }>(seriesRes);
+  const sessions = await json<{ data?: Record<string, unknown>[] }>(sessionsRes);
+
+  const dims: Record<string, [string, number][]> = {};
+  DIMENSIONS.forEach(([key], i) => {
+    const rows = rank(ranked[i], key === "from" ? "direct" : key === "query" ? "none" : "unknown");
+    // Absent rather than empty when the instance refused the question: an empty
+    // list is a claim about the app, and this one would be a claim about umami.
+    if (ranked[i] !== null) dims[key] = rows;
+  });
+
+  return {
+    ...base,
+    startAt,
+    endAt,
+    unit,
+    active: activeCount(await json<unknown>(activeRes)),
+    series: zip(series?.pageviews, series?.sessions, startAt, endAt, unit),
+    dims,
+    visitors_recent: (sessions?.data ?? []).map(visitorRow),
+  };
+}
+
+/** Test seam: the parsers above, exercised without a network. */
+export const __test = { num, before, zip, activeCount, rank };

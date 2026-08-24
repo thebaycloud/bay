@@ -352,7 +352,7 @@ export async function workspaceOfUser(userId: string): Promise<string | null> {
  *
  * A missing row reads false, which is the safe direction: the only thing this
  * gates is a DOMAIN rule, and a visitor we cannot find is not somebody we can
- * say holds an address at luwo.ai.
+ * say holds an address at acme.com.
  */
 export async function emailIsVerified(userId: string): Promise<boolean> {
   const r = await db().query(`SELECT email_verified FROM users WHERE id = $1`, [userId]);
@@ -363,8 +363,8 @@ export async function emailIsVerified(userId: string): Promise<boolean> {
  * Does this app carry a rule for this domain?
  *
  * Equality, in SQL, on a domain the caller took from the address with one split
- * — never `LIKE` and never a suffix test, or a rule for luwo.ai would also admit
- * evil-luwo.ai. Same reasoning as the sign-in allowlist in the control plane.
+ * — never `LIKE` and never a suffix test, or a rule for acme.com would also admit
+ * evil-acme.com. Same reasoning as the sign-in allowlist in the control plane.
  */
 export async function hasDomainGrant(appId: string, domain: string): Promise<boolean> {
   if (!domain) return false;

@@ -227,7 +227,7 @@ export function activation(input: ReportInput): Activation {
 
 // ─── reliability ──────────────────────────────────────────────────────────────
 
-export interface LaneReliability {
+interface LaneReliability {
   lane: string;
   total: number;
   ok: number;
@@ -236,7 +236,7 @@ export interface LaneReliability {
   rate: number | null;
 }
 
-export interface FailureReason {
+interface FailureReason {
   reason: string;
   count: number;
 }
@@ -338,7 +338,7 @@ function countReasons(messages: Array<string | null>): FailureReason[] {
 
 // ─── speed ────────────────────────────────────────────────────────────────────
 
-export interface StageTiming {
+interface StageTiming {
   stage: string;
   n: number;
   p50: number;
@@ -551,7 +551,7 @@ export { percentile };
  */
 export type Stall = "stuck" | "never-deployed" | "never-built" | "activated";
 
-export const STALL_ORDER: Stall[] = ["stuck", "never-deployed", "never-built", "activated"];
+const STALL_ORDER: Stall[] = ["stuck", "never-deployed", "never-built", "activated"];
 
 export const STALL_LABEL: Record<Stall, string> = {
   stuck: "deployed, never succeeded",
@@ -560,7 +560,7 @@ export const STALL_LABEL: Record<Stall, string> = {
   activated: "reached a working deploy",
 };
 
-export interface PersonApp {
+interface PersonApp {
   slug: string;
   status: string;
   /** From the most recent attempt that got far enough to choose one. */
@@ -570,7 +570,7 @@ export interface PersonApp {
   lastError: string | null;
 }
 
-export interface Person {
+interface Person {
   userId: string;
   email: string;
   createdAt: Date;
@@ -679,7 +679,7 @@ export function people(input: ReportInput, attempts: Attempt[]): Person[] {
   });
 }
 
-export interface AppDetail {
+interface AppDetail {
   slug: string;
   ownerEmail: string | null;
   status: string;

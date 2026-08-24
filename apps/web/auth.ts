@@ -36,7 +36,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     clientId: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     // The default profile drops `email_verified`, and a domain rule needs it:
-    // "anyone at luwo.ai" may only admit somebody Google says holds that
+    // "anyone at acme.com" may only admit somebody Google says holds that
     // address. Google sets it false for an unverified alias on a consumer
     // account, so it is read rather than assumed.
     profile(profile) {
@@ -117,7 +117,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         await createUser(user.email, user.name ?? "", null, account.provider, user.image ?? null);
         // Whether the provider PROVED this address, recorded on the row because
         // the edge reads it long after this request: a domain rule ("anyone at
-        // luwo.ai") may only admit a proven address. Signup with a password
+        // acme.com") may only admit a proven address. Signup with a password
         // proves nothing, so those rows stay false and are admitted by name
         // only — which is safe, because there the owner typed the address.
         //

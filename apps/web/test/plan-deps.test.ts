@@ -7,7 +7,7 @@ import {
   commandBinaries, requirementNames, checkPlanDeps, runtimeMismatch,
   assertRuntimeSupported, RUNTIME_VERSIONS, RUNTIME_UNSUPPORTED,
 } from "../lib/plan-deps";
-import { detectStack } from "../../../services/deploy-agent/src/index";
+import { detectStack } from "../../../packages/detector/src/index";
 
 /** A file in the repo, read relative to this test rather than to the cwd. */
 function repoFile(path: string): string {
@@ -135,13 +135,13 @@ test("an app asking for a runtime we do not have is told so plainly", () => {
   // Verbatim from fastapi/full-stack-fastapi-template.
   assert.match(
     runtimeMismatch({ pyproject: 'requires-python = ">=3.15,<4.0"\n' }) ?? "",
-    /needs Python >=3\.15.*runner has 3\.14/,
+    /needs Python >=3\.15.*platform has 3\.14/,
   );
   assert.equal(runtimeMismatch({ pyproject: 'requires-python = ">=3.14,<4.0"\n' }), null, "exactly what we have is fine");
   assert.equal(runtimeMismatch({ pyproject: 'requires-python = ">=3.10"\n' }), null, "older is fine");
   assert.equal(runtimeMismatch({ pyproject: null }), null);
 
-  assert.match(runtimeMismatch({ packageJson: { engines: { node: ">=26" } } }) ?? "", /needs Node >=26.*runner has 24/);
+  assert.match(runtimeMismatch({ packageJson: { engines: { node: ">=26" } } }) ?? "", /needs Node >=26.*platform has 24/);
   assert.equal(runtimeMismatch({ packageJson: { engines: { node: ">=20" } } }), null);
   // A range with no lower bound says nothing about what we must provide.
   assert.equal(runtimeMismatch({ packageJson: { engines: { node: "*" } } }), null);
@@ -181,21 +181,29 @@ test("a runtime the platform does not have stops the deploy instead of logging a
   assertRuntimeSupported({});
 });
 
-test("RUNTIME_VERSIONS is what the runner Dockerfiles say", () => {
-  // The four statements of these numbers had already drifted — the deploy-agent
-  // said python:3.12 while the runner shipped 3.14, which is how a repo declaring
-  // requires-python >=3.14 got built on the wrong interpreter. This is the pin:
-  // the Dockerfiles are the source of truth, and moving one without moving the
-  // constant fails here rather than in somebody's build log.
+test("RUNTIME_VERSIONS no longer has a file to be pinned against", () => {
+  // THIS TEST USED TO READ infra/runner/*/Dockerfile AND COMPARE.
   //
-  // Read here rather than at module load because services/runner is NOT in the
-  // deployed control-plane image (the root Dockerfile copies apps/web and
-  // services/deploy-agent, nothing else) — parsing at import would pass on every
-  // laptop and throw in production.
-  const from = (df: string) => repoFile(df).match(/^FROM\s+(\S+)/m)?.[1] ?? "";
-  assert.equal(from("services/runner/python/Dockerfile"), `python:${RUNTIME_VERSIONS.python}-slim`);
-  assert.equal(from("services/runner/node/Dockerfile"), `node:${RUNTIME_VERSIONS.node}-slim`);
-});
+  // It existed because the two had already drifted once: the detector said
+  // python:3.12 while the runner shipped 3.14, and a repo declaring
+  // requires-python >=3.14 got built on the wrong interpreter. The Dockerfiles
+  // were the source of truth and this was the pin.
+  //
+  // The runner lane is gone — no live revision runs a runner image, the
+  // decommission script's own condition is met, and infra/runner was deleted
+  // with it. So the pin has nothing to pin against, and a test that reads a
+  // deleted file can only ever be red.
+  //
+  // What is NOT resolved, and is a real question rather than a cleanup: these
+  // numbers still decide which deploys are refused, and nothing verifies them
+  // any more. Builds go through railpack against the Docker Hub mirror now, so
+  // the honest source of truth is whatever base that resolves to. Until
+  // somebody writes that down, this asserts only the shape.
+  assert.equal(typeof RUNTIME_VERSIONS.python, "string");
+  assert.equal(typeof RUNTIME_VERSIONS.node, "string");
+  assert.match(RUNTIME_VERSIONS.python, /^\d+\.\d+$/);
+  assert.match(RUNTIME_VERSIONS.node, /^\d+$/);
+});;
 
 test("the deploy-agent builds Python apps on the version the platform has", () => {
   // The fourth statement of the same number, and the one that was wrong: `runtime`

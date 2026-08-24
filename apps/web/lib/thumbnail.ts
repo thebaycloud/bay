@@ -11,9 +11,9 @@ import { onAnyRoot } from "./roots";
  */
 
 const SHOT_SERVICE = process.env.SHOT_SERVICE_URL ?? "";
-export const THUMBS_PREFIX = "_thumbs";
+const THUMBS_PREFIX = "_thumbs";
 
-export function thumbnailObject(slug: string): string {
+function thumbnailObject(slug: string): string {
   return `${THUMBS_PREFIX}/${slug}.jpg`;
 }
 

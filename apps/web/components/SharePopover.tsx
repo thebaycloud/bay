@@ -48,7 +48,7 @@ const ORDER: Visibility[] = ["private", "shared", "public"];
 /**
  * Is what they typed a company, or a person?
  *
- * `@luwo.ai` and `luwo.ai` are the company; `boris@luwo.ai` is Boris. One field
+ * `@acme.com` and `acme.com` are the company; `boris@acme.com` is Boris. One field
  * for both because that is how people write it — nobody wants to pick a mode
  * before typing an address. The server normalises and refuses; this only decides
  * which name the value is sent under.
@@ -188,7 +188,7 @@ export function SharePopover({ slug, address }: { slug: string; address: string 
         </div>
 
         <div className="flex items-center gap-2 px-4 pb-3.5">
-          {/* Not type="email": the browser refuses "@luwo.ai" on its own, and the
+          {/* Not type="email": the browser refuses "@acme.com" on its own, and the
               whole point of one field is that both spellings land. */}
           <Input
             aria-label="Invite by email or company"

@@ -56,7 +56,7 @@ export interface ScaleConfig {
  * zero-config promise: nothing is declared, Postgres appears, seventeen variable
  * names point at it.
  */
-export interface ManagedDatabase {
+interface ManagedDatabase {
   provider: "managed";
   engine: "postgres";
   version?: string;
@@ -76,7 +76,7 @@ export interface ManagedDatabase {
  * revision — so the credential travels the same path as every other secret and is
  * never committed to a file.
  */
-export interface ExternalDatabase {
+interface ExternalDatabase {
   provider: "external";
   /** Free-form, for the log line only. Nothing is provisioned, so nothing validates it. */
   engine?: string;

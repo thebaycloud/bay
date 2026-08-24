@@ -47,7 +47,7 @@ const REDACTIONS: ReadonlyArray<[RegExp, string]> = [
   [/\/cloudsql\/\S+/g, "[socket path redacted]"],
 ];
 
-export function redactForMail(text: string): string {
+function redactForMail(text: string): string {
   return REDACTIONS.reduce((m, [re, with_]) => m.replace(re, with_), text);
 }
 
