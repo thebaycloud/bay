@@ -101,3 +101,54 @@ test("every file allowed to name the old root still exists", () => {
     assert.doesNotThrow(() => statSync(join(web, rel)), `${rel} is allowed (${why}) but is gone`);
   }
 });
+
+/**
+ * The build cannot bake the old name in either.
+ *
+ * This test scanned `lib`, `app` and `components` and would have gone on passing
+ * forever while production said "Supersonic" in its own header — because the
+ * value that won was not in any of them. `NEXT_PUBLIC_*` is inlined into the
+ * client bundle when `next build` runs, so the Dockerfile's ARG and cloudbuild's
+ * substitution are the values a browser actually gets, and `NEXT_PUBLIC_` is
+ * checked FIRST by design. A runtime `PRODUCT_NAME=Bay` on the service reached
+ * every server-rendered link while the header above it did not, and the more
+ * correct the fallback chain became, the more thoroughly the stale build arg won.
+ *
+ * Found by reading the shipped bundle, which contained
+ * `(e="Supersonic","Supersonic").trim()||"Bay"` — the default was right and
+ * unreachable. A test over source files could not have caught it, so this one is
+ * over the build.
+ */
+test("the build does not bake the retiring name into the client bundle", () => {
+  const repo = join(__dirname, "..", "..", "..");
+  const checks: [string, RegExp][] = [
+    ["Dockerfile", /ARG NEXT_PUBLIC_PRODUCT_NAME=(\S+)/],
+    ["Dockerfile", /ARG NEXT_PUBLIC_ROOT_DOMAINS=(\S+)/],
+    ["cloudbuild.yaml", /_PRODUCT_NAME:\s*(\S+)/],
+    ["cloudbuild.yaml", /_ROOT_DOMAINS:\s*(\S+)/],
+  ];
+  for (const [file, re] of checks) {
+    const text = readFileSync(join(repo, file), "utf8");
+    const value = re.exec(text)?.[1];
+    assert.ok(value, `${file}: ${re} matched nothing — the build arg was renamed or removed`);
+    assert.doesNotMatch(
+      value!,
+      /Supersonic|^supersonic\.cv$/,
+      `${file} bakes ${value} into the client bundle, where it beats any runtime value`,
+    );
+  }
+});
+
+test("the canonical root is FIRST in what the build bakes", () => {
+  // Order is meaning: `rootDomain()` returns the first, and it is the name new
+  // addresses are minted under. Baking them the other way round would put every
+  // hosted app back on the retiring domain, silently, in the browser only.
+  const repo = join(__dirname, "..", "..", "..");
+  for (const [file, re] of [
+    ["Dockerfile", /ARG NEXT_PUBLIC_ROOT_DOMAINS=(\S+)/],
+    ["cloudbuild.yaml", /_ROOT_DOMAINS:\s*(\S+)/],
+  ] as [string, RegExp][]) {
+    const value = re.exec(readFileSync(join(repo, file), "utf8"))![1];
+    assert.equal(value.split(",")[0], "thebay.cloud", `${file} does not put the canonical root first`);
+  }
+});

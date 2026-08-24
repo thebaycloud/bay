@@ -61,3 +61,65 @@ test("anything that is not a name comes back as no name at all", async () => {
   }
   assert.equal(nameFromCallback(new URL("https://x/cb")), "");
 });
+
+/* ── one opaque slot, two facts ──────────────────────────────────────────── */
+
+test("a return and a name share `state` without colliding", async () => {
+  const { stateFor, returnPathFromCallback, nameFromCallback } = await import("../lib/github-setup");
+  const at = (state: string) => new URL(`https://app.thebay.cloud/api/github/setup?state=${encodeURIComponent(state)}`);
+
+  // The bug this separator exists for: "apps" is itself a valid slug, so the old
+  // scheme — one string checked against the literal "apps" AND validated as a
+  // name — sent somebody naming their app `apps` to the list with the name gone.
+  const s = stateFor("apps", "apps");
+  assert.equal(returnPathFromCallback(at(s)), "/");
+  assert.equal(nameFromCallback(at(s)), "apps", "the name survived its own destination");
+});
+
+test("every flow lands somewhere real, and `/new` is not one of them", async () => {
+  const { stateFor, returnPathFromCallback } = await import("../lib/github-setup");
+  const at = (state: string) => new URL(`https://app.thebay.cloud/api/github/setup?state=${encodeURIComponent(state)}`);
+  assert.equal(returnPathFromCallback(at(stateFor("apps"))), "/");
+  assert.equal(returnPathFromCallback(at(stateFor("settings"))), "/settings");
+  // Reconfigure cannot carry state at all — GitHub's own installation settings
+  // page takes no parameters of ours — so no state must mean the app list, where
+  // the dialog reopens. It used to mean `/new`, the standalone page.
+  assert.equal(returnPathFromCallback(new URL("https://app.thebay.cloud/api/github/setup")), "/");
+});
+
+test("a destination is an allow list, never a path from the query string", async () => {
+  const { returnPathFromCallback } = await import("../lib/github-setup");
+  // `state` crosses a third party and comes back. Appending it to our own origin
+  // is an open redirect, and no amount of validating a path is as safe as not
+  // having one.
+  for (const evil of [
+    "//evil.com~", "https://evil.com~", "/../../etc~", "..%2f..~", "/new~", "javascript:alert(1)~",
+  ]) {
+    const u = new URL(`https://app.thebay.cloud/api/github/setup?state=${encodeURIComponent(evil)}`);
+    assert.ok(["/", "/settings"].includes(returnPathFromCallback(u)), `${evil} escaped the allow list`);
+  }
+});
+
+test("a name that is not a name is no name", async () => {
+  const { nameFromCallback } = await import("../lib/github-setup");
+  const at = (state: string) => new URL(`https://app.thebay.cloud/api/github/setup?state=${encodeURIComponent(state)}`);
+  assert.equal(nameFromCallback(at("apps~My App")), "");
+  assert.equal(nameFromCallback(at("apps~<script>")), "");
+  assert.equal(nameFromCallback(at("apps~")), "");
+  assert.equal(nameFromCallback(at("apps~ok-name-2")), "ok-name-2");
+});
+
+test("a link minted before the separator existed still works", async () => {
+  const { returnPathFromCallback, nameFromCallback } = await import("../lib/github-setup");
+  // Somebody has this page open in a tab right now. Their install URL carries a
+  // bare slug, and it has to keep meaning what it meant.
+  const u = new URL("https://app.thebay.cloud/api/github/setup?state=my-old-app");
+  assert.equal(nameFromCallback(u), "my-old-app");
+  assert.equal(returnPathFromCallback(u), "/", "and lands on the app list rather than nowhere");
+});
+
+test("stateFor refuses to smuggle a bad name into the slot", async () => {
+  const { stateFor } = await import("../lib/github-setup");
+  assert.equal(stateFor("apps", "not a slug"), "apps~");
+  assert.equal(stateFor("apps", "fine-name"), "apps~fine-name");
+});

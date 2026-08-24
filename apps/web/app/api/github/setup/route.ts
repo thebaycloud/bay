@@ -31,7 +31,10 @@ import { publicOrigin } from "@/lib/public-origin";
  * carries the account independently and is where that gets tightened.
  */
 
-function back(req: Request, params: Record<string, string>, path = "/new"): Response {
+// The app list, not `/new`. Every one of these flows starts from the Ship-new
+// dialog or from Settings, and both live on pages that can reopen where the
+// person was — the standalone page could only start them over.
+function back(req: Request, params: Record<string, string>, path = "/"): Response {
   const to = new URL(path, publicOrigin(req));
   for (const [k, v] of Object.entries(params)) to.searchParams.set(k, v);
   return Response.redirect(to.toString(), 302);

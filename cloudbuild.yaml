@@ -351,8 +351,8 @@ substitutions:
   # values stay readable in the history of an image pushed to a shared
   # repository. A product name and a domain are printed on the page they build,
   # so there is nothing here to leak.
-  _PRODUCT_NAME: Supersonic
-  _ROOT_DOMAINS: supersonic.cv
+  _PRODUCT_NAME: Bay
+  _ROOT_DOMAINS: thebay.cloud,supersonic.cv
 
 # THE BUILD RUNS AS THE DEPLOYER, NOT AS THE DEFAULT COMPUTE ACCOUNT.
 #

@@ -13,10 +13,21 @@ COPY apps/web ./
 # never the browser, so the dashboard's own header would go on saying the old
 # name while every server-rendered link used the new one.
 #
-# Defaults are today's values: an image built without these is byte-identical in
-# behaviour to the one before they existed.
-ARG NEXT_PUBLIC_PRODUCT_NAME=Supersonic
-ARG NEXT_PUBLIC_ROOT_DOMAINS=supersonic.cv
+# THESE DEFAULTS WERE THE RENAME'S BLIND SPOT, and it is worth saying how.
+#
+# The comment above explains the mechanism correctly and the seam was built for
+# exactly this — then the cutover changed the runtime environment, the code
+# defaults, and seventy-four literals, and never came here. So `PRODUCT_NAME=Bay`
+# on the Cloud Run service reached every server-rendered link while the header
+# above it said "Supersonic", because `NEXT_PUBLIC_` is checked FIRST by design
+# and a build-time value cannot be overridden by a runtime one. The more correct
+# the fallback chain became, the more thoroughly a stale build arg won.
+#
+# Found by looking at production and reading the shipped bundle, which contained
+# `(e="Supersonic","Supersonic").trim()||"Bay"` — the default was right and
+# unreachable.
+ARG NEXT_PUBLIC_PRODUCT_NAME=Bay
+ARG NEXT_PUBLIC_ROOT_DOMAINS=thebay.cloud,supersonic.cv
 ENV NEXT_PUBLIC_PRODUCT_NAME=$NEXT_PUBLIC_PRODUCT_NAME
 ENV NEXT_PUBLIC_ROOT_DOMAINS=$NEXT_PUBLIC_ROOT_DOMAINS
 RUN npm run build
