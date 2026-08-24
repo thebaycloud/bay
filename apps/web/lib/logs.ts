@@ -196,7 +196,14 @@ export function filterFor(slug: string, q: Query = {}): string {
     // without this, `{"needsBody":true,"site":true,"owner":false}` appeared in a
     // tenant's log view as though their app had said it. Seen in production
     // before the third condition existed.
-    `(resource.type="cloud_run_revision" AND resource.labels.service_name="${EDGE_SERVICE}" AND jsonPayload.slug="${slug}" AND jsonPayload.source="edge")`,
+    //
+    // `browser` rides the same path: the collector posts to the app's own origin,
+    // which is the proxy, so those lines are written by the same process to the
+    // same stdout. Deliberately NOT in the tenant sink's filter, which is how
+    // browser events get thirty days while everything else gets ten years —
+    // retention expressed by which arm a line matches rather than by a second
+    // policy somebody has to remember.
+    `(resource.type="cloud_run_revision" AND resource.labels.service_name="${EDGE_SERVICE}" AND jsonPayload.slug="${slug}" AND (jsonPayload.source="edge" OR jsonPayload.source="browser"))`,
   ];
   const parts = [`(${homes.join(" OR ")})`];
 

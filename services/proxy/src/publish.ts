@@ -62,7 +62,7 @@ interface Budget {
 const budgets = new Map<string, Budget>();
 
 /** Whether this app may publish now, and how many it lost since it last could. */
-function allow(slug: string): { ok: boolean; dropped: number } {
+export function allow(slug: string): { ok: boolean; dropped: number } {
   const now = Math.floor(Date.now() / 1000);
   let b = budgets.get(slug);
   if (!b) {

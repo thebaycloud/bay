@@ -1,4 +1,5 @@
 import { config } from "./config";
+import { collectingBrowserLogs, collectorScript } from "./browserlog";
 
 // The Supersonic overlay injected into every hosted app's HTML. It renders inside
 // a Shadow DOM so the app's own CSS can't reach it (no style bleed, no glow) and
@@ -206,6 +207,12 @@ export function injectOverlay(
 ): string {
   const snippet =
     (websiteId ? trackerTag(websiteId) : "") +
+    // EVERY page, not only the ones that earn an overlay. An owner sees the
+    // toolbar and a free app shows a badge, but an error happens to whoever is
+    // looking — usually a stranger, on a Pro app with no badge at all, which is
+    // exactly the visit the owner cannot reproduce. Wrapped in its own IIFE so a
+    // failure in it cannot take the overlay's script down with it.
+    `<script>(function(){${collectorScript()}})();</script>` +
     (hasOverlay(owner, badge) ? overlayScript(slug, owner, badge) : "");
   if (!snippet) return htmlBody;
   const idx = htmlBody.toLowerCase().lastIndexOf("</body>");
@@ -234,9 +241,21 @@ export function hasOverlay(owner: boolean, badge: boolean): boolean {
  * second reason — it is the app whose owner most wants to know who is visiting
  * — and reading `hasOverlay` there would have quietly given analytics to
  * everyone EXCEPT the people paying for it.
+ *
+ * The browser collector is the third, and it is the same trap a third time. It
+ * goes on EVERY page: an error happens to whoever is looking, usually a stranger,
+ * often on a Pro app with the badge removed and analytics off — which is
+ * precisely the visit an owner cannot reproduce and most needs reported. Leaving
+ * this reading `hasOverlay || websiteId` would have collected errors from every
+ * app except the ones paying us.
+ *
+ * The cost is real and worth naming: buffering means holding a page's HTML rather
+ * than streaming it. It applies only to HTML documents, and only while
+ * `PUBLISH_BROWSER_LOGS` is on, which is the switch to reach for if that ever
+ * shows up in the numbers.
  */
 export function needsBody(owner: boolean, badge: boolean, websiteId?: string | null): boolean {
-  return hasOverlay(owner, badge) || Boolean(websiteId);
+  return hasOverlay(owner, badge) || Boolean(websiteId) || collectingBrowserLogs();
 }
 
 /** True only for a top-level HTML document we should decorate. */
