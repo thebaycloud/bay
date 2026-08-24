@@ -72,8 +72,8 @@ export function UsageSkeleton() {
         {[0, 1, 2, 3].map((i) => (
           <div className="flex items-center gap-5" key={i}>
             <Skeleton className="h-4 w-[120px]" />
-            <Skeleton className="hidden h-2 flex-1 rounded-full sm:block" />
-            <Skeleton className="h-4 w-16" />
+            <Skeleton className="ml-auto hidden h-2 w-[180px] shrink-0 rounded-full sm:block" />
+            <Skeleton className="h-4 w-[76px] shrink-0" />
           </div>
         ))}
       </div>

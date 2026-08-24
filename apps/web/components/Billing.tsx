@@ -73,43 +73,48 @@ function Meter({
 
   return (
     <div className="flex items-center gap-5">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-none sm:basis-[168px]">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-[14px] font-[450] text-ink">{label}</span>
         {resets ? <span className="text-[13px] text-ink-3">{resets}</span> : null}
       </div>
 
-      {/* Every row gets a track, unlimited included — but an unlimited one is
-          drawn as a fill that FADES OUT to the right rather than as a percentage.
-          There is no proportion to draw, and a solid bar at any width is a number
-          somebody will read: a quarter-full says "25%", a full one says "you are
-          at the limit". A fill running off the end says the thing that is true —
-          it keeps going. */}
-      <span className="hidden h-2 flex-1 overflow-hidden rounded-full bg-tile sm:block">
-        {unlimited ? (
-          <span className="block h-full rounded-full bg-gradient-to-r from-ink-3 to-transparent" />
-        ) : (
+      {/* An actual progress bar: the allowance is the track, in the accent at low
+          opacity, and what is used sits on top of it at full strength. One
+          colour, two weights — so the pair reads as "this much of that" rather
+          than as two unrelated bars.
+
+          180px and right-aligned, not `flex-1`. Full width put a metre of empty
+          track between a three-letter label and a two-digit number, and every
+          row's fill started at a different place because the labels differ in
+          length; a fixed width makes the four comparable at a glance, which is
+          the only reason to draw them side by side.
+
+          No amber step any more. With the bar in the accent, a second hue for
+          "nearly full" would be a third meaning for colour on one row — the
+          escalation is carried by the COUNT going red instead. */}
+      <span className="ml-auto hidden h-2 w-[180px] shrink-0 overflow-hidden rounded-full bg-red/15 sm:block">
+        {/* Unlimited draws the track and nothing in it. There is no proportion,
+            and any fill at all is a number somebody would read off it. */}
+        {unlimited ? null : (
           // A floor of 4% on anything above zero: one of ten apps is 10% and
           // draws as a sliver, and a sliver reads as a rendering artefact rather
           // than as "you have used one".
           <span
-            className={cn(
-              "block h-full rounded-full transition-[width]",
-              at ? "bg-red" : near ? "bg-[#B45309]" : "bg-ink",
-            )}
+            className="block h-full rounded-full bg-red transition-[width]"
             style={{ width: `${used > 0 ? Math.max(pct, 4) : 0}%` }}
           />
         )}
       </span>
       <span
         className={cn(
-          "flex shrink-0 items-center gap-1.5 text-[13px] tabular-nums",
-          at ? "text-red" : near ? "text-ink" : "text-ink-2",
+          "flex w-[76px] shrink-0 items-center justify-end gap-1.5 text-[13px] tabular-nums",
+          at || near ? "text-red" : "text-ink-2",
         )}
       >
         {unlimited ? (
           <>
             <InfinityIcon className="size-3.5" />
-            {used} used
+            {used}
           </>
         ) : (
           `${used} of ${max}`
@@ -237,8 +242,8 @@ export function Usage({ acct }: { acct: BillingAccount | null }) {
           [0, 1, 2, 3].map((i) => (
             <div className="flex items-center gap-5" key={i}>
               <Skeleton className="h-4 w-[120px]" />
-              <Skeleton className="hidden h-2 flex-1 rounded-full sm:block" />
-              <Skeleton className="h-4 w-16" />
+              <Skeleton className="ml-auto hidden h-2 w-[180px] shrink-0 rounded-full sm:block" />
+              <Skeleton className="h-4 w-[76px] shrink-0" />
             </div>
           ))
         ) : (
