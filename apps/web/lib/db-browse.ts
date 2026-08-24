@@ -418,7 +418,10 @@ export function editRefusal(table: TableShape, column: Column): string | null {
   if (column.generated) return "the database generates this column";
   if (table.primaryKey.includes(column.name)) return "this column is what names the row";
   const t = column.type.trim().toLowerCase();
-  if (t === "array" || t.startsWith("_")) return "arrays are not edited here";
+  // Three spellings of the same thing: `information_schema` says "ARRAY",
+  // `pg_type.typname` says "_text", and `format_type` — what the catalog reader
+  // uses now — says "text[]".
+  if (t === "array" || t.startsWith("_") || t.endsWith("[]")) return "arrays are not edited here";
   if (t === "bytea") return "binary values are not edited here";
   return null;
 }

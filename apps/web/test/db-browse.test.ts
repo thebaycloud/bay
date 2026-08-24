@@ -314,8 +314,12 @@ test("arrays and binary are refused, because the cell shows a rendering of them"
   // What the panel draws for these is not the database's own text, so what
   // somebody typed back would not be what they were shown.
   const t = table([["id", "integer"], ["tags", "ARRAY"], ["blob", "bytea"]], ["id"]);
+  // Three spellings, three sources: information_schema, pg_type.typname, and
+  // format_type — which is the one the catalog reader actually returns.
   assert.match(editRefusal(t, { name: "tags", type: "ARRAY" })!, /arrays/);
   assert.match(editRefusal(t, { name: "tags", type: "_text" })!, /arrays/);
+  assert.match(editRefusal(t, { name: "tags", type: "text[]" })!, /arrays/);
+  assert.match(editRefusal(t, { name: "tags", type: "numeric(10,2)[]" })!, /arrays/);
   assert.match(editRefusal(t, { name: "blob", type: "bytea" })!, /binary/);
 });
 

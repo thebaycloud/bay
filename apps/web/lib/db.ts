@@ -75,13 +75,16 @@ function poolFor(
   dbName: string,
   localPort: number,
   types?: { getTypeParser: typeof pgTypes.getTypeParser },
+  /** The real database, when `dbName` is a key with a suffix on it. */
+  database = dbName,
+  options?: string,
 ): Pool {
   const key = `${cfg.connectionName}/${dbName}`;
   const existing = pools.get(key);
   if (existing) return existing;
   const pool = isCloudRun()
-    ? new Pool({ host: `/cloudsql/${cfg.connectionName}`, user: cfg.user, password: cfg.password, database: dbName, max: 3, types })
-    : new Pool({ host: "127.0.0.1", port: localPort, user: cfg.user, password: cfg.password, database: dbName, max: 3, connectionTimeoutMillis: 6000, types });
+    ? new Pool({ host: `/cloudsql/${cfg.connectionName}`, user: cfg.user, password: cfg.password, database, max: 3, types, options })
+    : new Pool({ host: "127.0.0.1", port: localPort, user: cfg.user, password: cfg.password, database, max: 3, connectionTimeoutMillis: 6000, types, options });
   // An IDLE client dying is not an exception anybody is awaiting, so `pg` emits
   // it on the pool — and an 'error' event with no listener is how Node ends a
   // process. Measured on 16 Aug against production: dropping an app's database
@@ -116,11 +119,15 @@ function poolFor(
  * that is still finishing its shutdown must not delay that or fail it.
  */
 export function forgetTenantPool(dbName: string): void {
-  const key = `${tenantPgConfig().connectionName}/${dbName}`;
-  const pool = pools.get(key);
-  if (!pool) return;
-  pools.delete(key);
-  pool.end().catch(() => { /* already gone; the point was to stop using it */ });
+  // Both of them. The read-only pool holds connections to the same database, and
+  // one left behind is one `DROP DATABASE` cannot proceed past.
+  for (const name of [dbName, `${dbName}#ro`]) {
+    const key = `${tenantPgConfig().connectionName}/${name}`;
+    const pool = pools.get(key);
+    if (!pool) continue;
+    pools.delete(key);
+    pool.end().catch(() => { /* already gone; the point was to stop using it */ });
+  }
 }
 
 /** A pool on the PLATFORM instance — the control plane's own tables. */
@@ -137,6 +144,48 @@ export function getPool(dbName: string): Pool {
  */
 export function getTenantPool(dbName: string): Pool {
   return poolFor(tenantPgConfig(), dbName, TENANT_PORT, tenantTypes());
+}
+
+/**
+ * How long any one browsing query may run, and the fact that it cannot write.
+ *
+ * Both are STARTUP parameters rather than statements, which buys two things.
+ *
+ * Speed: the browse routes wrapped every read in `BEGIN; SET LOCAL
+ * statement_timeout; …; COMMIT`, and a round trip to Cloud SQL through a local
+ * proxy measured 196ms — so three of the four round trips in a read were spent
+ * arranging the timeout. Set at connection time it costs nothing, and it cannot
+ * leak to the next borrower of a pooled connection either, which is what the
+ * transaction was for.
+ *
+ * Safety, which is the better reason: `default_transaction_read_only` means the
+ * connection PHYSICALLY CANNOT WRITE. Verified — `UPDATE orders SET status='x'`
+ * comes back "cannot execute UPDATE in a read-only transaction". The SELECT-only
+ * guard in the route and in the agent's `db` tool stays exactly where it is; this
+ * is a second, independent enforcement underneath it, so a hole in a regex is no
+ * longer a hole that writes.
+ *
+ * That matters most for the chat agent. Its read-only tool is the only thing
+ * bounding a prompt injected through an app's own rows, and until now that
+ * property rested entirely on one `/^select\b/i`.
+ */
+const READ_ONLY_OPTIONS = [
+  `-c statement_timeout=${Number(process.env.TENANT_STATEMENT_TIMEOUT_MS ?? 4000)}`,
+  "-c default_transaction_read_only=on",
+  // An idle transaction cannot hold a snapshot open forever, whatever a client
+  // does with its connection.
+  "-c idle_in_transaction_session_timeout=15000",
+].join(" ");
+
+/**
+ * A pool on the tenant instance that can only read.
+ *
+ * A DIFFERENT pool from `getTenantPool`, deliberately: `pg-role.ts` creates roles
+ * and drops databases over the writable one, and a 4-second cap on a DROP
+ * DATABASE would turn a slow tenant into a failed teardown.
+ */
+export function getTenantReadPool(dbName: string): Pool {
+  return poolFor(tenantPgConfig(), `${dbName}#ro`, TENANT_PORT, tenantTypes(), dbName, READ_ONLY_OPTIONS);
 }
 
 export function dbNameForSlug(slug: string): string {

@@ -1,4 +1,4 @@
-import { getTenantPool, dbNameForSlug } from "@/lib/db";
+import { getTenantReadPool, dbNameForSlug } from "@/lib/db";
 import { appLogs } from "@/lib/app-logs";
 import { describeService, getErrors } from "@/lib/gcloud";
 import { getDeploy } from "@/lib/deploys";
@@ -41,7 +41,11 @@ async function db(slug: string, sql: string): Promise<Answer> {
   }
   if (q.includes(";")) return { ok: false, error: "one statement only" };
   try {
-    const pool = getTenantPool(dbNameForSlug(slug));
+    // The READ-ONLY pool. The SELECT-only guard above stays exactly where it is;
+    // this puts Postgres underneath it, refusing writes at the connection. That
+    // guard is the only thing bounding a prompt injected through an app's own
+    // rows, and it rested entirely on one regex.
+    const pool = getTenantReadPool(dbNameForSlug(slug));
     const r = await pool.query(q);
     const { rows, note } = trunc(r.rows);
     return { ok: true, data: { columns: r.fields.map((f) => f.name), rows, note } };
