@@ -1,4 +1,6 @@
 import { BRAND, CLI, DOMAIN, PKG, SITE } from "./brand";
+import en from "./i18n/messages/en";
+import { fill } from "./i18n";
 
 /**
  * Self-host templates, as data.
@@ -29,8 +31,12 @@ import { BRAND, CLI, DOMAIN, PKG, SITE } from "./brand";
  *   - Every app is private until its owner says otherwise.
  */
 
+/** The slugs, as a union: it is also the key into the message catalogues, so a
+ *  template cannot be added without its prose being translated. */
+export type TemplateSlug = "excalidraw" | "open-webui" | "cal-com";
+
 export interface Template {
-  slug: string;
+  slug: TemplateSlug;
   name: string;
   /** File in public/logos/brand, without the extension. */
   logo: string;
@@ -39,23 +45,18 @@ export interface Template {
   /** Card screenshot in public/templates. 720x450, the source's own matte
    *  trimmed off first so three cards crop to the same optical weight. */
   shot: string;
-  /** One line, for the card. */
-  blurb: string;
-  /** What it is, for the detail page. */
-  what: string;
   repo: string;
-  /** What Bay stands up for it. */
-  provisions: string[];
   /** Secrets that are just entropy, so the agent makes them rather than asking. */
   generates: string[];
   /** Env that must be the app's own address, which Bay knows before the build. */
   selfUrl: string[];
-  /** The only things a person can be asked for. */
-  asks: { key: string; what: string; required: boolean }[];
+  /** The only things a person can be asked for. `key` is the env var or the
+   *  credential's own name and is never translated; the explanation of it lives
+   *  in the catalogues, in this order. */
+  asks: { key: string; required: boolean }[];
   /** True when migrations have to run before web starts. */
   needsRelease: boolean;
-  /** Anything a reader should know before they click. */
-  caveats: string[];
+
   /** The body of agent.md, after the shared preamble. */
   steps: string[];
 }
@@ -67,17 +68,11 @@ export const TEMPLATES: Template[] = [
     name: "Excalidraw",
     logo: "excalidraw",
     logoHeight: 30,
-    blurb: "The whiteboard, running on an address of your own.",
-    what: "A virtual whiteboard for sketching hand-drawn diagrams. It builds to static files and keeps its scenes in the browser, so there is nothing to provision and nothing to configure.",
     repo: "https://github.com/excalidraw/excalidraw",
-    provisions: [],
     generates: [],
     selfUrl: [],
     asks: [],
     needsRelease: false,
-    caveats: [
-      "Scenes live in the browser, not on the server. This is the drawing tool, not a shared workspace with accounts.",
-    ],
     steps: [
       `Clone the repo and work inside it: \`git clone ${"https://github.com/excalidraw/excalidraw"} && cd excalidraw\``,
       `Run \`${CLI} deploy --wait\`. There is nothing to configure: no database, no secrets, no environment variables.`,
@@ -91,24 +86,16 @@ export const TEMPLATES: Template[] = [
     name: "Open WebUI",
     logo: "openwebui",
     logoHeight: 24,
-    blurb: "A private chat interface for your own models.",
-    what: "A self-hosted interface for local and API models. It stores conversations in Postgres and its uploads on disk, both of which Bay provides, so it comes up usable with no keys at all.",
     repo: "https://github.com/open-webui/open-webui",
-    provisions: ["Postgres", "A persistent disk at /data"],
     generates: ["WEBUI_SECRET_KEY"],
     selfUrl: [],
     asks: [
       {
         key: "OPENAI_API_KEY",
-        what: "Only if you want to talk to OpenAI-compatible models. Skip it and point it at Ollama later, or add it any time with `bay env`.",
         required: false,
       },
     ],
     needsRelease: false,
-    caveats: [
-      "The first account created becomes the administrator. On Bay the app is private anyway, so that account is yours.",
-      "With no model provider configured it starts and runs, it just has nothing to talk to yet.",
-    ],
     steps: [
       `Clone the repo and work inside it: \`git clone ${"https://github.com/open-webui/open-webui"} && cd open-webui\``,
       `Run \`${CLI} deploy --wait\`. Bay reads the repo's own Dockerfile, provisions Postgres, and injects \`DATABASE_URL\`.`,
@@ -125,24 +112,16 @@ export const TEMPLATES: Template[] = [
     name: "Cal.com",
     logo: "calcom",
     logoHeight: 22,
-    blurb: "Scheduling you own, on your own domain.",
-    what: "Open-source scheduling. It needs Postgres, a couple of generated secrets, its own address in its environment, and its migrations run before the web process starts. All four are things Bay can do without asking you anything.",
     repo: "https://github.com/calcom/cal.com",
-    provisions: ["Postgres"],
     generates: ["NEXTAUTH_SECRET", "CALENDSO_ENCRYPTION_KEY"],
     selfUrl: ["NEXT_PUBLIC_WEBAPP_URL", "NEXTAUTH_URL"],
     asks: [
       {
         key: "Google OAuth client",
-        what: "Only if you want to connect Google Calendar. Cal.com runs without it; the calendar integrations are what stay switched off.",
         required: false,
       },
     ],
     needsRelease: true,
-    caveats: [
-      "This is a monorepo and the Docker build is long. On the free plan you get 30 builds a month and one at a time, so a couple of failed attempts is a real dent.",
-      "Its migrations must run before the web process starts. That is what the release step is for, and skipping it gives you an app that serves its homepage and fails everything else.",
-    ],
     steps: [
       `Clone the repo and work inside it: \`git clone ${"https://github.com/calcom/cal.com"} && cd cal.com\``,
       `Read \`package.json\` and find the Prisma deploy script. Do not guess the command from memory: it has changed between versions, and it is usually a workspace script around \`prisma migrate deploy\`.`,
@@ -183,6 +162,12 @@ Keep me posted in plain language; I do not read build logs. If you need a secret
 /** The markdown an agent fetches. Shared by the route and the detail page. */
 export function agentMarkdown(t: Template): string {
   const lines: string[] = [];
+  // English, always: this file is read by a coding agent, and the commands in it
+  // are copied verbatim. Reading it from the catalogue rather than from a second
+  // copy on the record is what keeps the page and the instructions in step.
+  const prose = en.templates[t.slug];
+  const provisions = prose.provisions.map((x) => fill(x, { brand: BRAND, cli: CLI }));
+  const caveats = prose.caveats.map((x) => fill(x, { brand: BRAND, cli: CLI }));
 
   lines.push(`# Self-host ${t.name} on ${BRAND}`);
   lines.push("");
@@ -198,9 +183,9 @@ export function agentMarkdown(t: Template): string {
   lines.push(
     `- Builds from source. If the repo ships a Dockerfile, ${BRAND} uses that one and builds from the context it declares.`
   );
-  if (t.provisions.length) {
+  if (provisions.length) {
     lines.push(
-      `- Provisions ${t.provisions.join(" and ")}, and injects the connection details as environment variables. You never create, name, or copy a connection string.`
+      `- Provisions ${provisions.join(" and ")}, and injects the connection details as environment variables. You never create, name, or copy a connection string.`
     );
   } else {
     lines.push(`- Provisions nothing, because this app needs nothing.`);
@@ -238,7 +223,7 @@ export function agentMarkdown(t: Template): string {
     lines.push("## Secrets you generate, not ask for");
     lines.push("");
     lines.push(
-      `${t.generates.map((g) => `\`${g}\``).join(", ")} — these are random strings. Generate them yourself, set them with \`${CLI} env\`, and never print them. Asking a person to invent entropy is what makes self-hosting feel like work.`
+      `${t.generates.map((g) => `\`${g}\``).join(", ")}: these are random strings. Generate them yourself, set them with \`${CLI} env\`, and never print them. Asking a person to invent entropy is what makes self-hosting feel like work.`
     );
     lines.push("");
   }
@@ -255,9 +240,10 @@ export function agentMarkdown(t: Template): string {
       );
       lines.push("");
     }
-    for (const a of t.asks) {
-      lines.push(`- \`${a.key}\` (${a.required ? "required" : "optional"}): ${a.what}`);
-    }
+    t.asks.forEach((a, i) => {
+      const what = fill(prose.asks[i] ?? "", { brand: BRAND, cli: CLI });
+      lines.push(`- \`${a.key}\` (${a.required ? "required" : "optional"}): ${what}`);
+    });
   }
   lines.push("");
 
@@ -277,10 +263,10 @@ export function agentMarkdown(t: Template): string {
   );
   lines.push("");
 
-  if (t.caveats.length) {
+  if (caveats.length) {
     lines.push("## Tell the user these");
     lines.push("");
-    for (const c of t.caveats) lines.push(`- ${c}`);
+    for (const c of caveats) lines.push(`- ${c}`);
     lines.push("");
   }
 

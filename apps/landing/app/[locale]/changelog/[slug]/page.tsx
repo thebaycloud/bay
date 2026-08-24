@@ -5,6 +5,8 @@ import { ArrowLeft } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 import { allEntries, entryBySlug, formatDate } from "@/lib/changelog";
 import { SiteChrome } from "@/components/SiteChrome";
+import { getMessages } from "@/lib/i18n";
+import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
 import { BackLink } from "@/components/BackLink";
 import "../changelog.css";
 
@@ -12,7 +14,7 @@ const WRAP = "mx-auto w-full max-w-[1040px] px-[22px] min-[900px]:px-10";
 const ROW = "grid gap-2 min-[860px]:grid-cols-[160px_minmax(0,1fr)] min-[860px]:gap-8";
 
 export function generateStaticParams() {
-  return allEntries().map((e) => ({ slug: e.slug }));
+  return LOCALES.flatMap((locale) => allEntries().map((e) => ({ locale, slug: e.slug })));
 }
 
 export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
@@ -21,12 +23,18 @@ export function generateMetadata({ params }: { params: { slug: string } }): Meta
   return { title: `${e.title} — ${BRAND}`, description: e.summary };
 }
 
-export default function ChangelogEntry({ params }: { params: { slug: string } }) {
+export default function ChangelogEntry({
+  params,
+}: {
+  params: { locale: string; slug: string };
+}) {
+  const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
+  const t = getMessages(locale);
   const e = entryBySlug(params.slug);
   if (!e) notFound();
 
   return (
-    <SiteChrome>
+    <SiteChrome t={t} locale={locale}>
       {/* Same gutter and same measure as the index, so a post reads as the same
           object opened rather than a different page. */}
       <article className={`${WRAP} pb-16 pt-[clamp(40px,5vw,72px)]`}>

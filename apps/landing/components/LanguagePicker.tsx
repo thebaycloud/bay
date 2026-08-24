@@ -1,45 +1,53 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Check, ChevronDown, Globe } from "lucide-react";
+import {
+  DEFAULT_LOCALE,
+  LOCALES,
+  LOCALE_LABELS,
+  isLocale,
+  type Locale,
+} from "@/lib/i18n/locales";
 import { cn } from "@/lib/utils";
 
 /**
  * The language control in the footer.
  *
- * Everything is driven off LOCALES, so a language is added by adding a line.
- *
- * `current` is hardcoded to the first entry because the site has no locale
- * routing yet: there is nowhere for a selection to come from and nowhere for it
- * to go. Wiring that up is what turns this from a list into a control.
+ * The list lives in lib/i18n/locales.ts, not here: the routing and the message
+ * catalogues read the same array, so a language cannot be in the menu and
+ * missing from the site.
  */
-/**
- * Labels are in each language, not in English: a reader scanning for their own
- * language looks for the word they call it, not for "Chinese".
- *
- * Simplified and Traditional are separate entries rather than one "Chinese",
- * because they differ in vocabulary and not only in characters — software is
- * 软件 in the mainland and 軟體 in Taiwan, and one file cannot serve both.
- *
- * FONT: Geist covers Latin and Cyrillic, so English, Spanish and Russian render
- * in the site's own typeface. It has NO CJK, measured rather than assumed, so
- * zh-Hans, zh-Hant and ja fall back to whatever the reader's system supplies.
- * Those three want Noto Sans SC / TC / JP loaded alongside Geist before they
- * ship, or they will look like a different site rather than a translated one.
- */
-const LOCALES: { code: string; label: string }[] = [
-  { code: "en", label: "English" },
-  { code: "zh-Hans", label: "简体中文" },
-  { code: "zh-Hant", label: "繁體中文" },
-  { code: "es", label: "Español" },
-  { code: "ja", label: "日本語" },
-  { code: "ru", label: "Русский" },
-];
 
-export function LanguagePicker() {
+/**
+ * Splits a path into its locale and the page under it.
+ *
+ * English has no prefix, so `/pricing` is (en, /pricing) and `/ja/pricing` is
+ * (ja, /pricing). Reading the locale from the path rather than from a prop keeps
+ * this component out of every page's signature, and the path is the thing that
+ * is actually true after a client-side navigation.
+ */
+function split(pathname: string): { locale: Locale; rest: string } {
+  const [, first = "", ...tail] = pathname.split("/");
+  if (isLocale(first) && first !== DEFAULT_LOCALE) {
+    return { locale: first, rest: `/${tail.join("/")}` };
+  }
+  return { locale: DEFAULT_LOCALE, rest: pathname };
+}
+
+/** The same page under a different language. */
+function href(locale: Locale, rest: string): string {
+  const clean = rest === "/" ? "" : rest.replace(/\/$/, "");
+  return locale === DEFAULT_LOCALE ? clean || "/" : `/${locale}${clean}`;
+}
+
+export function LanguagePicker({ label = "Language" }: { label?: string }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
-  const current = LOCALES[0];
+  const router = useRouter();
+  const pathname = usePathname();
+  const { locale: current, rest } = split(pathname ?? "/");
 
   useEffect(() => {
     if (!open) return;
@@ -61,12 +69,12 @@ export function LanguagePicker() {
         type="button"
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-label="Language"
+        aria-label={label}
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-1.5 rounded-full bg-tile px-3 py-1.5 font-sans text-[13px] text-ink-2 transition-colors hover:text-ink"
       >
         <Globe size={13} strokeWidth={2} />
-        {current.label}
+        {LOCALE_LABELS[current]}
         <ChevronDown
           size={12}
           strokeWidth={2.2}
@@ -84,15 +92,19 @@ export function LanguagePicker() {
           <div className="overflow-hidden rounded-[12px] border border-line bg-white p-1.5 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.18)]">
             {LOCALES.map((l) => (
               <button
-                key={l.code}
+                key={l}
                 type="button"
                 role="option"
-                aria-selected={l.code === current.code}
-                onClick={() => setOpen(false)}
+                lang={l}
+                aria-selected={l === current}
+                onClick={() => {
+                  setOpen(false);
+                  if (l !== current) router.push(href(l, rest));
+                }}
                 className="flex w-full items-center justify-between gap-3 rounded-[8px] px-3 py-2 text-left font-sans text-[14px] text-ink-2 transition-colors hover:bg-tile hover:text-ink"
               >
-                {l.label}
-                {l.code === current.code ? (
+                {LOCALE_LABELS[l]}
+                {l === current ? (
                   <Check size={14} strokeWidth={2.2} className="shrink-0 text-ink-3" />
                 ) : null}
               </button>

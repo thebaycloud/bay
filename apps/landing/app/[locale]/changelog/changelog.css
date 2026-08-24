@@ -12,7 +12,7 @@
  * Radii follow the DASHBOARD's scale (4 / 8 / 12), which is the documented one.
  */
 
-@import "../home.css";
+@import "../../home.css";
 
 .prose {
   font-size: 17px;

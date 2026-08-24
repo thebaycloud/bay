@@ -1,15 +1,13 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { Check } from "lucide-react";
 import { BRAND } from "@/lib/brand";
-import { PLANS } from "@/lib/plans";
+import { plans } from "@/lib/plans";
+import { getMessages, localePath } from "@/lib/i18n";
+import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
 import { SiteChrome } from "@/components/SiteChrome";
 import { BackLink } from "@/components/BackLink";
 import "../changelog/changelog.css";
-
-export const metadata: Metadata = {
-  title: `Pricing — ${BRAND}`,
-  description: "Free forever, and no infrastructure bill.",
-};
 
 const WRAP = "mx-auto w-full max-w-[1200px] px-[22px] min-[900px]:px-10";
 
@@ -17,25 +15,40 @@ const BTN =
   "inline-flex h-10 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-[8px] " +
   "border px-[18px] font-sans text-[15px] font-[450] tracking-[-0.01em] transition-colors";
 
-export default function Pricing() {
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
+
+export function generateMetadata({ params }: { params: { locale: string } }): Metadata {
+  const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
+  const t = getMessages(locale);
+  return {
+    // A middle dot, not a dash: em dashes are out everywhere on this project.
+    title: `${t.pricing.metaTitle} · ${BRAND}`,
+    description: t.pricing.metaDescription,
+  };
+}
+
+export default function Pricing({ params }: { params: { locale: string } }) {
+  if (!isLocale(params.locale)) notFound();
+  const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
+  const t = getMessages(locale);
+
   return (
-    <SiteChrome>
+    <SiteChrome t={t} locale={locale}>
       <header className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
-        <BackLink href="/" label={BRAND} />
+        <BackLink href={localePath(locale, "/")} label={BRAND} />
         <h1 className="m-0 mt-8 max-w-[26ch] font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
-          Free forever. No infrastructure bill.
+          {t.pricing.h1}
         </h1>
-        <p className="mt-4 max-w-[54ch] text-[17px] leading-[1.6] text-ink-2">
-          Your cloud is included and you never see an AWS invoice. Apps on the free plan never
-          sleep or expire.
-        </p>
+        <p className="mt-4 max-w-[54ch] text-[17px] leading-[1.6] text-ink-2">{t.pricing.p}</p>
       </header>
 
       <section className={`${WRAP} pb-[clamp(72px,9vw,128px)]`}>
         <div className="mt-[clamp(36px,4.5vw,60px)] grid gap-5 min-[900px]:grid-cols-3">
-          {PLANS.map((p) => (
+          {plans(t).map((p) => (
             <div
-              key={p.name}
+              key={p.id}
               className="flex flex-col rounded-[12px] border border-line bg-white px-[26px] py-7"
             >
               <div className="text-[15px] font-medium">{p.name}</div>
@@ -52,7 +65,7 @@ export default function Pricing() {
                 {p.price}{" "}
                 {p.unit ? (
                   <span className="text-[14px] font-normal tracking-[-0.01em] text-ink-3">
-                    / {p.unit}
+                    {t.pricing.per} {p.unit}
                   </span>
                 ) : null}
               </div>
@@ -84,8 +97,7 @@ export default function Pricing() {
         </div>
 
         <p className="mt-10 max-w-[62ch] text-[14.5px] leading-[1.6] text-ink-3">
-          Self-hosting an open source project is free for its first year on top of any of these.
-          Nothing to claim: it is detected when you deploy.
+          {t.pricing.footnote}
         </p>
       </section>
     </SiteChrome>

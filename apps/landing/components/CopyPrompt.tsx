@@ -14,11 +14,14 @@ import { cn } from "@/lib/utils";
  */
 export function CopyPrompt({
   prompt,
-  label = "Copy the prompt",
+  label,
+  copiedLabel,
   logos,
 }: {
   prompt: string;
-  label?: string;
+  label: string;
+  /** What the button says once it has copied. */
+  copiedLabel: string;
   /** Agent marks, to say who this is for without a sentence saying it. */
   logos?: string[];
 }) {
@@ -33,7 +36,7 @@ export function CopyPrompt({
   return (
     <button
       type="button"
-      aria-label="Copy the prompt that tells your agent to deploy this"
+      aria-label={label}
       onClick={() => {
         navigator.clipboard?.writeText(prompt).then(() => setCopied(true)).catch(() => {});
       }}
@@ -60,7 +63,7 @@ export function CopyPrompt({
         </span>
       ) : null}
       <span className="text-[15px] font-medium text-[#ffffff]">
-        {copied ? "Copied. Paste it to your agent." : label}
+        {copied ? copiedLabel : label}
       </span>
       <span className="grid size-8 place-items-center rounded-[4px] text-[#ffffff]/70 transition-colors group-hover:text-[#ffffff]">
         {copied ? <Check size={16} strokeWidth={2.4} /> : <Copy size={15} strokeWidth={2} />}

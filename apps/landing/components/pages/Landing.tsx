@@ -15,32 +15,19 @@
 // tinted ground inside it, and a real button at the end.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import "./home.css";
 import { ArrowRight, Check, Copy, Lock, Terminal } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { cn } from "@/lib/utils";
 import { Dithering, MeshGradient } from "@paper-design/shaders-react";
-import { CONTACT_EMAIL, GITHUB_REPO } from "@/lib/brand";
+import { APP_URL, BRAND, CLI, CONTACT_EMAIL, DOMAIN, GITHUB_REPO, PKG } from "@/lib/brand";
 import { TEMPLATES, selfhostPrompt } from "@/lib/templates";
 import { Stars } from "@/components/Stars";
 import { SiteNav } from "@/components/SiteNav";
 import { LanguagePicker } from "@/components/LanguagePicker";
-import { CopyPrompt } from "./templates/copy-prompt";
+import { CopyPrompt } from "@/components/CopyPrompt";
+import { fill, localePath, type Locale, type Messages } from "@/lib/i18n";
 
-// ── the cutover block ──────────────────────────────────────────────────────
-//
-// The rebrand is designed for, not yet migrated: the platform still answers at
-// supersonic.cv today. Every string that changes on cutover day is here, so the
-// switch is an edit to this block and nothing else.
-//
-// NOTE: while DOMAIN says thebay.cloud and the fleet still serves supersonic.cv,
-// this page is ahead of the product. It should not go live before the migration.
-// Or point these back at the old names until it does.
-const BRAND = "Bay";
-const DOMAIN = "thebay.cloud";
-const CLI = "bay";
-const PKG = "bay";
-const APP_URL = "https://app.supersonic.cv";
+
 
 // ── repeated class strings ─────────────────────────────────────────────────
 //
@@ -169,25 +156,23 @@ const CODE = "overflow-hidden whitespace-pre font-mono text-[11.5px] leading-[1.
 const KEY = "font-medium text-ink";
 const DIM = "text-ink-3";
 
-// ── the six features ───────────────────────────────────────────────────────
+// ── the features ───────────────────────────────────────────────────────────
 
-// Short words and short sentences. A ten-year-old is the test, per CONTEXT.md:
-// product language is words a ten-year-old already knows, and that is not a style
-// choice, it is also what a model learns us by.
+// Structure only. The heading and the sentence live in the catalogues, keyed by
+// `id`, so a translation cannot silently drop a block and the Product menu keeps
+// linking to the same anchor whatever language it is read in.
 const FEATURES: {
-  /** Stable anchor for the Product menu. Not derived from the heading, so
-   *  rewording a feature does not break the link to it. */
-  id: string;
-  h: string;
-  p: string;
+  /** Stable anchor for the Product menu, and the catalogue key. Not derived from
+   *  the heading, so rewording a feature does not break the link to it. */
+  id: "ship" | "services" | "fixes";
   tint: keyof typeof TINT;
-  mock: (bleed: boolean) => React.ReactNode;
+  mock: (bleed: boolean, t: Messages) => React.ReactNode;
 }[] = [
   {
     id: "ship",
-    h: "Ship it with one command",
-    p: `Bay builds the app and gives back a live URL. Next, Django, Rails, Go, or anything in a container.`,
     tint: "warm",
+    // Simulated terminal output, and it stays English: the CLI speaks English
+    // and a half-translated terminal is worse than an English one.
     mock: (bleed) => (
       <Win title={CLI} bleed={bleed}>
         <div className={CODE}>
@@ -203,10 +188,8 @@ const FEATURES: {
   },
   {
     id: "services",
-    h: "Builds every service",
-    p: "Postgres, Redis and object storage come up with your app. Workers and cron run beside it. You provision none of it.",
     tint: "cool",
-    mock: (bleed) => (
+    mock: (bleed, t) => (
       <Win title="Data" bleed={bleed}>
         <div className={cn(CODE, "mb-[14px]")}>
           <span className={DIM}># injected into your app. you never write these.</span>
@@ -217,20 +200,19 @@ const FEATURES: {
           {"\n"}
           <span className={KEY}>STORAGE_BUCKET</span>=…
         </div>
-        <Row k="Postgres" v="16.4 · 240 MB" tag="Live" />
-        <Row k="Redis" v="cache and queues · 128 MB" tag="Live" />
-        <Row k="Files" v="1,204 objects · 2.1 GB" tag="Live" />
-        <Row k="Processes" v="web · worker · cron" tag="Live" />
+        <Row k="Postgres" v="16.4 · 240 MB" tag={t.mock.live} />
+        <Row k="Redis" v={`${t.mock.cacheAndQueues} · 128 MB`} tag={t.mock.live} />
+        <Row k={t.mock.files} v="1,204 objects · 2.1 GB" tag={t.mock.live} />
+        <Row k={t.mock.processes} v="web · worker · cron" tag={t.mock.live} />
       </Win>
     ),
   },
   {
     id: "fixes",
-    h: "Hands your agent bug fixes",
-    p: "Bay catches errors in production and turns them into an instruction for your coding agent.",
     tint: "warm",
-    mock: (bleed) => (
+    mock: (bleed, t) => (
       <Win title="Issues" bleed={bleed}>
+        {/* A real error string and a real log line. Both stay English. */}
         <div className="whitespace-pre-wrap border-l-2 border-brand py-[3px] pl-3 font-mono text-[11.5px] leading-[1.75] text-ink-2">
           <span className="font-medium text-brand-ink">
             relation &quot;orders&quot; does not exist
@@ -239,10 +221,9 @@ const FEATURES: {
         </div>
         <div className="mt-[15px] rounded-[4px] bg-ground px-[13px] py-3 text-[12.5px] leading-[1.6] text-ink-2">
           <div className="mb-1.5 text-[10.5px] uppercase tracking-[0.12em] text-ink-3">
-            For your agent
+            {t.mock.forYourAgent}
           </div>
-          Migrations never ran, so the schema is empty. Add a release step that runs them before
-          the web process starts, then deploy again.
+          {t.mock.diagnosis}
         </div>
       </Win>
     ),
@@ -269,15 +250,9 @@ const PMS: [string, string][] = [
   ["bun", `bunx ${PKG}@latest deploy`],
 ];
 
-const COMMANDS: [string, string][] = [
-  ["ship", "ship the folder you are in"],
-  ["logs", "what production actually saw"],
-  ["errors", "what is failing right now"],
-  ["diagnose", "a fix your agent can act on"],
-  ["rollback", "back to a version that worked"],
-  ["env", "secrets, never in the code"],
-  ["exec", "a shell on the live app"],
-];
+// The command names are the product's own and are never translated. Their
+// one-line descriptions are, and they are keyed by the name.
+const COMMANDS = ["ship", "logs", "errors", "diagnose", "rollback", "env", "exec"] as const;
 
 // The clients that speak MCP. Icons are real files in public/logos, downloaded
 // once from logo.dev rather than fetched from their API at runtime: a landing
@@ -374,7 +349,7 @@ function LogoTile({ c }: { c: (typeof MCP_CLIENTS)[number] }) {
   );
 }
 
-function CliCard() {
+function CliCard({ t }: { t: Messages }) {
   const [pm, setPm] = useState(0);
   const [copied, setCopied] = useState(false);
   const cmd = PMS[pm][1];
@@ -388,9 +363,9 @@ function CliCard() {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[12px] bg-white">
       <div className="px-6 pb-5 pt-6">
-        <div className="text-[15px] font-medium text-ink">Command line</div>
+        <div className="text-[15px] font-medium text-ink">{t.interfaces.cli.title}</div>
         <p className="mt-1.5 text-[14px] leading-[1.5] text-ink-2">
-          Anything that can run a command can run your infrastructure
+          {t.interfaces.cli.p}
         </p>
       </div>
 
@@ -403,7 +378,7 @@ function CliCard() {
           <span className="grid size-[26px] shrink-0 place-items-center rounded-[7px] bg-ink text-white">
             <Terminal size={14} strokeWidth={2.2} />
           </span>
-          <div className="flex items-center gap-0.5" role="tablist" aria-label="Package manager">
+          <div className="flex items-center gap-0.5" role="tablist" aria-label={t.interfaces.cli.pmAria}>
             {PMS.map(([name], i) => (
               <button
                 key={name}
@@ -425,7 +400,7 @@ function CliCard() {
           <div className="flex-1" />
           <button
             type="button"
-            aria-label={copied ? "Copied" : "Copy command"}
+            aria-label={copied ? t.interfaces.cli.copiedAria : t.interfaces.cli.copyAria}
             onClick={() => {
               navigator.clipboard?.writeText(cmd).then(() => setCopied(true)).catch(() => {});
             }}
@@ -446,12 +421,12 @@ function CliCard() {
           without the list floating in the middle of the space. */}
       <div className="mt-5 flex-1 border-t border-line px-6 py-5">
         <div className="flex flex-col gap-2">
-          {COMMANDS.map(([c, d]) => (
+          {COMMANDS.map((c) => (
             <div key={c} className="flex items-baseline gap-3 text-[12.5px]">
               <code className="w-[104px] shrink-0 font-mono text-ink">
                 {CLI} {c}
               </code>
-              <span className="text-ink-2">{d}</span>
+              <span className="text-ink-2">{t.interfaces.commands[c]}</span>
             </div>
           ))}
         </div>
@@ -622,7 +597,7 @@ function useNight<T extends HTMLElement>(ref: React.RefObject<T | null>) {
   }, [ref]);
 }
 
-function McpCard() {
+function McpCard({ t }: { t: Messages }) {
   const shader = useShaderGround();
   return (
     <div className="relative flex h-full flex-col overflow-hidden rounded-[12px] bg-white">
@@ -758,15 +733,14 @@ function McpCard() {
           {/* Not built yet, and labelled rather than implied. See
               docs/HANDOFF-panel.md §8. Delete the pill when it ships. */}
           <span className="rounded-full border border-line px-2 py-0.5 text-[10.5px] uppercase tracking-[0.1em] text-ink-3">
-            Soon
+            {t.interfaces.mcp.soon}
           </span>
         </div>
         <p className="mt-2 max-w-[42ch] text-[14px] leading-[1.55] text-ink-2">
-          Your agent calls Bay as tools instead of shelling out. Deploy, read the logs and apply a
-          fix, all without leaving the editor it is already in.
+          {fill(t.interfaces.mcp.p, { brand: BRAND })}
         </p>
         <a className={cn(BTN, BTN_FILL, "mt-5 self-start")} href="/llms.txt">
-          Read the agent manual <ArrowRight size={15} strokeWidth={2} />
+          {t.interfaces.mcp.cta} <ArrowRight size={15} strokeWidth={2} />
         </a>
       </div>
     </div>
@@ -823,7 +797,7 @@ My .env travels with the deploy, so do not copy keys across. Use  ${CLI} env <ap
 
 If a key is missing or is obviously a placeholder (sk_test_…, "changeme"), ask me for the real one in one sentence: what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
 
-function OnboardAgent() {
+function OnboardAgent({ t }: { t: Messages }) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -838,7 +812,7 @@ function OnboardAgent() {
       onClick={() => {
         navigator.clipboard?.writeText(ONBOARD_PROMPT).then(() => setCopied(true)).catch(() => {});
       }}
-      aria-label="Copy the prompt that onboards your coding agent"
+      aria-label={t.onboard.aria}
       className="group inline-flex h-12 items-center gap-3 rounded-[6px] border border-line bg-white pl-2.5 pr-2 transition-colors hover:bg-tile"
     >
       <span className="flex items-center">
@@ -858,7 +832,7 @@ function OnboardAgent() {
         ))}
       </span>
       <span className="text-[15px] font-medium text-ink">
-        {copied ? "Copied. Paste it to your agent." : "Onboard your agent"}
+        {copied ? t.onboard.copied : t.onboard.label}
       </span>
       <span
         className={cn(
@@ -934,7 +908,7 @@ function useScrollTarget() {
 
 // ── the page ───────────────────────────────────────────────────────────────
 
-export default function Home() {
+export default function Landing({ t, locale }: { t: Messages; locale: Locale }) {
   const nightRef = useRef<HTMLElement | null>(null);
   useRise();
   useNight(nightRef);
@@ -959,7 +933,7 @@ export default function Home() {
 
   return (
     <div className="bay bg-ground font-sans text-[16px] leading-[1.55] tracking-[-0.008em] text-ink antialiased">
-      <SiteNav />
+      <SiteNav t={t} locale={locale} />
 
       {/* ── hero ─────────────────────────────────────────────────────── */}
 
@@ -968,14 +942,13 @@ export default function Home() {
       <header className="pb-[clamp(40px,5vw,60px)] pt-[clamp(68px,8vw,108px)]">
         <div className={WRAP}>
           <h1 className="m-0 font-sans text-balance text-[clamp(30px,3.1vw,40px)] font-normal leading-[1.16] tracking-[-0.022em]">
-            The cloud for the agentic era
+            {t.hero.h1}
           </h1>
           <p className={cn(BODY, "mt-[18px]")}>
-            {BRAND} runs the apps you build with coding agents. Deploy from your agent or
-            terminal with a live URL, Postgres, Redis and storage included.
+            {fill(t.hero.p, { brand: BRAND })}
           </p>
           <div className="mt-8">
-            <OnboardAgent />
+            <OnboardAgent t={t} />
           </div>
         </div>
       </header>
@@ -1031,17 +1004,16 @@ export default function Home() {
             "rise grid items-start gap-[clamp(32px,6vw,96px)] min-[900px]:grid-cols-[0.82fr_1.18fr]"
           )}
         >
-          {/* <h2 className={H2}>Everything on, from the first ship.</h2> */}
-          <h2 className={H2}>Every app ships <br/>from the bay</h2>
+          {/* No manual line break: where it wants to fall depends on the
+              language, and text-balance already puts it in a sensible place. */}
+          <h2 className={cn(H2, "text-balance")}>{t.intro.h2}</h2>
           <div>
             <p className={BODY}>
-              There is no setup step. Every app opens at an address you can share, its database
-              is backed up from the first deploy, and we watch the live thing around the clock and
-              tell you what broke in plain words instead of an error code.
+              {t.intro.p}
             </p>
             <div className="mt-6 flex flex-wrap gap-[26px]">
               <a className={ARROW} href="/llms.txt">
-                Onboard your agent{" "}
+                {t.intro.link}{" "}
                 <ArrowRight size={15} strokeWidth={2} className={ARROW_ICON} />
               </a>
             </div>
@@ -1054,7 +1026,7 @@ export default function Home() {
       <section>
         <div className={cn(WRAP, "rise")}>
           <p className="text-center text-[15px] text-ink-2">
-            Works with the coding agent you already have open
+            {t.worksWith.line}
           </p>
           <div className="mt-7 grid grid-cols-2 gap-3 min-[560px]:grid-cols-4 min-[900px]:grid-cols-7">
             {TOOLS.map((t) => (
@@ -1098,14 +1070,14 @@ export default function Home() {
       <section className="pb-[clamp(72px,8.5vw,120px)] pt-[clamp(34px,4vw,56px)]" id="features">
         <div className={WRAP}>
           <div className="rise max-w-[36ch]">
-            <h2 className={cn(H2, "mt-[18px]")}>Your app needs more than a server</h2>
+            <h2 className={cn(H2, "mt-[18px]")}>{t.features.h2}</h2>
           </div>
 
           {FEATURES.map((f, i) => {
             const flip = i % 2 === 1;
             return (
               <div
-                key={f.h}
+                key={f.id}
                 id={f.id}
                 className={cn(
                   "rise mt-5 grid items-stretch gap-[clamp(28px,4vw,64px)] overflow-hidden rounded-[16px]",
@@ -1123,13 +1095,13 @@ export default function Home() {
                   )}
                 >
                   <h3 className="m-0 font-sans text-balance text-[clamp(21px,2.15vw,28px)] font-normal leading-[1.18] tracking-[-0.024em]">
-                    {f.h}
+                    {t.features[f.id].h}
                   </h3>
                   <p className="m-0 max-w-[30ch] text-pretty text-[clamp(21px,2.15vw,28px)] font-normal leading-[1.18] tracking-[-0.024em] text-ink-2">
-                    {f.p}
+                    {fill(t.features[f.id].p, { brand: BRAND })}
                   </p>
                   <a className={cn(BTN, BTN_FILL, "mt-7 self-start")} href={`${APP_URL}/new`}>
-                    Ship your app <ArrowRight size={15} strokeWidth={2} />
+                    {t.features.cta} <ArrowRight size={15} strokeWidth={2} />
                   </a>
                 </div>
 
@@ -1141,7 +1113,7 @@ export default function Home() {
                     flip ? "min-[900px]:px-[34px]" : "min-[900px]:pl-[34px] min-[900px]:pr-0"
                   )}
                 >
-                  {f.mock(!flip)}
+                  {f.mock(!flip, t)}
                 </div>
               </div>
             );
@@ -1160,13 +1132,13 @@ export default function Home() {
       <section ref={nightRef} id="interfaces" className="relative overflow-hidden py-[clamp(72px,8.5vw,120px)]">
         <Backdrop />
         <div className={cn(WRAP, "rise relative z-10")}>
-          <h2 className={H2}>MCP and CLI instead of a dashboard</h2>
+          <h2 className={H2}>{t.interfaces.h2}</h2>
           {/* Side by side, and both light so they read as a pair against the
               band. Each is modelled on its own reference: the CLI card on the
               shadcn docs command block, the MCP card on Refero's. */}
           <div className="mt-[clamp(22px,2.6vw,34px)] grid items-stretch gap-5 min-[900px]:grid-cols-[1.32fr_1fr]">
-            <CliCard />
-            <McpCard />
+            <CliCard t={t} />
+            <McpCard t={t} />
           </div>
         </div>
       </section>
@@ -1183,38 +1155,38 @@ export default function Home() {
         <div className={cn(WRAP, "rise")}>
           <div className="flex flex-wrap items-end justify-between gap-6">
             <div className="max-w-[36ch]">
-              <h2 className={H2}>Self-host something you already use</h2>
+              <h2 className={H2}>{t.templatesSection.h2}</h2>
             </div>
-            <a className={ARROW} href="/templates">
-              All templates <ArrowRight size={15} strokeWidth={2} className={ARROW_ICON} />
+            <a className={ARROW} href={localePath(locale, "/templates")}>
+              {t.templatesSection.all} <ArrowRight size={15} strokeWidth={2} className={ARROW_ICON} />
             </a>
           </div>
 
           <div className="mt-[clamp(28px,3.4vw,44px)] grid gap-4 min-[760px]:grid-cols-3">
-            {TEMPLATES.map((t) => (
+            {TEMPLATES.map((tpl) => (
               <a
-                key={t.slug}
-                href={`/templates/${t.slug}`}
+                key={tpl.slug}
+                href={localePath(locale, `/templates/${tpl.slug}`)}
                 className="group/card flex flex-col overflow-hidden rounded-[12px] bg-tile p-6 pb-0"
               >
                 <span className="flex items-center gap-2.5">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={`/logos/brand/${t.logo}.png`}
+                    src={`/logos/brand/${tpl.logo}.png`}
                     alt=""
                     className="h-[18px] w-auto shrink-0 object-contain"
                   />
-                  <span className="text-[17px] font-medium tracking-[-0.02em]">{t.name}</span>
+                  <span className="text-[17px] font-medium tracking-[-0.02em]">{tpl.name}</span>
                 </span>
 
                 {/* Heading and blurb butt together as one block, two colours, the
                     same treatment as the feature panels above. */}
                 <span className="mt-1.5 text-[17px] leading-[1.45] tracking-[-0.015em] text-ink-2">
-                  {t.blurb}
+                  {fill(t.templates[tpl.slug].blurb, { brand: BRAND, cli: CLI })}
                 </span>
 
                 <span className="mt-4 inline-flex items-center gap-2 text-[15px] text-brand-ink">
-                  Self-host it
+                  {t.templatesSection.cardCta}
                   <ArrowRight
                     size={15}
                     strokeWidth={2}
@@ -1228,8 +1200,8 @@ export default function Home() {
                 <span className="mt-6 block h-[210px] overflow-hidden rounded-t-[8px] bg-white">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={t.shot}
-                    alt={`${t.name} running`}
+                    src={tpl.shot}
+                    alt={fill(t.templatesSection.shotAlt, { name: tpl.name })}
                     width={720}
                     height={450}
                     className="size-full object-cover object-top transition-transform duration-500 group-hover/card:scale-[1.03]"
@@ -1268,9 +1240,9 @@ export default function Home() {
               className={cn(BTN, "gap-2 border-line bg-white text-ink hover:bg-tile")}
             />
 
-            <h2 className={cn(H2, "mx-auto mt-6 max-w-[24ch]")}>Self-hosting is free for 1 year</h2>
+            <h2 className={cn(H2, "mx-auto mt-6 max-w-[24ch]")}>{t.oss.h2}</h2>
             <p className="mx-auto mt-4 max-w-[42ch] text-[17px] leading-[1.6] text-ink-2">
-              We love open source, and we want software to be easier for anyone to run.
+              {t.oss.p}
             </p>
 
             {/* Not a link to our three templates: the year is for any public
@@ -1280,7 +1252,8 @@ export default function Home() {
             <div className="mt-7 flex justify-center">
               <CopyPrompt
                 prompt={selfhostPrompt()}
-                label="Self-host anything"
+                label={t.oss.cta}
+                copiedLabel={t.copyPrompt.copied}
                 logos={["claude", "openai", "cursor"]}
               />
             </div>
@@ -1293,12 +1266,12 @@ export default function Home() {
 
       <section className="border-t border-line py-[clamp(76px,9vw,130px)]">
         <div className={cn(WRAP, "rise text-center")}>
-          <h2 className={cn(H2, "mx-auto")}>Bring it in to the bay</h2>
+          <h2 className={cn(H2, "mx-auto")}>{t.closing.h2}</h2>
           {/* The same control as the hero, and the only one here. The page opens
               by asking you to hand a prompt to your agent; closing on a
               different ask would be closing on a different product. */}
           <div className="mt-[26px] flex justify-center">
-            <OnboardAgent />
+            <OnboardAgent t={t} />
           </div>
         </div>
       </section>
@@ -1308,33 +1281,33 @@ export default function Home() {
       <footer className="border-t border-line pb-10 pt-12">
         <div className={cn(WRAP, "flex flex-wrap items-start gap-x-14 gap-y-8")}>
           <div className="min-w-[200px]">
-            <a className="flex items-center gap-[9px]" href="/">
+            <a className="flex items-center gap-[9px]" href={localePath(locale, "/")}>
               {brand}
             </a>
-            <p className="mt-3.5 max-w-[24ch] text-[14px] text-ink-3">The cloud for the agentic era</p>
+            <p className="mt-3.5 max-w-[24ch] text-[14px] text-ink-3">{t.footer.tagline}</p>
           </div>
           <div className="flex-1" />
           {[
             {
-              head: "Product",
+              head: t.footer.product,
               links: [
-                ["What you get", "#features"],
-                ["Pricing", "/pricing"],
+                [t.footer.whatYouGet, "#features"],
+                [t.footer.pricing, "/pricing"],
               ],
             },
             {
-              head: "Build",
+              head: t.footer.build,
               links: [
-                ["Agent manual", "/llms.txt"],
-                ["Ship an app", `${APP_URL}/new`],
-                ["Sign in", APP_URL],
+                [t.footer.agentManual, "/llms.txt"],
+                [t.footer.shipAnApp, `${APP_URL}/new`],
+                [t.footer.signIn, APP_URL],
               ],
             },
             {
-              head: "Company",
+              head: t.footer.company,
               links: [
-                ["Contact", `mailto:${CONTACT_EMAIL}`],
-                ["GitHub", "https://github.com/The-Red-Onion"],
+                [t.footer.contact, `mailto:${CONTACT_EMAIL}`],
+                [t.footer.github, "https://github.com/The-Red-Onion"],
               ],
             },
           ].map((col) => (
@@ -1348,7 +1321,7 @@ export default function Home() {
                 return (
                   <a
                     key={label}
-                    href={href}
+                    href={localePath(locale, href)}
                     {...(away ? { target: "_blank", rel: "noreferrer" } : {})}
                     className="text-[14.5px] text-ink-2 hover:text-ink"
                   >
@@ -1359,8 +1332,8 @@ export default function Home() {
             </div>
           ))}
           <div className="mt-10 flex w-full flex-wrap justify-between gap-4 border-t border-line pt-5 font-mono text-[12px] text-ink-3">
-            <span>© {new Date().getFullYear()} Supersonic Software, Inc.</span>
-            <LanguagePicker />
+            <span>{fill(t.footer.rights, { year: new Date().getFullYear() })}</span>
+            <LanguagePicker label={t.footer.languageAria} />
           </div>
         </div>
       </footer>

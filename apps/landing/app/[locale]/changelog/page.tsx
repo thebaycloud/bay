@@ -4,6 +4,8 @@ import { ArrowRight } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 import { allEntries, formatDate } from "@/lib/changelog";
 import { SiteChrome } from "@/components/SiteChrome";
+import { getMessages } from "@/lib/i18n";
+import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
 import { BackLink } from "@/components/BackLink";
 import "./changelog.css";
 
@@ -17,11 +19,22 @@ const WRAP = "mx-auto w-full max-w-[1040px] px-[22px] min-[900px]:px-10";
 /** Date in a gutter, content in a column. One grid, used by both routes. */
 const ROW = "grid gap-2 min-[860px]:grid-cols-[160px_minmax(0,1fr)] min-[860px]:gap-8";
 
-export default function ChangelogIndex() {
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
+
+/**
+ * The entries stay English: they are dated, they grow without end, and every
+ * future post would owe five translations before it could ship. Only the chrome
+ * around them is translated.
+ */
+export default function ChangelogIndex({ params }: { params: { locale: string } }) {
+  const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
+  const t = getMessages(locale);
   const entries = allEntries();
 
   return (
-    <SiteChrome>
+    <SiteChrome t={t} locale={locale}>
       <header className={`${WRAP} pb-12 pt-[clamp(40px,5vw,72px)]`}>
         <BackLink href="/" label={BRAND} />
         <h1 className="m-0 mt-8 font-sans text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">

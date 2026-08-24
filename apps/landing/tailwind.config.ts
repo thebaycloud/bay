@@ -32,7 +32,15 @@ export default {
         live: "#16a34a",
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)", "system-ui", "-apple-system", "sans-serif"],
+        /* --font-cjk is set only on the three locales Geist cannot set, and it
+           sits BEHIND Geist so Latin inside a CJK page still uses Geist. */
+        sans: [
+          "var(--font-geist-sans)",
+          "var(--font-cjk)",
+          "system-ui",
+          "-apple-system",
+          "sans-serif",
+        ],
         mono: ["var(--font-geist-mono)", "ui-monospace", "SF Mono", "Menlo", "monospace"],
       },
       animation: {

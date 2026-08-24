@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 // the same `.bay` root class so they inherit the body override and ::selection
 // with it. Imported here rather than copied: two palettes is how two pages start
 // disagreeing about what grey means.
-import "../home.css";
+import "../../home.css";
 
 /**
  * Unlinked and noindex, on purpose.

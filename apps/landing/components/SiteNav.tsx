@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { APP_URL, BRAND, GITHUB_REPO } from "@/lib/brand";
 import { cn } from "@/lib/utils";
+import { fill, localePath, type Locale, type Messages } from "@/lib/i18n";
 import { Stars } from "./Stars";
 
 /**
@@ -29,20 +30,29 @@ type Item =
 // One word each. A menu is a list of destinations, not a second set of
 // headlines: the full sentence is waiting at the other end of the click.
 // "Ship" rather than "Deploy" because ship is the product word (CONTEXT.md).
-const PRODUCT: Item[] = [
-  { label: "Ship", to: "ship" },
-  { label: "Services", to: "services" },
-  { label: "Fixes", to: "fixes" },
-  { label: "Agents", to: "interfaces" },
-];
+//
+// Built from the catalogue rather than held as a constant, so the labels
+// translate while the anchors they scroll to stay the same in every language.
+function productItems(t: Messages): Item[] {
+  return [
+    { label: t.nav.ship, to: "ship" },
+    { label: t.nav.services, to: "services" },
+    { label: t.nav.fixes, to: "fixes" },
+    { label: t.nav.agents, to: "interfaces" },
+  ];
+}
 
-const RESOURCES: Item[] = [
-  { label: "Changelog", href: "/changelog" },
-  { label: "Docs", href: "/llms.txt" },
-  // PLACEHOLDER, like GITHUB_REPO itself: this points at a repo that is not ours
-  // until the code is public. See lib/brand.ts.
-  { label: "Community", href: `https://github.com/${GITHUB_REPO}/discussions` },
-];
+function resourceItems(t: Messages): Item[] {
+  return [
+    // The changelog is English only and lives outside the locale tree, so this
+    // link is deliberately not run through localePath.
+    { label: t.nav.changelog, href: "/changelog" },
+    { label: t.nav.docs, href: "/llms.txt" },
+    // PLACEHOLDER, like GITHUB_REPO itself: this points at a repo that is not
+    // ours until the code is public. See lib/brand.ts.
+    { label: t.nav.community, href: `https://github.com/${GITHUB_REPO}/discussions` },
+  ];
+}
 
 const BTN =
   "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-[8px] " +
@@ -145,11 +155,11 @@ function NavMenu({
   );
 }
 
-export function SiteNav() {
+export function SiteNav({ t, locale }: { t: Messages; locale: Locale }) {
   const [stuck, setStuck] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const onHome = pathname === "/";
+  const onHome = pathname === localePath(locale, "/");
 
   useEffect(() => {
     const onScroll = () => setStuck(window.scrollY > 8);
@@ -163,7 +173,7 @@ export function SiteNav() {
       // From another route there is nothing to scroll to yet, so hand the target
       // to the landing page and let it scroll once it has mounted.
       if (!onHome) {
-        router.push(`/?to=${id}`);
+        router.push(`${localePath(locale, "/")}?to=${id}`);
         return;
       }
       const el = document.getElementById(id);
@@ -174,7 +184,7 @@ export function SiteNav() {
         behavior: "smooth",
       });
     },
-    [onHome, router]
+    [onHome, router, locale]
   );
 
   return (
@@ -185,7 +195,11 @@ export function SiteNav() {
       )}
     >
       <div className="relative mx-auto flex h-full w-full max-w-[1200px] items-center px-[22px] min-[900px]:px-10">
-        <Link href="/" className="flex items-center gap-2.5" aria-label={`${BRAND} home`}>
+        <Link
+          href={localePath(locale, "/")}
+          className="flex items-center gap-2.5"
+          aria-label={fill(t.nav.homeAria, { brand: BRAND })}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo-bay.svg" alt="" width={30} height={30} className="size-[30px] shrink-0" />
           <span className="whitespace-nowrap text-[20px] font-medium tracking-[-0.03em]">
@@ -202,14 +216,14 @@ export function SiteNav() {
             the menu triggers unreliable to hit. This box is only as wide as the
             links, so nothing is covered and nothing needs excluding. */}
         <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-7 min-[900px]:flex">
-          <NavMenu label="Product" items={PRODUCT} onScrollTo={scrollTo} />
-          <Link href="/templates" className={TRIGGER}>
-            Templates
+          <NavMenu label={t.nav.product} items={productItems(t)} onScrollTo={scrollTo} />
+          <Link href={localePath(locale, "/templates")} className={TRIGGER}>
+            {t.nav.templates}
           </Link>
-          <Link href="/pricing" className={TRIGGER}>
-            Pricing
+          <Link href={localePath(locale, "/pricing")} className={TRIGGER}>
+            {t.nav.pricing}
           </Link>
-          <NavMenu label="Resources" items={RESOURCES} onScrollTo={scrollTo} />
+          <NavMenu label={t.nav.resources} items={resourceItems(t)} onScrollTo={scrollTo} />
         </div>
 
         <div className="flex-1" />
@@ -224,7 +238,7 @@ export function SiteNav() {
             className={cn(BTN, "border-brand-ink bg-brand text-[#ffffff] hover:bg-[#cf3522]")}
             href={APP_URL}
           >
-            My apps
+            {t.nav.myApps}
           </a>
         </div>
       </div>

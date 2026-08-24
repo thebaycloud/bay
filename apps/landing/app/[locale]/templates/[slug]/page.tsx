@@ -1,25 +1,32 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowUpRight, Check } from "lucide-react";
 import { BRAND, CLI } from "@/lib/brand";
 import { TEMPLATES, agentUrl, promptFor, templateBySlug } from "@/lib/templates";
-import { CopyPrompt } from "../copy-prompt";
+import { fill, getMessages, localePath, type Messages } from "@/lib/i18n";
+import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
+import { CopyPrompt } from "@/components/CopyPrompt";
 import { SiteChrome } from "@/components/SiteChrome";
 import { BackLink } from "@/components/BackLink";
 
 const WRAP = "mx-auto w-full max-w-[900px] px-[22px] min-[900px]:px-10";
 
 export function generateStaticParams() {
-  return TEMPLATES.map((t) => ({ slug: t.slug }));
+  return LOCALES.flatMap((locale) => TEMPLATES.map((t) => ({ locale, slug: t.slug })));
 }
 
-export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
-  const t = templateBySlug(params.slug);
-  if (!t) return {};
+export function generateMetadata({
+  params,
+}: {
+  params: { locale: string; slug: string };
+}): Metadata {
+  const tpl = templateBySlug(params.slug);
+  const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
+  if (!tpl) return {};
+  const t = getMessages(locale);
   return {
-    title: `Self-host ${t.name} — ${BRAND}`,
-    description: t.blurb,
+    title: `${fill(t.templatePage.metaTitle, { name: tpl.name })} · ${BRAND}`,
+    description: fill(t.templates[tpl.slug].blurb, { brand: BRAND, cli: CLI }),
   };
 }
 
@@ -41,86 +48,104 @@ function Facts({ head, items }: { head: string; items: string[] }) {
   );
 }
 
-export default function TemplatePage({ params }: { params: { slug: string } }) {
-  const t = templateBySlug(params.slug);
-  if (!t) notFound();
+export default function TemplatePage({
+  params,
+}: {
+  params: { locale: string; slug: string };
+}) {
+  const tpl = templateBySlug(params.slug);
+  if (!tpl || !isLocale(params.locale)) notFound();
+  const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
+  const t: Messages = getMessages(locale);
+  const prose = t.templates[tpl.slug];
+  const v = { brand: BRAND, cli: CLI };
 
-  const asks = t.asks.length
-    ? t.asks.map((a) => `${a.key} — ${a.required ? "required" : "optional"}. ${a.what}`)
-    : ["Nothing. There is no question to answer."];
+  // The env var name comes from the record and is never translated; the sentence
+  // explaining it comes from the catalogue, in the same order.
+  const asks = tpl.asks.length
+    ? tpl.asks.map(
+        (a, i) =>
+          `${a.key} (${a.required ? t.templatePage.required : t.templatePage.optional}). ` +
+          fill(prose.asks[i] ?? "", v)
+      )
+    : [t.templatePage.noAsks];
 
   return (
-    <SiteChrome>
+    <SiteChrome t={t} locale={locale}>
       <header className={`${WRAP} pb-8 pt-[clamp(36px,4.5vw,64px)]`}>
-        <BackLink href="/templates" label="Templates" />
+        <BackLink href={localePath(locale, "/templates")} label={t.nav.templates} />
 
         <div className="mt-8 flex h-12 items-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={`/logos/brand/${t.logo}.png`}
-            alt={t.name}
-            style={{ height: t.logoHeight + 6 }}
+            src={`/logos/brand/${tpl.logo}.png`}
+            alt={tpl.name}
+            style={{ height: tpl.logoHeight + 6 }}
             className="w-auto object-contain"
           />
         </div>
 
         <h1 className="m-0 mt-6 font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
-          Self-host {t.name}
+          {fill(t.templatePage.h1, { name: tpl.name })}
         </h1>
         <p className="mt-4 max-w-[58ch] text-pretty text-[17px] leading-[1.6] text-ink-2">
-          {t.what}
+          {fill(prose.what, v)}
         </p>
 
         {/* The one call to action. It copies, it does not navigate. */}
         <div className="mt-8">
           <CopyPrompt
-            prompt={promptFor(t)}
-            label={`Onboard your agent`}
+            prompt={promptFor(tpl)}
+            label={t.templatePage.copyLabel}
+            copiedLabel={t.copyPrompt.copied}
             logos={["claude", "openai", "cursor"]}
           />
         </div>
         <p className="mt-4 max-w-[54ch] text-[14px] leading-[1.6] text-ink-3">
-          Paste it into Claude Code, Codex, Cursor or anything else that runs commands. It clones
-          the source, deploys it, and signs you in on the way past. There is no dashboard step.
+          {t.templatePage.copyNote}
         </p>
       </header>
 
       <section className={`${WRAP} pb-[clamp(64px,8vw,112px)]`}>
         <div className="grid gap-8 border-t border-line pt-10 min-[760px]:grid-cols-2">
           <Facts
-            head={`What ${BRAND} provisions`}
-            items={t.provisions.length ? t.provisions : ["Nothing. This app needs nothing."]}
-          />
-          <Facts
-            head="Secrets it generates for you"
+            head={fill(t.templatePage.provisionsHead, v)}
             items={
-              t.generates.length
-                ? t.generates.map((g) => `${g}, generated rather than asked for`)
-                : ["None needed."]
+              prose.provisions.length
+                ? prose.provisions.map((p) => fill(p, v))
+                : [t.templatePage.noProvisions]
             }
           />
-          <Facts head="What you may be asked for" items={asks} />
           <Facts
-            head="Also handled"
+            head={t.templatePage.generatesHead}
+            items={
+              tpl.generates.length
+                ? tpl.generates.map((g) => fill(t.templatePage.generatedSuffix, { key: g }))
+                : [t.templatePage.noGenerates]
+            }
+          />
+          <Facts head={t.templatePage.asksHead} items={asks} />
+          <Facts
+            head={t.templatePage.handledHead}
             items={[
-              ...(t.selfUrl.length
-                ? [`Its own address, injected as ${t.selfUrl.join(" and ")}`]
+              ...(tpl.selfUrl.length
+                ? [fill(t.templatePage.selfUrlLine, { vars: tpl.selfUrl.join(" / ") })]
                 : []),
-              ...(t.needsRelease ? ["Migrations, run before the app starts"] : []),
-              "Private until you say otherwise",
+              ...(tpl.needsRelease ? [t.templatePage.migrationsLine] : []),
+              t.templatePage.privateLine,
             ]}
           />
         </div>
 
-        {t.caveats.length ? (
+        {prose.caveats.length ? (
           <div className="mt-10 rounded-[8px] border border-line bg-tile p-6">
             <div className="text-[12px] uppercase tracking-[0.16em] text-ink-3">
-              Before you start
+              {t.templatePage.caveatsHead}
             </div>
             <ul className="m-0 mt-3 flex list-none flex-col gap-2 p-0">
-              {t.caveats.map((c) => (
+              {prose.caveats.map((c) => (
                 <li key={c} className="text-[15px] leading-[1.6] text-ink-2">
-                  {c}
+                  {fill(c, v)}
                 </li>
               ))}
             </ul>
@@ -130,9 +155,9 @@ export default function TemplatePage({ params }: { params: { slug: string } }) {
         <div className="mt-10 flex flex-col gap-3 border-t border-line pt-8 text-[14.5px]">
           <a
             className="group inline-flex items-center gap-2 text-brand-ink transition-colors hover:text-brand"
-            href={agentUrl(t)}
+            href={agentUrl(tpl)}
           >
-            The instructions your agent will read
+            {t.templatePage.readInstructions}
             <ArrowUpRight
               size={15}
               strokeWidth={2}
@@ -141,18 +166,18 @@ export default function TemplatePage({ params }: { params: { slug: string } }) {
           </a>
           <a
             className="group inline-flex items-center gap-2 text-ink-2 transition-colors hover:text-ink"
-            href={t.repo}
+            href={tpl.repo}
             target="_blank"
             rel="noreferrer"
           >
-            {t.name} on GitHub
+            {fill(t.templatePage.onGithub, { name: tpl.name })}
             <ArrowUpRight size={15} strokeWidth={2} />
           </a>
           <a
             className="group inline-flex items-center gap-2 text-ink-2 transition-colors hover:text-ink"
             href="/llms.txt"
           >
-            Every {CLI} command
+            {fill(t.templatePage.everyCommand, { cli: CLI })}
             <ArrowUpRight size={15} strokeWidth={2} />
           </a>
         </div>

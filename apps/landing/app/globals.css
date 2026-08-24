@@ -355,3 +355,35 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.015
 }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+/* ── CJK ────────────────────────────────────────────────────────────────────
+ *
+ * Geist has no CJK coverage, so zh-Hans, zh-Hant and ja need a face named for
+ * them or they fall back to an undefined one. --font-cjk sits behind Geist in
+ * the Tailwind sans stack, so Latin inside a Chinese page (the brand name, a CLI
+ * command, a URL) still sets in Geist and only the CJK glyphs come from here.
+ *
+ * The system faces rather than Noto over the network, and not for weight alone:
+ * next/font/google downloads every unicode-range subset at build time, which for
+ * three CJK families is thousands of files and a build that does not finish.
+ * What the platform ships is also the better face. PingFang, Hiragino and Yu
+ * Gothic are the faces these readers already read everything else in, they are
+ * properly hinted at small sizes, and they cost no bytes at all.
+ *
+ * Simplified and Traditional get different stacks on purpose: the same codepoint
+ * is drawn differently in each, and asking for the wrong one gives a reader
+ * shapes that are legible but visibly foreign. */
+html[lang="zh-Hans"] {
+  --font-cjk: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+}
+
+html[lang="zh-Hant"] {
+  --font-cjk: "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC",
+    "Source Han Sans TC", sans-serif;
+}
+
+html[lang="ja"] {
+  --font-cjk: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic",
+    Meiryo, "Noto Sans CJK JP", sans-serif;
+}
