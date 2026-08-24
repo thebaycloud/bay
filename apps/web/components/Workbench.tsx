@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowUpRight, MessageSquare, SquareTerminal } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, MessageSquare, SquareTerminal } from "lucide-react";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import { type ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SharePopover } from "@/components/SharePopover";
@@ -63,12 +63,22 @@ const WorkbenchChat = dynamic(
 
 export type AppState = "live" | "shipping" | "broken";
 
-/** The panel's own words, and the dot that carries them. Green is status and
- *  nothing else — that is why the accent cannot also mean "running". */
-const STATE: Record<AppState, { word: string; dot: string }> = {
-  live: { word: "afloat", dot: "bg-[var(--green)]" },
-  shipping: { word: "shipping", dot: "bg-ink-3" },
-  broken: { word: "broken", dot: "bg-red" },
+/**
+ * The dot, and only the dot.
+ *
+ * The badge it used to sit in also carried the slug — which the address on the
+ * right already contains — and a word for the state. The badge is gone; the fact
+ * is not, because a broken app with no indicator anywhere in its own workbench is
+ * a worse screen than one with a red dot on it. It rides on the address now,
+ * which is the thing on this header somebody already looks at.
+ *
+ * Green is status and nothing else — that is why the accent cannot also mean
+ * "running".
+ */
+const DOT: Record<AppState, string> = {
+  live: "bg-[var(--green)]",
+  shipping: "bg-ink-3",
+  broken: "bg-red",
 };
 
 export function Workbench({
@@ -83,7 +93,7 @@ export function Workbench({
   /** Dev mode's body: the cell grid and the screens behind it. */
   children: ReactNode;
 }) {
-  const { word, dot } = STATE[state];
+  const dot = DOT[state];
   /**
    * Controlled, because the LAYOUT depends on which tab is open: dev mode is the
    * whole width, not a pane beside the rail. Radix would happily manage this
@@ -102,14 +112,18 @@ export function Workbench({
       value={tab}
     >
       <header className="flex items-center gap-3 border-b border-border bg-card px-3.5">
-        {/* `rounded-md`, like every other chip in this product. A pill here and
-            pills on the tabs were the two things making this screen read as a
-            different application from the list it is opened from. */}
-        <Badge variant="outline" className="h-7 gap-2 px-2.5 font-normal">
-          <span className={cn("size-1.5 shrink-0 rounded-full", dot)} aria-hidden="true" />
-          <span className="text-sub font-medium text-ink">{slug}</span>
-          <span className="font-mono text-[11px] tracking-[0.06em] text-ink-2">{word}</span>
-        </Badge>
+        {/* The way out, where the thing you came from should be.
+            It was a badge reading "<slug> afloat" — the slug, which the address
+            on the right already contains, and a state word. Neither was a
+            control, and the one thing missing from this header was any way back
+            to the list without the browser's own button. */}
+        <Link
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-sub text-ink transition-colors hover:bg-tile"
+          href="/"
+        >
+          <ArrowLeft size={14} strokeWidth={2} aria-hidden="true" />
+          All apps
+        </Link>
 
         <TabsList className="h-8">
           <TabsTrigger value="chat" className="gap-1.5 px-4 text-sub">
@@ -128,6 +142,7 @@ export function Workbench({
           target="_blank"
           rel="noreferrer"
         >
+          <span className={cn("size-1.5 shrink-0 rounded-full", dot)} aria-hidden="true" />
           {address}
           <ArrowUpRight size={13} strokeWidth={2} aria-hidden="true" />
         </a>

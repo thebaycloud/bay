@@ -8,6 +8,7 @@ import {
   type Visibility,
 } from "@/lib/apps";
 import { listPending, resolveRequest } from "@/lib/requests";
+import { profilesFor } from "@/lib/users";
 import { sendAccessGranted } from "@/lib/email";
 import { currentUserId } from "@/lib/session";
 import { entitlement, countPublicApps } from "@/lib/entitlements";
@@ -43,7 +44,32 @@ async function state(slug: string, visibility: Visibility | undefined) {
   const [grants, domains, requests, workspaceDomain] = await Promise.all([
     listGrants(slug), listDomainGrants(slug), listPending(slug), workspaceDomainOfApp(slug),
   ]);
-  return { visibility, grants, domains, requests, workspaceDomain };
+  // The name and face behind each address, for the panel to draw. Every one of
+  // these is somebody the owner invited, and this route is owner-only — it is not
+  // a lookup that would answer "is this person on the platform" about an address
+  // the caller has not already been shown.
+  //
+  // Absent for an invited address that has never signed in, and for a password
+  // account, which has no picture. The panel draws initials then, which is the
+  // truth rather than a placeholder for something we could have had.
+  const profiles = await profilesFor([...grants, ...requests]);
+  const person = (email: string) => ({
+    email,
+    name: profiles.get(email)?.name ?? null,
+    image: profiles.get(email)?.image ?? null,
+  });
+  return {
+    visibility,
+    domains,
+    workspaceDomain,
+    // Both shapes. `grants` and `requests` stay as plain string arrays because
+    // the CLI and the app's own drawer read them; `people` and `waiting` carry
+    // the same addresses with a name and a face on them.
+    grants,
+    requests,
+    people: grants.map(person),
+    waiting: requests.map(person),
+  };
 }
 
 export async function GET(req: Request, { params }: { params: { slug: string } }) {

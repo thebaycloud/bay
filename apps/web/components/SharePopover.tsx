@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  AtSign, Check, ChevronDown, Globe, Link2, Lock, Mail, UserPlus, Users, X,
+  AtSign, Check, ChevronDown, Globe, Link2, Lock, UserPlus, Users, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,12 +58,38 @@ function isDomainInput(value: string): boolean {
   return v.startsWith("@") || !v.includes("@");
 }
 
+/** One person, as the panel draws them. */
+interface Person {
+  email: string;
+  /** From the identity provider. Null for a password account or an unknown address. */
+  name: string | null;
+  /** `profile.picture` or `avatar_url`, refreshed on every sign-in. */
+  image: string | null;
+}
+
 interface State {
   visibility: Visibility;
-  grants: string[];
+  people: Person[];
+  waiting: Person[];
   domains: string[];
-  requests: string[];
   workspaceDomain: string | null;
+}
+
+/**
+ * Somebody's initials, from the best thing we know about them.
+ *
+ * Their name when we have it — "Arsen Kylysbek" is AK — and the local part of
+ * their address when we do not. NOT the whole address split on punctuation:
+ * `ilmak1704@gmail.com` would give "I1", and a digit in a monogram reads as a
+ * mistake. One letter is better than two wrong ones.
+ */
+function initials(p: Person): string {
+  const from = (p.name ?? "").trim() || p.email.split("@")[0].replace(/[._-]+/g, " ");
+  const words = from.split(/\s+/).filter((w) => /^[a-z]/i.test(w));
+  if (words.length === 0) return p.email[0]?.toUpperCase() ?? "?";
+  const first = words[0][0];
+  const last = words.length > 1 ? words[words.length - 1][0] : "";
+  return (first + last).toUpperCase();
 }
 
 export function SharePopover({ slug, address }: { slug: string; address: string }) {
@@ -76,9 +102,9 @@ export function SharePopover({ slug, address }: { slug: string; address: string 
   const take = useCallback((j: Partial<State>) => {
     setS({
       visibility: (j.visibility ?? "private") as Visibility,
-      grants: j.grants ?? [],
+      people: j.people ?? [],
+      waiting: j.waiting ?? [],
       domains: j.domains ?? [],
-      requests: j.requests ?? [],
       workspaceDomain: j.workspaceDomain ?? null,
     });
   }, []);
@@ -114,7 +140,7 @@ export function SharePopover({ slug, address }: { slug: string; address: string 
     }
   }
 
-  const waiting = s?.requests.length ?? 0;
+  const waiting = s?.waiting.length ?? 0;
   const current = ACCESS[s?.visibility ?? "private"];
   const CurrentIcon = current.icon;
 
@@ -150,7 +176,7 @@ export function SharePopover({ slug, address }: { slug: string; address: string 
         <div className="flex items-center gap-3 px-4 pb-3 pt-3.5">
           <h2 className="text-[15px] font-[450] text-ink">Share app</h2>
           <button
-            className="ml-auto inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-ink-2 transition-colors hover:text-ink"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-ink transition-colors hover:text-ink-2"
             onClick={() => {
               void navigator.clipboard?.writeText(`https://${address}`).then(() => setCopied(true));
             }}
@@ -190,34 +216,52 @@ export function SharePopover({ slug, address }: { slug: string; address: string 
 
         {/* Requests first, and only when there are any: somebody is waiting on an
             answer, which outranks every setting below it. */}
-        {s && s.requests.length > 0 ? (
-          <Section title="Waiting to be let in">
-            {s.requests.map((rq) => (
-              <PersonRow icon={Mail} key={rq} title={rq}>
-                <Button className="h-7 px-2.5 text-[13px]" disabled={busy} onClick={() => void post({ addEmail: rq })} size="sm">
+        {s && s.waiting.length > 0 ? (
+          <Section>
+            {s.waiting.map((p) => (
+              <Line key={p.email} lead={<Avatar person={p} />} sub={p.name ? p.email : "asking to be let in"} title={p.name ?? p.email}>
+                <Button className="h-7 px-2.5 text-[13px]" disabled={busy} onClick={() => void post({ addEmail: p.email })} size="sm">
                   Approve
                 </Button>
-                <Button className="h-7 px-2 text-[13px] text-ink-2 hover:text-ink" disabled={busy} onClick={() => void post({ denyEmail: rq })} size="sm" variant="ghost">
+                <Button className="h-7 px-2 text-[13px] text-ink-2 hover:text-ink" disabled={busy} onClick={() => void post({ denyEmail: p.email })} size="sm" variant="ghost">
                   Deny
                 </Button>
-              </PersonRow>
+              </Line>
             ))}
           </Section>
         ) : null}
 
-        {s && (s.domains.length > 0 || s.grants.length > 0) ? (
-          <Section title="People with access">
+        {s && (s.domains.length > 0 || s.people.length > 0) ? (
+          <Section>
             {/* Rules first: one row here can stand for a hundred below it, so
                 reading them in the other order tells you who is in too late. */}
             {s.domains.map((d) => (
-              <PersonRow icon={Globe} key={d} sub="Anyone signed in with a verified address there" title={`@${d}`}>
+              <Line
+                key={d}
+                lead={
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-tile">
+                    <Globe className="size-3.5 text-ink-3" />
+                  </span>
+                }
+                sub="Anyone signed in with a verified address there"
+                title={`@${d}`}
+              >
                 <Remove busy={busy} label={`@${d}`} onClick={() => void post({ removeDomain: d })} />
-              </PersonRow>
+              </Line>
             ))}
-            {s.grants.map((g) => (
-              <PersonRow icon={Mail} key={g} title={g}>
-                <Remove busy={busy} label={g} onClick={() => void post({ removeEmail: g })} />
-              </PersonRow>
+            {s.people.map((p) => (
+              <Line
+                key={p.email}
+                lead={<Avatar person={p} />}
+                // The name on top and the address under it when we know both. A
+                // person is easier to recognise by their face and name than by a
+                // string, which is the whole reason this stopped being an
+                // envelope icon beside an email.
+                sub={p.name ? p.email : undefined}
+                title={p.name ?? p.email}
+              >
+                <Remove busy={busy} label={p.email} onClick={() => void post({ removeEmail: p.email })} />
+              </Line>
             ))}
           </Section>
         ) : null}
@@ -239,9 +283,11 @@ export function SharePopover({ slug, address }: { slug: string; address: string 
             Red means something is wrong; it cannot also mean "this is the one you
             picked", which is what tinting the chosen option made it mean. */}
         {s ? (
-          <Section title="General access">
+          <Section>
             <div className="flex items-center gap-3 px-4 py-2.5">
-              <CurrentIcon className="size-4 shrink-0 text-ink-3" />
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-tile">
+                <CurrentIcon className="size-3.5 text-ink-3" />
+              </span>
               <span className="min-w-0">
                 <span className="block truncate text-[14px] text-ink">{current.label}</span>
                 <span className="block truncate text-[12.5px] text-ink-3">{current.desc}</span>
@@ -286,37 +332,72 @@ export function SharePopover({ slug, address }: { slug: string; address: string 
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="border-t border-border py-2">
-      <div className="px-4 pb-1 pt-1 text-[10.5px] font-[450] uppercase tracking-[0.07em] text-ink-3">
-        {title}
-      </div>
-      {children}
-    </div>
-  );
+/**
+ * A block of rows, separated by a rule and nothing else.
+ *
+ * It had a small uppercase label over each group. The rows say what they are —
+ * a person with a face on them is a person, and the access row states its own
+ * setting in words — so the labels were naming what was already legible, in the
+ * one type treatment nothing else in this product uses.
+ */
+function Section({ children }: { children: React.ReactNode }) {
+  return <div className="border-t border-border py-1.5">{children}</div>;
 }
 
-function PersonRow({
-  icon: Icon,
+function Line({
+  lead,
   title,
   sub,
   children,
 }: {
-  icon: typeof Mail;
+  lead: React.ReactNode;
   title: string;
   sub?: string;
   children?: React.ReactNode;
 }) {
   return (
     <div className="flex items-center gap-3 px-4 py-2">
-      <Icon className="size-4 shrink-0 text-ink-3" />
+      {lead}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[14px] text-ink">{title}</span>
         {sub ? <span className="block truncate text-[12.5px] text-ink-3">{sub}</span> : null}
       </span>
       {children}
     </div>
+  );
+}
+
+/**
+ * Their face, or their initials.
+ *
+ * The picture was already being fetched on every sign-in and thrown away —
+ * auth.ts asks Google for `profile.picture` and GitHub for `avatar_url`, and
+ * `createUser` inserted everything except that. It is stored now.
+ *
+ * An `onError` fallback rather than a check, because a Google avatar URL can stop
+ * resolving while the row is still on screen, and a broken image icon where a
+ * face should be is worse than the monogram it replaced.
+ */
+function Avatar({ person }: { person: Person }) {
+  const [broken, setBroken] = useState(false);
+  if (person.image && !broken) {
+    return (
+      <img
+        alt=""
+        className="size-7 shrink-0 rounded-full object-cover"
+        onError={() => setBroken(true)}
+        referrerPolicy="no-referrer"
+        src={person.image}
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-7 shrink-0 items-center justify-center rounded-full bg-tile text-[11px] font-medium text-ink-2"
+    >
+      {initials(person)}
+    </span>
   );
 }
 

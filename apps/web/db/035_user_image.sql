@@ -1,0 +1,12 @@
+-- The profile picture we were already fetching and throwing away.
+--
+-- Auth.js hands us `profile.picture` from Google and `profile.avatar_url` from
+-- GitHub on every sign-in — auth.ts asks for both explicitly — and `createUser`
+-- inserted the email, the name and the provider. So the avatar was requested,
+-- received and dropped, once per sign-in, since the first OAuth login.
+--
+-- Nullable, and it stays nullable: a password account has no picture, and an
+-- invited address that has never signed in has no row here at all. The share
+-- panel draws initials in that case, which is the truth rather than a
+-- placeholder standing in for something we could have had.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS image text;

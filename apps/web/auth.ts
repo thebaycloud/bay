@@ -114,7 +114,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // sign-in, and is unaffected.
 
       if (account && account.provider !== "credentials") {
-        await createUser(user.email, user.name ?? "", null, account.provider);
+        await createUser(user.email, user.name ?? "", null, account.provider, user.image ?? null);
         // Whether the provider PROVED this address, recorded on the row because
         // the edge reads it long after this request: a domain rule ("anyone at
         // luwo.ai") may only admit a proven address. Signup with a password
