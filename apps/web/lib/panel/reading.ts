@@ -35,7 +35,7 @@ export type Ship = {
   url?: string | null;
 };
 
-export type Alert = { kind: string; title: string; sub: string; act: string };
+type Alert = { kind: string; title: string; sub: string; act: string };
 
 export type Reading = {
   slug: string;

@@ -15,7 +15,7 @@ import type { DetectedStack } from "./infer-services";
  */
 
 /** Where the deploy agent lives, as an npm prefix. */
-export const AGENT_PREFIX = "apps/agent";
+const AGENT_PREFIX = "apps/agent";
 
 /** Runs a command and resolves with its stdout. Injected so tests spawn nothing. */
 export type Capture = (cmd: string, args: string[]) => Promise<string>;

@@ -106,7 +106,7 @@ export interface Live {
   databaseExists: boolean;
 }
 
-export interface Decision {
+interface Decision {
   /** Whether the app should have this resource after the deploy. */
   attach: boolean;
   /** Said out loud in the deploy log. Never "because the config says so". */

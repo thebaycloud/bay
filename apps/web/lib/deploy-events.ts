@@ -43,7 +43,7 @@ function ensure(): Promise<void> {
 export interface StoredEvent { id: number; event: Record<string, unknown> }
 
 /** Append a batch of events. Best-effort: losing a log line must not fail a deploy. */
-export async function appendEvents(runId: string, slug: string, events: unknown[]): Promise<void> {
+async function appendEvents(runId: string, slug: string, events: unknown[]): Promise<void> {
   if (!events.length) return;
   try {
     await ensure();

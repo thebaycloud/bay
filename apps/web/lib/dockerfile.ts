@@ -52,7 +52,7 @@ import { assertValidTag } from "./repo-runtime";
  */
 
 /** One language's install and build, rooted at one directory. */
-export interface DockerfileToolchain {
+interface DockerfileToolchain {
   /** "python" | "node" | "go" | … — whatever the repo declares. Never enumerated by us. */
   language: string;
   /** A concrete tag, already resolved and validated. See repo-runtime.ts. */

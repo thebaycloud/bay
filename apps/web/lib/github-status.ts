@@ -22,7 +22,7 @@ import { installationToken } from "./github-app";
 
 const API = "https://api.github.com";
 
-export type StatusState = "pending" | "success" | "failure" | "error";
+type StatusState = "pending" | "success" | "failure" | "error";
 
 export interface StatusDeps {
   fetch: typeof globalThis.fetch;
@@ -42,7 +42,7 @@ const live: StatusDeps = {
  * with two connected apps can report two independent outcomes on the same
  * commit without either overwriting the other.
  */
-export function contextFor(slug: string): string {
+function contextFor(slug: string): string {
   return `supersonic/${slug}`;
 }
 

@@ -30,7 +30,7 @@ import { Button } from "./Button";
  * the rounding leaves. An outer corner is a quarter of the well, an edge is a
  * half, a crossing is the whole thing.
  */
-export function CellGrid({ children }: { children: ReactNode }) {
+function CellGrid({ children }: { children: ReactNode }) {
   // bg-line, not bg-ground. `ground` used to be #E4E4E4 here — a hairline chosen
   // to be visible against white, sharing a name with the page ground it is not.
   // Now that `ground` means the page ground (#FAFAFA) it would have erased these
@@ -84,7 +84,7 @@ export function TintRow({ value }: { value: string }) {
   );
 }
 
-export function IconButton({ label, children }: { label: string; children: ReactNode }) {
+function IconButton({ label, children }: { label: string; children: ReactNode }) {
   return (
     <button
       aria-label={label}

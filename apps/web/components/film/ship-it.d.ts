@@ -24,7 +24,7 @@ export type FilmRail =
 export type FilmScenario = "container" | "repair" | "static";
 
 /** One line in the film's own log box. `k` is the glyph: ✓, ◆, ✕ or nothing. */
-export interface FilmLogLine {
+interface FilmLogLine {
   /** Seconds since the deploy started, shown in the gutter. */
   t: number;
   k: "" | "g" | "a" | "e";
@@ -32,7 +32,7 @@ export interface FilmLogLine {
 }
 
 /** What the film says about the app it is showing, over the scenario's fiction. */
-export interface FilmIdentity {
+interface FilmIdentity {
   app?: string;
   /** The address on the endcard — the one the person is about to open. */
   url?: string;
@@ -71,7 +71,7 @@ export interface FilmHandle {
   destroy(): void;
 }
 
-export interface FilmOptions {
+interface FilmOptions {
   scenario?: FilmScenario;
   /** Wire the player's own controls, for a surface that draws them. */
   controls?: boolean;

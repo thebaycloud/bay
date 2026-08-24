@@ -44,7 +44,7 @@
  */
 
 /** Everything an app may declare, including the ones that are refused. */
-export type DependencyKind = "database" | "bucket" | "redis" | "elasticsearch";
+type DependencyKind = "database" | "bucket" | "redis" | "elasticsearch";
 
 export interface SidecarSpec {
   /** Process name, and the handle the app's env refers to it by. */

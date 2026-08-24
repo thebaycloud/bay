@@ -71,7 +71,7 @@ export function nodeHealth(nodes: NodeSeen[], now: number, leaseMs: number): { n
  * recovery is about two and a half minutes. Carried in the spec that reaches the
  * node so it can change without shipping an agent.
  */
-export const LEASE_MS = 120_000;
+const LEASE_MS = 120_000;
 
 /* -------------------------------------------------------------------------- */
 /* One pass.                                                                   */

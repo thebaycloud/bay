@@ -110,7 +110,7 @@ export interface ProcessConfig {
   shutdownGrace?: number;
 }
 
-export interface ProcessBase {
+interface ProcessBase {
   name: string;
   command: string;
   /** The fields the AUTHOR wrote. Same reason ResolvedService carries one. */

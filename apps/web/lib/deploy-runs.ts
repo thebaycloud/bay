@@ -449,7 +449,7 @@ export async function pruneRuns(hours = 6): Promise<void> {
  * reason nobody would guess from the message. scripts/setup-deploy-job.sh
  * creates the job with this same list.
  */
-export const DEPLOY_JOB_ARGS = ["--import", "tsx", "scripts/deploy-job.ts"];
+const DEPLOY_JOB_ARGS = ["--import", "tsx", "scripts/deploy-job.ts"];
 
 /**
  * Where the two images come from. Injected so the check can be tested without
@@ -609,7 +609,7 @@ function imageTagOfThisService(): string {
 const WORKER_ACCEPT_MS = 4_000;
 
 /** What the worker said when asked to take a run. */
-export type WorkerVerdict = "accepted" | "declined";
+type WorkerVerdict = "accepted" | "declined";
 
 /**
  * Offer a run to the warm worker.

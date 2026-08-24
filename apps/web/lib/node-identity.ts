@@ -54,7 +54,7 @@ export const NODE_AUDIENCE = "https://supersonic.cv/fleet";
  * So both are accepted. The old one goes when no node older than the rename is
  * on the fleet, which is a thing to check rather than a date to pick.
  */
-export const ACCEPTED_NODE_AUDIENCES = [
+const ACCEPTED_NODE_AUDIENCES = [
   "https://thebay.cloud/fleet",
   NODE_AUDIENCE,
 ] as const;

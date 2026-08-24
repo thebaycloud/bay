@@ -269,7 +269,7 @@ const PACKAGE_RULES: Record<RuntimeLanguage, PackageRule[]> = {
 };
 
 /** Every manifest a language's rules can match, for the Dockerfile's cached COPY. */
-export const PACKAGE_MANIFESTS: string[] = [
+const PACKAGE_MANIFESTS: string[] = [
   ...new Set(RUNTIME_LANGUAGES.flatMap((l) => PACKAGE_RULES[l].map((r) => r.file))),
 ];
 
@@ -669,7 +669,7 @@ const NEEDS: Array<{ when: (f: DirFacts) => boolean; packages: string[] }> = [
  * The rules are the detector's own (`deploy-agent/src/index.ts:163-169, 214-218`),
  * plus the three languages it never covered.
  */
-export function detectDatabase(f: DirFacts): BuildSpec["database"] {
+function detectDatabase(f: DirFacts): BuildSpec["database"] {
   const dep = (n: string) => f.deps.has(n);
   const py = (n: string) => new RegExp(`(^|[^\\w-])${n}`, "i").test(f.pythonText);
 
@@ -889,7 +889,7 @@ function staticOutputDir(f: DirFacts): string | undefined {
 /* -------------------------------------------------------------------------- */
 
 /** Which of the seven languages this directory declares, most-declared first. */
-export function languagesIn(dir: string): RuntimeLanguage[] {
+function languagesIn(dir: string): RuntimeLanguage[] {
   return RUNTIME_LANGUAGES.filter((l) => PACKAGE_RULES[l].some((r) => hasFile(dir, r.file)));
 }
 

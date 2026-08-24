@@ -22,7 +22,7 @@ import { join } from "node:path";
  * had, which is the entire reason to read it.
  */
 
-export const PROCFILE = "Procfile";
+const PROCFILE = "Procfile";
 
 /**
  * `web: gunicorn app:app` — the name and everything after the FIRST colon.

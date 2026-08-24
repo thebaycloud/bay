@@ -17,7 +17,7 @@ const PROD = process.env.NODE_ENV === "production";
  */
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || undefined;
 
-export const SESSION_COOKIE_NAME = PROD
+const SESSION_COOKIE_NAME = PROD
   ? "__Secure-authjs.session-token"
   : "authjs.session-token";
 

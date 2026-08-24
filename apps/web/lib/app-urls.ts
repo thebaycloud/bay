@@ -31,7 +31,7 @@ import { rootDomain } from "./roots";
 const ROOT = rootDomain();
 
 /** The app itself — what an owner shares with somebody. */
-export function appUrl(slug: string): string {
+function appUrl(slug: string): string {
   return `https://${slug}.${ROOT}`;
 }
 
@@ -57,6 +57,6 @@ export function xrayUrl(slug: string): string {
  * callers are greppable: when data, files, jobs and secrets reach the X-ray,
  * this is the list of things left to delete.
  */
-export function platformAppUrl(slug: string, tab?: string): string {
+function platformAppUrl(slug: string, tab?: string): string {
   return `/apps/${slug}${tab ? `?tab=${tab}` : ""}`;
 }

@@ -29,7 +29,7 @@
  */
 
 /** What the platform answered to before the rebrand, and still must. */
-export const LEGACY_ROOT = "supersonic.cv";
+const LEGACY_ROOT = "supersonic.cv";
 
 /**
  * Every root, canonical first.

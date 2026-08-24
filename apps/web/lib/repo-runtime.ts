@@ -760,7 +760,7 @@ export function resolveRuntime(language: RuntimeLanguage, pin: RuntimePin | null
 }
 
 /** Read one directory and answer for one language, in a single call. */
-export function runtimeFor(dir: string, language: RuntimeLanguage): ResolvedRuntime {
+function runtimeFor(dir: string, language: RuntimeLanguage): ResolvedRuntime {
   return resolveRuntime(language, pinFor(runtimePins(readRuntimeFiles(dir)), language));
 }
 

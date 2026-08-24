@@ -92,7 +92,7 @@ export function requirementNames(requirements: string): Set<string> {
 }
 
 /** Names declared in a package.json's dependencies and devDependencies. */
-export function packageJsonNames(pkg: unknown): Set<string> {
+function packageJsonNames(pkg: unknown): Set<string> {
   const p = (pkg ?? {}) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
   return new Set([...Object.keys(p.dependencies ?? {}), ...Object.keys(p.devDependencies ?? {})]);
 }

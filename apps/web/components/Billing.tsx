@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
  * because Infinity does not survive JSON — null is the wire form of unlimited,
  * and rendering it as a number is how you get "3/null" and a full progress bar.
  */
-export interface BillingUsage {
+interface BillingUsage {
   apps: number;
   maxApps: number | null;
   publicApps: number;

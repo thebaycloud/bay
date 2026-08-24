@@ -31,7 +31,7 @@ export function isAllowed(email: string, entries: AllowEntry[]): boolean {
   return false;
 }
 
-export async function listAllowEntries(): Promise<AllowEntry[]> {
+async function listAllowEntries(): Promise<AllowEntry[]> {
   const r = await getPool(DB).query(`SELECT email, domain FROM allowed_signins`);
   return r.rows;
 }

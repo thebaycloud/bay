@@ -21,7 +21,7 @@
  */
 import { renameSync, writeFileSync } from "node:fs";
 
-export type ProjectState =
+type ProjectState =
   | "pending"      // in the queue, no lane free yet
   | "waiting"      // refused at the ceiling, retrying
   | "deploying"    // the CLI is running
@@ -92,7 +92,7 @@ export interface BatchStatus {
  * anyone see the mislabelling immediately. The phase is a convenience for
  * arranging colour and order, never a claim.
  */
-export function phaseOf(line: string): string | null {
+function phaseOf(line: string): string | null {
   const l = line.toLowerCase();
   if (/will be live at|reserv/.test(l)) return "reserve";
   if (/pulling|cloning|unpacking|uploading/.test(l)) return "source";
