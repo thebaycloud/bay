@@ -2,6 +2,8 @@
 // Keys are read from the environment; until they're set, sends are logged and
 // skipped so the surrounding flow still works.
 
+import { appUrl, productName } from "./brand";
+
 const API = "https://api.agentmail.to/v0";
 
 export interface SendResult { ok: boolean; skipped?: boolean; error?: string }
@@ -11,7 +13,7 @@ export async function sendAccessGranted(to: string, slug: string): Promise<SendR
   return sendEmail({
     to,
     subject: `You now have access to ${slug}`,
-    text: `You've been given access to the app "${slug}" on Supersonic.\n\nOpen it: https://${slug}.supersonic.cv`,
+    text: `You've been given access to the app "${slug}" on ${productName()}.\n\nOpen it: ${appUrl(slug)}`,
   });
 }
 

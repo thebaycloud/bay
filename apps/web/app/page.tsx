@@ -5,7 +5,8 @@ import { Suspense } from "react";
 import { TopBar } from "@/components/TopBar";
 import { HeadSkeleton, ListSkeleton } from "@/components/Skeleton";
 import { AccountBanner } from "@/components/AccountBanner";
-import { type App } from "@/components/AppsGrid";
+import { type App } from "@/lib/app-row";
+import { appUrl } from "@/lib/brand";
 import { AppsTable } from "@/components/AppsTable";
 import { currentUserId } from "@/lib/session";
 import { listOwnedApps, type AppSort } from "@/lib/apps";
@@ -42,7 +43,7 @@ async function initialApps(sort: AppSort): Promise<{ apps: App[]; error?: string
     const building: App[] = deploys
       .filter((d) => !known.has(d.slug))
       .map((d) => ({
-        slug: d.slug, name: d.name || d.slug, url: `https://${d.slug}.supersonic.cv`,
+        slug: d.slug, name: d.name || d.slug, url: appUrl(d.slug),
         ready: false, region: "us-central1", image: "",
         status: "building", stage: d.stage || "deploying…",
       }));

@@ -1,3 +1,4 @@
+import { controlPlaneHost } from "./brand";
 import type { Limits } from "./entitlements";
 import { rootDomain } from "./roots";
 
@@ -15,25 +16,27 @@ import { rootDomain } from "./roots";
  * apps and want a fourth — and "you have hit your limit" is a strange way to
  * answer good news.
  */
-const APP = "app.supersonic.cv";
+/** Read per call, not once at import: a module-level constant is a literal
+ *  again, just one the rename cannot see. */
+const APP = () => controlPlaneHost();
 
 export function appLimitMessage(limits: Limits): string {
   const n = limits.maxApps;
-  return `You're using all ${n} of your free apps. Pro is $20/month for unlimited apps — upgrade at ${APP}.`;
+  return `You're using all ${n} of your free apps. Pro is $20/month for unlimited apps — upgrade at ${APP()}.`;
 }
 
 export function publicLimitMessage(limits: Limits): string {
   const n = limits.maxPublicApps;
   return n === 1
-    ? `Free includes 1 public app. Your other apps can still be shared by email with as many people as you like — or upgrade at ${APP} to make them all public.`
-    : `Free includes ${n} public apps. Sharing by email stays unlimited — or upgrade at ${APP}.`;
+    ? `Free includes 1 public app. Your other apps can still be shared by email with as many people as you like — or upgrade at ${APP()} to make them all public.`
+    : `Free includes ${n} public apps. Sharing by email stays unlimited — or upgrade at ${APP()}.`;
 }
 
 export function buildLimitMessage(limits: Limits): string {
   // "deploys", not "builds". The meter is incremented once per DEPLOY dispatched
   // — see countIfUnder in /api/deploy — and a refusal that names a unit the
   // dashboard does not show is a refusal somebody cannot check.
-  return `You've used all ${limits.monthlyBuilds} deploys this month. They reset on the 1st — or upgrade at ${APP} for ${limits.monthlyBuilds >= 500 ? "more" : "500 a month"}.`;
+  return `You've used all ${limits.monthlyBuilds} deploys this month. They reset on the 1st — or upgrade at ${APP()} for ${limits.monthlyBuilds >= 500 ? "more" : "500 a month"}.`;
 }
 
 export function agentLimitMessage(): string {
@@ -41,10 +44,10 @@ export function agentLimitMessage(): string {
 }
 
 export function customDomainMessage(): string {
-  return `Custom domains are on Pro. Your app keeps its ${rootDomain()} address — upgrade at ${APP} to point your own domain at it.`;
+  return `Custom domains are on Pro. Your app keeps its ${rootDomain()} address — upgrade at ${APP()} to point your own domain at it.`;
 }
 
 /** A canceled subscription downgrades to free; nothing is ever locked outright. */
 export function noAccountMessage(): string {
-  return `We couldn't find your account. Sign in again at ${APP}.`;
+  return `We couldn't find your account. Sign in again at ${APP()}.`;
 }

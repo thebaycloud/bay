@@ -7,6 +7,7 @@ import { listPending } from "@/lib/requests";
 import { envKeysFor } from "@/lib/env-keys";
 import { websiteStats } from "@/lib/umami";
 import type { Answer, Handler, Op } from "@/lib/chat/bridge";
+import { appUrl } from "@/lib/brand";
 
 /**
  * What each tool actually reads.
@@ -203,7 +204,7 @@ export function toolsFor(slug: string, cookie?: string): Handler {
           if (!deployed) return { ok: false, error: localNote };
           // The edge reading, from the proxy in front of this app. It counts
           // REQUESTS; analytics counts PEOPLE. Never add them together.
-          const r = await fetch(`https://${slug}.supersonic.cv/_xray`, {
+          const r = await fetch(`${appUrl(slug)}/_xray`, {
             headers: asOwner,
           });
           const ct = r.headers.get("content-type") ?? "";

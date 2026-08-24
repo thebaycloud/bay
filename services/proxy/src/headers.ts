@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
+import { rootDomain } from "./roots";
 
 const IDENTITY_PREFIX = "x-supersonic-";
 /**
@@ -252,7 +253,20 @@ export function scrubSetCookie(headers: OutgoingHttpHeaders): OutgoingHttpHeader
 }
 
 /** The one origin allowed to frame a tenant app: the workbench. */
-export const WORKBENCH_ORIGIN = "https://app.supersonic.cv";
+/**
+ * The one origin allowed to frame an app's page.
+ *
+ * Read from `./roots`, not typed out: this is a `frame-ancestors` directive, so a
+ * stale value does not fail loudly — the workbench iframe simply goes blank, on
+ * the new domain only, which reads as a broken product rather than as a
+ * misconfiguration.
+ *
+ * A function and not a constant, because a constant is evaluated at import and
+ * this module is imported by tests that set the environment first.
+ */
+export function workbenchOrigin(): string {
+  return `https://app.${rootDomain()}`;
+}
 
 /**
  * Let the workbench frame a tenant's app, and nobody else.
@@ -297,7 +311,7 @@ export function allowWorkbenchFraming(headers: OutgoingHttpHeaders): OutgoingHtt
     // rewriting it would corrupt the app's own telemetry about its own policy.
   }
 
-  const allow = `frame-ancestors ${WORKBENCH_ORIGIN}`;
+  const allow = `frame-ancestors ${workbenchOrigin()}`;
   if (policy === null) {
     headers["content-security-policy"] = allow;
     return headers;

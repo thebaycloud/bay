@@ -99,7 +99,7 @@ export default function DesignPage() {
               ["Section", "20 / 28 · -0.1px", <span key="s" className="text-section">Database</span>],
               ["Body", "16 / 24", <span key="b" className="text-body text-ink-2">Four people opened this tool today. Nobody had to install anything.</span>],
               ["Sub", "13 / 20 · ink-2", <span key="u" className="text-sub text-ink-2">Your app&rsquo;s data and files</span>],
-              ["Machine", "14 / 22 · mono", <span key="m" className="font-mono text-val text-red-ink">standup-notes.supersonic.cv</span>],
+              ["Machine", "14 / 22 · mono", <span key="m" className="font-mono text-val text-red-ink">standup-notes.thebay.cloud</span>],
               ["Label", "11 · 0.14em caps", <span key="l" className="font-mono text-label uppercase text-ink-3">Shared with</span>],
             ].map(([name, spec, demo]) => (
               <div key={name as string} className="grid grid-cols-1 items-baseline gap-2 border-b border-line py-4 sm:grid-cols-[128px_1fr] sm:gap-6">
@@ -115,11 +115,11 @@ export default function DesignPage() {
 
           <Row label="The two reds — why there are two">
             <div className="flex flex-col gap-2">
-              <div className="rounded-xl bg-tint p-4 font-mono text-val text-red">standup-notes.supersonic.cv</div>
+              <div className="rounded-xl bg-tint p-4 font-mono text-val text-red">standup-notes.thebay.cloud</div>
               <div className="font-mono text-[11px] text-ink-3">#E63F2C on tint — 3.58:1, fails</div>
             </div>
             <div className="flex flex-col gap-2">
-              <div className="rounded-xl bg-tint p-4 font-mono text-val text-red-ink">standup-notes.supersonic.cv</div>
+              <div className="rounded-xl bg-tint p-4 font-mono text-val text-red-ink">standup-notes.thebay.cloud</div>
               <div className="font-mono text-[11px] font-semibold text-red-ink">#C9301B on tint — 5.10:1, passes</div>
             </div>
           </Row>
@@ -135,7 +135,7 @@ export default function DesignPage() {
 
           <Row label="The value row on its own">
             <div className="w-full max-w-[460px]">
-              <TintRow value="https://mcp.supersonic.cv/v2/mcp-oauth" />
+              <TintRow value="https://mcp.thebay.cloud/v2/mcp-oauth" />
             </div>
           </Row>
         </Section>

@@ -137,28 +137,43 @@ func (t *routerTable) summary() string {
 
 // slugFromHost pulls the app out of the Host header.
 //
-// `<slug>.supersonic.cv` today. The port is stripped because a Host header
-// carries one whenever the client used a non-default port, and a slug with
-// ":8080" glued to it matches nothing — which surfaces as a 404 for an app that
-// is running perfectly.
-func slugFromHost(host, rootDomain string) string {
+// `roots` is a comma-separated list, canonical first, because the platform
+// answers on more than one name during the rebrand: an app is reachable at both
+// `<slug>.thebay.cloud` and `<slug>.supersonic.cv`, and a node that knows only
+// one of them answers "No app here" for an app that is running perfectly. The
+// edge normally sends `x-supersonic-slug` and this is never consulted — but a
+// request that reaches a node directly has nothing else to go on.
+//
+// The port is stripped because a Host header carries one whenever the client used
+// a non-default port, and a slug with ":8080" glued to it matches nothing.
+func slugFromHost(host, roots string) string {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if !strings.HasSuffix(host, "."+rootDomain) {
-		return ""
+	for _, root := range strings.Split(roots, ",") {
+		root = strings.ToLower(strings.TrimSpace(root))
+		if root == "" || !strings.HasSuffix(host, "."+root) {
+			continue
+		}
+		sub := strings.TrimSuffix(host, "."+root)
+		// Only a single label is an app. `a.b.thebay.cloud` is not app "a.b".
+		//
+		// `return` and not `continue`: a bad label under one root must not fall
+		// through and be tried against the next. `evil.lilna.thebay.cloud` is
+		// not an app under either name, and continuing would let a second root
+		// accept what the first refused.
+		if sub == "" || strings.Contains(sub, ".") {
+			return ""
+		}
+		return sub
 	}
-	sub := strings.TrimSuffix(host, "."+rootDomain)
-	// Only a single label is an app. `a.b.supersonic.cv` is not app "a.b".
-	if sub == "" || strings.Contains(sub, ".") {
-		return ""
-	}
-	return sub
+	return ""
 }
 
 type Router struct {
 	table      *routerTable
+	// Comma-separated, canonical first. See slugFromHost.
 	rootDomain string
 	// edgeSecret is what the edge proxy signs its requests with.
 	//
@@ -347,7 +362,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		setRouterStatus(w, "no-slug")
 		w.WriteHeader(http.StatusNotFound)
 		io.WriteString(w, page(404, "No app here.",
-			"Apps are served at &lt;name&gt;."+rt.rootDomain+"."))
+			"Apps are served at &lt;name&gt;."+canonicalRoot(rt.rootDomain)+"."))
 		return
 	}
 
@@ -472,4 +487,15 @@ func page(code int, title, detail string) string {
  .n{color:#484f58;font-size:.75rem;letter-spacing:.08em;margin-bottom:1rem}
 </style>
 <div class="c"><div class="n">%d</div><h1>%s</h1><p>%s</p></div>`, code, code, title, detail)
+}
+
+// canonicalRoot is the first root in the list — the one new addresses are minted
+// under, and so the only one worth naming in a message to a person.
+func canonicalRoot(roots string) string {
+	for _, r := range strings.Split(roots, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			return r
+		}
+	}
+	return roots
 }

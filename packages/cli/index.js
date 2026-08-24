@@ -47,7 +47,8 @@ const { configDirIn, envVarFrom } = require("./lib/home");
  */
 const CFG_DIR = configDirIn(os.homedir(), fs.existsSync, path.join);
 const CFG = path.join(CFG_DIR, "config.json");
-const DEFAULT_URL = "https://app.supersonic.cv";
+// From lib/brand, not a second copy of it.
+const DEFAULT_URL = brand.DEFAULT_URL;
 
 /**
  * A variable under its new name, falling back to the old one.
@@ -293,7 +294,7 @@ async function apps(args) {
     const building = a.status === "building";
     const dot = a.ready ? green("●") : building ? yellow("◐") : red("○");
     const note = building ? dim(`  ${a.stage || "deploying…"}`) : "";
-    print(`${dot} ${bold(a.slug.padEnd(22))} ${dim(a.url || `${a.slug}.supersonic.cv`)}${note}`);
+    print(`${dot} ${bold(a.slug.padEnd(22))} ${dim(a.url || `${a.slug}.${brand.DOMAIN}`)}${note}`);
   }
 }
 
@@ -309,7 +310,7 @@ async function status(args) {
   print(`${bold(app)}  ${dot}${d.deploying && d.stage ? dim(` · ${d.stage}`) : ""}`);
   // The server's own answer, for the same reason `open` asks for it: the root is
   // not this file's to know.
-  print(dim("  url      ") + (d.url || `https://${app}.supersonic.cv`));
+  print(dim("  url      ") + (d.url || `https://${app}.${brand.DOMAIN}`));
   print(dim("  revision ") + (d.revision || "—"));
   print(dim("  image    ") + (d.image ? d.image.split("/").pop() : "—"));
   print(dim("  region   ") + (d.region || "—"));
@@ -821,7 +822,7 @@ async function exec(args) {
 async function open(args) {
   const app = needApp(args);
   const d = await api(`/api/apps/${app}`);
-  const url = d.url || `https://${app}.supersonic.cv`;
+  const url = d.url || `https://${app}.${brand.DOMAIN}`;
   info(`opening ${url}`);
   openBrowser(url);
 }
@@ -1537,7 +1538,7 @@ async function consumeDeploy(res, args, knownSlug) {
   if (slug) {
     const deploy = await followDeployOnServer(slug);
     if (deploy?.status === "live") {
-      const url = deploy.url || `https://${slug}.supersonic.cv`;
+      const url = deploy.url || `https://${slug}.${brand.DOMAIN}`;
       if (args.json) json({ ok: true, slug, url, runId });
       else print(green("✓ live: ") + url);
       process.exit(0);

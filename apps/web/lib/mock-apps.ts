@@ -1,4 +1,4 @@
-import type { App } from "@/components/AppsGrid";
+import type { App } from "@/lib/app-row";
 
 /**
  * Sample apps, for looking at the list without a database behind it.
@@ -20,7 +20,7 @@ export function mockApps(): App[] {
     {
       slug: "harbor",
       name: "harbor",
-      url: "https://harbor.supersonic.cv",
+      url: "https://harbor.thebay.cloud",
       ready: true,
       region: "us-central1",
       image: "",
@@ -30,7 +30,7 @@ export function mockApps(): App[] {
     {
       slug: "echo-chamber-social",
       name: "echo-chamber-social",
-      url: "https://echo-chamber-social.supersonic.cv",
+      url: "https://echo-chamber-social.thebay.cloud",
       ready: true,
       region: "us-central1",
       image: "",
@@ -40,7 +40,7 @@ export function mockApps(): App[] {
     {
       slug: "standup-notes",
       name: "standup-notes",
-      url: "https://standup-notes.supersonic.cv",
+      url: "https://standup-notes.thebay.cloud",
       ready: false,
       region: "us-central1",
       image: "",
@@ -50,7 +50,7 @@ export function mockApps(): App[] {
     {
       slug: "checkout-service",
       name: "checkout-service",
-      url: "https://checkout-service.supersonic.cv",
+      url: "https://checkout-service.thebay.cloud",
       ready: false,
       region: "us-central1",
       image: "",
@@ -62,7 +62,7 @@ export function mockApps(): App[] {
       // Long enough to truncate, which is the only way to see that it does.
       slug: "internal-analytics-dashboard-experiment",
       name: "internal-analytics-dashboard-experiment",
-      url: "https://internal-analytics-dashboard-experiment.supersonic.cv",
+      url: "https://internal-analytics-dashboard-experiment.thebay.cloud",
       ready: true,
       region: "us-central1",
       image: "",
@@ -72,7 +72,7 @@ export function mockApps(): App[] {
     {
       slug: "voice-router",
       name: "voice-router",
-      url: "https://voice-router.supersonic.cv",
+      url: "https://voice-router.thebay.cloud",
       ready: true,
       region: "us-central1",
       image: "",

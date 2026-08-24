@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import type { Plan } from "./entitlements";
+import { controlPlaneUrl } from "./brand";
 
 // Everything Stripe is read from env and stays inert until the keys exist, so
 // this ships before billing is live. `stripe()` returns null when unconfigured;
@@ -11,7 +12,7 @@ const PRICE_PRO = process.env.STRIPE_PRICE_PRO || "";
 // returns "" and checkout answers with "talk to us" instead of a Stripe error.
 const PRICE_TEAM = process.env.STRIPE_PRICE_TEAM || "";
 export const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
-export const APP_URL = process.env.APP_URL || "https://app.supersonic.cv";
+export const APP_URL = controlPlaneUrl();
 
 let client: Stripe | null = null;
 export function stripe(): Stripe | null {

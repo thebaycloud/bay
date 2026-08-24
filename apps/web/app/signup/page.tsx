@@ -8,15 +8,22 @@ import { Github } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { GoogleIcon } from "@/components/BrandIcons";
 import { productName } from "@/lib/brand";
+import { isPlatformHost } from "@/lib/roots";
 
-// A supersonic.cv return URL from ?callbackUrl (validated), so signing up from a
+// A return URL on one of OUR roots, from ?callbackUrl, so signing up from a
 // shared app sends you back to it.
+//
+// Was `endsWith(".supersonic.cv")`, which after the cutover refuses a callback to
+// an app on the canonical root — so the one case this exists for, arriving from a
+// shared app, silently dropped you on the dashboard instead. `onAnyRoot` parses
+// the URL rather than matching the string: `evil.com/?x=.thebay.cloud` contains
+// our root and is not ours.
 function safeCallback(): string {
   try {
     const cb = new URLSearchParams(window.location.search).get("callbackUrl");
     if (!cb) return "";
     const u = new URL(cb);
-    if (u.protocol === "https:" && (u.hostname === "supersonic.cv" || u.hostname.endsWith(".supersonic.cv"))) return cb;
+    if (u.protocol === "https:" && isPlatformHost(u.hostname)) return cb;
   } catch { /* malformed — fall through */ }
   return "";
 }

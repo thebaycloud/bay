@@ -21,7 +21,7 @@ test("the room asks nothing of a third party, and works without the one thing it
   // arrive (no WebGL, reduced motion, a small screen, a failed request) leaves
   // the page exactly as it was.
   for (const [, url] of html.matchAll(/src\s*=\s*["'](https?:[^"']+)/g)) {
-    assert.ok(url.startsWith("https://app.supersonic.cv/"), `the room asks ${url} for something`);
+    assert.ok(url.startsWith("https://app.thebay.cloud/"), `the room asks ${url} for something`);
   }
   assert.equal(/href\s*=\s*["']https?:\/\/(?!app\.supersonic\.cv)/.test(html), false);
   assert.equal(html.includes("<canvas"), true);

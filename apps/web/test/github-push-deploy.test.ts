@@ -86,7 +86,7 @@ test("a pending status is posted, pointing at the app's own address", async () =
     sha: SHA,
     fullName: "thebaycloud/bay",
     slug: "q13fh",
-    targetUrl: "https://q13fh.supersonic.cv",
+    targetUrl: "https://q13fh.thebay.cloud",
   });
 });
 

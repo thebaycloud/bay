@@ -1,6 +1,7 @@
 import { getPool } from "./db";
 import { identityToken } from "./gcp-rest";
 import { probeSummary, probeCacheUsable, type ProbeResult, type ProbeSummary } from "./app-probe";
+import { appUrl } from "./brand";
 
 const DB = "supersonic_platform";
 
@@ -65,7 +66,7 @@ export function probeTarget(slug: string, runUrl: string | null | undefined): Pr
       return false;
     }
   })();
-  return own ? { url: runUrl!, authed: true } : { url: `https://${slug}.supersonic.cv`, authed: false };
+  return own ? { url: runUrl!, authed: true } : { url: appUrl(slug), authed: false };
 }
 
 async function targetOf(slug: string, ownerId: string): Promise<ProbeTarget | null> {

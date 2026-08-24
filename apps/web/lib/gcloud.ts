@@ -17,6 +17,7 @@ import { SCHEDULER_SA } from "./identities";
 import { appLogFilter } from "./log-filter";
 import { TENANT_PG_INSTANCE } from "./pg-config";
 import { memo } from "./memo";
+import { rootDomains } from "./roots";
 
 const PROJECT = "supersonic-deploy-prod";
 // The one shared Cloud SQL instance every app's database lives on. Imported
@@ -551,7 +552,11 @@ export async function deleteApp(slug: string): Promise<void> {
       await capture(["scheduler", "jobs", "delete", name, "--location", REGION, "--project", PROJECT, "--quiet"]).catch(() => {});
     }
   } catch { /* no schedules */ }
-  try { await capture(["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* no mapping */ }
+  // Every root: an app mapped under the old name before the cutover still has
+  // that mapping, and deleting only the canonical one leaves it dangling.
+  for (const root of rootDomains()) {
+    try { await capture(["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.${root}`, "--region", REGION, "--project", PROJECT, "--quiet"]); } catch { /* no mapping */ }
+  }
   try { await capture(["storage", "rm", "-r", `gs://supersonicdeploy-${slug}`, "--quiet"]); } catch { /* no per-app bucket */ }
   try { await capture(["storage", "rm", "-r", `gs://${ASSETS_BUCKET}/${slug}`, "--quiet"]); } catch { /* not a static release */ }
 

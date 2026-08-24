@@ -309,7 +309,7 @@ export function provisionPlan(s: Stack): string[] {
   plan.push("Apply security baseline (secret scan, rate limits, WAF)");
   plan.push("Enable daily backups");
   if (s.secretsNeeded.length) plan.push(`Ask user for secrets: ${s.secretsNeeded.join(", ")}`);
-  plan.push(`Deploy to Cloud Run on :${s.port} → <slug>.supersonic.cv`);
+  plan.push(`Deploy to Cloud Run on :${s.port} → <slug>.thebay.cloud`);
   return plan;
 }
 

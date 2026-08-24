@@ -19,6 +19,7 @@ import { entitlement, countOwnerApps } from "@/lib/entitlements";
 import { usageFor } from "@/lib/usage";
 import { appLimitMessage, buildLimitMessage, noAccountMessage } from "@/lib/plan-copy";
 import { inFlightForOwner, runIdsForSlug } from "@/lib/deploy-runs";
+import { appUrl } from "@/lib/brand";
 
 export async function POST(req: Request) {
   const uid = await currentUserId();
@@ -94,5 +95,5 @@ export async function POST(req: Request) {
     setDeploy(slug, { ownerId: uid, name: friendly, status: "building", stage: "reserved" });
   }
 
-  return Response.json({ slug, url: `https://${slug}.supersonic.cv`, name: friendly });
+  return Response.json({ slug, url: appUrl(slug), name: friendly });
 }

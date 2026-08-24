@@ -728,7 +728,7 @@ func main() {
 	var (
 		addr       = flag.String("addr", "127.0.0.1:9900", "status and control API address")
 		routerAddr = flag.String("router", ":8080", "app traffic address (behind the load balancer)")
-		rootDomain = flag.String("domain", "supersonic.cv", "wildcard domain apps are served under")
+		rootDomain = flag.String("domain", "thebay.cloud,supersonic.cv", "wildcard domains apps are served under, canonical first, comma-separated")
 		interval   = flag.Duration("interval", 10*time.Second, "reconcile interval")
 		showVer    = flag.Bool("version", false, "print the build version and exit")
 	)

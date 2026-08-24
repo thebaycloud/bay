@@ -191,14 +191,14 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // moved, and a 302 says so rather than serving a second copy of the panel.
     if (wantsHtml(String(req.headers.accept ?? ""))) {
       res.writeHead(302, {
-        Location: `https://app.supersonic.cv/apps/${encodeURIComponent(slug)}`,
+        Location: `https://app.${config.rootDomains[0]}/apps/${encodeURIComponent(slug)}`,
         "Cache-Control": "no-store",
       });
       res.end();
       return;
     }
     const reading = await assembleReading(slug, liveDeps(async () => ({
-      door: `${slug}.supersonic.cv`,
+      door: `${slug}.${config.rootDomains[0]}`,
       // False for an app that has never once answered for itself, which is a
       // state a reading can now actually be fetched in.
       open: Boolean(app.run_url),
@@ -327,7 +327,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     if (domainRuleMatches && !visitorEmailVerified) {
       return html(res, 403, pageProve(visitorDomain, authUrls(req).loginUrl));
     }
-    return html(res, 403, page403(slug, "https://app.supersonic.cv"));
+    return html(res, 403, page403(slug, `https://app.${config.rootDomains[0]}`));
   }
 
   const workspaceDomain = (await workspaceDomainOf(app.workspace_id)) ?? "";

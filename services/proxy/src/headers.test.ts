@@ -271,7 +271,7 @@ test("an inbound x-serverless-authorization is never trusted through", () => {
 
 test("the workbench may frame a tenant document, and nobody else", () => {
   const h = allowWorkbenchFraming({ "content-type": "text/html" });
-  assert.equal(h["content-security-policy"], "frame-ancestors https://app.supersonic.cv");
+  assert.equal(h["content-security-policy"], "frame-ancestors https://app.thebay.cloud");
 });
 
 test("X-Frame-Options is dropped whatever case it arrived in", () => {
@@ -292,7 +292,7 @@ test("an app's own frame-ancestors is replaced, not appended to", () => {
   });
   assert.equal(
     h["content-security-policy"],
-    "default-src 'self'; img-src *; frame-ancestors https://app.supersonic.cv",
+    "default-src 'self'; img-src *; frame-ancestors https://app.thebay.cloud",
   );
 });
 
@@ -302,7 +302,7 @@ test("the rest of an app's policy survives untouched", () => {
   });
   assert.equal(
     h["content-security-policy"],
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; frame-ancestors https://app.supersonic.cv",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; frame-ancestors https://app.thebay.cloud",
   );
 });
 
@@ -310,7 +310,7 @@ test("only one CSP header goes out, whatever case the app used", () => {
   const h = allowWorkbenchFraming({ "Content-Security-Policy": "frame-ancestors 'self'" });
   const names = Object.keys(h).filter((k) => k.toLowerCase() === "content-security-policy");
   assert.equal(names.length, 1);
-  assert.equal(h[names[0]], "frame-ancestors https://app.supersonic.cv");
+  assert.equal(h[names[0]], "frame-ancestors https://app.thebay.cloud");
 });
 
 test("report-only policies are left alone — they enforce nothing", () => {

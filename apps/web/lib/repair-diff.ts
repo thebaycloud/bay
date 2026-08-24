@@ -49,7 +49,7 @@ export async function snapshotSources(dir: string): Promise<boolean> {
   // snapshot without a list of exclusions that would need maintaining.
   if (await git(dir, ["add", "-A"], 60_000) === null) return false;
   const commit = await git(dir, [
-    "-c", "user.email=deploy@supersonic.cv",
+    "-c", "user.email=deploy@thebay.cloud",
     "-c", "user.name=supersonic",
     "commit", "-q", "--allow-empty", "-m", "before the repair agent",
   ], 60_000);

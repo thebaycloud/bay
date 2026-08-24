@@ -1,6 +1,7 @@
 import { getDeploy } from "./deploys";
 import { getAccount } from "./users";
 import { sendEmail } from "./email";
+import { appUrl } from "./brand";
 
 /**
  * Telling someone their deploy finished.
@@ -75,7 +76,7 @@ export function deployEmail(d: FinishedDeploy): { subject: string; text: string 
   if (!FINISHED.has(d.status)) return null;
 
   const label = d.name || d.slug;
-  const address = `https://${d.slug}.supersonic.cv`;
+  const address = appUrl(d.slug);
 
   if (d.status === "failed") {
     const why = d.error ? brief(d.error) : "no reason was recorded, which is itself a bug — please tell us";

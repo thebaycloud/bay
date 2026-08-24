@@ -179,3 +179,50 @@ func TestBothEdgeHeadersAreStrippedFromTheApp(t *testing.T) {
 		}
 	}
 }
+
+// Both names, because the platform answers on both during the rebrand.
+//
+// A node that knows only one root answers "No app here" for an app that is
+// running perfectly — reachable at its new address through the edge, and dead on
+// any request that arrives with a Host and no `x-supersonic-slug`.
+func TestSlugFromHostAcceptsEveryRoot(t *testing.T) {
+	const roots = "thebay.cloud,supersonic.cv"
+	for host, want := range map[string]string{
+		"shop.thebay.cloud":       "shop",
+		"shop.supersonic.cv":      "shop",
+		"shop.thebay.cloud:8080":  "shop",
+		"SHOP.TheBay.Cloud":       "shop",
+		"shop.thebay.cloud.":      "shop",
+		"thebay.cloud":            "",
+		"a.b.thebay.cloud":        "",
+		"shop.evil.com":           "",
+		"shop.notthebay.cloud":    "",
+		"shop.thebay.cloud.evil":  "",
+	} {
+		if got := slugFromHost(host, roots); got != want {
+			t.Errorf("slugFromHost(%q) = %q, want %q", host, got, want)
+		}
+	}
+}
+
+// A label refused under one root must not be retried against the next.
+//
+// `evil.lilna.thebay.cloud` is not an app under either name. Continuing the loop
+// instead of returning would let a second root accept what the first refused,
+// which is how a namespace we issue becomes one anybody can claim.
+func TestABadLabelIsNotRetriedAgainstTheNextRoot(t *testing.T) {
+	if got := slugFromHost("evil.lilna.thebay.cloud", "thebay.cloud,supersonic.cv"); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+	if got := slugFromHost("a.b.supersonic.cv", "thebay.cloud,supersonic.cv"); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+// One root still works, which is what every existing test and every node
+// configured before this change passes in.
+func TestASingleRootIsStillAList(t *testing.T) {
+	if got := slugFromHost("shop.supersonic.cv", "supersonic.cv"); got != "shop" {
+		t.Errorf("got %q, want shop", got)
+	}
+}

@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 541ed09e927ae777
+// supersonic-vendor-stamp 5c53051cdd3a4d8f
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -349,7 +349,7 @@ function provisionPlan(s) {
   plan.push("Apply security baseline (secret scan, rate limits, WAF)");
   plan.push("Enable daily backups");
   if (s.secretsNeeded.length) plan.push(`Ask user for secrets: ${s.secretsNeeded.join(", ")}`);
-  plan.push(`Deploy to Cloud Run on :${s.port} \u2192 <slug>.supersonic.cv`);
+  plan.push(`Deploy to Cloud Run on :${s.port} \u2192 <slug>.thebay.cloud`);
   return plan;
 }
 function cloneToTemp(url) {

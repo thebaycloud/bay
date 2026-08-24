@@ -1,3 +1,5 @@
+import { rootDomains } from "./roots";
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`missing required env var ${name}`);
@@ -11,7 +13,7 @@ export const config = {
   authSecret: required("AUTH_SECRET"),
   /** Must match apps/web auth.config.ts exactly — it is also the decode salt. */
   sessionCookieName: PROD ? "__Secure-authjs.session-token" : "authjs.session-token",
-  loginUrl: process.env.LOGIN_URL ?? "https://app.supersonic.cv/login",
+  loginUrl: process.env.LOGIN_URL ?? "https://app.thebay.cloud/login",
   /**
    * Every root the platform issues addresses under, CANONICAL FIRST.
    *
@@ -32,12 +34,14 @@ export const config = {
    * Separate from the roots above because the two move apart: thebay.cloud was
    * added beside supersonic.cv without the name on the page changing at all.
    */
-  productName: process.env.PRODUCT_NAME ?? "Supersonic",
-  rootDomains: (process.env.ROOT_DOMAINS ?? process.env.ROOT_DOMAIN ?? "supersonic.cv")
-    .split(",")
-    .map((r) => r.trim().toLowerCase())
-    .filter(Boolean),
-  /** Inject the "Runs on Supersonic" badge + owner toolbar into HTML pages. */
+  // The default is the CURRENT name. It was "Supersonic" for months after the
+  // cutover, and by this comment's own argument that put our retired brand on
+  // every hosted app whose edge did not set the variable.
+  productName: process.env.PRODUCT_NAME ?? "Bay",
+  // From ./roots, which owns the parsing and the defaults — canonical first, the
+  // new name first, and never empty.
+  rootDomains: rootDomains(),
+  /** Inject the "Runs on <product>" badge + owner toolbar into HTML pages. */
   injectOverlay: process.env.INJECT_OVERLAY !== "0",
   /**
    * Whether plan limits are enforced — must match GATING_ENABLED in apps/web.

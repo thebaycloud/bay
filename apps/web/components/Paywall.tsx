@@ -72,7 +72,7 @@ const HEAD: Record<PaywallReason, { title: string; sub: string }> = {
 };
 
 const TEAM_MAILTO =
-  "mailto:founders@supersonic.cv?subject=Supersonic%20Team%20plan"
+  "mailto:founders@supersonic.cv?subject=Bay%20Team%20plan"
   + "&body=Hi%20—%20I'd%20like%20to%20set%20up%20a%20Team%20plan.%0A%0AHow%20many%20people%20will%20be%20deploying%3A%0AWhat%20you're%20building%3A";
 
 /**

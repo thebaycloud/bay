@@ -1,5 +1,6 @@
 import type { AppSpec } from "./fleet-spec";
 import type { ProcessState } from "./fleet";
+import { appUrl } from "./brand";
 
 /**
  * What the platform knows about one app, answered from where the app RUNS.
@@ -103,7 +104,7 @@ export function statusFromFleet(
   return {
     slug,
     name: slug,
-    url: `https://${slug}.supersonic.cv`,
+    url: appUrl(slug),
     ready: readyFrom(running),
     region: "us-central1",
     revision: "",

@@ -6,29 +6,35 @@ import { getPool } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { addRequest } from "@/lib/requests";
 import { currentUserId } from "@/lib/session";
+import { corsFor } from "@/lib/cors";
+import { controlPlaneUrl } from "@/lib/brand";
 
 const DB = "supersonic_platform";
 
-// Same-subdomain-only CORS: the request button lives on <slug>.supersonic.cv.
-function cors(req: Request): Record<string, string> {
-  const origin = req.headers.get("origin") ?? "";
-  try {
-    const h = new URL(origin).hostname;
-    if (h === "supersonic.cv" || h.endsWith(".supersonic.cv")) {
-      return {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        Vary: "Origin",
-      };
-    }
-  } catch { /* same-origin */ }
-  return {};
+/**
+ * `lib/cors.ts`, which this route was not using.
+ *
+ * It had its own copy of the rule and got it wrong in the one way that file
+ * exists to warn about: `h.endsWith(".supersonic.cv")` allows EVERY tenant's
+ * subdomain, and every one of those origins is somebody else's JavaScript
+ * running on our cookie domain. With `Allow-Credentials: true` reflected back,
+ * any hosted app could POST here as whoever opened it.
+ *
+ * `corsFor` is an exact match — `<slug>.<root>` or `app.<root>`, over every root
+ * — so an app reaches its own request-access endpoint and no other app's. Which
+ * is all the button on the 403 page needs.
+ *
+ * The migration is what surfaced it: the check had to learn `thebay.cloud`
+ * either way, and widening a suffix test to two roots doubles the wrong thing.
+ */
+function cors(req: Request, slug: string): Record<string, string> {
+  const allowed = corsFor(req, slug);
+  if (!allowed["Access-Control-Allow-Origin"]) return {};
+  return { ...allowed, "Access-Control-Allow-Methods": "POST, OPTIONS" };
 }
 
-export async function OPTIONS(req: Request) {
-  return new Response(null, { status: 204, headers: cors(req) });
+export async function OPTIONS(req: Request, { params }: { params: { slug: string } }) {
+  return new Response(null, { status: 204, headers: cors(req, decodeURIComponent(params.slug)) });
 }
 
 async function emailOf(userId: string): Promise<string | null> {
@@ -37,8 +43,8 @@ async function emailOf(userId: string): Promise<string | null> {
 }
 
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
-  const headers = cors(req);
   const slug = decodeURIComponent(params.slug);
+  const headers = cors(req, slug);
 
   // The visitor must be signed in — the proxy sends anonymous users to log in
   // first, so we always know who is asking.
@@ -57,7 +63,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   // Record it so the owner can approve/deny from the Share panel, not just email.
   if (requester) await addRequest(app.id, requester);
 
-  const link = `https://app.supersonic.cv/apps/${slug}`;
+  const link = `${controlPlaneUrl()}/apps/${slug}`;
   const result = await sendEmail({
     to: owner,
     subject: `${requester ?? "Someone"} is requesting access to ${slug}`,

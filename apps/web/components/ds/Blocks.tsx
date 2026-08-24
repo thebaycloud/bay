@@ -114,7 +114,7 @@ export function DashboardBlocks() {
         title="Domain"
         sub="Link to your website"
       >
-        <TintRow value="standup-notes.supersonic.cv" />
+        <TintRow value="standup-notes.thebay.cloud" />
       </Cell>
 
       <Cell title="People" sub="Who can open this">

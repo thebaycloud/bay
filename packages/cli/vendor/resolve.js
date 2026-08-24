@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 920d377cdf077931
+// supersonic-vendor-stamp 28f80cdd930034fb
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -118,15 +118,17 @@ function withScale(over) {
   return { ...DEFAULT_SCALE, ...declared };
 }
 
+// lib/env-owner.ts
+var ALWAYS_OWNED_PREFIXES = [/^BAY_/, /^SUPERSONIC_/];
+var ALWAYS_OWNED_EXACT = /* @__PURE__ */ new Set(["PORT"]);
+var DATABASE_OWNED_PREFIXES = [/^POSTGRES_/, /^PG/, /^DB_/];
+var DATABASE_OWNED_EXACT = new Set(databaseEnvNames());
+
 // lib/app-config.ts
 var CONFIG_FILENAME = "supersonic.json";
 var ConfigError = class extends Error {
 };
 var LANGUAGES = /* @__PURE__ */ new Set(["node", "python", "static", "other"]);
-var ALWAYS_OWNED_PREFIXES = [/^SUPERSONIC_/];
-var ALWAYS_OWNED_EXACT = /* @__PURE__ */ new Set(["PORT"]);
-var DATABASE_OWNED_PREFIXES = [/^POSTGRES_/, /^PG/, /^DB_/];
-var DATABASE_OWNED_EXACT = new Set(databaseEnvNames());
 function platformOwned(name, database) {
   if (ALWAYS_OWNED_EXACT.has(name) || ALWAYS_OWNED_PREFIXES.some((re) => re.test(name))) return true;
   if (database?.provider !== "managed") return false;

@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { listOwnedApps, sortOf } from "@/lib/apps";
 import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
+import { appUrl } from "@/lib/brand";
 
 /**
  * The dashboard's app list.
@@ -41,7 +42,7 @@ export async function GET(req: Request) {
       .map((d) => ({
         slug: d.slug,
         name: d.name || d.slug,
-        url: `https://${d.slug}.supersonic.cv`,
+        url: appUrl(d.slug),
         ready: false,
         region: "us-central1",
         image: "",

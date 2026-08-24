@@ -14,7 +14,7 @@ import { escapeHtml } from "./pages";
  * mounted only if it actually arrives — see `filmBoot` below. If it does not,
  * the room is exactly what it was.
  */
-const FILM_ORIGIN = process.env.FILM_ORIGIN ?? "https://app.supersonic.cv";
+const FILM_ORIGIN = process.env.FILM_ORIGIN ?? "https://app.thebay.cloud";
 
 /**
  * The room.

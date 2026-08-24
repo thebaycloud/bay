@@ -8,6 +8,7 @@ import { startBuild, finishBuild, type Commit } from "@/lib/builds";
 import { appForPush, refreshRepoName, type PushTarget } from "@/lib/app-repos";
 import { postCommitStatus, type StatusPost } from "@/lib/github-status";
 import type { Push } from "@/lib/github-webhook";
+import { appHost, appUrl } from "./brand";
 
 /**
  * What a push means, and how it becomes a build.
@@ -176,7 +177,7 @@ export async function shipPush(push: Push, over: Partial<ShipDeps> = {}): Promis
     slug: target.slug,
     // The Room: the app's own address, which is where a person watches the
     // build happen and which becomes the app itself the moment it opens.
-    targetUrl: `https://${target.slug}.supersonic.cv`,
+    targetUrl: appUrl(target.slug),
     description: "Building…",
   });
 
@@ -240,7 +241,7 @@ export async function reportOutcome(o: {
   if (o.installationId == null || !o.commitSha) return;
   const fullName = fullNameFromUrl(o.repoUrl);
   if (!fullName) return;
-  const url = `https://${o.slug}.supersonic.cv`;
+  const url = appUrl(o.slug);
   await postCommitStatus({
     installationId: o.installationId,
     fullName,
@@ -251,6 +252,6 @@ export async function reportOutcome(o: {
     state: o.outcome === "ok" ? "success" : "failure",
     slug: o.slug,
     targetUrl: url,
-    description: o.outcome === "ok" ? `Live at ${o.slug}.supersonic.cv` : "The build failed",
+    description: o.outcome === "ok" ? `Live at ${appHost(o.slug)}` : "The build failed",
   });
 }

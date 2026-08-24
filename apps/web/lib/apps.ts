@@ -1,5 +1,6 @@
 import { getPool } from "./db";
 import { ensureWebsite, umamiConfigured } from "./umami";
+import { appUrl } from "./brand";
 
 const DB = "supersonic_platform";
 
@@ -288,7 +289,7 @@ export async function listOwnedApps(ownerId: string, sort: AppSort = "deployed")
     name: row.name,
     // A static app's run_url points at the shared static server, which is useless
     // to show someone — their app lives at its own name.
-    url: `https://${row.slug}.supersonic.cv`,
+    url: appUrl(row.slug),
     ready: row.status === "live",
     status: row.status,
     visibility: row.visibility,

@@ -87,7 +87,7 @@ let SNAP=true;
 const L=(o,k,m)=>({o,k,m});
 const SCENARIOS={
   container:{
-    lane:"container lane · warm worker", app:"storefront", url:"storefront.supersonic.cv",
+    lane:"container lane · warm worker", app:"storefront", url:"storefront.thebay.cloud",
     node:"n-04", release:"41", cargo:[0,0,1,0,1,0], crates:18,
     beats:[
       {id:"accept",rail:"run-record",dur:0.6,logs:[L(0,"a","supersonic deploy · run 8f3c21b")]},
@@ -102,10 +102,10 @@ const SCENARIOS={
       {id:"flood",rail:"release",dur:6,logs:[L(.3,"","Flooding the dock — the release is sealed")]},
       {id:"place",rail:"fleet",dur:87.7,logs:[L(0,"","Placing on node n-04 · us-central1-a"),L(5,"","fleet-pull · the node is pulling the image"),L(64,"g","fleet-pull — 62.1s"),L(68,"","fleet-boot · sandbox starting"),L(80,"g","fleet-boot — 6.2s")]},
       {id:"verify",rail:"verify",dur:5,logs:[L(0,"","Checking the build…"),L(3.6,"g","GET / → 200 in 84 ms")]},
-      {id:"live",rail:"done",dur:11,logs:[L(.5,"","Private by default — anyone opening this link has to sign in."),L(1.6,"g","Live at storefront.supersonic.cv")]}
+      {id:"live",rail:"done",dur:11,logs:[L(.5,"","Private by default — anyone opening this link has to sign in."),L(1.6,"g","Live at storefront.thebay.cloud")]}
     ]},
   repair:{
-    lane:"container lane · the build fails", app:"storefront", url:"storefront.supersonic.cv",
+    lane:"container lane · the build fails", app:"storefront", url:"storefront.thebay.cloud",
     node:"n-04", release:"42", cargo:[0,0,1,0,1,0], crates:18, fail:{beat:"build",at:.62},
     beats:[
       {id:"accept",rail:"run-record",dur:0.6,logs:[L(0,"a","supersonic deploy · run 4d90ff2")]},
@@ -122,10 +122,10 @@ const SCENARIOS={
       {id:"flood",rail:"release",dur:6,logs:[]},
       {id:"place",rail:"fleet",dur:87.7,logs:[L(0,"","Placing on node n-04 · us-central1-a"),L(64,"g","fleet-pull — 61.4s"),L(80,"g","fleet-boot — 5.9s")]},
       {id:"verify",rail:"verify",dur:5,logs:[L(0,"","Checking the build…"),L(3.6,"g","GET / → 200 in 91 ms")]},
-      {id:"live",rail:"done",dur:11,logs:[L(1.6,"g","Live at storefront.supersonic.cv")]}
+      {id:"live",rail:"done",dur:11,logs:[L(1.6,"g","Live at storefront.thebay.cloud")]}
     ]},
   static:{
-    lane:"static lane · no image, no node", app:"portfolio", url:"portfolio.supersonic.cv",
+    lane:"static lane · no image, no node", app:"portfolio", url:"portfolio.thebay.cloud",
     node:"edge", release:"7", cargo:[0,1], crates:10,
     beats:[
       {id:"accept",rail:"run-record",dur:0.6,logs:[L(0,"a","supersonic deploy · run 2b71c04")]},
@@ -140,7 +140,7 @@ const SCENARIOS={
       {id:"flood",rail:"release",dur:5,logs:[]},
       {id:"place",rail:"deploy",dur:12,logs:[L(0,"","Serving it from the edge — no node, no image to pull")]},
       {id:"verify",rail:"verify",dur:4,logs:[L(0,"","Checking the build…"),L(2.8,"g","GET / → 200 in 31 ms")]},
-      {id:"live",rail:"done",dur:11,logs:[L(1,"g","Live at portfolio.supersonic.cv")]}
+      {id:"live",rail:"done",dur:11,logs:[L(1,"g","Live at portfolio.thebay.cloud")]}
     ]}
 };
 let SC,AT,TOTAL,FAIL_T=Infinity,LOGS=[],NOW=0;

@@ -20,8 +20,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { App } from "@/components/AppsGrid";
+import type { App } from "@/lib/app-row";
 import { cn } from "@/lib/utils";
+import { appHost, appUrl } from "@/lib/brand";
 
 /**
  * The app list, as a list.
@@ -155,7 +156,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
                         mono because it is a machine value. Hidden on narrow screens
                         rather than wrapped — the state matters more. */}
                     <span className="hidden min-w-0 truncate text-[13px] text-ink-3 sm:block">
-                      {a.slug}.supersonic.cv
+                      {appHost(a.slug)}
                     </span>
                   </Link>
 
@@ -176,7 +177,7 @@ export function AppsTable({ initial, initialError }: { initial: App[]; initialEr
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem asChild>
-                        <a href={`https://${a.slug}.supersonic.cv`} rel="noreferrer" target="_blank">
+                        <a href={appUrl(a.slug)} rel="noreferrer" target="_blank">
                           <ArrowUpRight className="size-3.5" />
                           Open the app
                         </a>

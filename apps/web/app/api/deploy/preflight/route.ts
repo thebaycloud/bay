@@ -5,6 +5,7 @@ import { cloudRunName } from "@/lib/slug";
 import { currentUserId } from "@/lib/session";
 import { resolveSlug } from "@/lib/gcloud";
 import { liveReleaseHash } from "@/lib/apps";
+import { appUrl } from "@/lib/brand";
 
 /**
  * "Is this exact build already live?"
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
     const slug = await resolveSlug(ownerId, cloudRunName(app));
     const live = await liveReleaseHash(slug, ownerId);
     if (live && live === hash) {
-      return Response.json({ skip: true, slug, url: `https://${slug}.supersonic.cv` });
+      return Response.json({ skip: true, slug, url: appUrl(slug) });
     }
     return Response.json({ skip: false, slug });
   } catch {

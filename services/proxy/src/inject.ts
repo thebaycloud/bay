@@ -8,8 +8,16 @@ import { config } from "./config";
 // Read from the same root the rest of the edge uses. This markup is injected
 // into other people's pages, so a stale literal here is our old brand showing
 // up on somebody's live site after the rename.
-const APP = `https://app.${config.rootDomain}`;
-const SITE = `https://${config.rootDomain}`;
+//
+// `rootDomains[0]`, and it said `rootDomain` — a field the config object does not
+// have. So both of these were the string "https://app.undefined" and
+// "https://undefined": the badge on every hosted app pointing nowhere. The
+// rename removed the literal here and put nothing real in its place, which is a
+// worse failure than the literal was, and a silent one — an undefined host in a
+// template throws nothing.
+const ROOT = config.rootDomains[0];
+const APP = `https://app.${ROOT}`;
+const SITE = `https://${ROOT}`;
 
 /**
  * Everything only an owner may see — as SOURCE, not as a runtime branch.

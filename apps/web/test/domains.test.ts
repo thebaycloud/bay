@@ -107,14 +107,24 @@ test("EVERY root is refused during the cutover, not just the canonical one", asy
 
 test("roots are read from one place, canonical first, and never empty", async () => {
   const { rootDomains, rootDomain, isPlatformHost } = await import("@/lib/roots");
-  // Defaults to the legacy root, because that is what production answers to
-  // today and a module that defaulted to nothing would refuse no hostname at
-  // all — opening the namespace we issue for anyone to claim.
-  assert.deepEqual(rootDomains(), ["supersonic.cv"]);
-  assert.equal(rootDomain(), "supersonic.cv");
+  // BOTH, canonical first, and that is the default now. It defaulted to the
+  // legacy root alone, and that default was doing real work: every service that
+  // does not set ROOT_DOMAINS — local development, the static server, a node's
+  // -domain flag — minted supersonic.cv addresses months after the cutover.
+  // Production sets the variable explicitly either way.
+  //
+  // Never empty, whatever happens: with no roots `refuseHostname` refuses
+  // nothing, and the namespace we issue is open for anyone to claim.
+  assert.deepEqual(rootDomains(), ["thebay.cloud", "supersonic.cv"]);
+  assert.equal(rootDomain(), "thebay.cloud", "the canonical root is the first");
+  assert.ok(isPlatformHost("l3sgp.thebay.cloud"));
+  assert.ok(isPlatformHost("thebay.cloud"));
+  // The legacy root is still ours — three live apps and every installed CLI.
   assert.ok(isPlatformHost("l3sgp.supersonic.cv"));
   assert.ok(isPlatformHost("supersonic.cv"));
+  // A name that merely ENDS with ours is not ours.
   assert.ok(!isPlatformHost("notsupersonic.cv"));
+  assert.ok(!isPlatformHost("notthebay.cloud"));
 });
 
 /* ------------------------------------------------------- certificate naming */

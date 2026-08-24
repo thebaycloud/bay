@@ -57,6 +57,8 @@ import { agentLimitMessage } from "@/lib/plan-copy";
 import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, proxyWait, type DbAddress } from "@/lib/db-address";
 import { databaseEnv, databaseEnvNames, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
+import { appHost, appUrl } from "@/lib/brand";
+import { rootDomains } from "@/lib/roots";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
 import { classify } from "@/lib/deploy-errors";
@@ -1011,29 +1013,38 @@ async function staticServiceUrl(): Promise<string | null> {
  * worked.
  */
 async function removeDomainMapping(slug: string, log: (l: string) => void): Promise<void> {
-  try {
-    await capture("gcloud", ["beta", "run", "domain-mappings", "describe", "--domain", `${slug}.supersonic.cv`,
-      "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
-  } catch {
-    return; // there is no mapping, which is the state we wanted
-  }
-  try {
-    await capture("gcloud", ["beta", "run", "domain-mappings", "delete", "--domain", `${slug}.supersonic.cv`,
-      "--region", REGION, "--project", PROJECT, "--quiet"]);
-    log(`Removed the address ${slug}.supersonic.cv — this app no longer has a web process`);
-  } catch (e) {
-    log(`! could not remove ${slug}.supersonic.cv: ${e instanceof Error ? e.message : String(e)}`);
+  // EVERY root, not just the canonical one. An app mapped under supersonic.cv
+  // before the cutover and turned worker-only afterwards would otherwise keep a
+  // hostname pointing at a service that no longer serves — the exact leak this
+  // function exists to stop, moved one rename to the left.
+  for (const host of rootDomains().map((root) => `${slug}.${root}`)) {
+    try {
+      await capture("gcloud", ["beta", "run", "domain-mappings", "describe", "--domain", host,
+        "--region", REGION, "--project", PROJECT, "--format=value(metadata.name)"]);
+    } catch {
+      continue; // there is no mapping under this root, which is the state we wanted
+    }
+    try {
+      await capture("gcloud", ["beta", "run", "domain-mappings", "delete", "--domain", host,
+        "--region", REGION, "--project", PROJECT, "--quiet"]);
+      log(`Removed the address ${host} — this app no longer has a web process`);
+    } catch (e) {
+      log(`! could not remove ${host}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 
 
 async function createDomainMapping(slug: string, log: (l: string) => void, service: string = slug): Promise<void> {
+  // The CANONICAL root only. Mapping every root would provision a certificate
+  // for a name we are retiring and then have to be told to stop.
+  const host = appHost(slug);
   try {
-    await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", service, "--domain", `${slug}.supersonic.cv`, "--region", REGION, "--project", PROJECT]);
-    log(`Mapped ${slug}.supersonic.cv (SSL provisioning, live in ~15 min)`);
+    await capture("gcloud", ["beta", "run", "domain-mappings", "create", "--service", service, "--domain", host, "--region", REGION, "--project", PROJECT]);
+    log(`Mapped ${host} (SSL provisioning, live in ~15 min)`);
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
-    if (/already exists/i.test(m)) { log(`${slug}.supersonic.cv already mapped`); return; }
+    if (/already exists/i.test(m)) { log(`${host} already mapped`); return; }
     log(`! custom domain skipped: ${m.replace(/\s+/g, " ").slice(0, 100)}`);
   }
 }
@@ -1177,7 +1188,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // intervals rather than summing them.
       await stages.around(ACTIVATION_STAGE, async () => {
         await publishPrebuilt({ dir, archive, slug, hash: prebuiltHash, log, send, stages });
-        setDeploy(slug, { status: "live", url: `https://${slug}.supersonic.cv` });
+        setDeploy(slug, { status: "live", url: appUrl(slug) });
         if (ownerId && ownerWorkspace) {
           const staticUrl = (await staticServiceUrl()) ?? "";
           // A static site is nothing but a web page, so `true` — and `null` for
@@ -1187,7 +1198,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
           void requestThumbnail(slug, staticUrl);
         }
       });
-      send({ type: "done", slug, url: `https://${slug}.supersonic.cv` });
+      send({ type: "done", slug, url: appUrl(slug) });
       return;
     }
 
@@ -1781,7 +1792,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
               if (existsSync(p)) { try { envFiles.push(readFileSync(p, "utf8")); } catch { /* unreadable is silent */ } }
             }
           }
-          const address = publicUrlEnvArgs(envFiles, `https://${slug}.supersonic.cv`,
+          const address = publicUrlEnvArgs(envFiles, appUrl(slug),
             Object.entries(declared).map(([key, value]) => ({ key, value: String(value) })));
           if (address.length) {
             log(`Telling the build where this app will live: ${address.map((a) => a.key).join(", ")}`);
@@ -2022,8 +2033,15 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // derived from the slug rather than discovered from Cloud Run. An app was
     // previously told its port, its database and its bucket, and never its own
     // hostname — so every absolute URL it generated was the Cloud Run one.
+    //
+    // `appHost` and not a literal. This line read `${slug}.supersonic.cv` for
+    // months after the cutover, which is how every app deployed in that window
+    // came to be told it lived on the retiring domain — in BAY_URL, in
+    // ALLOWED_HOSTS, in CSRF_TRUSTED_ORIGINS, and therefore in every absolute
+    // URL it generated: OAuth redirect_uri, password-reset links, canonical
+    // tags, sitemaps. Verified on z1b3k's live placement before the fix.
     const facts: DeploymentFacts = {
-      hostname: `${slug}.supersonic.cv`,
+      hostname: appHost(slug),
       scheme: "https",
       pathPrefix: appConfig ? servicePath(primaryService(appConfig)) : "/",
       siblingUrls: {},
@@ -2505,7 +2523,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
         ? join(dir, primaryOwnDockerfile)
         : join(dir, "Dockerfile");
       if (existsSync(ownDockerfilePath)) {
-        const told = publicUrlBuildArgs(readFileSync(ownDockerfilePath, "utf8"), `https://${slug}.supersonic.cv`, buildArgs);
+        const told = publicUrlBuildArgs(readFileSync(ownDockerfilePath, "utf8"), appUrl(slug), buildArgs);
         if (told.length) {
           log(`Telling the build where this app will live: ${told.map((a) => a.key).join(", ")}`);
           buildArgs.push(...told);
@@ -2717,7 +2735,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
             // Same for a sibling, at the address the app is served on — a
             // sibling is mounted under a path on the SAME origin, so the app's
             // own URL is what its frontend should call.
-            siblingArgs.push(...publicUrlBuildArgs(own, `https://${slug}.supersonic.cv`, siblingArgs));
+            siblingArgs.push(...publicUrlBuildArgs(own, appUrl(slug), siblingArgs));
             writeFileSync(join(buildContext, configName), cachedBuildConfig(image, builder, name, {
               secretEnv: mountable,
               buildArgs: siblingArgs,
@@ -3674,7 +3692,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
       // is reached the same way a sealed or static one already is, through
       // the proxy's own wildcard `*.supersonic.cv`, once its `run_url` is
       // the fleet load balancer address `markAppLive` writes below.
-      log(`Live at ${slug}.supersonic.cv`);
+      log(`Live at ${appHost(slug)}`);
     } else {
       await createDomainMapping(slug, log);
     }
@@ -3735,7 +3753,7 @@ export async function runDeploy(input: DeployInput, emit: (e: unknown) => void):
     // would-be hostname would put a dead link in front of whoever deployed it.
     send({
       type: "done", slug,
-      url: serviceless ? undefined : SEAL_APPS || staticServe ? `https://${slug}.supersonic.cv` : result.url,
+      url: serviceless ? undefined : SEAL_APPS || staticServe ? appUrl(slug) : result.url,
       // Every decision this deploy made, so the next one is not a fresh guess and
       // the author can see what was chosen FOR them.
       //

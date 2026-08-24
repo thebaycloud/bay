@@ -24,7 +24,7 @@ test("a failure names the app and carries the reason", () => {
 test("a clean success gives the address and nothing alarming", () => {
   const m = deployEmail({ slug: "abc12", name: "tasks", status: "live" })!;
 
-  assert.match(m.text, /abc12\.supersonic\.cv/);
+  assert.match(m.text, /abc12\.thebay\.cloud/);
   assert.doesNotMatch(m.subject, /not|fail/i);
 });
 

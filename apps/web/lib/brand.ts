@@ -62,6 +62,25 @@ export function controlPlaneHost(): string {
 }
 
 /**
+ * One app's address, with its scheme.
+ *
+ * Here because `https://${slug}.supersonic.cv` was typed out by hand in
+ * seventy-odd places — the deploy pipeline alone had fifteen — and a literal is a
+ * place a rename cannot reach. Every one of those sites was still minting the
+ * retiring domain months after the cutover, including the one that tells an app
+ * its own hostname.
+ */
+export function appUrl(slug: string): string {
+  return `https://${appHost(slug)}`;
+}
+
+/** Where the dashboard answers, with its scheme. Honours APP_URL when set. */
+export function controlPlaneUrl(): string {
+  const set = (process.env.NEXT_PUBLIC_APP_URL ?? process.env.APP_URL ?? "").trim();
+  return set.replace(/\/+$/, "") || `https://${controlPlaneHost()}`;
+}
+
+/**
  * Test seam. `productName` is cached because it is read on hot paths and cannot
  * change within a process — except in a test that sets the environment and
  * expects to be believed.

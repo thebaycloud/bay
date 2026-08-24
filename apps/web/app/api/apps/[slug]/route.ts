@@ -9,6 +9,7 @@ import { getDeploy } from "@/lib/deploys";
 import { placementFor, runningOnNode } from "@/lib/fleet";
 import { statusFromFleet } from "@/lib/app-status";
 import { deployTargetForApp } from "@/lib/deploy-target";
+import { appUrl } from "@/lib/brand";
 
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -87,7 +88,7 @@ export async function GET(_req: Request, { params }: { params: { slug: string } 
     return Response.json({
       slug,
       name: slug,
-      url: `https://${slug}.supersonic.cv`,
+      url: appUrl(slug),
       ready: app.status === "live",
       status: app.status,
       deploying,

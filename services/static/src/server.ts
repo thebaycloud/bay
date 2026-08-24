@@ -16,7 +16,7 @@ import { PointerCache, isReleaseId } from "./pointer.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const BUCKET = process.env.ASSETS_BUCKET ?? "supersonic-static-assets";
-const ROOT_DOMAIN = process.env.ROOT_DOMAIN ?? "supersonic.cv";
+const ROOT_DOMAIN = process.env.ROOT_DOMAIN ?? "thebay.cloud";
 
 const storage = new Storage();
 const bucket = storage.bucket(BUCKET);

@@ -33,7 +33,10 @@ const fs = require("fs");
 const BRAND = "Bay";
 const CLI = "bay";
 const DOMAIN = "thebay.cloud";
-const DEFAULT_URL = "https://app.supersonic.cv";
+// Derived from DOMAIN, which said `thebay.cloud` on the line above while this
+// said `supersonic.cv`. Both answer, so nothing broke — which is exactly why it
+// went unnoticed, and why every `bay` install was talking to the retiring name.
+const DEFAULT_URL = `https://app.${DOMAIN}`;
 
 const NEW_DIR = path.join(os.homedir(), ".bay");
 const OLD_DIR = path.join(os.homedir(), ".supersonic");

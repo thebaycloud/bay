@@ -1,4 +1,6 @@
 import { accessToken } from "./gcp-rest";
+import { appUrl } from "./brand";
+import { onAnyRoot } from "./roots";
 
 /**
  * Asking the screenshot service for a picture of an app.
@@ -93,12 +95,15 @@ export async function requestThumbnail(slug: string, runUrl: string, visibility?
     // Only for a PUBLIC app. A private one answers the sign-in gate, and a
     // screenshot of a login page filed as an app preview is worse than no
     // preview — it looks like the app broke.
-    const onFleet = !isCloudRunUrl(runUrl) && !runUrl.includes(".supersonic.cv");
+    // Every root, not one: this asks "is this already a platform address", and
+    // after the cutover an app on thebay.cloud would otherwise be treated as a
+    // Cloud Run URL and shot at the wrong host.
+    const onFleet = !isCloudRunUrl(runUrl) && !onAnyRoot(runUrl);
     if (onFleet && visibility !== "public") {
       console.log(`thumbnail ${slug}: private app on a node — the shot service would photograph the sign-in page, so nothing was requested`);
       return;
     }
-    if (onFleet) runUrl = `https://${slug}.supersonic.cv`;
+    if (onFleet) runUrl = appUrl(slug);
     const appIsCloudRun = isCloudRunUrl(runUrl);
     const [callerToken, appToken] = await Promise.all([
       identityToken(SHOT_SERVICE),

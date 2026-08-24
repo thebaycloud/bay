@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { filterCommands, type CommandItem } from "@/lib/command-search";
-import type { App } from "./AppsGrid";
+import type { App } from "@/lib/app-row";
+import { appHost } from "@/lib/brand";
 
 /**
  * Search, on `/`.
@@ -48,7 +49,7 @@ export function CommandPalette({ apps }: { apps: App[] }) {
     () => apps.map((a) => ({
       id: `app:${a.slug}`,
       label: a.name || a.slug,
-      hint: `${a.slug}.supersonic.cv`,
+      hint: appHost(a.slug),
       // The app's own X-ray, not the platform's page about it.
       href: xrayUrl(a.slug),
     })),
