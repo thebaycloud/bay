@@ -137,9 +137,15 @@ test("`app` is identified by the ABSENCE of a source field", () => {
   assert.match(both, /NOT jsonPayload\.source:\*/);
 });
 
-test("no sources asked for means no source restriction at all", () => {
+test("no sources asked for means no source RESTRICTION at all", () => {
+  // The edge arm mentions `source="edge"` as part of identifying who wrote a
+  // line — that is not a restriction the caller asked for, so it must survive.
+  // Asserted on the trailing clause instead: with no sources, nothing is ANDed on.
   const f = filterFor("shop", { sources: [] });
-  assert.doesNotMatch(f, /jsonPayload\.source/);
+  assert.doesNotMatch(f, /\) AND \(jsonPayload\.source=/);
+  assert.doesNotMatch(f, /NOT jsonPayload\.source:\*/);
+  // And with one, it is.
+  assert.match(filterFor("shop", { sources: ["browser"] }), /AND \(jsonPayload\.source="browser"\)/);
 });
 
 test("every level and every source is expressible", () => {
