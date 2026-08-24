@@ -245,8 +245,24 @@ async function getHandler(req: Request, { params }: { params: { slug: string } }
 }
 
 /**
- * The escape hatch, unchanged: one read-only statement, for the person who wants
- * to ask something the view above does not.
+ * How many rows one statement may hand back.
+ *
+ * Postgres has already buffered them by the time this counts, so this is not a
+ * guard on the database — the statement timeout is. It is a guard on the wire and
+ * on the browser: `SELECT * FROM events` on a real table serialises to something
+ * no tab can draw, and the person who typed it wanted the first screenful.
+ *
+ * Said rather than done silently, which is why `truncated` is in the payload.
+ */
+const MAX_ROWS = 500;
+
+/**
+ * The escape hatch: one read-only statement, for the person who wants to ask
+ * something the view above does not.
+ *
+ * The rules are unchanged and stay HERE, on the server. They are the security
+ * boundary — one statement, SELECT only, a bounded timeout — and the SQL editor
+ * that arrived in front of this does not get to relax any of them.
  */
 async function postHandler(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
@@ -258,8 +274,28 @@ async function postHandler(req: Request, { params }: { params: { slug: string } 
   if (!/^select\b/i.test(q)) return Response.json({ error: "only SELECT queries are allowed" }, { status: 400 });
   if (q.includes(";")) return Response.json({ error: "one statement only" }, { status: 400 });
   try {
-    const r = await bounded(db, (c) => c.query(q));
-    return Response.json({ columns: r.fields.map((f) => f.name), rows: r.rows });
+    const out = await bounded(db, async (c) => {
+      const r = await c.query(q);
+      // The grid aligns and sizes columns by TYPE, and a result set arrives
+      // carrying type OIDs rather than names. One lookup turns them into the same
+      // `typname` strings — `int4`, `timestamptz`, `numeric` — that the table
+      // view already reasons about, so one grid can draw both.
+      const oids = [...new Set(r.fields.map((f) => f.dataTypeID))];
+      const names = new Map<number, string>();
+      if (oids.length > 0) {
+        const t = await c.query<{ oid: number; typname: string }>(
+          `SELECT oid::int AS oid, typname FROM pg_type WHERE oid::int = ANY($1::int[])`,
+          [oids],
+        );
+        for (const row of t.rows) names.set(row.oid, row.typname);
+      }
+      return {
+        columns: r.fields.map((f) => ({ name: f.name, type: names.get(f.dataTypeID) ?? "" })),
+        rows: r.rows.slice(0, MAX_ROWS),
+        truncated: r.rows.length > MAX_ROWS,
+      };
+    });
+    return Response.json(out);
   } catch (e) {
     if (isTimeout(e)) return Response.json({ error: `the query ran longer than ${STATEMENT_TIMEOUT_MS / 1000}s and was stopped` });
     return Response.json({ error: e instanceof Error ? e.message : String(e) });

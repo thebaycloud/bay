@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown, ArrowUp, Check, ChevronDown, Copy, Filter as FilterIcon, KeyRound,
-  Play, RefreshCw, Table2, X,
+  Play, RefreshCw, Table2, Terminal, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,11 +16,14 @@ import { useQueryRecord } from "@/lib/use-query-state";
 /**
  * Everything about this screen that belongs in the URL, in one place.
  *
- * All six move together — picking a table clears the sort and the filter, because
- * a column of `orders` means nothing in `customers` — and moving them one at a
- * time left six entries in the history for one click. See `useQueryRecord`.
+ * They move together — picking a table clears the sort and the filter, because a
+ * column of `orders` means nothing in `customers` — and moving them one at a time
+ * left six entries in the history for one click. See `useQueryRecord`.
+ *
+ * `sql` carries the whole statement, which is what makes a query somebody wrote
+ * a thing they can send to somebody else.
  */
-const VIEW_KEYS = ["table", "sort", "dir", "where", "op", "value"] as const;
+const VIEW_KEYS = ["table", "sort", "dir", "where", "op", "value", "pane", "sql"] as const;
 
 /**
  * The app's data, answering "did it land".
@@ -171,6 +174,9 @@ function full(v: unknown): { text: string; dim?: boolean } {
  */
 const NUMERIC = [
   "int", "smallint", "bigint", "serial", "numeric", "decimal", "real", "double", "money",
+  // The SQL surface reports Postgres's own `typname`, so the same helper has to
+  // recognise `int4` and `float8` as well as "integer" and "double precision".
+  "float",
 ];
 function isNumeric(type: string): boolean {
   const t = type.toLowerCase();
@@ -228,41 +234,42 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
   if (err) return <Empty>That could not be read. {err.slice(0, 160)}</Empty>;
   if (!hasDb) return <Empty>This app has no database.</Empty>;
   if (tables === null) return <Empty>Reading…</Empty>;
-  if (tables.length === 0) {
-    return (
-      <div className="flex flex-col gap-3">
-        <Empty>No tables yet — nothing has written to this database.</Empty>
-        <QueryBox slug={slug} />
-      </div>
-    );
-  }
+
+  const sqlPane = q.pane === "sql";
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-start gap-3">
-        <TableList
-          // A sort or a filter belongs to the table it was made on. Carrying
-          // `sort=total` into `customers` would either error or, worse, be
-          // silently dropped while the URL still claimed it.
-          onOpen={(t) => setQ({ table: t, sort: null, dir: null, where: null, op: null, value: null })}
-          open={open}
-          tables={tables}
-        />
-        <div className="min-w-0 flex-1">
-          {open ? (
-            <TableView
-              key={open}
-              nonce={nonce}
-              onRefresh={() => setNonce((n) => n + 1)}
-              q={q}
-              setQ={setQ}
-              slug={slug}
-              table={open}
-            />
-          ) : null}
-        </div>
+    <div className="flex items-start gap-3">
+      <TableList
+        // A sort or a filter belongs to the table it was made on. Carrying
+        // `sort=total` into `customers` would either error or, worse, be
+        // silently dropped while the URL still claimed it.
+        onOpen={(t) =>
+          setQ({ table: t, pane: null, sort: null, dir: null, where: null, op: null, value: null })
+        }
+        // The table state is kept, not cleared: coming back from SQL should land
+        // on the table and the filter you left, not on the top of the list.
+        onSql={() => setQ({ pane: "sql" })}
+        open={sqlPane ? null : open}
+        sqlOpen={sqlPane}
+        tables={tables}
+      />
+      <div className="min-w-0 flex-1">
+        {sqlPane ? (
+          <SqlPane q={q} setQ={setQ} slug={slug} />
+        ) : tables.length === 0 ? (
+          <Empty>No tables yet — nothing has written to this database.</Empty>
+        ) : open ? (
+          <TableView
+            key={open}
+            nonce={nonce}
+            onRefresh={() => setNonce((n) => n + 1)}
+            q={q}
+            setQ={setQ}
+            slug={slug}
+            table={open}
+          />
+        ) : null}
       </div>
-      <QueryBox slug={slug} />
     </div>
   );
 }
@@ -278,14 +285,36 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
 function TableList({
   tables,
   open,
+  sqlOpen,
   onOpen,
+  onSql,
 }: {
   tables: TableSummary[];
   open: string | null;
+  sqlOpen: boolean;
   onOpen: (t: string) => void;
+  onSql: () => void;
 }) {
   return (
     <div className="max-h-[560px] w-[224px] shrink-0 overflow-auto rounded-xl border border-border">
+      {/* SQL as a row zero rather than a drawer at the bottom of the page.
+          It was a `<details>` summary reading "Ask it something else", which is
+          where you put a thing you hope nobody needs — and the whole reason
+          somebody opens it is that the filter above could not express their
+          question. Here it sits alongside the tables, which is what it is. */}
+      <button
+        aria-current={sqlOpen ? "true" : undefined}
+        className={[
+          "flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left",
+          sqlOpen ? "bg-tile" : "hover:bg-tile",
+        ].join(" ")}
+        onClick={onSql}
+        type="button"
+      >
+        <Terminal className="size-3.5 shrink-0 text-ink-3" />
+        <span className={`text-[13px] ${sqlOpen ? "text-ink" : "text-ink-2"}`}>SQL</span>
+      </button>
+
       {tables.map((t) => {
         const when = agoShort(t.lastWriteAt);
         const is = t.name === open;
@@ -406,16 +435,6 @@ function TableView({
         : `~${page.total.toLocaleString()}`;
   const more = page ? (page.total === null ? page.rows.length === page.limit : shownTo < page.total) : false;
 
-  // Frozen only when the key is a single LEADING column, which is what a
-  // generated schema has. A composite key would need two sticky offsets from
-  // measured widths, and a key in the middle of the table would have the columns
-  // before it slide underneath — both are worse than not freezing.
-  const frozen =
-    page && page.primaryKey.length === 1 && page.columns[0]?.name === page.primaryKey[0]
-      ? page.primaryKey[0]
-      : null;
-  const pk = new Set(page?.primaryKey ?? []);
-
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex h-7 items-center gap-2.5">
@@ -463,113 +482,16 @@ function TableView({
           <Empty>{page.filter ? "No rows match that." : "This table is empty."}</Empty>
         ) : (
           <>
-            {/* A data grid, not a layout table.
-
-                Everything here is one decision: the values are MACHINE data, so
-                they are set the way machine data is read. Mono, because an id and
-                a timestamp are compared character by character and the UI font
-                gives 0 and O the same width but not the same shape. 28px rows,
-                so twice as many fit. Faint vertical rules, so a column can be
-                followed down without losing your place. A sticky header, because
-                scrolling past the names is how you end up guessing which column
-                you are reading.
-
-                `border-separate` and not `collapse`, which is what it was: a
-                collapsed border is owned by the table rather than the cell, and
-                Chrome drops it entirely on a `position: sticky` cell — so
-                freezing the key column would have erased the grid's own lines.
-                With spacing at zero the two render the same.
-
-                None of this contradicts "no mono anywhere else": everywhere else
-                the text is English. */}
-            <div className="max-h-[560px] overflow-auto rounded-xl border border-border">
-              <table className="w-full border-separate border-spacing-0 font-mono text-[12.5px]">
-                <thead>
-                  <tr>
-                    {/* The ordinal gutter. Not the primary key and not pretending
-                        to be: it numbers the rows ON THIS PAGE against the total,
-                        which is what tells you where you are in 40 rows. */}
-                    <th className="sticky left-0 top-0 z-20 w-[52px] border-b border-r border-border bg-tile px-2.5 py-2 text-right font-normal text-ink-3">
-                      #
-                    </th>
-                    {page.columns.map((c) => {
-                      const on = page.sort?.column === c.name;
-                      const isFrozen = c.name === frozen;
-                      return (
-                        <th
-                          className={[
-                            "top-0 cursor-pointer select-none border-b border-r border-border bg-tile px-2.5 py-2 font-normal last:border-r-0 hover:bg-card",
-                            isFrozen ? "sticky left-[52px] z-20" : "sticky z-10",
-                            isNumeric(c.type) ? "text-right" : "text-left",
-                          ].join(" ")}
-                          key={c.name}
-                          onClick={() => clickSort(c.name)}
-                          style={{ width: widthFor(c.type) }}
-                          title={`Sort by ${c.name}`}
-                        >
-                          <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                            {/* The key, marked. It was known server-side all
-                                along and never sent, so the one column that
-                                identifies a row looked like every other. */}
-                            {pk.has(c.name) ? (
-                              <KeyRound aria-label="primary key" className="size-3 shrink-0 text-ink-3" />
-                            ) : null}
-                            <span className="text-ink">{c.name}</span>
-                            {on ? (
-                              page.sort?.dir === "asc" ? (
-                                <ArrowUp className="size-3 shrink-0 text-ink" />
-                              ) : (
-                                <ArrowDown className="size-3 shrink-0 text-ink" />
-                              )
-                            ) : null}
-                          </span>
-                          {/* The type, dimmer and one size down. It is here because
-                              a column of unreadable values needs it explained — not
-                              because the schema is the point. */}
-                          <span className="whitespace-nowrap pl-2 text-[11px] text-ink-3">
-                            {c.type}
-                          </span>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  {page.rows.map((row, i) => (
-                    <tr className="group" key={i}>
-                      <td className="sticky left-0 z-10 border-b border-r border-border bg-ground px-2.5 py-[5px] text-right tabular-nums text-ink-3 group-hover:bg-tile">
-                        {page.offset + i + 1}
-                      </td>
-                      {page.columns.map((c) => {
-                        const v = fmt(row[c.name]);
-                        const num = isNumeric(c.type);
-                        const on = focus?.row === i && focus.column === c.name;
-                        const isFrozen = c.name === frozen;
-                        return (
-                          <td
-                            className={[
-                              "max-w-[22rem] cursor-pointer truncate border-b border-r border-border px-2.5 py-[5px] last:border-r-0 group-hover:bg-tile",
-                              isFrozen ? "sticky left-[52px] z-10 bg-ground" : "",
-                              num ? "text-right tabular-nums" : "text-left",
-                              // `null` is dim AND italic. Dim alone reads as a
-                              // pale string, and "null" is a value people also
-                              // store as text.
-                              v.dim ? "italic text-ink-3" : "text-ink",
-                              on ? "bg-tile ring-1 ring-inset ring-ink-3" : "",
-                            ].join(" ")}
-                            key={c.name}
-                            onClick={() => setFocus(on ? null : { row: i, column: c.name })}
-                            title={v.text}
-                          >
-                            {v.text}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Grid
+              columns={page.columns}
+              focus={focus}
+              offset={page.offset}
+              onFocus={setFocus}
+              onSort={clickSort}
+              primaryKey={page.primaryKey}
+              rows={page.rows}
+              sort={page.sort}
+            />
 
             {focus && page.rows[focus.row] ? (
               <CellPanel
@@ -610,6 +532,154 @@ function TableView({
           </>
         )
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The grid, for a table and for a result set alike.
+ *
+ * Extracted so the SQL surface draws its answers the way the table view draws its
+ * rows. The alternative — and what it was — is a second, worse table further down
+ * the page: no type labels, no right-aligned numbers, no `null` you can tell from
+ * an empty string, and no way to open a jsonb value. Somebody who reaches for SQL
+ * because a single filter could not express their question should not lose the
+ * grid as the price of asking.
+ *
+ * A data grid, not a layout table. Everything here is one decision: the values
+ * are MACHINE data, so they are set the way machine data is read. Mono, because
+ * an id and a timestamp are compared character by character and the UI font gives
+ * 0 and O the same width but not the same shape. 28px rows, so twice as many fit.
+ * Faint vertical rules, so a column can be followed down without losing your
+ * place. A sticky header, because scrolling past the names is how you end up
+ * guessing which column you are reading.
+ *
+ * `border-separate` and not `collapse`, which is what it was: a collapsed border
+ * is owned by the table rather than the cell, and Chrome drops it entirely on a
+ * `position: sticky` cell — so freezing the key column would have erased the
+ * grid's own lines. With spacing at zero the two render the same.
+ *
+ * `onSort` absent means the headers are not buttons. A result set has no column
+ * we could reorder without rewriting somebody's statement.
+ *
+ * None of this contradicts "no mono anywhere else": everywhere else the text is
+ * English.
+ */
+function Grid({
+  columns,
+  rows,
+  offset = 0,
+  primaryKey = [],
+  sort = null,
+  onSort,
+  focus,
+  onFocus,
+}: {
+  columns: Column[];
+  rows: Record<string, unknown>[];
+  offset?: number;
+  primaryKey?: string[];
+  sort?: Sort | null;
+  onSort?: (column: string) => void;
+  focus: { row: number; column: string } | null;
+  onFocus: (f: { row: number; column: string } | null) => void;
+}) {
+  // Frozen only when the key is a single LEADING column, which is what a
+  // generated schema has. A composite key would need two sticky offsets from
+  // measured widths, and a key in the middle of the table would have the columns
+  // before it slide underneath — both are worse than not freezing.
+  const frozen =
+    primaryKey.length === 1 && columns[0]?.name === primaryKey[0] ? primaryKey[0] : null;
+  const pk = new Set(primaryKey);
+
+  return (
+    <div className="max-h-[560px] overflow-auto rounded-xl border border-border">
+      <table className="w-full border-separate border-spacing-0 font-mono text-[12.5px]">
+        <thead>
+          <tr>
+            {/* The ordinal gutter. Not the primary key and not pretending to be:
+                it numbers the rows ON THIS PAGE against the total, which is what
+                tells you where you are in 40 rows. */}
+            <th className="sticky left-0 top-0 z-20 w-[52px] border-b border-r border-border bg-tile px-2.5 py-2 text-right font-normal text-ink-3">
+              #
+            </th>
+            {columns.map((c) => {
+              const on = sort?.column === c.name;
+              const isFrozen = c.name === frozen;
+              return (
+                <th
+                  className={[
+                    "top-0 select-none border-b border-r border-border bg-tile px-2.5 py-2 font-normal last:border-r-0",
+                    onSort ? "cursor-pointer hover:bg-card" : "",
+                    isFrozen ? "sticky left-[52px] z-20" : "sticky z-10",
+                    isNumeric(c.type) ? "text-right" : "text-left",
+                  ].join(" ")}
+                  key={c.name}
+                  onClick={onSort ? () => onSort(c.name) : undefined}
+                  style={{ width: widthFor(c.type) }}
+                  title={onSort ? `Sort by ${c.name}` : c.name}
+                >
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    {/* The key, marked. It was known server-side all along and
+                        never sent, so the one column that identifies a row looked
+                        like every other. */}
+                    {pk.has(c.name) ? (
+                      <KeyRound aria-label="primary key" className="size-3 shrink-0 text-ink-3" />
+                    ) : null}
+                    <span className="text-ink">{c.name}</span>
+                    {on ? (
+                      sort?.dir === "asc" ? (
+                        <ArrowUp className="size-3 shrink-0 text-ink" />
+                      ) : (
+                        <ArrowDown className="size-3 shrink-0 text-ink" />
+                      )
+                    ) : null}
+                  </span>
+                  {/* The type, dimmer and one size down. It is here because a
+                      column of unreadable values needs it explained — not because
+                      the schema is the point. */}
+                  {c.type ? (
+                    <span className="whitespace-nowrap pl-2 text-[11px] text-ink-3">{c.type}</span>
+                  ) : null}
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr className="group" key={i}>
+              <td className="sticky left-0 z-10 border-b border-r border-border bg-ground px-2.5 py-[5px] text-right tabular-nums text-ink-3 group-hover:bg-tile">
+                {offset + i + 1}
+              </td>
+              {columns.map((c) => {
+                const v = fmt(row[c.name]);
+                const num = isNumeric(c.type);
+                const on = focus?.row === i && focus.column === c.name;
+                const isFrozen = c.name === frozen;
+                return (
+                  <td
+                    className={[
+                      "max-w-[22rem] cursor-pointer truncate border-b border-r border-border px-2.5 py-[5px] last:border-r-0 group-hover:bg-tile",
+                      isFrozen ? "sticky left-[52px] z-10 bg-ground" : "",
+                      num ? "text-right tabular-nums" : "text-left",
+                      // `null` is dim AND italic. Dim alone reads as a pale
+                      // string, and "null" is a value people also store as text.
+                      v.dim ? "italic text-ink-3" : "text-ink",
+                      on ? "bg-tile ring-1 ring-inset ring-ink-3" : "",
+                    ].join(" ")}
+                    key={c.name}
+                    onClick={() => onFocus(on ? null : { row: i, column: c.name })}
+                    title={v.text}
+                  >
+                    {v.text}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -836,66 +906,180 @@ function CellPanel({
   );
 }
 
-/** The escape hatch: one read-only statement, below the view rather than above it. */
-function QueryBox({ slug }: { slug: string }) {
-  const [sql, setSql] = useState("");
-  const [out, setOut] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+/**
+ * The last few statements somebody ran here.
+ *
+ * In `localStorage` and not on the server, deliberately. A query is a question
+ * about your own data — sometimes it is `SELECT * FROM users WHERE email = …` —
+ * and keeping a list of them on our side is retaining something on somebody's
+ * behalf that they did not ask us to retain. The browser it was typed in is the
+ * right place for it, and clearing site data is the right way to be rid of it.
+ */
+const HISTORY_MAX = 8;
+const historyKey = (slug: string) => `bay:db:sql:${slug}`;
 
-  const run = useCallback(() => {
-    if (!sql.trim()) return;
-    setErr(null);
-    fetch(`/api/apps/${encodeURIComponent(slug)}/db`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sql }),
-    })
-      .then((r) => r.json())
-      .then((d) => (d.error ? setErr(String(d.error)) : setOut(d)))
-      .catch((e) => setErr(String(e)));
-  }, [slug, sql]);
+function readHistory(slug: string): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(historyKey(slug)) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string").slice(0, HISTORY_MAX) : [];
+  } catch {
+    // A corrupt or unavailable store loses a convenience, never the screen.
+    return [];
+  }
+}
+
+function writeHistory(slug: string, sql: string, prev: string[]): string[] {
+  const next = [sql, ...prev.filter((s) => s !== sql)].slice(0, HISTORY_MAX);
+  try {
+    localStorage.setItem(historyKey(slug), JSON.stringify(next));
+  } catch { /* private mode, or a full quota. Not worth a message. */ }
+  return next;
+}
+
+/**
+ * SQL, as a place rather than an escape hatch.
+ *
+ * It was one line in a `<details>` at the bottom of the page, results in a
+ * cramped table of its own, nothing remembered and nothing shareable. Which meant
+ * the answer to "the filter cannot express my question" was a worse version of
+ * the screen you were already on.
+ *
+ * So: a real editor, ⌘↵ to run, the answers in the SAME grid as a table — so a
+ * jsonb value still opens and a number is still right-aligned — the statement in
+ * the URL so a question can be sent to somebody, and the last few in this
+ * browser.
+ *
+ * The rules did not move. One statement, SELECT only, a bounded timeout, all of
+ * them server-side in the route, because that is where a boundary has to be: this
+ * component is a convenience in front of it and could be replaced by curl.
+ */
+function SqlPane({
+  slug,
+  q,
+  setQ,
+}: {
+  slug: string;
+  q: Record<(typeof VIEW_KEYS)[number], string | null>;
+  setQ: (patch: Partial<Record<(typeof VIEW_KEYS)[number], string | null>>, mode?: "push" | "replace") => void;
+}) {
+  const [draft, setDraft] = useState(q.sql ?? "");
+  const [out, setOut] = useState<{ columns: Column[]; rows: Record<string, unknown>[]; truncated?: boolean } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [focus, setFocus] = useState<{ row: number; column: string } | null>(null);
+  const [history, setHistory] = useState<string[]>([]);
+
+  const run = useCallback(
+    (sql: string, mode: "push" | "replace" = "push") => {
+      const s = sql.trim();
+      if (!s) return;
+      setBusy(true);
+      setErr(null);
+      setFocus(null);
+      // Pushed, not replaced: the back button walking back through the questions
+      // you asked is the right behaviour for a place you explore in. Replaced on
+      // arrival, though — a link that ran itself did not navigate anywhere, and
+      // pushing there would cost two presses of Back to leave.
+      setQ({ pane: "sql", sql: s }, mode);
+      setHistory((prev) => writeHistory(slug, s, prev));
+      fetch(`/api/apps/${encodeURIComponent(slug)}/db`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql: s }),
+      })
+        .then((r) => r.json())
+        .then((d) => (d.error ? setErr(String(d.error)) : setOut(d)))
+        .catch((e) => setErr(String(e)))
+        .finally(() => setBusy(false));
+    },
+    [slug, setQ],
+  );
+
+  // A statement arriving in the URL is somebody following a link, and a link to a
+  // question should show its answer rather than a filled-in box and a Run button.
+  // Once, on mount — after that, running is a deliberate act.
+  useEffect(() => {
+    setHistory(readHistory(slug));
+    if (q.sql) run(q.sql, "replace");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
 
   return (
-    <details className="rounded-xl border border-border">
-      <summary className="cursor-pointer px-3 py-2 text-sub text-ink-2">Ask it something else</summary>
-      <div className="flex flex-col gap-2 p-3 pt-0">
-        <div className="flex gap-2">
-          <input
-            className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-sub text-ink"
-            onChange={(e) => setSql(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") run(); }}
-            placeholder="SELECT … — read-only, one statement"
-            value={sql}
-          />
-          <button className="flex items-center gap-1 rounded-md border border-border px-2 text-sub" onClick={run} type="button">
-            <Play size={12} />Run
-          </button>
-        </div>
-        {err ? <div className="text-sub text-ink-3">⚠ {err.slice(0, 200)}</div> : null}
-        {out && out.rows.length === 0 ? <div className="text-sub text-ink-3">0 rows</div> : null}
-        {out && out.rows.length > 0 ? (
-          <div className="max-h-64 overflow-auto rounded-md border border-border">
-            <table className="w-full border-collapse text-sub">
-              <thead>
-                <tr className="bg-card">
-                  {out.columns.map((c) => <th className="px-2 py-1 text-left font-normal text-ink-2" key={c}>{c}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {out.rows.map((r, i) => (
-                  <tr className="border-t border-border" key={i}>
-                    {out.columns.map((c) => {
-                      const v = fmt(r[c]);
-                      return <td className={`max-w-[18rem] truncate px-2 py-1 ${v.dim ? "text-ink-3" : "text-ink"}`} key={c} title={v.text}>{v.text}</td>;
-                    })}
-                  </tr>
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="overflow-hidden rounded-xl border border-border">
+        <textarea
+          aria-label="SQL"
+          className="block max-h-[240px] min-h-[92px] w-full resize-y bg-card px-3 py-2.5 font-mono text-[12.5px] leading-[1.6] text-ink outline-none placeholder:text-ink-3"
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              run(draft);
+            }
+          }}
+          placeholder="SELECT * FROM orders WHERE total_cents > 5000"
+          spellCheck={false}
+          value={draft}
+        />
+        <div className="flex items-center gap-2 border-t border-border px-3 py-2">
+          <Button className="h-7 px-2.5 text-[13px]" disabled={busy || draft.trim() === ""} onClick={() => run(draft)} size="sm">
+            <Play className="size-3.5" />
+            Run
+          </Button>
+          <span className="text-[12px] text-ink-3">⌘↵</span>
+          {history.length > 0 ? (
+            <div className="ml-auto">
+              <Picker label="Recent" width="max-h-[280px] w-[420px]">
+                {history.map((h) => (
+                  <DropdownMenuItem
+                    className="font-mono text-[12px]"
+                    key={h}
+                    onClick={() => { setDraft(h); run(h); }}
+                  >
+                    <span className="truncate">{h}</span>
+                  </DropdownMenuItem>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+              </Picker>
+            </div>
+          ) : null}
+        </div>
       </div>
-    </details>
+
+      {err ? <Empty>{err.slice(0, 400)}</Empty> : null}
+      {busy && !out ? <Empty>Running…</Empty> : null}
+
+      {out && !err ? (
+        out.rows.length === 0 ? (
+          <Empty>0 rows.</Empty>
+        ) : (
+          <>
+            <Grid
+              columns={out.columns}
+              focus={focus}
+              onFocus={setFocus}
+              rows={out.rows}
+            />
+            {focus && out.rows[focus.row] ? (
+              <CellPanel
+                column={focus.column}
+                columns={out.columns}
+                onClose={() => setFocus(null)}
+                onColumn={(name) => setFocus({ row: focus.row, column: name })}
+                ordinal={focus.row + 1}
+                row={out.rows[focus.row]}
+              />
+            ) : null}
+            <span className="text-[13px] tabular-nums text-ink-2">
+              {/* Said, because a truncated answer that looks complete is worse
+                  than a slow one. The LIMIT is theirs to choose. */}
+              {out.truncated
+                ? `first ${out.rows.length.toLocaleString()} rows — add a LIMIT to choose`
+                : `${out.rows.length.toLocaleString()} ${out.rows.length === 1 ? "row" : "rows"}`}
+            </span>
+          </>
+        )
+      ) : null}
+    </div>
   );
 }
 
