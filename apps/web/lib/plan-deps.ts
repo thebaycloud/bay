@@ -233,8 +233,8 @@ export function runtimeMismatch(manifests: { pyproject?: string | null; packageJ
   if (py) {
     const need = lowestAccepted(py);
     if (need && below(RUNTIME_VERSIONS.python, need)) {
-      return `this app needs Python ${py} and the runner has ${RUNTIME_VERSIONS.python}`
-        + ` — widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the runner to move.`
+      return `this app needs Python ${py} and the platform has ${RUNTIME_VERSIONS.python}`
+        + ` — widen requires-python in pyproject.toml to accept ${RUNTIME_VERSIONS.python}, or wait for the platform to move.`
         + ` Nothing in the code can fix this one.`;
     }
   }
@@ -242,8 +242,8 @@ export function runtimeMismatch(manifests: { pyproject?: string | null; packageJ
   if (engines) {
     const need = lowestAccepted(engines);
     if (need && below(RUNTIME_VERSIONS.node, need)) {
-      return `this app needs Node ${engines} and the runner has ${RUNTIME_VERSIONS.node}`
-        + ` — widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the runner to move.`
+      return `this app needs Node ${engines} and the platform has ${RUNTIME_VERSIONS.node}`
+        + ` — widen engines.node in package.json to accept ${RUNTIME_VERSIONS.node}, or wait for the platform to move.`
         + ` Nothing in the code can fix this one.`;
     }
   }

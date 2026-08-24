@@ -54,7 +54,7 @@ import { stripQualityGates } from "@/lib/build-gates";
 import { type Limits } from "@/lib/entitlements";
 import { countIfUnder, claimFreeFix } from "@/lib/usage";
 import { agentLimitMessage } from "@/lib/plan-copy";
-import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, runnerPrepareConfig, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
+import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, proxyWait, type DbAddress } from "@/lib/db-address";
 import { databaseEnv, databaseEnvNames, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
 import { verifyApp } from "@/lib/verify-app";

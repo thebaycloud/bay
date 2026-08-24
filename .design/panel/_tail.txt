@@ -1,8 +1,0 @@
-</x-dc>
-<script data-dc-script data-props='{"dark":{"editor":"boolean","default":false,"section":"Theme"}}'>
-class Component extends DCLogic {
-  renderVals() { return { themeClass: this.props.dark ? 'r dark' : 'r' }; }
-}
-</script>
-</body>
-</html>

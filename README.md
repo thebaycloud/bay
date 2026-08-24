@@ -61,18 +61,11 @@ not of principle.
 | `packages/detector` | Reads a repository and works out what it is: language, framework, runtime, install, build, start, database. Deterministic — no model, no network. The CLI bundles the same source, so `bay check` answers what the server would answer. |
 | `packages/prompts` | The sentences every prompt and agent document here restates. |
 
-**`infra/` — what builds and provisions**
-
-| Path | What it is |
-|---|---|
-| `infra/bases` | Base images apps are built on top of. |
-| `infra/runner` | The scripts baked into every app image — fetch the code, install, build, start. |
-| `infra/buildkit` | Provisions the long-lived BuildKit host builds go through. |
-
 **And**
 
 | Path | What it is |
 |---|---|
+| `scripts/` | Setup and provisioning, run by hand. Includes `scripts/buildkit`, which provisions the long-lived BuildKit host builds go through. |
 | `examples/` | Small apps used as deploy fixtures — a broken one, a Postgres one, a static one. |
 | `docs/` | Architecture, decision records, plans, and the research behind them. |
 
