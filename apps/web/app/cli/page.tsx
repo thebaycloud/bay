@@ -2,13 +2,12 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { signOut } from "next-auth/react";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TopBar } from "@/components/TopBar";
-import { Row, RowGroup, RowList } from "@/components/panel/atoms";
+import { Row, RowList } from "@/components/panel/atoms";
 import { RowSkeleton } from "@/components/Skeleton";
-import { productName } from "@/lib/brand";
+import { Skeleton } from "@/components/ui/skeleton";
 
 /**
  * Authorizing the CLI, on the product's own design system.
@@ -126,15 +125,6 @@ function CliAuth() {
     }
   }
 
-  // Signing out from here has to come back here: the CLI is holding a loopback
-  // port open, and dropping the visitor on the dashboard would strand it until
-  // it times out.
-  async function switchAccount() {
-    await signOut({ redirect: false });
-    const back = window.location.pathname + window.location.search;
-    window.location.href = `/login?callbackUrl=${encodeURIComponent(back)}`;
-  }
-
   const command = `bay login --token ${token}`;
 
   return (
@@ -144,33 +134,25 @@ function CliAuth() {
           who opened it to check which account they were about to authorize had to
           type a URL to get anywhere else. */}
       <TopBar />
-      <div className="mx-auto flex w-full max-w-[520px] flex-col gap-6 px-6 py-14">
-        <header className="flex flex-col gap-1.5">
-          <h1 className="text-[24px] font-[450] tracking-[-0.02em] text-ink">Authorize the CLI</h1>
-          <p className="text-[15px] leading-[1.6] text-ink-2">
-            This connects <span className="text-ink">{name}</span> to your {productName()} account so
-            your coding agent can ship and manage apps from the terminal.
-          </p>
-        </header>
+      {/* 760px, not 520. The machines list is a table with four columns now, and
+          a column of dates does not fit in a card sized for one sentence. */}
+      <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-6 py-14">
+        <h1 className="text-[24px] font-[450] tracking-[-0.02em] text-ink">Authorize the CLI</h1>
 
+        {/* The two facts, as label-and-value rows — which is where the sentence
+            that used to be here went. It said what the machine and the account
+            were in prose; the rows say it in four words and stay true. */}
         <RowList>
-          {/* The account, or its shape. `?? "…"` put an ellipsis where an email
-              goes, which reads as an address nobody has — on the one screen whose
-              job is telling you WHICH account you are about to authorize. */}
           {acct ? (
-            <Row sub="signed in as" title={acct.email}>
-              <Button
-                className="h-7 px-2.5 text-[13px] text-ink-2 hover:text-ink"
-                onClick={switchAccount}
-                size="sm"
-                variant="ghost"
-              >
-                Not you?
-              </Button>
+            <Row title="Account">
+              <span className="text-[13px] text-ink-2">{acct.email}</span>
             </Row>
           ) : (
-            <RowSkeleton tile={false} w={208} />
+            <RowSkeleton tile={false} w={88} />
           )}
+          <Row title="Machine">
+            <span className="text-[13px] text-ink-2">{name}</span>
+          </Row>
         </RowList>
 
         {state !== "done" ? (
@@ -222,77 +204,107 @@ function CliAuth() {
 
       {state === "error" ? <p className="text-[14px] text-red">{msg}</p> : null}
 
-      {/* Everything already holding a key to this account. A machine you no
-          longer use, or one you don't recognize, is revoked from here. */}
-      <RowGroup title="Authorized machines">
-        {tokens === null ? (
-          <>
-            <RowSkeleton tile={false} w={176} />
-            <RowSkeleton tile={false} w={152} />
-          </>
-        ) : null}
+      {/* Everything already holding a key to this account, as a table.
+          
+          Columns rather than a name with a sentence under it: three machines all
+          called "MacBook-Pro-3.local" are told apart by their dates, and dates
+          buried in prose cannot be compared down a column. Which is the whole
+          reason to draw a table — the row you want to revoke is the one whose
+          "last used" is old. */}
+      <section className="flex flex-col gap-2.5">
+        <div className="flex items-baseline gap-2 px-0.5">
+          <h2 className="text-[15px] text-ink">Authorized machines</h2>
+          {tokens?.length ? (
+            <span className="text-[13px] text-ink-3">{tokens.length}</span>
+          ) : null}
+        </div>
 
-        {tokens?.length === 0 ? (
-          <Row sub="this will be the first" title="Nothing is authorized yet" />
-        ) : null}
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="grid grid-cols-[minmax(0,1fr)_112px_112px_32px] items-center gap-3 border-b border-border px-4 py-2.5">
+            <span className="text-[13px] text-ink-3">Name</span>
+            <span className="text-[13px] text-ink-3">Added</span>
+            <span className="text-[13px] text-ink-3">Last used</span>
+            <span aria-hidden="true" />
+          </div>
 
-        {tokens?.map((t) => (
-          <Row
-            key={t.id}
-            sub={`added ${shortDate(t.created_at)} · last used ${shortDate(t.last_used_at)}`}
-            title={
-              <>
-                {t.name || "cli"}
-                {t.id === freshId ? (
-                  <span className="ml-2 text-[13px] font-normal text-ink-3">just now</span>
-                ) : null}
-              </>
-            }
-          >
-            {confirmingId === t.id ? (
-              <>
-                <Button
-                  className="h-7 px-2.5 text-[13px]"
-                  disabled={revoking === t.id}
-                  onClick={() => revoke(t.id)}
-                  size="sm"
+          {tokens === null
+            ? [0, 1].map((i) => (
+                <div
+                  className="grid grid-cols-[minmax(0,1fr)_112px_112px_32px] items-center gap-3 border-b border-border px-4 py-2.5 last:border-0"
+                  key={i}
                 >
-                  {revoking === t.id ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  Revoke it
-                </Button>
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-4 w-20" />
+                  <Skeleton className="h-4 w-20" />
+                  <span aria-hidden="true" />
+                </div>
+              ))
+            : null}
+
+          {tokens?.length === 0 ? (
+            <p className="px-4 py-5 text-[14px] text-ink-2">
+              Nothing is authorized yet — this will be the first.
+            </p>
+          ) : null}
+
+          {tokens?.map((t) => (
+            <div
+              className="group grid grid-cols-[minmax(0,1fr)_112px_112px_32px] items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-0 hover:bg-tile"
+              key={t.id}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 truncate text-[14px] text-ink">{t.name || "cli"}</span>
+                {t.id === freshId ? (
+                  <span className="shrink-0 text-[13px] text-ink-3">just now</span>
+                ) : null}
+              </span>
+              <span className="text-[13px] tabular-nums text-ink-2">{shortDate(t.created_at)}</span>
+              <span className="text-[13px] tabular-nums text-ink-2">
+                {shortDate(t.last_used_at)}
+              </span>
+
+              {/* Confirmed in place. Revoking is immediate — that machine's next
+                  command is rejected — so the second click is the warning, said
+                  by the word on the button rather than by a paragraph under the
+                  table that nobody reads until afterwards. */}
+              {confirmingId === t.id ? (
+                <span className="col-span-4 flex items-center gap-2 pt-1">
+                  <Button
+                    className="h-7 px-2.5 text-[13px]"
+                    disabled={revoking === t.id}
+                    onClick={() => revoke(t.id)}
+                    size="sm"
+                  >
+                    {revoking === t.id ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                    Revoke, it stops working now
+                  </Button>
+                  <Button
+                    className="h-7 px-2.5 text-[13px]"
+                    onClick={() => setConfirmingId(null)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    Keep
+                  </Button>
+                </span>
+              ) : (
                 <Button
-                  className="h-7 px-2.5 text-[13px]"
-                  onClick={() => setConfirmingId(null)}
-                  size="sm"
+                  aria-label={`Revoke ${t.name || "cli"}`}
+                  className="size-7 text-ink-3 opacity-0 transition-opacity hover:text-ink group-hover:opacity-100 focus-visible:opacity-100"
+                  onClick={() => {
+                    setConfirmingId(t.id);
+                    setMsg("");
+                  }}
+                  size="icon-sm"
                   variant="ghost"
                 >
-                  Keep
+                  <Trash2 className="size-3.5" />
                 </Button>
-              </>
-            ) : (
-              <Button
-                aria-label={`Revoke ${t.name || "cli"}`}
-                className="size-7 text-ink-3 hover:text-ink"
-                onClick={() => {
-                  setConfirmingId(t.id);
-                  setMsg("");
-                }}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            )}
-          </Row>
-        ))}
-      </RowGroup>
-
-      {tokens && tokens.length > 0 ? (
-        <p className="px-0.5 text-[13px] leading-[1.6] text-ink-3">
-          Revoking takes effect immediately — that machine’s next command is rejected and it has
-          to sign in again.
-        </p>
-      ) : null}
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
       </div>
     </>
   );
