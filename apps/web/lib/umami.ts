@@ -369,5 +369,206 @@ export async function websiteStats(
   };
 }
 
+/* ==========================================================================
+   EVERYTHING UMAMI HAS, FOR THE SCREEN THAT ASKED FOR IT
+
+   `websiteStats` above is the CHEAP read: six numbers and two lists, on a path
+   that is polled. This is the other one — every dimension the instance will
+   answer for, the time series, who is on the site this second, and the last few
+   visitors — and it happens once, when somebody opens the Analytics screen, for
+   the window that screen asked for.
+
+   Two reads rather than one because they have different budgets and different
+   lifetimes, not because the data differs.
+   ========================================================================== */
+
+/**
+ * What can be asked for, and what to call it where a person reads it.
+ *
+ * The names are tried IN ORDER and the first that answers wins — `path` is what
+ * this instance calls the pages metric and `url` is what an older one calls it,
+ * and neither is right on both. A dimension the instance refuses (this one
+ * refuses `host`) is simply absent from the answer, because a missing column
+ * beside a true visitor count is a worse reading, not an unreadable one.
+ *
+ * Verified against the running instance on 25 Aug: path, title, referrer, query,
+ * browser, os, device, screen, country, region, city, language, event, tag,
+ * channel, entry and exit all answer; url and host are 400.
+ */
+export const DIMENSIONS: [string, string[]][] = [
+  ["pages", ["path", "url"]],
+  ["entry", ["entry", "entry_url"]],
+  ["exit", ["exit", "exit_url"]],
+  ["titles", ["title"]],
+  ["from", ["referrer"]],
+  ["channel", ["channel"]],
+  ["query", ["query"]],
+  ["country", ["country"]],
+  ["region", ["region"]],
+  ["city", ["city"]],
+  ["language", ["language"]],
+  ["browser", ["browser"]],
+  ["os", ["os"]],
+  ["device", ["device"]],
+  ["screen", ["screen"]],
+  ["event", ["event"]],
+];
+
+/** One point of the time series. `t` is the start of the bucket, in ms. */
+export interface Point { t: number; views: number; visitors: number }
+
+/** One visitor, as umami remembers them. No name, no id that means anything. */
+export interface Visitor {
+  id: string;
+  firstAt: string;
+  lastAt: string;
+  visits: number;
+  views: number;
+  country: string | null;
+  city: string | null;
+  device: string | null;
+  browser: string | null;
+  os: string | null;
+}
+
+export interface WebsiteDetail extends WebsiteStats {
+  startAt: number;
+  endAt: number;
+  /** hour for a day, day for anything longer — what the series is bucketed by. */
+  unit: string;
+  /** People on the site right now, or null when umami would not say. */
+  active: number | null;
+  series: Point[];
+  /** Keyed by the names in DIMENSIONS. A dimension this instance refuses is absent. */
+  dims: Record<string, [string, number][]>;
+  visitors_recent: Visitor[];
+}
+
+/** Ranked rows, trimmed, with the nameless bucket given a name. */
+function rank(rows: { x: string | null; y: number }[] | null, blank: string, keep = 8): [string, number][] {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((r) => typeof r?.y === "number" && r.y > 0)
+    .slice(0, keep)
+    .map((r) => [r.x && String(r.x).trim() ? String(r.x) : blank, Math.round(r.y)] as [string, number]);
+}
+
+/**
+ * Two series into one, on the buckets umami actually returned.
+ *
+ * Umami answers pageviews and sessions as SEPARATE arrays and omits the buckets
+ * with nothing in them — from either one independently. Zipping by index would
+ * therefore pair a Tuesday's views with a Thursday's visitors as soon as one
+ * quiet day appeared in one array and not the other. Keyed by timestamp, and the
+ * gaps are filled with zeroes so a chart drawn from this has an x-axis that is
+ * time rather than a list of the days something happened.
+ */
+export function zip(
+  views: { x: string; y: number }[] | undefined,
+  sessions: { x: string; y: number }[] | undefined,
+  startAt: number,
+  endAt: number,
+  unit: string,
+): Point[] {
+  const step = unit === "hour" ? 3600_000 : 86400_000;
+  const at = (x: string) => {
+    const ms = Date.parse(x.endsWith("Z") || x.includes("+") ? x : `${x}Z`);
+    return Number.isFinite(ms) ? Math.floor(ms / step) * step : NaN;
+  };
+  const v = new Map<number, number>();
+  const p = new Map<number, number>();
+  for (const r of views ?? []) { const t = at(r.x); if (!Number.isNaN(t)) v.set(t, Math.round(Number(r.y) || 0)); }
+  for (const r of sessions ?? []) { const t = at(r.x); if (!Number.isNaN(t)) p.set(t, Math.round(Number(r.y) || 0)); }
+
+  const first = Math.floor(startAt / step) * step;
+  const last = Math.floor(endAt / step) * step;
+  const out: Point[] = [];
+  // Bounded: 30 days of hours would be 720 points, and nothing asks for that —
+  // but a clock skew or a bad range must not turn into a million-point loop.
+  for (let t = first; t <= last && out.length < 800; t += step) {
+    out.push({ t, views: v.get(t) ?? 0, visitors: p.get(t) ?? 0 });
+  }
+  return out;
+}
+
+/** People on the site this second. Null, not 0, when umami would not say. */
+function activeCount(raw: unknown): number | null {
+  if (typeof raw === "number") return Math.round(raw);
+  if (Array.isArray(raw)) return raw.length;
+  if (raw && typeof raw === "object") {
+    const o = raw as { visitors?: number; x?: number };
+    if (typeof o.visitors === "number") return Math.round(o.visitors);
+    if (typeof o.x === "number") return Math.round(o.x);
+  }
+  return null;
+}
+
+function visitorRow(r: Record<string, unknown>): Visitor {
+  const str = (k: string) => (typeof r[k] === "string" && r[k] ? (r[k] as string) : null);
+  return {
+    id: String(r.id ?? ""),
+    firstAt: String(r.firstAt ?? ""),
+    lastAt: String(r.lastAt ?? ""),
+    visits: Math.round(Number(r.visits) || 0),
+    views: Math.round(Number(r.views) || 0),
+    country: str("country"),
+    city: str("city"),
+    device: str("device"),
+    browser: str("browser"),
+    os: str("os"),
+  };
+}
+
+/**
+ * The whole picture for one app over one window.
+ *
+ * Every query goes out together, so the wall clock is the slowest one rather
+ * than the sum — about twenty of them, which is why this is not on the polled
+ * path. A dimension that fails is absent; the reading survives. Only `/stats`
+ * failing makes the whole thing null, because without the headline numbers
+ * there is nothing to draw a screen around.
+ */
+export async function websiteDetail(websiteId: string, range = "7d"): Promise<WebsiteDetail | null> {
+  const span = WINDOWS[range] ?? WINDOWS["7d"];
+  const endAt = Date.now();
+  const startAt = endAt - span;
+  const unit = span <= WINDOWS["1d"] ? "hour" : "day";
+  const q = `startAt=${startAt}&endAt=${endAt}`;
+
+  const json = async <T,>(r: Response | null): Promise<T | null> =>
+    r && r.ok ? ((await r.json().catch(() => null)) as T | null) : null;
+
+  const [base, seriesRes, activeRes, sessionsRes, ...ranked] = await Promise.all([
+    websiteStats(websiteId, range),
+    api(`/api/websites/${websiteId}/pageviews?${q}&unit=${encodeURIComponent(unit)}`),
+    api(`/api/websites/${websiteId}/active`),
+    api(`/api/websites/${websiteId}/sessions?${q}&pageSize=8&page=1`),
+    ...DIMENSIONS.map(([, names]) => metricList(websiteId, q, names)),
+  ]);
+  if (!base) return null;
+
+  const series = await json<{ pageviews?: { x: string; y: number }[]; sessions?: { x: string; y: number }[] }>(seriesRes);
+  const sessions = await json<{ data?: Record<string, unknown>[] }>(sessionsRes);
+
+  const dims: Record<string, [string, number][]> = {};
+  DIMENSIONS.forEach(([key], i) => {
+    const rows = rank(ranked[i], key === "from" ? "direct" : key === "query" ? "none" : "unknown");
+    // Absent rather than empty when the instance refused the question: an empty
+    // list is a claim about the app, and this one would be a claim about umami.
+    if (ranked[i] !== null) dims[key] = rows;
+  });
+
+  return {
+    ...base,
+    startAt,
+    endAt,
+    unit,
+    active: activeCount(await json<unknown>(activeRes)),
+    series: zip(series?.pageviews, series?.sessions, startAt, endAt, unit),
+    dims,
+    visitors_recent: (sessions?.data ?? []).map(visitorRow),
+  };
+}
+
 /** Test seam: the parsers above, exercised without a network. */
-export const __test = { num, before };
+export const __test = { num, before, zip, activeCount, rank };

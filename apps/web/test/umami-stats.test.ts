@@ -203,3 +203,96 @@ test("umami not answering the list creates nothing at all", async () => {
   // unreachable minute turns into a duplicate site per deploy.
   assert.ok(!asked.some((a) => a.startsWith("POST /api/websites")));
 });
+
+/* ==========================================================================
+   THE FULL READ — every dimension, the series, who is here now
+   ========================================================================== */
+
+test("the series is keyed by time, not by index — umami omits its empty buckets", async () => {
+  const { __test } = await lib();
+  // Umami answers pageviews and sessions as separate arrays and drops the
+  // buckets with nothing in them, INDEPENDENTLY. Zipped by index, this pairs
+  // the 17th's views with the 16th's visitors the moment one array skips a day.
+  const day = 86_400_000;
+  const t0 = Date.UTC(2026, 7, 16);
+  const points = __test.zip(
+    [{ x: "2026-08-16T00:00:00Z", y: 4 }, { x: "2026-08-18T00:00:00Z", y: 37 }],
+    [{ x: "2026-08-18T00:00:00Z", y: 3 }],
+    t0,
+    t0 + 2 * day,
+    "day",
+  );
+  assert.deepEqual(points, [
+    { t: t0, views: 4, visitors: 0 },
+    { t: t0 + day, views: 0, visitors: 0 },   // the quiet day exists on the axis
+    { t: t0 + 2 * day, views: 37, visitors: 3 },
+  ]);
+});
+
+test("a window with nothing in it is still a window", async () => {
+  const { __test } = await lib();
+  const t0 = Date.UTC(2026, 7, 20, 0);
+  const points = __test.zip([], undefined, t0, t0 + 3 * 3600_000, "hour");
+  assert.equal(points.length, 4);
+  assert.ok(points.every((p: { views: number; visitors: number }) => p.views === 0 && p.visitors === 0));
+});
+
+test("nobody here now is 0; umami not saying is null", async () => {
+  const { __test } = await lib();
+  assert.equal(__test.activeCount({ visitors: 3 }), 3);
+  assert.equal(__test.activeCount([{ x: 1 }, { x: 2 }]), 2);
+  assert.equal(__test.activeCount(7), 7);
+  assert.equal(__test.activeCount(null), null);
+  assert.equal(__test.activeCount({ nope: 1 }), null);
+});
+
+test("the full read carries every dimension the instance answers, and omits the ones it refuses", async () => {
+  const { websiteDetail } = await lib();
+  routes = {
+    "/stats?": { body: FLAT },
+    "type=path": { body: [{ x: "/", y: 10 }, { x: "/v", y: 1 }] },
+    "type=referrer": { body: [{ x: "", y: 2 }] },
+    "type=country": { body: [{ x: "KZ", y: 7 }] },
+    // This instance refuses `host`, and there is no second name to try.
+    "type=host": { status: 400, body: {} },
+    "type=": { body: [] },
+    "/pageviews?": { body: { pageviews: [{ x: "2026-08-24T00:00:00Z", y: 5 }], sessions: [] } },
+    "/active": { body: { visitors: 2 } },
+    "/sessions?": {
+      body: {
+        data: [{
+          id: "s1", firstAt: "2026-08-24T10:00:00Z", lastAt: "2026-08-24T10:18:00Z",
+          visits: 13, views: 121, country: "KZ", city: "Astana", device: "laptop", browser: "chrome", os: "Mac OS",
+        }],
+      },
+    },
+  };
+  const d = await websiteDetail("w1", "7d");
+  assert.ok(d);
+  assert.equal(d.visitors, 10);
+  assert.equal(d.active, 2);
+  assert.deepEqual(d.dims.pages, [["/", 10], ["/v", 1]]);
+  // A referrer with no name is a direct visit, named rather than dropped.
+  assert.deepEqual(d.dims.from, [["direct", 2]]);
+  assert.deepEqual(d.dims.country, [["KZ", 7]]);
+  // Absent, not empty: an empty list would be a claim about the app, and this
+  // is a fact about umami.
+  assert.equal("hosts" in d.dims, false);
+  assert.equal(d.visitors_recent.length, 1);
+  assert.equal(d.visitors_recent[0].city, "Astana");
+  assert.equal(d.unit, "day");
+  assert.ok(d.series.length >= 7, "a seven-day window has seven or eight buckets");
+});
+
+test("a day's window is bucketed by hour, a month's by day", async () => {
+  const { websiteDetail } = await lib();
+  routes = { "/stats?": { body: FLAT }, "type=": { body: [] }, "/pageviews?": { body: {} }, "/active": { body: {} }, "/sessions?": { body: { data: [] } } };
+  assert.equal((await websiteDetail("w1", "1d"))?.unit, "hour");
+  assert.equal((await websiteDetail("w1", "30d"))?.unit, "day");
+});
+
+test("no stats means no screen, not a screen of zeroes", async () => {
+  const { websiteDetail } = await lib();
+  routes = { "/stats?": { status: 503, body: {} }, "type=": { body: [] } };
+  assert.equal(await websiteDetail("w1", "7d"), null);
+});
