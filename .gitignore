@@ -1,5 +1,10 @@
 node_modules/
 .next/
+# A second build output, for verifying a production build WITHOUT overwriting the
+# one `next dev` is serving: `next build` and `next dev` share `.next`, and
+# building over a running dev server 404s every chunk the browser is holding.
+# See the NEXT_DIST_DIR branch in apps/web/next.config.mjs.
+.next-verify/
 out/
 dist/
 build/
