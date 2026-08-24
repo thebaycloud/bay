@@ -6,6 +6,7 @@ import { type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SharePopover } from "@/components/SharePopover";
 import { useQueryState } from "@/lib/use-query-state";
 import { cn } from "@/lib/utils";
 
@@ -130,6 +131,12 @@ export function Workbench({
           {address}
           <ArrowUpRight size={13} strokeWidth={2} aria-hidden="true" />
         </a>
+
+        {/* Top right, on BOTH tabs. Sharing is not a development concern — you do
+            it while looking at the app, mid-conversation about it — and as a row
+            inside Dev mode it also hid the only notice that somebody was waiting
+            to be let in. */}
+        <SharePopover address={address} slug={slug} />
       </header>
 
       <div

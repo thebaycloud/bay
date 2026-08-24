@@ -10,7 +10,6 @@ import {
   KeyRound,
   RefreshCw,
   Ship,
-  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -34,7 +33,6 @@ import { JobsPanel } from "@/components/JobsPanel";
 import { IssuesPanel } from "@/components/IssuesPanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
 import { GitPanel } from "@/components/GitPanel";
-import SharePanel from "@/components/SharePanel";
 import { useQueryState } from "@/lib/use-query-state";
 import {
   deriveReading,
@@ -48,11 +46,11 @@ import {
  * Dev mode: the panel's cell grid, and the screens behind it.
  *
  * A port of homeScreen from services/proxy/panel/cells.js — Address full width,
- * then Analytics|Ships, Data|Keys, Infra|Access. Each cell
+ * then Analytics|Ships, Data|Keys and Infra. Each cell
  * carries one live fact and pushes into a screen; the back affordance pops.
  *
  * The screens REUSE the panels that already exist rather than being rewritten.
- * DatabasePanel, StoragePanel, JobsPanel, IssuesPanel, DomainsPanel and SharePanel
+ * DatabasePanel, StoragePanel, JobsPanel, IssuesPanel and DomainsPanel
  * are roughly 570 working, shipped lines that answer the same questions these
  * screens ask. What Cockpit contributed was chrome — a brand bar, an app switcher,
  * a tab strip — and that is what the workbench already provides, which is why the
@@ -71,7 +69,6 @@ type View =
   | "data"
   | "keys"
   | "infra"
-  | "access"
 
 /**
  * A mark per block.
@@ -88,7 +85,6 @@ const ICON = {
   data: Database,
   keys: KeyRound,
   infra: Activity,
-  access: Users,
 } as const;
 
 const TITLE: Record<View, string> = {
@@ -97,7 +93,6 @@ const TITLE: Record<View, string> = {
   data: "Data",
   keys: "Keys",
   infra: "Infra",
-  access: "Access",
 };
 
 export function Dev({ slug, address }: { slug: string; address: string }) {
@@ -205,24 +200,9 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
         ) : null}
 
         <RowList>
-          <Row icon={ICON.access} onOpen={() => setView("access")} title="Access">
-            <Chips>
-              {!has("share") ? <ChipSkeleton w={104} /> : null}
-              <Avatars initials={d.pInitials} />
-              {has("share") ? (
-                <StatusChip
-                  text={
-                    d.who === "public"
-                      ? "anyone with the link"
-                      : d.who === "shared"
-                        ? "people you invited"
-                        : "only you"
-                  }
-                  tone={d.who === "public" ? "grey" : "green"}
-                />
-              ) : null}
-            </Chips>
-          </Row>
+          {/* Access has left this list for the top right of the workbench header,
+            where it is reachable from Chat as well and where a pending request
+            is visible without going looking for it. See SharePopover. */}
 
           <Row icon={ICON.analytics} onOpen={() => setView("analytics")} title="Analytics">
             <Chips>
@@ -358,16 +338,9 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
       </div>
     );
   }
-  if (view === "access") {
-    return (
-      <div className="flex flex-col gap-6">
-        <SharePanel slug={slug} />
-        <GitPanel onToast={toast} slug={slug} />
-      </div>
-    );
-  }
   if (view === "ships") {
     return (
+      <div className="flex flex-col gap-6">
       <Card className="flex flex-col gap-2 rounded-xl border-border bg-card p-4 shadow-none">
         <div className="text-val text-ink">{d.ships[0].did}</div>
         <div className="text-sub text-ink-2">
@@ -383,6 +356,13 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
             not on the screen: an owner reading this wants the ship, not our
             roadmap. */}
       </Card>
+
+      {/* The repository, HERE and not under Access, which is where it was. "Every
+          push to main ships this app" is a statement about deploys; it shared a
+          screen with sharing only because both had been called access. Draws
+          nothing when no repository is connected. */}
+      <GitPanel onToast={toast} slug={slug} />
+      </div>
     );
   }
   if (view === "keys") {

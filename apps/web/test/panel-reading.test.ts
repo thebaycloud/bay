@@ -10,7 +10,7 @@ import { deriveReading, type Raw } from "@/lib/panel/reading";
  */
 
 test("an empty read set still produces a whole Reading", () => {
-  const d = deriveReading("l3sgp", "l3sgp.supersonic.cv", {});
+  const d = deriveReading("l3sgp", "l3sgp.thebay.cloud", {});
   assert.equal(d.slug, "l3sgp");
   assert.equal(d.an, null);
   assert.deepEqual(d.keys, []);
@@ -23,10 +23,12 @@ test("an empty read set still produces a whole Reading", () => {
 });
 
 test("one read landing fills its own fields and nothing else", () => {
-  const raw: Raw = { share: { visibility: "public", grants: ["a@b.com"] } };
-  const d = deriveReading("l3sgp", "l3sgp.supersonic.cv", raw);
-  assert.equal(d.who, "public");
-  assert.deepEqual(d.people, ["a@b.com"]);
+  // `share` used to be one of these reads. Access moved to the workbench header,
+  // which fetches it itself for the waiting-to-be-let-in badge, so the panel does
+  // not ask a second time — see SharePopover.
+  const raw: Raw = { env: { keys: ["DATABASE_URL", "STRIPE_SECRET"] } };
+  const d = deriveReading("l3sgp", "l3sgp.thebay.cloud", raw);
+  assert.deepEqual(d.keys.map((k) => k.name), ["DATABASE_URL", "STRIPE_SECRET"]);
   // Analytics has not answered, and that is not the same as zero visitors.
   assert.equal(d.an, null);
 });
@@ -34,7 +36,7 @@ test("one read landing fills its own fields and nothing else", () => {
 test("a read that answers null is still an answer", () => {
   // `/_xray` resolves to null when the tenant cannot be reached. Deriving from it
   // must not throw — the row shows nothing, which is what null means.
-  const d = deriveReading("l3sgp", "l3sgp.supersonic.cv", { live: null, an: {} });
+  const d = deriveReading("l3sgp", "l3sgp.thebay.cloud", { live: null, an: {} });
   assert.deepEqual(d.live, []);
   assert.deepEqual(d.here, []);
   assert.equal(d.an, null);

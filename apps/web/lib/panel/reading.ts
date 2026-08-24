@@ -53,10 +53,6 @@ export type Reading = {
   anReady: boolean;
   here: string[];
   initials: string[];
-  who: string;
-  people: string[];
-  pInitials: string[];
-  requests: unknown[];
   tables: [string, number][];
   files: number;
   missing: string | null;
@@ -148,14 +144,13 @@ function keyName(k: Json | string): string {
  * answer arrived in 40ms sat behind `/jobs`, which spawns the gcloud CLI. Nothing
  * appeared until everything had.
  */
-export type Part = "share" | "env" | "db" | "store" | "jobs" | "dep" | "an" | "live";
+export type Part = "env" | "db" | "store" | "jobs" | "dep" | "an" | "live";
 
 /** The raw answers, as they arrive. Absent means "not yet". */
 export type Raw = Partial<Record<Part, Json | null>>;
 
 /** What each read is, and how long it is worth waiting for. */
 const PARTS: { key: Part; get: (slug: string, addr: string) => Promise<Json | null>; ms: number }[] = [
-  { key: "share", get: (s) => api(s, "/share"), ms: 6000 },
   { key: "env", get: (s) => api(s, "/env"), ms: 6000 },
   { key: "db", get: (s) => api(s, "/db"), ms: 6000 },
   { key: "store", get: (s) => api(s, "/storage"), ms: 6000 },
@@ -208,7 +203,6 @@ export function readParts(
  * gave us.
  */
 export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
-  const share = (raw.share ?? {}) as Json;
   const env = (raw.env ?? {}) as Json;
   const db = (raw.db ?? {}) as Json;
   const store = (raw.store ?? {}) as Json;
@@ -217,7 +211,6 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
   const an = (raw.an ?? {}) as Json;
   const live = raw.live as Json | null | undefined;
 
-  const grants: string[] = share.grants ?? [];
   const paths = live?.live?.paths ?? [];
   const here: string[] = live?.live?.here?.names ?? [];
   const stats = an.stats ?? null;
@@ -250,10 +243,6 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
     anReady: Boolean(an.provisioned),
     here,
     initials: here.map(ini),
-    who: share.visibility ?? "private",
-    people: grants,
-    pInitials: grants.map(ini),
-    requests: share.requests ?? [],
     tables: (db.tables ?? []).map(tableRow),
     files: (store.objects ?? []).length,
     missing: db.error ?? null,
