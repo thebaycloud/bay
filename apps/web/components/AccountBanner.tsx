@@ -56,7 +56,7 @@ export function AccountBanner() {
   const nudge: { reason: PaywallReason; text: React.ReactNode } | null = atApps
     ? { reason: "app_limit", text: <><b>You're using all {u.maxApps} free apps.</b> Pro is $20/month for unlimited.</> }
     : nearBuilds
-      ? { reason: "build_limit", text: <><b>{u.builds} of {u.monthlyBuilds} builds used this month.</b> They reset on the 1st.</> }
+      ? { reason: "build_limit", text: <><b>{u.builds} of {u.monthlyBuilds} deploys used this month.</b> They reset on the 1st.</> }
       : atPublic
         ? { reason: "public_limit", text: <><b>Your one public app is in use.</b> Sharing by email is still unlimited.</> }
         : null;

@@ -49,6 +49,11 @@ const PRICE: Record<string, string> = { free: "$0 / forever", pro: "$20 / month"
  * `N of M` rather than a percentage. A percentage is how you read a meter with a
  * large ceiling; these ceilings are 3 and 10, and "33% used" of three apps is a
  * worse sentence than "1 of 3".
+ *
+ * "Deploys", not "Builds". The counter is incremented once per deploy dispatched
+ * — see `countIfUnder` in /api/deploy — so "builds" named an internal unit for
+ * something a person did. The column stays `builds`; the word somebody reads
+ * does not have to match a column name.
  */
 function Meter({
   label,
@@ -73,37 +78,43 @@ function Meter({
         {resets ? <span className="text-[13px] text-ink-3">{resets}</span> : null}
       </div>
 
-      {/* No track for an unlimited ceiling: there is no proportion to draw, and a
-          full-width empty bar suggests one that is merely nowhere near full. */}
-      {unlimited ? (
-        <span className="ml-auto flex items-center gap-1.5 text-[13px] text-ink-2">
-          <InfinityIcon className="size-3.5" />
-          {used} used
-        </span>
-      ) : (
-        <>
-          <span className="hidden h-2 flex-1 overflow-hidden rounded-full bg-tile sm:block">
-            {/* A floor of 4% on anything above zero: one of ten apps is 10% and
-                draws as a sliver, and a sliver reads as a rendering artefact
-                rather than as "you have used one". */}
-            <span
-              className={cn(
-                "block h-full rounded-full transition-[width]",
-                at ? "bg-red" : near ? "bg-[#B45309]" : "bg-ink",
-              )}
-              style={{ width: `${used > 0 ? Math.max(pct, 4) : 0}%` }}
-            />
-          </span>
+      {/* Every row gets a track, unlimited included — but an unlimited one is
+          drawn as a fill that FADES OUT to the right rather than as a percentage.
+          There is no proportion to draw, and a solid bar at any width is a number
+          somebody will read: a quarter-full says "25%", a full one says "you are
+          at the limit". A fill running off the end says the thing that is true —
+          it keeps going. */}
+      <span className="hidden h-2 flex-1 overflow-hidden rounded-full bg-tile sm:block">
+        {unlimited ? (
+          <span className="block h-full rounded-full bg-gradient-to-r from-ink-3 to-transparent" />
+        ) : (
+          // A floor of 4% on anything above zero: one of ten apps is 10% and
+          // draws as a sliver, and a sliver reads as a rendering artefact rather
+          // than as "you have used one".
           <span
             className={cn(
-              "shrink-0 text-[13px] tabular-nums",
-              at ? "text-red" : near ? "text-ink" : "text-ink-2",
+              "block h-full rounded-full transition-[width]",
+              at ? "bg-red" : near ? "bg-[#B45309]" : "bg-ink",
             )}
-          >
-            {used} of {max}
-          </span>
-        </>
-      )}
+            style={{ width: `${used > 0 ? Math.max(pct, 4) : 0}%` }}
+          />
+        )}
+      </span>
+      <span
+        className={cn(
+          "flex shrink-0 items-center gap-1.5 text-[13px] tabular-nums",
+          at ? "text-red" : near ? "text-ink" : "text-ink-2",
+        )}
+      >
+        {unlimited ? (
+          <>
+            <InfinityIcon className="size-3.5" />
+            {used} used
+          </>
+        ) : (
+          `${used} of ${max}`
+        )}
+      </span>
     </div>
   );
 }
@@ -239,26 +250,17 @@ export function Usage({ acct }: { acct: BillingAccount | null }) {
                 totals, the two below are spent and given back every month. */}
             <span className="h-px bg-border" />
 
-            <Meter label="Builds" max={u.monthlyBuilds} resets={resets} used={u.builds} />
-            {/* On free the monthly agent allowance is zero by design — the grant
-                is a single lifetime one — so a "0 of 0" meter would say nothing
-                true. The state that matters there is whether it is still
-                available. */}
+            <Meter label="Deploys" max={u.monthlyBuilds} resets={resets} used={u.builds} />
             {plan === "free" ? (
-              <div className="flex items-center gap-5">
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-none sm:basis-[168px]">
-                  <span className="text-[14px] font-[450] text-ink">Auto-fix</span>
-                  <span className="text-[13px] text-ink-3">one on the free plan</span>
-                </div>
-                <span
-                  className={cn(
-                    "ml-auto text-[13px]",
-                    u.freeFixAvailable ? "text-ink-2" : "text-red",
-                  )}
-                >
-                  {u.freeFixAvailable ? "not used yet" : "used"}
-                </span>
-              </div>
+              // On free the monthly allowance is zero and the grant is a single
+              // lifetime one, so this IS a meter of one — drawn as such rather
+              // than as a sentence beside four bars.
+              <Meter
+                label="Auto-fix"
+                max={1}
+                resets="one on the free plan"
+                used={u.freeFixAvailable ? 0 : 1}
+              />
             ) : (
               <Meter label="Auto-fix" max={u.monthlyAgentRuns} resets={resets} used={u.agentRuns} />
             )}

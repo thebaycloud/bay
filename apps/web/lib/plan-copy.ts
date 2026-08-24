@@ -1,4 +1,5 @@
 import type { Limits } from "./entitlements";
+import { rootDomain } from "./roots";
 
 /**
  * What a user is told when a plan limit stops them.
@@ -29,7 +30,10 @@ export function publicLimitMessage(limits: Limits): string {
 }
 
 export function buildLimitMessage(limits: Limits): string {
-  return `You've used all ${limits.monthlyBuilds} builds this month. They reset on the 1st — or upgrade at ${APP} for ${limits.monthlyBuilds >= 500 ? "more" : "500 a month"}.`;
+  // "deploys", not "builds". The meter is incremented once per DEPLOY dispatched
+  // — see countIfUnder in /api/deploy — and a refusal that names a unit the
+  // dashboard does not show is a refusal somebody cannot check.
+  return `You've used all ${limits.monthlyBuilds} deploys this month. They reset on the 1st — or upgrade at ${APP} for ${limits.monthlyBuilds >= 500 ? "more" : "500 a month"}.`;
 }
 
 export function agentLimitMessage(): string {
@@ -37,7 +41,7 @@ export function agentLimitMessage(): string {
 }
 
 export function customDomainMessage(): string {
-  return `Custom domains are on Pro. Your app keeps its supersonic.cv address — upgrade at ${APP} to point your own domain at it.`;
+  return `Custom domains are on Pro. Your app keeps its ${rootDomain()} address — upgrade at ${APP} to point your own domain at it.`;
 }
 
 /** A canceled subscription downgrades to free; nothing is ever locked outright. */
