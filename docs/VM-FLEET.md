@@ -1,5 +1,12 @@
 # Apps run on machines we own
 
+> **Historical, not current.** This document was written while the Cloud Run
+> application lane existed. That lane was removed on 16 August 2026 — applications
+> run on the fleet, `SEAL_APPS=1`, `NODE_IDENTITY=enforce`, and
+> `APP_RUNTIME_SERVICE_ACCOUNT` is set. Passages below describing apps as
+> world-invokable, or as inheriting a project-wide service account, describe a
+> shape that no longer exists. See `SECURITY.md`.
+
 Supersedes nothing. `DEPLOY-PLAN-V2.md` is about the vocabulary the platform
 speaks; this is about where the words land. Every conclusion that plan reached
 survives, and several of them get easier the moment the runtime is ours.

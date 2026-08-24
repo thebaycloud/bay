@@ -112,6 +112,16 @@ One caveat, and it costs an afternoon if nobody tells you:
 Postgres is reached through a Cloud SQL proxy on port 5433 — which brings you back to
 needing the GCP project.
 
+## Security
+
+Reporting a vulnerability: **`SECURITY.md`**. Private reporting is enabled on
+this repository — please use it rather than a public issue.
+
+Note that `docs/` holds historical documents. Several describe security
+weaknesses in present tense that were closed when the Cloud Run application
+lane was removed on 16 August 2026. `SECURITY.md` names the two that get
+reported most.
+
 ## Status
 
 In production, serving real apps. Small: a handful of apps and users at the time of
