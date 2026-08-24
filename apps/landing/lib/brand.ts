@@ -50,10 +50,19 @@ export const CONTACT_EMAIL = env("NEXT_PUBLIC_CONTACT_EMAIL", `founders@${DOMAIN
 export const SITE = env("NEXT_PUBLIC_SITE_URL", `https://${DOMAIN}`);
 
 /**
- * The npm package that provides the CLI. Usually the same word as the command,
- * but not necessarily: a name can be taken on npm and free as a binary.
+ * The npm package that provides the CLI.
+ *
+ * NOT the command name. This defaulted to CLI ("bay") and every prompt on the
+ * site therefore told an agent to run `npm i -g bay`, which succeeds and
+ * installs a real, unrelated package: `bay` on npm is a web framework at
+ * 0.6.2 owned by somebody else. The agent then has no `bay` binary and step one
+ * of the prompt has already failed, quietly and with a zero exit code.
+ *
+ * The published package is the scoped one, which is also what public/llms.txt
+ * has always said. A name can be taken on npm and free as a binary, so these two
+ * are related by nothing except habit and must be set separately.
  */
-export const PKG = env("NEXT_PUBLIC_CLI_PACKAGE", CLI);
+export const PKG = env("NEXT_PUBLIC_CLI_PACKAGE", "@thebaycloud/cli");
 
 /**
  * The repo the star count and the community link read from.

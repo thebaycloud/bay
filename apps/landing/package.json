@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "check:prompts": "node ../../scripts/sync-prompt-rules.mjs --check"
   },
   "dependencies": {
     "@paper-design/shaders-react": "^0.0.80",

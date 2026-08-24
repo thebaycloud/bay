@@ -8,7 +8,7 @@ import { MANUAL, RULES, SELFHOST_DOC, agentDoc, selfhostPrompt, templatePrompt }
  *
  * One record per template, read by three consumers: the index page, the detail
  * page, and `/templates/<slug>/agent.md`. That last one is the important
- * consumer — it is what an agent actually follows, and the human page is a
+ * consumer: it is what an agent actually follows, and the human page is a
  * rendering of the same record. A template that is data cannot promise on the
  * page something the instructions do not do, which is the failure this repo has
  * already had twice (MCP, "Backups and undo").
@@ -76,8 +76,8 @@ export const TEMPLATES: Template[] = [
     needsRelease: false,
     steps: [
       `Clone the repo and work inside it: \`git clone ${"https://github.com/excalidraw/excalidraw"} && cd excalidraw\``,
-      `Run \`${CLI} deploy --wait\`. There is nothing to configure: no database, no secrets, no environment variables.`,
-      `It worked only when you see a line beginning \`✓ live:\`. If the build fails, \`${CLI} logs <app>\` shows what the build actually saw and \`${CLI} diagnose <app>\` hands you a fix. Fix it and deploy again.`,
+      `Run \`${CLI} ship --wait\`. There is nothing to configure: no database, no secrets, no environment variables.`,
+      `It worked only when you see a line beginning \`✓ live:\`. If the build fails, \`${CLI} logs <app>\` shows what the build actually saw and \`${CLI} diagnose <app>\` hands you a fix. Fix it and ship again.`,
       `Tell me the address, and tell me it is private until I say otherwise.`,
     ],
   },
@@ -99,10 +99,10 @@ export const TEMPLATES: Template[] = [
     needsRelease: false,
     steps: [
       `Clone the repo and work inside it: \`git clone ${"https://github.com/open-webui/open-webui"} && cd open-webui\``,
-      `Run \`${CLI} deploy --wait\`. Bay reads the repo's own Dockerfile, provisions Postgres, and injects \`DATABASE_URL\`.`,
+      `Run \`${CLI} ship --wait\`. Bay reads the repo's own Dockerfile, provisions Postgres, and injects \`DATABASE_URL\`.`,
       `Generate a random 48-character secret yourself and set it: \`${CLI} env <app> set WEBUI_SECRET_KEY=<random>\`. Do not ask me for this and do not print it. It is entropy, not a credential I hold.`,
       `Point its writable state at the persistent disk: \`${CLI} env <app> set DATA_DIR=/data\`. Anything written outside /data does not survive a redeploy.`,
-      `Deploy again so the new environment is picked up, and wait for \`✓ live:\`.`,
+      `Ship again so the new environment is picked up, and wait for \`✓ live:\`.`,
       `Do NOT set a model provider unless I gave you a key. If I did, set \`OPENAI_API_KEY\`. If I did not, tell me the app is up and that I can add a provider later, or point it at an Ollama endpoint.`,
       `Tell me the address, and tell me the first account I create becomes the admin.`,
     ],
@@ -127,10 +127,10 @@ export const TEMPLATES: Template[] = [
       `Clone the repo and work inside it: \`git clone ${"https://github.com/calcom/cal.com"} && cd cal.com\``,
       `Read \`package.json\` and find the Prisma deploy script. Do not guess the command from memory: it has changed between versions, and it is usually a workspace script around \`prisma migrate deploy\`.`,
       `Add a release step so it runs before the web process. Create a \`Procfile\` with a \`release:\` line naming that script, and a \`web:\` line for the app's start command. Bay runs \`release\` to completion before it starts \`web\`.`,
-      `Run \`${CLI} deploy --wait\`. Bay reads the repo's own Dockerfile, provisions Postgres, and injects \`DATABASE_URL\`.`,
+      `Run \`${CLI} ship --wait\`. Bay reads the repo's own Dockerfile, provisions Postgres, and injects \`DATABASE_URL\`.`,
       `Generate two random 32-byte hex secrets yourself and set them: \`${CLI} env <app> set NEXTAUTH_SECRET=<random> CALENDSO_ENCRYPTION_KEY=<random>\`. Do not ask me for these and do not print them.`,
-      `Cal.com has to know its own address. Take the URL from the \`✓ live:\` line and set both: \`${CLI} env <app> set NEXT_PUBLIC_WEBAPP_URL=<url> NEXTAUTH_URL=<url>\`. \`NEXT_PUBLIC_\` values are baked in at build time, so you must deploy AGAIN after setting it or the app will keep using the wrong address.`,
-      `Deploy again and wait for \`✓ live:\`. If the app serves a page but signup fails, check \`${CLI} logs <app>\` for a migration error before changing anything else.`,
+      `Cal.com has to know its own address. Take the URL from the \`✓ live:\` line and set both: \`${CLI} env <app> set NEXT_PUBLIC_WEBAPP_URL=<url> NEXTAUTH_URL=<url>\`. \`NEXT_PUBLIC_\` values are baked in at build time, so you must ship AGAIN after setting it or the app will keep using the wrong address.`,
+      `Ship again and wait for \`✓ live:\`. If the app serves a page but signup fails, check \`${CLI} logs <app>\` for a migration error before changing anything else.`,
       `Do NOT set up Google OAuth unless I asked for it. Tell me the address, that scheduling works now, and that calendar integrations need a Google OAuth client if I want them.`,
     ],
   },
@@ -292,8 +292,8 @@ export function selfhostMarkdown(): string {
     "2. Clone the repo they named and work inside it. Keep the git remote intact: it is how the open source year is detected.",
     `3. Read the project's own docs for its required environment. Generate anything that is only entropy (session secrets, encryption keys) yourself and set it with \`${CLI} env <app> set KEY=VALUE\`. Do not ask a person to invent a random string.`,
     `4. If it needs migrations, add a \`Procfile\` with a \`release:\` line for them and a \`web:\` line for the start command.`,
-    `5. Run \`${CLI} deploy --wait\`. ${RULES.wait}`,
-    `6. If the app needs its own URL in its environment, take it from the \`✓ live:\` line, set it, and deploy AGAIN. Values baked in at build time do not update without a rebuild.`,
+    `5. Run \`${CLI} ship --wait\`. ${RULES.wait}`,
+    `6. If the app needs its own URL in its environment, take it from the \`✓ live:\` line, set it, and ship AGAIN. Values baked in at build time do not update without a rebuild.`,
     `7. ${RULES.green}`,
     "",
     "## The free year",

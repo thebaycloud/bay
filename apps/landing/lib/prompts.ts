@@ -1,4 +1,5 @@
 import { BRAND, CLI, DOMAIN, PKG, SITE } from "./brand";
+import { rules } from "./prompt-rules";
 
 /**
  * Every prompt and instruction document this site hands to a coding agent.
@@ -44,46 +45,13 @@ export function agentDoc(slug: string): string {
 }
 
 /**
- * The sentences more than one prompt or document needs.
+ * The shared rules, with this app's names in them.
  *
- * Each is a complete thought that can be dropped into a numbered list or a
- * paragraph without rewording. Edit one here and every prompt follows.
+ * The sentences live in packages/prompts/rules.ts and are copied into
+ * lib/prompt-rules.ts by scripts/sync-prompt-rules.mjs, so apps/web composes its
+ * prompts from the same text. See that script for why it is a copy.
  */
-export const RULES = {
-  install: `Install the CLI if it is missing: \`npm i -g ${PKG}\``,
-
-  wait:
-    `Always pass \`--wait\`. Without it the command returns as soon as the address is ` +
-    `reserved and finishes building after you have stopped watching, so you would report ` +
-    `success for a build that has not happened.`,
-
-  green:
-    `It worked only when you see a line beginning \`✓ live:\`. Getting it green is your ` +
-    `job, not the user's: \`${CLI} logs <app>\` shows what production actually saw, ` +
-    `\`${CLI} errors <app>\` shows what is failing now, and \`${CLI} diagnose <app>\` hands ` +
-    `you a fix. Fix the code, deploy again, repeat. Do not paste an error back and ask what to do.`,
-
-  injected:
-    `Never set \`DATABASE_URL\`, \`REDIS_URL\` or \`STORAGE_BUCKET\`. ${BRAND} provisions ` +
-    `those and injects them, so a value you set will be wrong.`,
-
-  dotenv:
-    `The project's \`.env\` travels with the deploy, so do not copy keys across by hand. ` +
-    `Use \`${CLI} env <app> set KEY=VALUE\` only for a value that is not already in it.`,
-
-  secrets:
-    `If a key is missing or is obviously a placeholder (\`sk_test_…\`, \`changeme\`), ask ` +
-    `for the real one in one sentence: what it is and where to get it. Never invent, ` +
-    `hardcode, commit, or print a secret value.`,
-
-  plain: `Keep the user posted in plain language; they do not read build logs.`,
-
-  private:
-    `Every app is private until its owner says otherwise, so an address that asks them to ` +
-    `sign in is not a bug. Tell them it is live and private, and that they can open it up later.`,
-
-  disk: `Anything written outside \`/data\` does not survive a redeploy. \`/data\` is the persistent disk.`,
-} as const;
+export const RULES = rules({ brand: BRAND, cli: CLI, pkg: PKG });
 
 /**
  * The landing page's one prompt, on the hero button and in the dialog.
@@ -101,7 +69,7 @@ export function onboardPrompt(): string {
     `1. ${RULES.install}`,
     ``,
     `2. Ship it, and WAIT for the answer:`,
-    `   ${CLI} deploy --wait`,
+    `   ${CLI} ship --wait`,
     `   The first run opens a browser for me to sign in. ${RULES.wait}`,
     ``,
     `3. ${RULES.green}`,
