@@ -1,9 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Copy, Play, Table2, X } from "lucide-react";
+import {
+  ArrowDown, ArrowUp, Check, ChevronDown, Copy, Filter as FilterIcon, KeyRound,
+  Play, RefreshCw, Table2, X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useQueryState } from "@/lib/use-query-state";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { FILTER_OPS, opTakesValue, type Filter, type FilterOp, type Sort } from "@/lib/db-browse";
+import { useQueryRecord } from "@/lib/use-query-state";
+
+/**
+ * Everything about this screen that belongs in the URL, in one place.
+ *
+ * All six move together — picking a table clears the sort and the filter, because
+ * a column of `orders` means nothing in `customers` — and moving them one at a
+ * time left six entries in the history for one click. See `useQueryRecord`.
+ */
+const VIEW_KEYS = ["table", "sort", "dir", "where", "op", "value"] as const;
 
 /**
  * The app's data, answering "did it land".
@@ -41,13 +58,35 @@ interface Column {
 interface Page {
   table: string;
   columns: Column[];
+  /** The columns making up the primary key, in order. Empty when there is none. */
+  primaryKey: string[];
   rows: Record<string, unknown>[];
-  total: number;
+  /** Null when the count could not be taken — never 0, which is a different fact. */
+  total: number | null;
   totalExact: boolean;
   limit: number;
   offset: number;
+  /** What was APPLIED, which is not always what the URL asked for. */
+  sort: Sort | null;
+  filter: Filter | null;
   orderedBy: string;
 }
+
+/** The comparisons, in the words somebody reading a row would use. */
+const OP_LABEL: Record<FilterOp, string> = {
+  eq: "is",
+  neq: "is not",
+  gt: "is more than",
+  gte: "is at least",
+  lt: "is less than",
+  lte: "is at most",
+  contains: "contains",
+  starts: "starts with",
+  // Said as `null` rather than "is empty", because the grid draws the word `null`
+  // and an empty string is a different thing sitting in the same column.
+  null: "is null",
+  notnull: "is not null",
+};
 
 const PAGE = 50;
 
@@ -150,7 +189,11 @@ function widthFor(type: string): string {
 export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean }) {
   const [tables, setTables] = useState<TableSummary[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [param, setParam] = useQueryState("table");
+  const [q, setQ] = useQueryRecord(VIEW_KEYS);
+  // Bumped by the one refresh button, which re-reads the counts AND the open
+  // page: the point of this screen is watching data arrive, and it only ever
+  // read on mount.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     if (!hasDb) return;
@@ -164,16 +207,16 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
       })
       .catch((e) => alive && setErr(String(e)));
     return () => { alive = false; };
-  }, [slug, hasDb]);
+  }, [slug, hasDb, nonce]);
 
   // The URL is a request, not a fact. `?table=` is only honoured once the listing
   // says such a table exists — otherwise a stale link fires a request that can
   // only come back as an error, and the first table is a better answer than one.
   const open = useMemo(() => {
     if (!tables || tables.length === 0) return null;
-    if (param && tables.some((t) => t.name === param)) return param;
+    if (q.table && tables.some((t) => t.name === q.table)) return q.table;
     return tables[0].name;
-  }, [tables, param]);
+  }, [tables, q.table]);
 
   // Three different facts, and they used to be one sentence.
   //
@@ -197,9 +240,26 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-start gap-3">
-        <TableList onOpen={(t) => setParam(t)} open={open} tables={tables} />
+        <TableList
+          // A sort or a filter belongs to the table it was made on. Carrying
+          // `sort=total` into `customers` would either error or, worse, be
+          // silently dropped while the URL still claimed it.
+          onOpen={(t) => setQ({ table: t, sort: null, dir: null, where: null, op: null, value: null })}
+          open={open}
+          tables={tables}
+        />
         <div className="min-w-0 flex-1">
-          {open ? <TableView key={open} slug={slug} table={open} /> : null}
+          {open ? (
+            <TableView
+              key={open}
+              nonce={nonce}
+              onRefresh={() => setNonce((n) => n + 1)}
+              q={q}
+              setQ={setQ}
+              slug={slug}
+              table={open}
+            />
+          ) : null}
         </div>
       </div>
       <QueryBox slug={slug} />
@@ -257,19 +317,46 @@ function TableList({
   );
 }
 
-function TableView({ slug, table }: { slug: string; table: string }) {
+function TableView({
+  slug,
+  table,
+  q,
+  setQ,
+  nonce,
+  onRefresh,
+}: {
+  slug: string;
+  table: string;
+  q: Record<(typeof VIEW_KEYS)[number], string | null>;
+  setQ: (patch: Partial<Record<(typeof VIEW_KEYS)[number], string | null>>, mode?: "push" | "replace") => void;
+  nonce: number;
+  onRefresh: () => void;
+}) {
   const [page, setPage] = useState<Page | null>(null);
   const [offset, setOffset] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   // Which cell is open, as a position on this page — reset whenever the page is
   // replaced, because row 3 of the next page is a different row.
   const [focus, setFocus] = useState<{ row: number; column: string } | null>(null);
+  const [barOpen, setBarOpen] = useState(false);
+
+  // What the URL asked for. Used for the SORT CYCLE, because a click has to know
+  // what the last click did without waiting for a round trip. What is DRAWN comes
+  // from the payload below — the two are separate on purpose.
+  const asked: Sort | null = q.sort ? { column: q.sort, dir: q.dir === "asc" ? "asc" : "desc" } : null;
 
   useEffect(() => {
     let alive = true;
     setPage(null);
     setFocus(null);
-    fetch(`/api/apps/${encodeURIComponent(slug)}/db?table=${encodeURIComponent(table)}&limit=${PAGE}&offset=${offset}`)
+    const p = new URLSearchParams({ table, limit: String(PAGE), offset: String(offset) });
+    if (q.sort) { p.set("sort", q.sort); p.set("dir", q.dir === "asc" ? "asc" : "desc"); }
+    if (q.where) {
+      p.set("where", q.where);
+      p.set("op", q.op ?? "eq");
+      if (q.value) p.set("value", q.value);
+    }
+    fetch(`/api/apps/${encodeURIComponent(slug)}/db?${p}`)
       .then((r) => r.json())
       .then((d) => {
         if (!alive) return;
@@ -278,9 +365,56 @@ function TableView({ slug, table }: { slug: string; table: string }) {
       })
       .catch((e) => alive && setErr(String(e)));
     return () => { alive = false; };
-  }, [slug, table, offset]);
+  }, [slug, table, offset, nonce, q.sort, q.dir, q.where, q.op, q.value]);
 
-  const last = page ? Math.min(page.offset + page.rows.length, page.total) : 0;
+  // The URL is a request; the payload is what happened.
+  //
+  // A link made when this table had a `total` column is stale, not hostile: the
+  // read succeeds without it, and the parameter that did nothing is dropped
+  // rather than left in the URL claiming an order the grid is not in. Replace,
+  // not push — nobody navigated anywhere.
+  useEffect(() => {
+    if (!page) return;
+    if (!page.sort && (q.sort || q.dir)) setQ({ sort: null, dir: null }, "replace");
+    if (!page.filter && q.where && q.value) setQ({ where: null, op: null, value: null }, "replace");
+  }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Descending, then ascending, then back to the table's own order. */
+  function clickSort(column: string) {
+    setOffset(0);
+    if (!asked || asked.column !== column) return setQ({ sort: column, dir: "desc" });
+    if (asked.dir === "desc") return setQ({ sort: column, dir: "asc" });
+    setQ({ sort: null, dir: null });
+  }
+
+  function applyFilter(f: Filter | null) {
+    setOffset(0);
+    setQ(f ? { where: f.column, op: f.op, value: f.value } : { where: null, op: null, value: null });
+    if (!f) setBarOpen(false);
+  }
+
+  const shownTo = page ? page.offset + page.rows.length : 0;
+  // Three answers, and the middle one is why `total` is nullable: a count that
+  // timed out used to arrive as 0, so the footer read "1–50 of ~0" underneath
+  // fifty visible rows.
+  const of = !page
+    ? ""
+    : page.total === null
+      ? "many"
+      : page.totalExact
+        ? page.total.toLocaleString()
+        : `~${page.total.toLocaleString()}`;
+  const more = page ? (page.total === null ? page.rows.length === page.limit : shownTo < page.total) : false;
+
+  // Frozen only when the key is a single LEADING column, which is what a
+  // generated schema has. A composite key would need two sticky offsets from
+  // measured widths, and a key in the middle of the table would have the columns
+  // before it slide underneath — both are worse than not freezing.
+  const frozen =
+    page && page.primaryKey.length === 1 && page.columns[0]?.name === page.primaryKey[0]
+      ? page.primaryKey[0]
+      : null;
+  const pk = new Set(page?.primaryKey ?? []);
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -290,14 +424,43 @@ function TableView({ slug, table }: { slug: string; table: string }) {
         {/* Said, not assumed: the route decides the ordering and reports it, so
             this line and the SQL behind it cannot disagree. */}
         {page ? <span className="truncate text-[13px] text-ink-3">{page.orderedBy}</span> : null}
+        <Button
+          className={`ml-auto h-7 shrink-0 px-2 text-[13px] ${page?.filter ? "text-ink" : "text-ink-2"}`}
+          onClick={() => setBarOpen((o) => !o)}
+          size="sm"
+          variant="ghost"
+        >
+          <FilterIcon className="size-3.5" />
+          Filter
+        </Button>
+        <Button
+          aria-label="Read this again"
+          className="size-7 shrink-0 text-ink-3 hover:text-ink"
+          onClick={onRefresh}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <RefreshCw className="size-3.5" />
+        </Button>
       </div>
+
+      {/* Keyed on the applied filter, so applying one re-seeds the draft and
+          clearing one empties it, without a second copy of the same state. */}
+      {barOpen || page?.filter ? (
+        <FilterBar
+          applied={page?.filter ?? null}
+          columns={page?.columns ?? []}
+          key={page?.filter ? `${page.filter.column}:${page.filter.op}:${page.filter.value}` : "none"}
+          onApply={applyFilter}
+        />
+      ) : null}
 
       {err ? <Empty>That could not be read. {err.slice(0, 160)}</Empty> : null}
       {!page && !err ? <Empty>Reading…</Empty> : null}
 
       {page ? (
         page.rows.length === 0 ? (
-          <Empty>This table is empty.</Empty>
+          <Empty>{page.filter ? "No rows match that." : "This table is empty."}</Empty>
         ) : (
           <>
             {/* A data grid, not a layout table.
@@ -311,51 +474,82 @@ function TableView({ slug, table }: { slug: string; table: string }) {
                 scrolling past the names is how you end up guessing which column
                 you are reading.
 
+                `border-separate` and not `collapse`, which is what it was: a
+                collapsed border is owned by the table rather than the cell, and
+                Chrome drops it entirely on a `position: sticky` cell — so
+                freezing the key column would have erased the grid's own lines.
+                With spacing at zero the two render the same.
+
                 None of this contradicts "no mono anywhere else": everywhere else
                 the text is English. */}
             <div className="max-h-[560px] overflow-auto rounded-xl border border-border">
-              <table className="w-full border-collapse font-mono text-[12.5px]">
-                <thead className="sticky top-0 z-10">
+              <table className="w-full border-separate border-spacing-0 font-mono text-[12.5px]">
+                <thead>
                   <tr>
                     {/* The ordinal gutter. Not the primary key and not pretending
                         to be: it numbers the rows ON THIS PAGE against the total,
                         which is what tells you where you are in 40 rows. */}
-                    <th className="w-[52px] border-b border-r border-border bg-tile px-2.5 py-2 text-right font-normal text-ink-3">
+                    <th className="sticky left-0 top-0 z-20 w-[52px] border-b border-r border-border bg-tile px-2.5 py-2 text-right font-normal text-ink-3">
                       #
                     </th>
-                    {page.columns.map((c) => (
-                      <th
-                        className={`border-b border-r border-border bg-tile px-2.5 py-2 font-normal last:border-r-0 ${
-                          isNumeric(c.type) ? "text-right" : "text-left"
-                        }`}
-                        key={c.name}
-                        style={{ width: widthFor(c.type) }}
-                      >
-                        <span className="whitespace-nowrap text-ink">{c.name}</span>
-                        {/* The type, dimmer and one size down. It is here because
-                            a column of unreadable values needs it explained — not
-                            because the schema is the point. */}
-                        <span className="whitespace-nowrap pl-2 text-[11px] text-ink-3">
-                          {c.type}
-                        </span>
-                      </th>
-                    ))}
+                    {page.columns.map((c) => {
+                      const on = page.sort?.column === c.name;
+                      const isFrozen = c.name === frozen;
+                      return (
+                        <th
+                          className={[
+                            "top-0 cursor-pointer select-none border-b border-r border-border bg-tile px-2.5 py-2 font-normal last:border-r-0 hover:bg-card",
+                            isFrozen ? "sticky left-[52px] z-20" : "sticky z-10",
+                            isNumeric(c.type) ? "text-right" : "text-left",
+                          ].join(" ")}
+                          key={c.name}
+                          onClick={() => clickSort(c.name)}
+                          style={{ width: widthFor(c.type) }}
+                          title={`Sort by ${c.name}`}
+                        >
+                          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                            {/* The key, marked. It was known server-side all
+                                along and never sent, so the one column that
+                                identifies a row looked like every other. */}
+                            {pk.has(c.name) ? (
+                              <KeyRound aria-label="primary key" className="size-3 shrink-0 text-ink-3" />
+                            ) : null}
+                            <span className="text-ink">{c.name}</span>
+                            {on ? (
+                              page.sort?.dir === "asc" ? (
+                                <ArrowUp className="size-3 shrink-0 text-ink" />
+                              ) : (
+                                <ArrowDown className="size-3 shrink-0 text-ink" />
+                              )
+                            ) : null}
+                          </span>
+                          {/* The type, dimmer and one size down. It is here because
+                              a column of unreadable values needs it explained — not
+                              because the schema is the point. */}
+                          <span className="whitespace-nowrap pl-2 text-[11px] text-ink-3">
+                            {c.type}
+                          </span>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
                   {page.rows.map((row, i) => (
                     <tr className="group" key={i}>
-                      <td className="border-b border-r border-border bg-ground px-2.5 py-[5px] text-right tabular-nums text-ink-3 group-hover:bg-tile">
+                      <td className="sticky left-0 z-10 border-b border-r border-border bg-ground px-2.5 py-[5px] text-right tabular-nums text-ink-3 group-hover:bg-tile">
                         {page.offset + i + 1}
                       </td>
                       {page.columns.map((c) => {
                         const v = fmt(row[c.name]);
                         const num = isNumeric(c.type);
                         const on = focus?.row === i && focus.column === c.name;
+                        const isFrozen = c.name === frozen;
                         return (
                           <td
                             className={[
                               "max-w-[22rem] cursor-pointer truncate border-b border-r border-border px-2.5 py-[5px] last:border-r-0 group-hover:bg-tile",
+                              isFrozen ? "sticky left-[52px] z-10 bg-ground" : "",
                               num ? "text-right tabular-nums" : "text-left",
                               // `null` is dim AND italic. Dim alone reads as a
                               // pale string, and "null" is a value people also
@@ -364,9 +558,7 @@ function TableView({ slug, table }: { slug: string; table: string }) {
                               on ? "bg-tile ring-1 ring-inset ring-ink-3" : "",
                             ].join(" ")}
                             key={c.name}
-                            onClick={() =>
-                              setFocus(on ? null : { row: i, column: c.name })
-                            }
+                            onClick={() => setFocus(on ? null : { row: i, column: c.name })}
                             title={v.text}
                           >
                             {v.text}
@@ -394,8 +586,7 @@ function TableView({ slug, table }: { slug: string; table: string }) {
               {/* The count keeps its `~`: an estimate that looks exact is the one
                   number on this screen somebody might act on. */}
               <span className="text-[13px] tabular-nums text-ink-2">
-                {page.offset + 1}–{last} of{" "}
-                {page.totalExact ? page.total.toLocaleString() : `~${page.total.toLocaleString()}`}
+                {page.offset + 1}–{shownTo} of {of}
               </span>
               <Button
                 className="ml-auto h-7 px-2.5 text-[13px]"
@@ -408,7 +599,7 @@ function TableView({ slug, table }: { slug: string; table: string }) {
               </Button>
               <Button
                 className="h-7 px-2.5 text-[13px]"
-                disabled={last >= page.total}
+                disabled={!more}
                 onClick={() => setOffset(offset + PAGE)}
                 size="sm"
                 variant="outline"
@@ -422,6 +613,111 @@ function TableView({ slug, table }: { slug: string; table: string }) {
     </div>
   );
 }
+
+/**
+ * One filter: a column, a comparison, and something to compare against.
+ *
+ * One, not many, because the question this screen answers is "is MY row there"
+ * and one clause answers it. Several clauses need an AND/OR tree, which is a
+ * query builder, which is what the SQL box is for.
+ *
+ * Held as a DRAFT until it is applied. Filtering per keystroke would fire a read
+ * for every prefix of what somebody is typing, and a half-typed email matches
+ * rows that are not theirs — so the grid would answer the question wrongly on the
+ * way to answering it right.
+ */
+function FilterBar({
+  columns,
+  applied,
+  onApply,
+}: {
+  columns: Column[];
+  applied: Filter | null;
+  onApply: (f: Filter | null) => void;
+}) {
+  const [column, setColumn] = useState(applied?.column ?? columns[0]?.name ?? "");
+  const [op, setOp] = useState<FilterOp>(applied?.op ?? "eq");
+  const [value, setValue] = useState(applied?.value ?? "");
+
+  const needsValue = opTakesValue(op);
+  const ready = column !== "" && (!needsValue || value !== "");
+  const submit = () => { if (ready) onApply({ column, op, value: needsValue ? value : "" }); };
+
+  if (columns.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
+      <Picker label={column || "column"} mono width="max-h-[280px]">
+        {columns.map((c) => (
+          <DropdownMenuItem className="font-mono text-[12.5px]" key={c.name} onClick={() => setColumn(c.name)}>
+            {c.name}
+            <span className="ml-auto pl-3 text-[11px] text-ink-3">{c.type}</span>
+          </DropdownMenuItem>
+        ))}
+      </Picker>
+
+      <Picker label={OP_LABEL[op]}>
+        {FILTER_OPS.map((o) => (
+          <DropdownMenuItem key={o} onClick={() => setOp(o)}>{OP_LABEL[o]}</DropdownMenuItem>
+        ))}
+      </Picker>
+
+      {needsValue ? (
+        <Input
+          aria-label="Value"
+          className="h-8 w-[220px] font-mono text-[12.5px]"
+          onChange={(e) => setValue(e.currentTarget.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          placeholder="value"
+          value={value}
+        />
+      ) : null}
+
+      <Button className="h-8 px-3 text-[13px]" disabled={!ready} onClick={submit} size="sm">
+        Apply
+      </Button>
+      {applied ? (
+        <Button
+          className="h-8 px-2 text-[13px] text-ink-2 hover:text-ink"
+          onClick={() => onApply(null)}
+          size="sm"
+          variant="ghost"
+        >
+          <X className="size-3.5" />
+          Clear
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** A dropdown that looks like the one in the app list, because it is the same one. */
+function Picker({
+  label,
+  mono,
+  width,
+  children,
+}: {
+  label: string;
+  mono?: boolean;
+  width?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button className={`h-8 px-2.5 text-[13px] ${mono ? "font-mono text-[12.5px]" : ""}`} size="sm" variant="outline">
+          {label}
+          <ChevronDown className="size-3.5 text-ink-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className={`overflow-auto ${width ?? ""}`}>
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 
 /**
  * One cell, whole.

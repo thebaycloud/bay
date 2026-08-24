@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   recencyColumn, orderingFor, describeOrdering, pageQuery,
   pageSize, pageOffset, MAX_PAGE, DEFAULT_PAGE,
+  countQuery, describeSort, parseFilter, parseSort, opTakesValue, FILTER_OPS,
   type TableShape,
 } from "../lib/db-browse";
 
@@ -111,7 +112,7 @@ test("what the SQL does and what the user is told come from one decision", () =>
   // first" above rows that are in table order.
   const t = table([["id", "integer"], ["created_at", "timestamp with time zone"]], ["id"]);
   const o = orderingFor(t);
-  assert.match(pageQuery(t, o, 50, 0), /ORDER BY "created_at" DESC/);
+  assert.match(pageQuery(t, o, 50, 0).text, /ORDER BY "created_at" DESC/);
   assert.match(describeOrdering(o), /created_at/);
 });
 
@@ -120,8 +121,9 @@ test("what the SQL does and what the user is told come from one decision", () =>
 test("a table with no ordering claim gets no ORDER BY at all", () => {
   const t = table([["a", "text"]]);
   const sql = pageQuery(t, orderingFor(t), 50, 0);
-  assert.doesNotMatch(sql, /ORDER BY/);
-  assert.match(sql, /LIMIT 50 OFFSET 0/);
+  assert.doesNotMatch(sql.text, /ORDER BY/);
+  assert.match(sql.text, /LIMIT 50 OFFSET 0/);
+  assert.deepEqual(sql.values, []);
 });
 
 test("nulls sort last, so an empty clock does not fill the first page", () => {
@@ -129,7 +131,7 @@ test("nulls sort last, so an empty clock does not fill the first page", () => {
   // would open on every row that has no time at all — the least useful rows,
   // presented as the newest.
   const t = table([["created_at", "timestamp with time zone"]]);
-  assert.match(pageQuery(t, orderingFor(t), 10, 0), /DESC NULLS LAST/);
+  assert.match(pageQuery(t, orderingFor(t), 10, 0).text, /DESC NULLS LAST/);
 });
 
 test("an identifier that could carry an injection is refused, not escaped", () => {
@@ -158,4 +160,133 @@ test("an offset is never negative and never fractional", () => {
   assert.equal(pageOffset(-10), 0);
   assert.equal(pageOffset("100"), 100);
   assert.equal(pageOffset(3.9), 3);
+});
+
+/* ── the order the person chose ───────────────────────────────────────────── */
+
+test("a sort on a column this table does not have is dropped, not refused", () => {
+  // A link made before a migration is stale, not hostile. Answering it with an
+  // error page is worse than answering it with the table.
+  const t = table([["id", "integer"], ["email", "text"]], ["id"]);
+  assert.deepEqual(parseSort(t, "total", "desc"), { ok: true, value: null });
+  assert.deepEqual(parseSort(t, null, null), { ok: true, value: null });
+  assert.deepEqual(parseSort(t, "", ""), { ok: true, value: null });
+});
+
+test("a sort column that could carry an injection IS refused", () => {
+  // The plan's own acceptance test: this has to be turned away by the identifier
+  // check, not by Postgres, because by the time Postgres sees it the string is
+  // already inside a statement.
+  const t = table([["id", "integer"]], ["id"]);
+  const out = parseSort(t, "x; DROP TABLE users --", "desc");
+  assert.equal(out.ok, false);
+  assert.match(out.ok === false ? out.error : "", /invalid column name/);
+});
+
+test("a direction is normalised rather than rejected", () => {
+  // The column is the part that could carry an injection. A direction cannot, so
+  // anything that is not `asc` is descending and nobody sees a 400 over a typo.
+  const t = table([["id", "integer"]], ["id"]);
+  assert.deepEqual(parseSort(t, "id", "asc"), { ok: true, value: { column: "id", dir: "asc" } });
+  assert.deepEqual(parseSort(t, "id", "ASC"), { ok: true, value: { column: "id", dir: "asc" } });
+  assert.deepEqual(parseSort(t, "id", "sideways"), { ok: true, value: { column: "id", dir: "desc" } });
+  assert.deepEqual(parseSort(t, "id", null), { ok: true, value: { column: "id", dir: "desc" } });
+});
+
+test("their sort is described as theirs, never as newest first", () => {
+  // `describeOrdering` makes a claim about arrival. Somebody sorting `email`
+  // ascending is not looking at the newest anything, and the line above the grid
+  // must not say so.
+  assert.doesNotMatch(describeSort({ column: "email", dir: "asc" }), /newest/i);
+  assert.match(describeSort({ column: "email", dir: "asc" }), /email/);
+  assert.match(describeSort({ column: "email", dir: "asc" }), /ascending/);
+});
+
+test("the person's order wins over ours, and only appears once", () => {
+  const t = table([["id", "integer"], ["created_at", "timestamp with time zone"]], ["id"]);
+  const sql = pageQuery(t, orderingFor(t), 50, 0, { sort: { column: "id", dir: "asc" } });
+  assert.match(sql.text, /ORDER BY "id" ASC NULLS LAST/);
+  assert.doesNotMatch(sql.text, /created_at/);
+  assert.equal(sql.text.match(/ORDER BY/g)?.length, 1);
+});
+
+/* ── the one filter ──────────────────────────────────────────────────────── */
+
+test("an operator not on the list has no path into a statement", () => {
+  const t = table([["id", "integer"]], ["id"]);
+  const out = parseFilter(t, "id", "; DROP TABLE users --", "1");
+  assert.equal(out.ok, false);
+  assert.match(out.ok === false ? out.error : "", /unknown operator/);
+  // And every name on the list survives the round trip, so the allow list and
+  // the SQL below it cannot drift apart.
+  for (const op of FILTER_OPS) {
+    const ok = parseFilter(t, "id", op, "1");
+    assert.equal(ok.ok, true, op);
+  }
+});
+
+test("an empty box is not a filter", () => {
+  // Somebody who has picked a column and not typed yet is asking for nothing.
+  // Hiding rows at that moment answers "is my row there" with "no".
+  const t = table([["email", "text"]]);
+  assert.deepEqual(parseFilter(t, "email", "eq", ""), { ok: true, value: null });
+  assert.deepEqual(parseFilter(t, "email", "contains", null), { ok: true, value: null });
+  // Except for the two whose entire meaning is emptiness.
+  assert.equal(opTakesValue("null"), false);
+  assert.deepEqual(parseFilter(t, "email", "null", ""), {
+    ok: true, value: { column: "email", op: "null", value: "" },
+  });
+});
+
+test("a value is bound, never interpolated", () => {
+  const t = table([["email", "text"]]);
+  const sql = pageQuery(t, { by: "physical" }, 50, 0, {
+    filter: { column: "email", op: "eq", value: "' OR 1=1 --" },
+  });
+  assert.match(sql.text, /WHERE "email" = \$1/);
+  assert.doesNotMatch(sql.text, /OR 1=1/);
+  assert.deepEqual(sql.values, ["' OR 1=1 --"]);
+});
+
+test("LIKE wildcards in what somebody typed are characters, not wildcards", () => {
+  // `order_id` means an underscore. Unescaped it matches any character, so the
+  // filter returns MORE rows than asked for — which on this screen means
+  // answering "is my row there" with somebody else's row.
+  const t = table([["ref", "text"]]);
+  const sql = pageQuery(t, { by: "physical" }, 50, 0, {
+    filter: { column: "ref", op: "contains", value: "order_1%" },
+  });
+  assert.deepEqual(sql.values, ["%order\\_1\\%%"]);
+  assert.match(sql.text, /"ref"::text ILIKE \$1/);
+});
+
+test("IS NULL binds nothing at all", () => {
+  const t = table([["shipped_at", "timestamp with time zone"]]);
+  const a = pageQuery(t, { by: "physical" }, 50, 0, { filter: { column: "shipped_at", op: "null", value: "" } });
+  assert.match(a.text, /WHERE "shipped_at" IS NULL/);
+  assert.deepEqual(a.values, []);
+  const b = pageQuery(t, { by: "physical" }, 50, 0, { filter: { column: "shipped_at", op: "notnull", value: "" } });
+  assert.match(b.text, /WHERE "shipped_at" IS NOT NULL/);
+});
+
+test("the total counts the same rows the page is a page of", () => {
+  // A total counted without the filter is a total of a different thing, and the
+  // footer pages past the end of what it is showing.
+  const t = table([["email", "text"]]);
+  const f = { column: "email", op: "contains" as const, value: "@example.com" };
+  const c = countQuery(t, f);
+  assert.match(c.text, /count\(\*\)/);
+  assert.match(c.text, /WHERE "email"::text ILIKE \$1/);
+  assert.deepEqual(c.values, ["%@example.com%"]);
+  // And with no filter it is the plain count, with nothing bound.
+  assert.deepEqual(countQuery(t, null).values, []);
+});
+
+test("the WHERE comes before the ORDER BY, which is the only order Postgres accepts", () => {
+  const t = table([["id", "integer"], ["created_at", "timestamp with time zone"]], ["id"]);
+  const sql = pageQuery(t, orderingFor(t), 25, 50, {
+    sort: { column: "id", dir: "desc" },
+    filter: { column: "id", op: "gt", value: "10" },
+  });
+  assert.match(sql.text, /FROM "orders" WHERE "id" > \$1 ORDER BY "id" DESC NULLS LAST LIMIT 25 OFFSET 50/);
 });

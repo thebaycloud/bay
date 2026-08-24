@@ -62,3 +62,62 @@ export function useQueryState(
 
   return [value, set] as const;
 }
+
+/**
+ * Several keys at once, written in one go.
+ *
+ * `useQueryState` is one key per hook, and each setter reads `location.search`
+ * fresh — so five of them called from one click leave five entries in the
+ * history, and the back button then walks backwards through half a state nobody
+ * ever saw. The database view moves a table, a sort column, a direction and three
+ * filter parts together, which made that the normal case rather than the odd one.
+ *
+ * So: one state object, one listener, one `pushState` per patch. A key set to
+ * null or "" is REMOVED, for the same reason the single-key version drops its
+ * fallback — `?op=&value=` in a link somebody sends is noise that also reads as a
+ * filter that is not there.
+ *
+ * `keys` must be a stable array — declare it as a module constant, not inline, or
+ * the effect resubscribes on every render.
+ */
+export function useQueryRecord<K extends string>(
+  keys: readonly K[],
+): readonly [
+  Record<K, string | null>,
+  (patch: Partial<Record<K, string | null>>, mode?: "push" | "replace") => void,
+] {
+  const params = useSearchParams();
+  const [value, setValue] = useState<Record<K, string | null>>(
+    () => Object.fromEntries(keys.map((k) => [k, params.get(k)])) as Record<K, string | null>,
+  );
+
+  useEffect(() => {
+    const onPop = () => {
+      const p = new URLSearchParams(window.location.search);
+      setValue(Object.fromEntries(keys.map((k) => [k, p.get(k)])) as Record<K, string | null>);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [keys]);
+
+  const set = useCallback(
+    (patch: Partial<Record<K, string | null>>, mode: "push" | "replace" = "push") => {
+      setValue((prev) => ({ ...prev, ...patch }));
+      const p = new URLSearchParams(window.location.search);
+      for (const k of Object.keys(patch) as K[]) {
+        const v = patch[k];
+        if (v === null || v === undefined || v === "") p.delete(k);
+        else p.set(k, String(v));
+      }
+      const q = p.toString();
+      window.history[mode === "push" ? "pushState" : "replaceState"](
+        null,
+        "",
+        window.location.pathname + (q ? `?${q}` : ""),
+      );
+    },
+    [],
+  );
+
+  return [value, set] as const;
+}

@@ -137,10 +137,7 @@ export function describeOrdering(o: Ordering): string {
 }
 
 /**
- * Identifiers are interpolated, not bound: Postgres has no parameter slot for a
- * table or column name. So they are constrained to a shape that cannot carry an
- * injection rather than escaped and hoped over — the same rule, and the same
- * alphabet, `pg-role.ts` uses for role names.
+ * Identifiers are interpolated, not bound
  *
  * The caller checks EXISTENCE separately. This says a name is safe to
  * interpolate, never that it is real.
@@ -167,6 +164,175 @@ export function pageOffset(requested: unknown): number {
   return Math.floor(n);
 }
 
+/* -------------------------------------------------------------------------- */
+/*  What the person asked to see: an order of their own, and one filter.       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A sort the PERSON chose, as opposed to the `Ordering` this module chooses for
+ * them. Both end up in the same ORDER BY; they are separate types because only
+ * one of them is a claim we make ("newest first") and the other is an instruction
+ * we were given.
+ */
+export type SortDir = "asc" | "desc";
+export interface Sort {
+  column: string;
+  dir: SortDir;
+}
+
+/**
+ * The comparisons a filter may make. An ALLOW LIST, and the only place operators
+ * are named — the SQL below maps from this and nothing else, so an operator that
+ * is not on this list has no path into a statement.
+ *
+ * `contains` and `starts` cast to text before matching, because the commonest
+ * question on this screen is "is MY row there" and the answer is usually part of
+ * an id or an email. Casting means those work on a uuid and an integer too.
+ *
+ * `null` and `notnull` take no value, which is why `opTakesValue` exists: an
+ * empty box means "not filtering yet" for every other operator and means the
+ * filter itself for these two.
+ */
+export const FILTER_OPS = [
+  "eq", "neq", "gt", "gte", "lt", "lte", "contains", "starts", "null", "notnull",
+] as const;
+export type FilterOp = (typeof FILTER_OPS)[number];
+
+export interface Filter {
+  column: string;
+  op: FilterOp;
+  value: string;
+}
+
+export function opTakesValue(op: FilterOp): boolean {
+  return op !== "null" && op !== "notnull";
+}
+
+/** What the person asked for, once it has been checked. */
+export interface View {
+  sort?: Sort | null;
+  filter?: Filter | null;
+}
+
+/**
+ * The outcome of reading one of these out of a query string.
+ *
+ * Three outcomes, not two, and the difference between the second and the third
+ * is the whole point:
+ *
+ *   `{ok: true, value: <it>}`   — asked for, and applied.
+ *   `{ok: true, value: null}`   — not asked for, OR asked for on a column this
+ *                                 table does not have. A link made before a
+ *                                 migration is STALE, not hostile, and the right
+ *                                 answer to it is the table's own ordering
+ *                                 rather than an error page.
+ *   `{ok: false, error}`        — the name could not be an identifier at all.
+ *                                 That is a bug or an attack, and it is REFUSED
+ *                                 here rather than passed to Postgres to refuse.
+ */
+export type Parsed<T> = { ok: true; value: T | null } | { ok: false; error: string };
+
+function checkedColumn(t: TableShape, raw: unknown): Parsed<string> {
+  if (raw === null || raw === undefined || raw === "") return { ok: true, value: null };
+  const name = String(raw);
+  // Shape first: this is the check standing between a query string and an
+  // interpolated identifier, so it runs before anything else looks at the name.
+  if (!isSafeIdent(name)) return { ok: false, error: `invalid column name: ${name}` };
+  // Existence second, and deliberately not an error.
+  if (!t.columns.some((c) => c.name === name)) return { ok: true, value: null };
+  return { ok: true, value: name };
+}
+
+export function parseSort(t: TableShape, column: unknown, dir: unknown): Parsed<Sort> {
+  const col = checkedColumn(t, column);
+  if (!col.ok) return col;
+  if (col.value === null) return { ok: true, value: null };
+  // Anything that is not "asc" is descending. A direction is not worth a 400:
+  // the column is the part that could carry an injection, and this cannot.
+  const d = String(dir ?? "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  return { ok: true, value: { column: col.value, dir: d } };
+}
+
+export function parseFilter(
+  t: TableShape,
+  column: unknown,
+  op: unknown,
+  value: unknown,
+): Parsed<Filter> {
+  const col = checkedColumn(t, column);
+  if (!col.ok) return col;
+  if (col.value === null) return { ok: true, value: null };
+
+  const o = String(op ?? "eq").toLowerCase();
+  if (!(FILTER_OPS as readonly string[]).includes(o)) {
+    return { ok: false, error: `unknown operator: ${o}` };
+  }
+  const f = o as FilterOp;
+
+  const v = value === null || value === undefined ? "" : String(value);
+  // Mid-typing is not a filter. No rows are hidden on the strength of an empty
+  // box — except for the two operators whose whole meaning is emptiness.
+  if (opTakesValue(f) && v === "") return { ok: true, value: null };
+
+  return { ok: true, value: { column: col.value, op: f, value: v } };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The SQL.                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A statement and the values bound into it.
+ *
+ * Identifiers are interpolated because Postgres has no parameter slot for a
+ * column name; VALUES never are. That split is the reason this returns a pair
+ * instead of a string — a builder that returned only a string would have had to
+ * put the person's search text inside it.
+ */
+export interface Sql {
+  text: string;
+  values: unknown[];
+}
+
+const CMP: Record<"eq" | "neq" | "gt" | "gte" | "lt" | "lte", string> = {
+  eq: "=", neq: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=",
+};
+
+/**
+ * `%` and `_` are wildcards to LIKE and characters to everybody else.
+ *
+ * Somebody searching for `order_id` means an underscore. Unescaped it matches any
+ * character, so the filter quietly returns more rows than asked for — which on
+ * this screen means answering "is my row there" with somebody else's row.
+ */
+function likeLiteral(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+function whereClause(f: Filter | null | undefined, values: unknown[]): string {
+  if (!f) return "";
+  const col = `"${assertIdent(f.column)}"`;
+  if (f.op === "null") return ` WHERE ${col} IS NULL`;
+  if (f.op === "notnull") return ` WHERE ${col} IS NOT NULL`;
+  if (f.op === "contains" || f.op === "starts") {
+    const pattern = likeLiteral(f.value);
+    values.push(f.op === "contains" ? `%${pattern}%` : `${pattern}%`);
+    return ` WHERE ${col}::text ILIKE $${values.length}`;
+  }
+  values.push(f.value);
+  return ` WHERE ${col} ${CMP[f.op]} $${values.length}`;
+}
+
+function orderClause(o: Ordering, sort: Sort | null | undefined): string {
+  // The person's choice wins over ours, and is stated as theirs — see
+  // `describeSort`, so the line above the grid never claims "newest first" about
+  // a column they sorted alphabetically.
+  if (sort) {
+    return ` ORDER BY "${assertIdent(sort.column)}" ${sort.dir === "asc" ? "ASC" : "DESC"} NULLS LAST`;
+  }
+  return o.by === "physical" ? "" : ` ORDER BY "${assertIdent(o.column)}" DESC NULLS LAST`;
+}
+
 /**
  * The rows of one page, newest first where that means anything.
  *
@@ -174,10 +340,40 @@ export function pageOffset(requested: unknown): number {
  * SQL and the sentence shown above it cannot disagree — which they would, given
  * two places to decide the same thing.
  */
-export function pageQuery(table: TableShape, o: Ordering, limit: number, offset: number): string {
+export function pageQuery(
+  table: TableShape,
+  o: Ordering,
+  limit: number,
+  offset: number,
+  view: View = {},
+): Sql {
   if (!isSafeIdent(table.name)) throw new Error(`unsafe table name: ${table.name}`);
-  const order = o.by === "physical" ? "" : ` ORDER BY "${assertIdent(o.column)}" DESC NULLS LAST`;
-  return `SELECT * FROM "${table.name}"${order} LIMIT ${Math.floor(limit)} OFFSET ${Math.floor(offset)}`;
+  const values: unknown[] = [];
+  const where = whereClause(view.filter, values);
+  const order = orderClause(o, view.sort);
+  return {
+    text: `SELECT * FROM "${table.name}"${where}${order} LIMIT ${Math.floor(limit)} OFFSET ${Math.floor(offset)}`,
+    values,
+  };
+}
+
+/**
+ * How many rows the page is a page OF.
+ *
+ * Takes the same filter as `pageQuery` and for the same reason the ordering is
+ * shared: a total counted without the filter is a total of a different thing, and
+ * the footer would page past the end of what it is showing.
+ */
+export function countQuery(table: TableShape, filter?: Filter | null): Sql {
+  if (!isSafeIdent(table.name)) throw new Error(`unsafe table name: ${table.name}`);
+  const values: unknown[] = [];
+  const where = whereClause(filter, values);
+  return { text: `SELECT count(*)::text AS n FROM "${table.name}"${where}`, values };
+}
+
+/** Their order, in their words — never "newest first", which is our claim. */
+export function describeSort(s: Sort): string {
+  return `by ${s.column}, ${s.dir === "desc" ? "descending" : "ascending"}`;
 }
 
 function assertIdent(name: string): string {

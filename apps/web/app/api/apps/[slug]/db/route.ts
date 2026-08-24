@@ -7,8 +7,9 @@ import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { withCors, optionsHandler } from "@/lib/cors";
 import {
-  recencyColumn, orderingFor, describeOrdering, pageQuery, pageSize, pageOffset,
-  isSafeIdent, type TableShape, type Column,
+  recencyColumn, orderingFor, describeOrdering, describeSort, pageQuery, countQuery,
+  pageSize, pageOffset, parseSort, parseFilter, isSafeIdent,
+  type TableShape, type Column, type Filter, type Sort,
 } from "@/lib/db-browse";
 import type { PoolClient } from "pg";
 
@@ -142,22 +143,45 @@ async function listTables(db: string) {
   });
 }
 
-async function readTable(db: string, name: string, limit: number, offset: number) {
+/** What the query string asked for, before anything has checked it. */
+interface ViewRequest {
+  sort: string | null;
+  dir: string | null;
+  where: string | null;
+  op: string | null;
+  value: string | null;
+}
+
+async function readTable(db: string, name: string, limit: number, offset: number, want: ViewRequest) {
   return bounded(db, async (c) => {
     const all = await shapes(c);
     const t = all.find((x) => x.name === name);
     // Existence, not just shape. A name that passes the regex and does not exist
     // should say so rather than producing a Postgres syntax error the owner has
     // no way to read.
-    if (!t) return { error: `no table named "${name}" in this database` as const };
+    if (!t) return { error: `no table named "${name}" in this database`, status: 404 as const };
 
-    const ordering = orderingFor(t);
-    const rows = await c.query(pageQuery(t, ordering, limit, offset));
+    // Checked against THIS table's columns, so the two failures stay apart: a
+    // name that could not be an identifier is refused here, and a name that is
+    // simply not in this table is dropped. See `Parsed` in lib/db-browse.
+    const sort = parseSort(t, want.sort, want.dir);
+    if (!sort.ok) return { error: sort.error, status: 400 as const };
+    const filter = parseFilter(t, want.where, want.op, want.value);
+    if (!filter.ok) return { error: filter.error, status: 400 as const };
+    const view = { sort: sort.value, filter: filter.value };
 
-    let total = 0;
+    const q = pageQuery(t, orderingFor(t), limit, offset, view);
+    const rows = await c.query(q.text, q.values);
+
+    // Null is an answer: "we could not count these". It used to be 0, so a count
+    // that timed out was reported as `~0` above fifty visible rows — the same
+    // defect as the estimate that read zero for a table with rows in it, one
+    // function along.
+    let total: number | null = null;
     let totalExact = false;
     try {
-      const r = await c.query<{ n: string }>(`SELECT count(*)::text AS n FROM "${t.name}"`);
+      const cq = countQuery(t, view.filter);
+      const r = await c.query<{ n: string }>(cq.text, cq.values);
       total = Number(r.rows[0].n);
       totalExact = true;
     } catch (e) {
@@ -167,10 +191,19 @@ async function readTable(db: string, name: string, limit: number, offset: number
     return {
       table: t.name,
       columns: t.columns as Column[],
+      // Known here all along and never sent. The grid marks it, and freezes it
+      // when it is a single leading column, which is most of why a wide table is
+      // navigable at all.
+      primaryKey: t.primaryKey,
       rows: rows.rows,
       total, totalExact,
       limit, offset,
-      orderedBy: describeOrdering(ordering),
+      // What was APPLIED, not what was asked for. The screen renders from these
+      // rather than from its own URL, so a stale parameter cannot leave the grid
+      // claiming an order or a filter that is not in the SQL above it.
+      sort: view.sort as Sort | null,
+      filter: view.filter as Filter | null,
+      orderedBy: view.sort ? describeSort(view.sort) : describeOrdering(orderingFor(t)),
     };
   });
 }
@@ -186,8 +219,24 @@ async function getHandler(req: Request, { params }: { params: { slug: string } }
   try {
     if (table) {
       if (!isSafeIdent(table)) return Response.json({ error: "invalid table name" }, { status: 400 });
-      const out = await readTable(db, table, pageSize(url.searchParams.get("limit")), pageOffset(url.searchParams.get("offset")));
-      return "error" in out ? Response.json(out, { status: 404 }) : Response.json(out);
+      const out = await readTable(
+        db, table,
+        pageSize(url.searchParams.get("limit")),
+        pageOffset(url.searchParams.get("offset")),
+        {
+          sort: url.searchParams.get("sort"),
+          dir: url.searchParams.get("dir"),
+          where: url.searchParams.get("where"),
+          op: url.searchParams.get("op"),
+          value: url.searchParams.get("value"),
+        },
+      );
+      // 404 for a table that is not there, 400 for a parameter that could never
+      // have been one. Both were 404, which told an owner their table was missing
+      // when the truth was that their link was malformed.
+      return "error" in out
+        ? Response.json({ error: out.error }, { status: out.status })
+        : Response.json(out);
     }
     return Response.json(await listTables(db));
   } catch (e) {
