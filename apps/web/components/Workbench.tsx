@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowUpRight, MessageSquare, SquareTerminal } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Sparkles, SquareTerminal } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { type ReactNode } from "react";
@@ -131,7 +131,7 @@ export function Workbench({
               "dev" resolves here, so old links keep working either way. Renaming
               it would be churn in a string nobody reads. */}
           <TabsTrigger value="chat" className="gap-1.5 px-4 text-sub">
-            <MessageSquare size={13} strokeWidth={2} aria-hidden="true" />
+            <Sparkles size={13} strokeWidth={2} aria-hidden="true" />
             Agent
           </TabsTrigger>
           <TabsTrigger value="dev" className="gap-1.5 px-4 text-sub">
