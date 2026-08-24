@@ -29,6 +29,24 @@ export const INSTALL_URL = "https://github.com/apps/baycloudcd/installations/new
 /** Where a person goes to change which repositories we can see. */
 export const CONFIGURE_URL = "https://github.com/apps/baycloudcd/installations/select_target";
 
+/**
+ * Where an installation is MANAGED — including uninstalled.
+ *
+ * A different page for a person and for an organisation, and GitHub is the only
+ * place either one exists. There is deliberately no "Disconnect" button on our
+ * side: deleting our row would leave the App installed, still able to push, with
+ * a dashboard claiming it was gone. `forgetInstallation` is called from the
+ * `installation.deleted` webhook and from nowhere else, which is the honest
+ * order — GitHub decides, we find out.
+ */
+export function manageUrl(accountLogin: string, accountType: string): string {
+  const org = accountType.toLowerCase() === "organization";
+  const login = encodeURIComponent(accountLogin);
+  return org
+    ? `https://github.com/organizations/${login}/settings/installations`
+    : `https://github.com/settings/installations`;
+}
+
 export interface ImportDeps {
   workspaceId: string;
   installationId: number | null;

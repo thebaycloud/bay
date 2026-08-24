@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { Suspense } from "react";
 import { TopBar } from "@/components/TopBar";
+import { HeadSkeleton, ListSkeleton } from "@/components/Skeleton";
 import { AccountBanner } from "@/components/AccountBanner";
 import { type App } from "@/components/AppsGrid";
 import { AppsTable } from "@/components/AppsTable";
@@ -105,14 +106,15 @@ export default function Home() {
   );
 }
 
-/** The same page with nothing in it yet. */
+/** The same page with nothing in it yet — the loading.tsx shapes, so the two
+ *  waiting states are one behaviour rather than two drawings. */
 function HomeShell() {
   return (
     <>
       <TopBar />
-      <div className="mx-auto w-full max-w-[1080px] px-6 py-10">
-        <div className="h-8 w-40 rounded-md bg-tile" />
-        <div className="mt-8 h-64 rounded-xl border border-border bg-card" />
+      <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-7 px-6 py-10">
+        <HeadSkeleton />
+        <ListSkeleton rows={5} />
       </div>
     </>
   );

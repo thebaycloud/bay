@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { Check, Copy, Github, Loader2, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -67,8 +68,21 @@ interface GhRepo {
 
 export function ShipNew() {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const params = useSearchParams();
+  /**
+   * Open on arrival when GitHub just sent somebody back.
+   *
+   * `?connected=<login>` and `?github_error=<kind>` are the setup route's two
+   * answers, and both are meaningless on a page with no dialog: the person left
+   * this dialog to install the App and the only sensible place to land is back
+   * inside it, one step further along.
+   */
+  const [open, setOpen] = useState(
+    () => params.has("connected") || params.has("github_error"),
+  );
   const [copied, setCopied] = useState(false);
+  const connected = params.get("connected");
+  const returnedError = params.get("github_error");
 
   const [connections, setConnections] = useState<GhConnection[] | null>(null);
   const [links, setLinks] = useState<{ installUrl: string; configureUrl: string } | null>(null);
@@ -154,7 +168,11 @@ export function ShipNew() {
    * there — an older tab mid-flow keeps working — and an absent name means the
    * repository names the app, which is what it did before the name step existed.
    */
-  const connectUrl = links?.installUrl ?? "#";
+  // `state=apps` so the setup redirect comes back HERE, to the app list, where
+  // this dialog can reopen. Without it the install landed on /new — a different
+  // page with the dialog gone, which is an install that worked and looked like
+  // nothing had happened.
+  const connectUrl = links?.installUrl ? `${links.installUrl}?state=apps` : "#";
 
   /**
    * The rows the search leaves.
@@ -248,6 +266,27 @@ export function ShipNew() {
 
             <section className="flex min-w-0 flex-col gap-2.5">
               <span className="text-[14px] font-[450] text-ink">Ship from GitHub</span>
+
+              {/* What the trip to GitHub achieved, said where they came back to.
+                  The install itself happens on github.com and the redirect is the
+                  only moment we can report on it. */}
+              {connected ? (
+                <p className="flex items-center gap-2 text-[13px] text-ink-2">
+                  <Check className="size-3.5 shrink-0" />
+                  Connected {connected}. Pick a repository below.
+                </p>
+              ) : null}
+              {returnedError ? (
+                <p className="text-[13px] text-red">
+                  {returnedError === "taken"
+                    ? "That account is already connected to another workspace here. Uninstall our App from it on GitHub, then connect it again."
+                    : returnedError === "no-installation"
+                      ? "That didn’t finish connecting. Try again — it takes about a minute."
+                      : returnedError === "no-workspace"
+                        ? "Your account isn’t set up yet. Ship something once and this will work."
+                        : "We couldn’t finish connecting to GitHub. Try again in a moment."}
+                </p>
+              ) : null}
 
               {connections === null ? (
                 <p className="flex items-center gap-2 py-1 text-[14px] text-ink-2">
@@ -351,13 +390,23 @@ export function ShipNew() {
                     )}
                   </div>
 
+                  {/* Always, not only once a listing has arrived. "I can't see my
+                      repository" is answered by this link, and it was hidden in
+                      exactly the state where somebody needs it: an installation
+                      that shared nothing renders an empty list, and the way out
+                      was below the fold of a list with no rows. */}
                   {links?.configureUrl ? (
-                    <p className="text-[13px] text-ink-3">
-                      Not seeing one?{" "}
-                      <a className="text-ink underline" href={links.configureUrl}>
-                        Choose which repositories we can see
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] text-ink-3">
+                      <span>
+                        Not seeing one?{" "}
+                        <a className="text-ink underline" href={links.configureUrl}>
+                          Choose which repositories we can see
+                        </a>
+                      </span>
+                      <a className="text-ink underline" href={connectUrl}>
+                        Add another account
                       </a>
-                    </p>
+                    </div>
                   ) : null}
                 </>
               )}

@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { TopBar } from "@/components/TopBar";
 import { Row, RowGroup } from "@/components/panel/atoms";
 import { Plan, Usage, type BillingAccount } from "@/components/Billing";
+import { GithubSettings } from "@/components/GithubSettings";
 import { RowSkeleton } from "@/components/Skeleton";
 
 /**
@@ -164,6 +165,10 @@ export default function Settings() {
             looked like the first of five limits. */}
         <Plan acct={acct} />
         <Usage acct={acct} />
+
+        {/* Where a person checks GitHub without being mid-ship. The dialog was
+            the only place this was visible, and only while shipping. */}
+        <GithubSettings />
 
         {/* One line, not a second copy of the list. /cli is where a machine is
             authorized and revoked; a list here meant two screens showing the

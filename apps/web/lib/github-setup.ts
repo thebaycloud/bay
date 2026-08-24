@@ -47,6 +47,27 @@ export function installationFromCallback(url: URL): CallbackDecision {
  * far smaller than the set that can hurt. Anything else answers empty, which
  * means "name it from the repository", exactly as before.
  */
+/**
+ * Where to send somebody back to, from the one opaque parameter GitHub returns.
+ *
+ * The install happens on github.com. Everything we knew before it — which page
+ * they were on, what they had typed — is gone by the time they come back, and
+ * `state` is the only channel: GitHub hands an App's install URL one string and
+ * gives it back on the setup redirect.
+ *
+ * It used to carry the app name and the redirect was hardcoded to `/new`, so
+ * connecting from the Ship-new dialog on the app list dropped somebody onto a
+ * different page with the dialog gone — an install that succeeded and looked
+ * like nothing had happened.
+ *
+ * An ALLOW-LIST of two, not a path. This value left our origin and came back
+ * through a third party, and a redirect target taken from a string like that is
+ * an open redirect — the one bug this function exists to not have.
+ */
+export function returnPathFromCallback(url: URL): "/" | "/new" {
+  return (url.searchParams.get("state") ?? "").trim() === "apps" ? "/" : "/new";
+}
+
 export function nameFromCallback(url: URL): string {
   const raw = (url.searchParams.get("state") ?? "").trim();
   return /^[a-z0-9][a-z0-9-]{0,38}$/.test(raw) ? raw : "";
