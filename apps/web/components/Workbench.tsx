@@ -126,9 +126,13 @@ export function Workbench({
         </Link>
 
         <TabsList className="h-8">
+          {/* The VALUE stays "chat". It is the default, so it never appears in
+              the URL — only `?tab=dev` is written — and anything that is not
+              "dev" resolves here, so old links keep working either way. Renaming
+              it would be churn in a string nobody reads. */}
           <TabsTrigger value="chat" className="gap-1.5 px-4 text-sub">
             <MessageSquare size={13} strokeWidth={2} aria-hidden="true" />
-            Chat
+            Agent
           </TabsTrigger>
           <TabsTrigger value="dev" className="gap-1.5 px-4 text-sub">
             <SquareTerminal size={13} strokeWidth={2} aria-hidden="true" />
