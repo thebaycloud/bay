@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpIcon, CircleDashedIcon, DatabaseIcon } from "lucide-react";
+import { ArrowUpIcon, CircleDashedIcon } from "lucide-react";
+import { BayMark } from "@/components/BayMark";
 import {
   Message,
   MessageContent,
@@ -212,14 +213,11 @@ export function WorkbenchChat({ slug }: { slug: string }) {
     <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
       <div className="min-h-0 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-10 text-center">
-            <DatabaseIcon className="size-5 text-ink-3" aria-hidden="true" />
+          <div className="flex flex-col items-center gap-2.5 py-10 text-center">
+            {/* The mark, not a database icon: this is the app's own front door,
+                and a cylinder said the conversation was about a database. */}
+            <BayMark className="size-9 text-ink-3" />
             <p className="text-sub font-medium text-ink">Ask about {slug}</p>
-            <p className="max-w-[34ch] text-micro text-ink-2">
-              How many users, what broke, what the last ship did. A read-only agent
-              reads your app&rsquo;s own data — it can look, and it cannot change
-              anything.
-            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-5">
