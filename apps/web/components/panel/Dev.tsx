@@ -28,9 +28,8 @@ import {
 } from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
 import { KeysPanel } from "@/components/KeysPanel";
+import { LogsPanel } from "@/components/LogsPanel";
 import { StoragePanel } from "@/components/StoragePanel";
-import { JobsPanel } from "@/components/JobsPanel";
-import { IssuesPanel } from "@/components/IssuesPanel";
 import { DomainsPanel } from "@/components/DomainsPanel";
 import { GitPanel } from "@/components/GitPanel";
 import { useQueryState } from "@/lib/use-query-state";
@@ -68,7 +67,7 @@ type View =
   | "ships"
   | "data"
   | "keys"
-  | "infra"
+  | "logs"
 
 /**
  * A mark per block.
@@ -84,7 +83,7 @@ const ICON = {
   ships: Ship,
   data: Database,
   keys: KeyRound,
-  infra: Activity,
+  logs: Activity,
 } as const;
 
 const TITLE: Record<View, string> = {
@@ -92,7 +91,7 @@ const TITLE: Record<View, string> = {
   ships: "Ships",
   data: "Data",
   keys: "Keys",
-  infra: "Infra",
+  logs: "Logs",
 };
 
 export function Dev({ slug, address }: { slug: string; address: string }) {
@@ -169,7 +168,7 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
       {/* The alert stays a tinted card above the groups. It is the one thing here
           that must not look like the rows it sits over. */}
       {d.alert ? (
-        <AlertCell act={d.alert.act} onAct={() => setView("infra")} sub={d.alert.sub} title={d.alert.title} />
+        <AlertCell act={d.alert.act} onAct={() => setView("logs")} sub={d.alert.sub} title={d.alert.title} />
       ) : null}
 
       {/* Overview is a group interrupted by a card, so its list breaks in two:
@@ -244,20 +243,22 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
             </Chips>
           </Row>
 
-          <Row icon={ICON.infra} onOpen={() => setView("infra")} title="Infra">
+          {/* One fact, about traffic — the jobs chip left with jobs. A failing
+              path is the reason somebody opens this row, so it outranks the
+              count when there is one. */}
+          <Row icon={ICON.logs} onOpen={() => setView("logs")} title="Logs">
             <Chips>
               {has("live") ? (
                 <StatusChip
-                  text={`${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`}
+                  text={
+                    broken
+                      ? `${broken} ${broken === 1 ? "path failing" : "paths failing"}`
+                      : `${d.live.length} ${d.live.length === 1 ? "path" : "paths"}`
+                  }
                   tone={broken ? "red" : "green"}
                 />
               ) : (
-                <ChipSkeleton w={56} />
-              )}
-              {has("jobs") ? (
-                <StatusChip text={`${d.jobs.length} ${d.jobs.length === 1 ? "job" : "jobs"}`} tone="green" />
-              ) : (
-                <ChipSkeleton w={48} />
+                <ChipSkeleton w={64} />
               )}
             </Chips>
           </Row>
@@ -330,12 +331,12 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
       </div>
     );
   }
-  if (view === "infra") {
+  if (view === "logs") {
     return (
-      <div className="flex flex-col gap-3">
-        <IssuesPanel slug={slug} />
-        <JobsPanel slug={slug} />
-      </div>
+      // Logs only. Jobs left for a section of its own — a cron is a thing that
+      // runs your app, not a thing your app said — and Issues was a summary of
+      // the errors that are now lines in the list below it.
+      <LogsPanel slug={slug} />
     );
   }
   if (view === "ships") {

@@ -57,7 +57,6 @@ export type Reading = {
   files: number;
   missing: string | null;
   keys: { name: string; tone: string }[];
-  jobs: unknown[];
   shipping: boolean;
   ships: Ship[];
   live: { path: string; hits: number; p50: number; ago: number; brokenFor?: number }[];
@@ -144,7 +143,7 @@ function keyName(k: Json | string): string {
  * answer arrived in 40ms sat behind `/jobs`, which spawns the gcloud CLI. Nothing
  * appeared until everything had.
  */
-export type Part = "env" | "db" | "store" | "jobs" | "dep" | "an" | "live";
+export type Part = "env" | "db" | "store" | "dep" | "an" | "live";
 
 /** The raw answers, as they arrive. Absent means "not yet". */
 export type Raw = Partial<Record<Part, Json | null>>;
@@ -154,7 +153,6 @@ const PARTS: { key: Part; get: (slug: string, addr: string) => Promise<Json | nu
   { key: "env", get: (s) => api(s, "/env"), ms: 6000 },
   { key: "db", get: (s) => api(s, "/db"), ms: 6000 },
   { key: "store", get: (s) => api(s, "/storage"), ms: 6000 },
-  { key: "jobs", get: (s) => api(s, "/jobs"), ms: 6000 },
   { key: "dep", get: (s) => api(s, "/deploy-status"), ms: 6000 },
   { key: "an", get: (s) => api(s, "/analytics"), ms: 6000 },
   {
@@ -206,7 +204,6 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
   const env = (raw.env ?? {}) as Json;
   const db = (raw.db ?? {}) as Json;
   const store = (raw.store ?? {}) as Json;
-  const jobs = (raw.jobs ?? {}) as Json;
   const dep = (raw.dep ?? {}) as Json;
   const an = (raw.an ?? {}) as Json;
   const live = raw.live as Json | null | undefined;
@@ -247,7 +244,6 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
     files: (store.objects ?? []).length,
     missing: db.error ?? null,
     keys: (env.keys ?? []).map((k: Json | string) => ({ name: keyName(k), tone: "" })),
-    jobs: jobs.jobs ?? [],
     // deploys.ts: status is live | building | deploying | pending | failed |
     // canceled, and there is no 'done'. Reading `stage` for doneness left every
     // finished app saying "Shipping" forever, because stage holds the last step
