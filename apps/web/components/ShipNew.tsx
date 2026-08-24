@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Check, Copy, Github, Loader2, Plus, Search } from "lucide-react";
+import { Check, Copy, Github, Loader2, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,25 +12,25 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { slugify } from "@/lib/slug";
 import { cn } from "@/lib/utils";
 
 /**
- * Ship new — name it, then choose where the code comes from.
+ * Ship new — the two ways in, and nothing else.
  *
- * Two steps rather than two tabs. The name is the one question with the same answer
- * whichever route you take, so it is asked once and first. The routes are then shown
- * TOGETHER, because they are not modes to switch between: one is a prompt you paste
- * into the agent you already have open, the other is a button you press. Anybody
- * arriving already knows which of those they are doing.
+ * It used to ask for a name first. That step is gone: the folder is already
+ * called something, and the CLI sends that name, so asking was asking a person
+ * to repeat a fact their filesystem already holds. It also made the dialog claim
+ * an app existed — the heading read "lantern-893 is empty" — when nothing had
+ * been created, because nothing IS created here. Two reads and a clipboard write
+ * is all this dialog does.
  *
- * The name is optional. A generated one is offered and used when the field is left
- * empty, so nobody is stopped at a text box on the way to shipping.
+ * The two routes are shown together, because they are not modes to switch
+ * between: one is a prompt you paste into the agent you already have open, the
+ * other is a button you press.
  *
- * The deploy FILM stays a page. A dialog cannot hold a live build log, and watching
- * the thing come up is the best part of this product, so the GitHub route hands off
- * to /new and that page does the rest.
+ * The deploy FILM stays a page. A dialog cannot hold a live build log, and
+ * watching the thing come up is the best part of this product, so the GitHub
+ * route hands off to /new and that page does the rest.
  */
 
 /** Whose marks sit beside the prompt. Files copied from apps/landing/public/logos. */
@@ -41,21 +41,18 @@ const AGENTS = [
 ];
 
 /**
- * A name to offer, in the shape the platform would have picked anyway.
+ * What to paste. Short on purpose — /new carries the long version.
  *
- * lib/slug's `randomSlug` is what /api/deploy already falls back to, but it is a
- * letter and four characters — "as76d" — which makes a fine subdomain and a poor
- * thing to find again in a list. This pairs a word with a number instead: still a
- * legal Cloud Run name, and readable.
+ * The package is `@thebaycloud/cli`, which is not a detail: npm refused
+ * `bay-cli` as a typosquat, and this string said `bay-cli` — an install line
+ * that fails. The binary is `bay`.
  */
-const WORDS = [
-  "harbor", "ferry", "pier", "tide", "beacon", "anchor", "cove", "quay",
-  "lantern", "compass", "current", "drift", "haven", "keel", "mast", "reef",
-];
-function suggestName(): string {
-  const w = WORDS[Math.floor(Math.random() * WORDS.length)];
-  return `${w}-${Math.floor(Math.random() * 900 + 100)}`;
-}
+const AGENT_PROMPT = `Install the Bay CLI and ship this folder:
+
+  npm i -g @thebaycloud/cli && bay ship --wait
+
+It opens a browser once to sign you in, then prints the address the app is live on.
+Without --wait it returns before the build has finished.`;
 
 interface GhConnection {
   installationId: number;
@@ -71,9 +68,6 @@ interface GhRepo {
 export function ShipNew() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<"name" | "source">("name");
-  const [suggested, setSuggested] = useState(suggestName);
-  const [name, setName] = useState("");
   const [copied, setCopied] = useState(false);
 
   const [connections, setConnections] = useState<GhConnection[] | null>(null);
@@ -84,24 +78,6 @@ export function ShipNew() {
   const [query, setQuery] = useState("");
 
   /**
-   * What it will actually be called: the field when filled, the offer when not.
-   *
-   * The emptiness test is on the raw field, not on the slug — `slugify("")` answers
-   * "app", so `slugify(name) || suggested` named every unnamed app "app" and never
-   * once used the suggestion it had just shown.
-   */
-  const chosen = name.trim() ? slugify(name.trim()) : suggested;
-
-  const prompt = useMemo(
-    () =>
-      `Install the Bay CLI and ship this folder as "${chosen}":\n\n` +
-      `  npm i -g bay-cli && bay ship --name ${chosen} --wait\n\n` +
-      `It opens a browser once to sign you in, then prints the address the app is live on.\n` +
-      `Without --wait it returns before the build has finished.`,
-    [chosen],
-  );
-
-  /**
    * Copy, from either the block or the button.
    *
    * One function because there are now two ways to ask for the same thing, and
@@ -109,7 +85,7 @@ export function ShipNew() {
    * "Copied" lasts.
    */
   function copyPrompt() {
-    navigator.clipboard?.writeText(prompt).catch(() => {});
+    navigator.clipboard?.writeText(AGENT_PROMPT).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   }
@@ -117,18 +93,14 @@ export function ShipNew() {
   // A second Ship-new is a fresh one, not the last attempt's half-finished state.
   useEffect(() => {
     if (open) return;
-    setStep("name");
-    setName("");
-    setSuggested(suggestName());
     setCopied(false);
   }, [open]);
 
-  // Read when the source step opens, not when the dialog does: somebody shipping
-  // from their folder never needs their GitHub accounts. `null` means "not asked
-  // yet" and is a different state from an empty list — one is a spinner, the other
-  // is the connect button.
+  // Read when the dialog opens, and only once. `null` means "not asked yet" and
+  // is a different state from an empty list — one is a spinner, the other is the
+  // connect button.
   useEffect(() => {
-    if (!open || step !== "source" || connections !== null) return;
+    if (!open || connections !== null) return;
     let alive = true;
     fetch("/api/github/repos")
       .then((r) => r.json())
@@ -142,7 +114,7 @@ export function ShipNew() {
     return () => {
       alive = false;
     };
-  }, [open, step, connections]);
+  }, [open, connections]);
 
   useEffect(() => {
     if (installation === null) return;
@@ -177,12 +149,12 @@ export function ShipNew() {
   /**
    * Where a person goes to put the App on another account.
    *
-   * The name they have already typed rides along in `state`, which GitHub hands
-   * back to the setup redirect untouched — see `nameFromCallback`. Without it,
-   * connecting an account mid-flow throws away the first thing this dialog
-   * asked for.
+   * Nothing rides along in `state` now that the dialog asks for nothing before
+   * this point. `nameFromCallback` on the setup route still reads one if it is
+   * there — an older tab mid-flow keeps working — and an absent name means the
+   * repository names the app, which is what it did before the name step existed.
    */
-  const connectUrl = links?.installUrl ? `${links.installUrl}?state=${encodeURIComponent(chosen)}` : "#";
+  const connectUrl = links?.installUrl ?? "#";
 
   /**
    * The rows the search leaves.
@@ -198,9 +170,9 @@ export function ShipNew() {
   }, [repos, query]);
 
   function ship(fullName: string) {
-    // The chosen name travels with it, so /new reserves the slug this dialog just
-    // showed rather than minting a second one from the repository name.
-    const p = new URLSearchParams({ src: "github", repo: fullName, name: chosen });
+    // No name: the repository is the name. /api/deploy still honours `body.name`
+    // for the CLI, which sends the folder's.
+    const p = new URLSearchParams({ src: "github", repo: fullName });
     if (installation !== null) p.set("installation_id", String(installation));
     router.push(`/new?${p}`);
   }
@@ -216,66 +188,30 @@ export function ShipNew() {
 
       <DialogContent className="w-[calc(100vw-2rem)] max-w-[520px] gap-0 overflow-hidden p-0">
         <DialogHeader className="px-5 pb-4 pt-5">
-          <DialogTitle className="flex min-w-0 items-baseline gap-2 text-[17px] font-[450] tracking-[-0.01em]">
-            {step === "name" ? (
-              <>
-                New app
-                {/* Beside the title, not under the field: it qualifies the one
-                    thing this step asks for, and it is the whole of what a
-                    paragraph down there used to say. */}
-                <span className="text-[14px] text-ink-3">Optional</span>
-              </>
-            ) : (
-              <span className="min-w-0 truncate">{chosen} is empty</span>
-            )}
+          <DialogTitle className="text-[17px] font-[450] tracking-[-0.01em]">
+            Ship an app
           </DialogTitle>
           <DialogDescription className="sr-only">
-            Name the app, then ship it from the folder you have open or from a GitHub
-            repository.
+            Ship the folder you have open with your agent, or ship a GitHub repository.
           </DialogDescription>
         </DialogHeader>
 
-        {step === "name" ? (
-          <form
-            className="flex min-w-0 flex-col gap-3 px-5 pb-5"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setStep("source");
-            }}
-          >
-            {/* The placeholder is the generated name, so the offer is visible
-                rather than described — leave it and that is what ships. */}
-            <Input
-              aria-label="App name (optional)"
-              autoFocus
-              className="h-9 placeholder:text-ink-3"
-              onChange={(e) => setName(e.currentTarget.value)}
-              placeholder={suggested}
-              value={name}
-            />
-
-            <Button className="mt-1 w-full" type="submit">
-              Continue
-              <ArrowRight className="size-4" />
-            </Button>
-          </form>
-        ) : (
-          <div className="flex min-w-0 flex-col gap-4 px-5 pb-5">
-            {/* Both routes at once. */}
-            <section className="flex min-w-0 flex-col gap-2.5">
-              <div className="flex items-center gap-3">
-                <span className="text-[14px] font-[450] text-ink">Ship with your agent</span>
-                <span className="ml-auto flex shrink-0 items-center gap-2.5">
-                  {AGENTS.map((a) => (
-                    <img
-                      alt={a.name}
-                      className="size-[18px] object-contain opacity-80"
-                      key={a.name}
-                      src={a.src}
-                      title={a.name}
-                    />
-                  ))}
-                </span>
+        <div className="flex min-w-0 flex-col gap-4 px-5 pb-5">
+          {/* Both routes at once. */}
+          <section className="flex min-w-0 flex-col gap-2.5">
+            <div className="flex items-center gap-3">
+              <span className="text-[14px] font-[450] text-ink">Ship with your agent</span>
+              <span className="ml-auto flex shrink-0 items-center gap-2.5">
+                {AGENTS.map((a) => (
+                  <img
+                    alt={a.name}
+                    className="size-[18px] object-contain opacity-80"
+                    key={a.name}
+                    src={a.src}
+                    title={a.name}
+                  />
+                ))}
+              </span>
               </div>
 
               {/* The prompt IS the button. Everybody's first instinct in front of a
@@ -294,7 +230,7 @@ export function ShipNew() {
                 type="button"
               >
                 <pre className="max-h-[200px] max-w-full overflow-y-auto whitespace-pre-wrap break-words font-mono text-[12.5px] leading-[1.7] text-ink-2">
-                  {prompt}
+                  {AGENT_PROMPT}
                 </pre>
               </button>
 
@@ -426,8 +362,7 @@ export function ShipNew() {
                 </>
               )}
             </section>
-          </div>
-        )}
+        </div>
       </DialogContent>
     </Dialog>
   );
