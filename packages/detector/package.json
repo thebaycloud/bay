@@ -1,5 +1,5 @@
 {
-  "name": "@supersonic/deploy-agent",
+  "name": "@bay/detector",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,5 +11,6 @@
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
     "@types/node": "^22.7.5"
-  }
+  },
+  "description": "Deterministic stack detection and build planning: reads a repository and works out how to build and run it."
 }

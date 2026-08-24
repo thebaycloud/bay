@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Which apps still run on the prebuilt runner, and therefore what still depends
-# on services/runner/ existing.
+# on infra/runner/ existing.
 #
 # THE QUESTION THIS ANSWERS, AND WHY IT NEEDS ASKING
 #
@@ -12,7 +12,7 @@
 #
 # That matters because two things must not be deleted while this returns rows:
 #
-#   services/runner/build.sh is the only thing that builds runner-node:latest and
+#   infra/runner/build.sh is the only thing that builds runner-node:latest and
 #   runner-python:latest, and every live runner revision cold-starts FROM those
 #   images. Delete the directory and they can never be patched again.
 #
@@ -47,7 +47,7 @@ if [[ ${#rows[@]} -eq 0 ]]; then
   echo "No service runs a runner image."
   echo
   echo "Safe to delete now:"
-  echo "  services/runner/                      (2 Dockerfiles, entrypoint.sh, prepare.sh, build.sh, popular-*.txt)"
+  echo "  infra/runner/                      (2 Dockerfiles, entrypoint.sh, prepare.sh, build.sh, popular-*.txt)"
   echo "  runnerPrepareConfig                   apps/web/lib/build-config.ts"
   echo "  runnerServes, runtimeRouting          apps/web/lib/repo-runtime.ts"
   echo "  RUNTIME_VERSIONS                      apps/web/lib/plan-deps.ts (+ the two vendored copies)"
@@ -57,7 +57,7 @@ if [[ ${#rows[@]} -eq 0 ]]; then
   exit 0
 fi
 
-echo "${#rows[@]} service(s) still on the runner. services/runner/ must NOT be deleted."
+echo "${#rows[@]} service(s) still on the runner. infra/runner/ must NOT be deleted."
 echo
 printf '  %-24s %s\n' "SERVICE" "IMAGE"
 printf '%s\n' "${rows[@]}" | awk 'NF{printf "  %-24s %s\n", $1, $2}'

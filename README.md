@@ -37,16 +37,42 @@ not of principle.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | The control plane. Next.js: the dashboard, the API, the deploy pipeline, billing, GitHub integration. Everything the platform decides happens here. |
+**`apps/` — what a person opens**
+
+| Path | What it is |
+|---|---|
+| `apps/web` | The control plane. Next.js: the dashboard, the API, the deploy pipeline, billing, GitHub integration. Everything the platform decides happens here. Named `web` for the monorepo convention, not because it is only a website. |
 | `apps/landing` | [thebay.cloud](https://thebay.cloud) itself. Also serves `/llms.txt`, the manual coding agents read. |
-| `packages/cli` | `@thebaycloud/cli` — the `bay` command. |
+
+**`services/` — what runs continuously**
+
+| Path | What it is |
+|---|---|
 | `services/proxy` | The edge. Resolves a hostname to an app, checks who is asking, injects the badge and the owner's toolbar. |
-| `services/fleet` | The Go agent that runs on each VM: pulls images, starts processes, routes requests to them. |
-| `services/runner` | The scripts baked into every app image — fetch the code, install, build, start. |
-| `services/static`, `services/shot` | Static-site serving, and screenshots for thumbnails. |
-| `services/deploy-agent` | Reads a repository and works out how to build and run it. |
-| `services/buildplane` | Provisions the long-lived BuildKit host that builds go through. |
+| `services/fleet` | The Go agent on each VM: pulls images, starts processes, routes requests to them. **Fleet** is a defined term — see `CONTEXT.md`. |
+| `services/static` | Serves static sites. |
+| `services/screenshots` | Thumbnails of live apps. |
+
+**`packages/` — libraries and tools**
+
+| Path | What it is |
+|---|---|
+| `packages/cli` | `@thebaycloud/cli` — the `bay` command. |
+| `packages/detector` | Reads a repository and works out what it is: language, framework, runtime, install, build, start, database. Deterministic — no model, no network. The CLI bundles the same source, so `bay check` answers what the server would answer. |
+| `packages/prompts` | The sentences every prompt and agent document here restates. |
+
+**`infra/` — what builds and provisions**
+
+| Path | What it is |
+|---|---|
 | `infra/bases` | Base images apps are built on top of. |
+| `infra/runner` | The scripts baked into every app image — fetch the code, install, build, start. |
+| `infra/buildkit` | Provisions the long-lived BuildKit host builds go through. |
+
+**And**
+
+| Path | What it is |
+|---|---|
 | `examples/` | Small apps used as deploy fixtures — a broken one, a Postgres one, a static one. |
 | `docs/` | Architecture, decision records, plans, and the research behind them. |
 

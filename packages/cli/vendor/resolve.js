@@ -1,4 +1,4 @@
-// supersonic-vendor-stamp 920d377cdf077931
+// supersonic-vendor-stamp 6746f5fbd6a74eef
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;

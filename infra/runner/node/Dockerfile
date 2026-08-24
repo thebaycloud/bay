@@ -1,5 +1,5 @@
 # Node runner base image — built ONCE, shared by every Node app. Build context is
-# the runner root (services/runner), so COPY sees entrypoint.sh + the list:
+# the runner root (infra/runner), so COPY sees entrypoint.sh + the list:
 #     docker build -f node/Dockerfile -t <registry>/runner-node:latest .
 # The active LTS, pinned deliberately.
 #

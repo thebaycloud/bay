@@ -1,5 +1,5 @@
 # Python runner base image — built ONCE, shared by every Python app. Build context
-# is the runner root (services/runner):
+# is the runner root (infra/runner):
 #     docker build -f python/Dockerfile -t <registry>/runner-python:latest .
 # Pinned deliberately, and bumped deliberately.
 #

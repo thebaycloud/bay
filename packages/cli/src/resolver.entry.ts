@@ -17,7 +17,7 @@
  * resolve.ts is the control plane's own entry into them. Moving them into
  * packages/cli would break Next's bundling of lib/ (see the RUNTIME_VERSIONS
  * comment in plan-deps.ts — the control-plane image copies apps/web and
- * services/deploy-agent and nothing else). Bundling costs one generated file and
+ * packages/detector and nothing else). Bundling costs one generated file and
  * breaks nothing.
  *
  * Precedent: vendor/detector.js already does this for the stack detector, for the

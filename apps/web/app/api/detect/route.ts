@@ -10,7 +10,7 @@ import { getPool } from "@/lib/db";
 import { cloneTokenFor, redactToken } from "@/lib/github-clone";
 import { authenticatedCloneUrl } from "@/lib/github-repos";
 
-const AGENT = join(process.cwd(), "..", "..", "services", "deploy-agent");
+const AGENT = join(process.cwd(), "..", "..", "packages", "detector");
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" } as NodeJS.ProcessEnv;
 
 function normalizeRepo(raw: string): string {

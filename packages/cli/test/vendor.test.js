@@ -52,7 +52,7 @@ test("every vendored bundle was built from the source that is here now", { skip:
   // liable to describe the imports and forget the file doing the importing.
   const ENTRY = {
     "resolve.js": "packages/cli/src/resolver.entry.ts",
-    "detector.js": "services/deploy-agent/src/index.ts",
+    "detector.js": "packages/detector/src/index.ts",
   };
 
   for (const [file, sources] of Object.entries(inputs)) {

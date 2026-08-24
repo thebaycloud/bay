@@ -30,7 +30,7 @@ mkdirSync(dirname(out), { recursive: true });
 const scratch = mkdtempSync(join(tmpdir(), "supersonic-bundle-"));
 const metaPath = join(scratch, "resolve.meta.json");
 
-// esbuild comes with tsx, which apps/web and services/deploy-agent both already
+// esbuild comes with tsx, which apps/web and packages/detector both already
 // depend on. CommonJS because the CLI is CommonJS and require() has to work out
 // of a published tarball with no build step.
 //
@@ -54,7 +54,7 @@ try {
 
   writeFileSync(join(cliRoot, "vendor", "README.md"),
     "Generated. Do not edit — `npm run bundle` rebuilds all of it.\n\n" +
-    "- detector.js — scripts/bundle-detector.mjs, from services/deploy-agent\n" +
+    "- detector.js — scripts/bundle-detector.mjs, from packages/detector\n" +
     "- resolve.js  — scripts/bundle-resolver.mjs, from apps/web/lib\n" +
     "- inputs.json — every repository file esbuild inlined into each bundle, from its metafile.\n" +
     "                test/vendor.test.js hashes these to prove the bundles are not stale.\n");

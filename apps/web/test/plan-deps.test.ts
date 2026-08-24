@@ -7,7 +7,7 @@ import {
   commandBinaries, requirementNames, checkPlanDeps, runtimeMismatch,
   assertRuntimeSupported, RUNTIME_VERSIONS, RUNTIME_UNSUPPORTED,
 } from "../lib/plan-deps";
-import { detectStack } from "../../../services/deploy-agent/src/index";
+import { detectStack } from "../../../packages/detector/src/index";
 
 /** A file in the repo, read relative to this test rather than to the cwd. */
 function repoFile(path: string): string {
@@ -188,13 +188,13 @@ test("RUNTIME_VERSIONS is what the runner Dockerfiles say", () => {
   // the Dockerfiles are the source of truth, and moving one without moving the
   // constant fails here rather than in somebody's build log.
   //
-  // Read here rather than at module load because services/runner is NOT in the
+  // Read here rather than at module load because infra/runner is NOT in the
   // deployed control-plane image (the root Dockerfile copies apps/web and
-  // services/deploy-agent, nothing else) — parsing at import would pass on every
+  // packages/detector, nothing else) — parsing at import would pass on every
   // laptop and throw in production.
   const from = (df: string) => repoFile(df).match(/^FROM\s+(\S+)/m)?.[1] ?? "";
-  assert.equal(from("services/runner/python/Dockerfile"), `python:${RUNTIME_VERSIONS.python}-slim`);
-  assert.equal(from("services/runner/node/Dockerfile"), `node:${RUNTIME_VERSIONS.node}-slim`);
+  assert.equal(from("infra/runner/python/Dockerfile"), `python:${RUNTIME_VERSIONS.python}-slim`);
+  assert.equal(from("infra/runner/node/Dockerfile"), `node:${RUNTIME_VERSIONS.node}-slim`);
 });
 
 test("the deploy-agent builds Python apps on the version the platform has", () => {

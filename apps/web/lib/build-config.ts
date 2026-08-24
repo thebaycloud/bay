@@ -581,7 +581,7 @@ export function runnerPrepareConfig(opts: { image: string; bucket: string; slug:
   // running this build may predate the rename. A build container older than the
   // switch reads only SUPERSONIC_*; one newer reads either. Sending both means
   // the two do not have to be deployed in any particular order — see
-  // services/runner/prepare.sh, which normalises them on the way in.
+  // infra/runner/prepare.sh, which normalises them on the way in.
   const both = (name: string, value: string) => [`BAY_${name}=${value}`, `SUPERSONIC_${name}=${value}`];
   const env = [
     ...both("OUT", out),

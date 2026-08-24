@@ -37,7 +37,7 @@ function resolver() {
  * The stack detector, as the async `Detect` that inferAppConfig expects.
  *
  * Synchronous in the CLI — there is one process, one repo, and nothing else
- * waiting on the event loop. The control plane spawns the deploy-agent as a
+ * waiting on the event loop. The control plane spawns the detector as a
  * subprocess for the same job, which is why the interface is a promise at all;
  * matching the interface rather than the transport is what lets both callers
  * share inferAppConfig unchanged.

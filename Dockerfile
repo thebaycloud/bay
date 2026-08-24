@@ -32,12 +32,12 @@ RUN npm run build
 # it is.
 RUN npm prune --omit=dev
 
-# --- install the deploy-agent deps (tsx) ---
+# --- install the detector's deps (tsx) ---
 FROM node:22-slim AS agentdeps
-WORKDIR /app/services/deploy-agent
-COPY services/deploy-agent/package*.json ./
+WORKDIR /app/packages/detector
+COPY packages/detector/package*.json ./
 RUN npm ci
-COPY services/deploy-agent ./
+COPY packages/detector ./
 
 # --- runtime: node + gcloud + git ---
 FROM node:22-slim
@@ -89,7 +89,7 @@ RUN curl -fsSL "https://github.com/railwayapp/railpack/releases/download/v${RAIL
   && railpack --version
 
 # buildctl talks to the long-lived BuildKit on the build host. It is the client
-# half of services/build/provision-buildkit.sh: the daemon keeps a warm local
+# half of infra/buildkit/provision-buildkit.sh: the daemon keeps a warm local
 # cache on SSD, and this is what reaches it over mTLS.
 #
 # Only `bin/buildctl` is taken. The archive also carries buildkitd, runc shims,
@@ -102,7 +102,7 @@ RUN curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VE
 
 WORKDIR /app
 COPY --from=webbuild /app/apps/web ./apps/web
-COPY --from=agentdeps /app/services/deploy-agent ./services/deploy-agent
+COPY --from=agentdeps /app/packages/detector ./packages/detector
 
 WORKDIR /app/apps/web
 ENV NODE_ENV=production PORT=8080
