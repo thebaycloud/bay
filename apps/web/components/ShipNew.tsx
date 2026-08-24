@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
-import { Check, Copy, Github, Loader2, Plus, Search } from "lucide-react";
+import { Check, Copy, Github, Loader2, Plus, Search, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -330,23 +330,8 @@ export function ShipNew() {
                         {c.accountLogin}
                       </button>
                     ))}
-                    {/* Both ways out, in the switcher rather than in a sentence
-                        under the list. "Choose repositories" is the answer to "I
-                        can't see mine" and it was a paragraph; here it is a word
-                        beside the accounts it applies to. */}
-                    {links?.configureUrl ? (
-                      <a
-                        className="ml-auto flex h-[28px] items-center rounded-md px-2.5 text-[13px] text-ink-2 transition-colors hover:text-ink"
-                        href={links.configureUrl}
-                      >
-                        Choose repositories
-                      </a>
-                    ) : null}
                     <a
-                      className={cn(
-                        "flex h-[28px] items-center gap-1.5 rounded-md px-2.5 text-[13px] text-ink-2 transition-colors hover:text-ink",
-                        links?.configureUrl ? "" : "ml-auto",
-                      )}
+                      className="ml-auto flex h-[28px] items-center gap-1.5 rounded-md px-2.5 text-[13px] text-ink-2 transition-colors hover:text-ink"
                       href={connectUrl}
                     >
                       <Plus className="size-3.5" />
@@ -379,6 +364,27 @@ export function ShipNew() {
                       ask. */}
                   {trouble ? null : (
                   <div className="max-h-[176px] overflow-y-auto rounded-lg border border-border">
+                    {/* Row zero, above the repositories.
+                        
+                        The way to change what we can see belongs IN the list: the
+                        moment somebody wants it is the moment they are scanning
+                        these rows for a repository that is not among them. As a
+                        link beside the account switcher it was a word competing
+                        with two other words; here it is the first thing under the
+                        heading, and it stays put while the list scrolls past. */}
+                    {links?.configureUrl ? (
+                      <a
+                        className="flex w-full items-center gap-2 border-b border-border bg-ground px-3 py-2.5 text-left transition-colors hover:bg-tile"
+                        href={links.configureUrl}
+                      >
+                        <Settings2 className="size-3.5 shrink-0 text-ink-3" />
+                        <span className="text-[14px] text-ink">Reconfigure GitHub</span>
+                        <span className="ml-auto shrink-0 text-[13px] text-ink-3">
+                          choose repositories
+                        </span>
+                      </a>
+                    ) : null}
+
                     {shown === null ? (
                       <p className="flex items-center gap-2 px-3 py-5 text-[14px] text-ink-2">
                         <Loader2 className="size-3.5 animate-spin" />
@@ -386,9 +392,11 @@ export function ShipNew() {
                       </p>
                     ) : shown.length === 0 ? (
                       <p className="px-3 py-5 text-[14px] text-ink-2">
+                        {/* No advice sentence: the row above IS the advice, and
+                            it is already on screen. */}
                         {query.trim()
                           ? `Nothing here matches “${query.trim()}”.`
-                          : "No repositories were shared with us yet."}
+                          : "Nothing shared with us yet."}
                       </p>
                     ) : (
                       shown.map((r) => (
