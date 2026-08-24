@@ -7,6 +7,7 @@ import { signIn } from "next-auth/react";
 import { Github } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { GoogleIcon } from "@/components/BrandIcons";
+import { productName } from "@/lib/brand";
 
 // A supersonic.cv return URL from ?callbackUrl (validated), so signing up from a
 // shared app sends you back to it.
@@ -66,7 +67,15 @@ export default function Signup() {
   return (
     <div className="authpage">
       <div className="authbox">
-        <div className="authbrand"><span className="logo"><Mark size={15} onDark /></span>SUPERSONIC</div>
+        {/* The landing page's lockup. This was the slash mark and the old name
+            set in caps — two things the product stopped being. */}
+        <div className="flex items-center justify-center gap-2.5 pb-1">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt="" className="size-[26px] shrink-0" height={26} src="/logo-bay.svg" width={26} />
+          <span className="text-[17px] font-medium tracking-[-0.03em] text-ink">
+            {productName()}
+          </span>
+        </div>
         <h1>Create account</h1>
         <form onSubmit={submit}>
           <input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />

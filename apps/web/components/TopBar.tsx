@@ -32,11 +32,20 @@ export function TopBar() {
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-card">
       <div className="mx-auto flex h-[52px] w-full max-w-[1080px] items-center gap-4 px-6">
-        <Link className="flex items-center gap-2" href="/">
-          <span className="flex size-6 items-center justify-center rounded-md bg-red text-[13px] font-semibold text-white">
-            {productName().slice(0, 1)}
-          </span>
-          <span className="text-[15px] font-[450] tracking-[-0.01em] text-ink">
+        {/* The landing page's lockup, exactly: its own logo file, the same gap,
+            the same weight and tracking. A red square with a letter in it was
+            something I drew — the landing page is what the product looks like,
+            and there is only one logo. */}
+        <Link className="flex items-center gap-2.5" href="/">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            alt=""
+            className="size-[26px] shrink-0"
+            height={26}
+            src="/logo-bay.svg"
+            width={26}
+          />
+          <span className="whitespace-nowrap text-[17px] font-medium tracking-[-0.03em] text-ink">
             {productName()}
           </span>
         </Link>

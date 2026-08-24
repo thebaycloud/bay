@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Bitter } from "next/font/google";
+import { controlPlaneHost, productName } from "@/lib/brand";
 import { SessionWrapper } from "@/components/SessionWrapper";
 import { themeBootScript } from "@/lib/theme";
 import "./globals.css";
@@ -28,12 +29,15 @@ const displaySerif = Bitter({
   display: "swap",
 });
 
-const TITLE = "Supersonic — Deploy anything in one click";
+// The browser tab, and what a link to the dashboard unfurls as. Read from the
+// brand seam rather than written here: this string is why the tab said
+// "Supersonic" on every page of a product called Bay.
+const TITLE = `${productName()} — Deploy anything in one click`;
 const DESCRIPTION =
   "Point us at the app you vibe-coded. We turn it into a real, live product — database, auth, everything — in one click. No infra, ever.";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.APP_URL || "https://app.supersonic.cv"),
+  metadataBase: new URL(process.env.APP_URL || `https://${controlPlaneHost()}`),
   title: TITLE,
   description: DESCRIPTION,
   // Each entry is its own drawing, not one file scaled — see docs/BRAND.md.
@@ -48,7 +52,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "Supersonic",
+    siteName: productName(),
     title: TITLE,
     description: DESCRIPTION,
     images: [{ url: "/og.png", width: 1200, height: 630 }],

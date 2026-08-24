@@ -20,7 +20,19 @@ import { rootDomain } from "./roots";
  * No server-only imports: read from client components.
  */
 
-const DEFAULT_PRODUCT_NAME = "Supersonic";
+/**
+ * Bay. Not "Supersonic".
+ *
+ * This defaulted to the old name on the theory that the control plane should
+ * keep saying it until the cutover — but the cutover happened: the landing page
+ * is Bay, the CLI is `bay` from `@thebaycloud/cli`, and the proxy serves
+ * thebay.cloud. A default nobody sets is not a fallback, it is the value, and it
+ * was putting the old name in the dashboard's own nav.
+ *
+ * The landing page is the source of truth for what we are called, and its
+ * `apps/landing/lib/brand.ts` has said Bay since the day it was written.
+ */
+const DEFAULT_PRODUCT_NAME = "Bay";
 
 let cachedName: string | null = null;
 

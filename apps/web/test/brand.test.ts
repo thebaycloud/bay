@@ -28,8 +28,13 @@ function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
 
 const NONE = { NEXT_PUBLIC_PRODUCT_NAME: undefined, PRODUCT_NAME: undefined };
 
-test("today's name is the default, so nothing moves until something is set", () => {
-  withEnv(NONE, () => assert.equal(productName(), "Supersonic"));
+test("the default is Bay, because that is what the product is called", () => {
+  // It was "Supersonic", on the theory that the control plane should keep saying
+  // the old name until the cutover. The cutover happened — the landing page is
+  // Bay, the CLI is `bay` from @thebaycloud/cli, the edge serves thebay.cloud —
+  // and a default nobody sets is not a fallback, it is the value. It was putting
+  // the old name in the dashboard's own nav.
+  withEnv(NONE, () => assert.equal(productName(), "Bay"));
 });
 
 test("the public variable wins, because a client bundle can read only that one", () => {
@@ -46,7 +51,7 @@ test("the server-only variable still works alone, for processes Next never built
 });
 
 test("an empty value is not a name", () => {
-  withEnv({ ...NONE, PRODUCT_NAME: "   " }, () => assert.equal(productName(), "Supersonic"));
+  withEnv({ ...NONE, PRODUCT_NAME: "   " }, () => assert.equal(productName(), "Bay"));
 });
 
 test("hosts are built from the canonical root, never from a literal", () => {

@@ -8,6 +8,7 @@ import { Github } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { isPlatformHost } from "@/lib/roots";
 import { GoogleIcon } from "@/components/BrandIcons";
+import { productName } from "@/lib/brand";
 
 // The URL to return to after auth — read from ?callbackUrl and validated to be a
 // host under one of our own roots, so we never bounce a user to an
@@ -51,7 +52,15 @@ export default function Login() {
   return (
     <div className="authpage">
       <div className="authbox">
-        <div className="authbrand"><span className="logo"><Mark size={15} onDark /></span>SUPERSONIC</div>
+        {/* The landing page's lockup. This was the slash mark and the old name
+            set in caps — two things the product stopped being. */}
+        <div className="flex items-center justify-center gap-2.5 pb-1">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt="" className="size-[26px] shrink-0" height={26} src="/logo-bay.svg" width={26} />
+          <span className="text-[17px] font-medium tracking-[-0.03em] text-ink">
+            {productName()}
+          </span>
+        </div>
         <h1>Sign in</h1>
         <form onSubmit={submit}>
           <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />

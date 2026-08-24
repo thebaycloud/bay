@@ -114,7 +114,13 @@ function notYours() {
   return (
     <div className="authpage">
       <div className="authbox">
-        <div className="authbrand">{productName()}</div>
+        <div className="flex items-center gap-2.5 pb-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img alt="" className="size-[26px] shrink-0" height={26} src="/logo-bay.svg" width={26} />
+          <span className="text-[17px] font-medium tracking-[-0.03em] text-ink">
+            {productName()}
+          </span>
+        </div>
         <h1>Not found</h1>
         <p className="authalt">This app doesn&apos;t exist or isn&apos;t yours. <a href="/">Back to your apps</a></p>
       </div>
