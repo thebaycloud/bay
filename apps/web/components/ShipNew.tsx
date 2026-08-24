@@ -145,12 +145,15 @@ export function ShipNew() {
         if (d.repos) return setRepos(d.repos);
         // Three refusals, three different next actions — and never GitHub's own
         // error text, which names things a person here has no word for.
+        // Three refusals, three next actions, and none of them a paragraph. The
+        // long version explained whose fault it was and what else still worked,
+        // which is a sentence somebody reads once and never again.
         setTrouble(
           d.reason === "no-installation"
-            ? "That account isn’t connected any more. Connect it again to pick a repository."
+            ? "That account isn’t connected any more."
             : d.reason === "bad-credentials"
-              ? "We can’t reach GitHub right now. This one is on us — nothing you do will fix it, and the folder route above still works."
-              : "GitHub isn’t answering. Try again in a moment.",
+              ? "Couldn’t reach GitHub."
+              : "GitHub isn’t answering.",
         );
         setRepos([]);
       })
@@ -327,8 +330,23 @@ export function ShipNew() {
                         {c.accountLogin}
                       </button>
                     ))}
+                    {/* Both ways out, in the switcher rather than in a sentence
+                        under the list. "Choose repositories" is the answer to "I
+                        can't see mine" and it was a paragraph; here it is a word
+                        beside the accounts it applies to. */}
+                    {links?.configureUrl ? (
+                      <a
+                        className="ml-auto flex h-[28px] items-center rounded-md px-2.5 text-[13px] text-ink-2 transition-colors hover:text-ink"
+                        href={links.configureUrl}
+                      >
+                        Choose repositories
+                      </a>
+                    ) : null}
                     <a
-                      className="ml-auto flex h-[28px] items-center gap-1.5 rounded-md px-2.5 text-[13px] text-ink-2 transition-colors hover:text-ink"
+                      className={cn(
+                        "flex h-[28px] items-center gap-1.5 rounded-md px-2.5 text-[13px] text-ink-2 transition-colors hover:text-ink",
+                        links?.configureUrl ? "" : "ml-auto",
+                      )}
                       href={connectUrl}
                     >
                       <Plus className="size-3.5" />
@@ -394,25 +412,6 @@ export function ShipNew() {
                     )}
                   </div>
                   )}
-
-                  {/* Always, not only once a listing has arrived. "I can't see my
-                      repository" is answered by this link, and it was hidden in
-                      exactly the state where somebody needs it: an installation
-                      that shared nothing renders an empty list, and the way out
-                      was below the fold of a list with no rows. */}
-                  {links?.configureUrl ? (
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] text-ink-3">
-                      <span>
-                        Not seeing one?{" "}
-                        <a className="text-ink underline" href={links.configureUrl}>
-                          Choose which repositories we can see
-                        </a>
-                      </span>
-                      <a className="text-ink underline" href={connectUrl}>
-                        Add another account
-                      </a>
-                    </div>
-                  ) : null}
                 </>
               )}
             </section>
