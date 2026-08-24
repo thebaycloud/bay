@@ -88,7 +88,10 @@ function CliAuth() {
       const r = await fetch("/api/cli/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        // The CLI sends `os.hostname()`. A direct visit sends nothing, and the
+        // token is labelled for what it is rather than "cli" — a row in the
+        // table below that says which of these you made by hand.
+        body: JSON.stringify({ name: port ? name : "pasted by hand" }),
       });
       const d = await r.json();
       if (!r.ok || d.error) throw new Error(d.error || "failed to mint token");
@@ -137,7 +140,21 @@ function CliAuth() {
       {/* 760px, not 520. The machines list is a table with four columns now, and
           a column of dates does not fit in a card sized for one sentence. */}
       <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-6 py-14">
-        <h1 className="text-[24px] font-[450] tracking-[-0.02em] text-ink">Authorize the CLI</h1>
+        {/* Two pages, one route.
+            
+            With `?port=` a CLI is waiting on a loopback socket and this is a
+            CONSENT screen: the click is what hands a credential to that port, and
+            it has to be a click — a page that minted on load would hand a token
+            to whatever is listening there, and something malicious running
+            locally can name its own port.
+            
+            Without it nobody is waiting and nothing is being authorized. You are
+            minting a token to paste. Calling both "Authorize the CLI" was a lie
+            in the second case, and the machine row said "cli" — the fallback for
+            a name the CLI never sent, because there is no CLI. */}
+        <h1 className="text-[24px] font-[450] tracking-[-0.02em] text-ink">
+          {port ? "Authorize the CLI" : "Create a CLI token"}
+        </h1>
 
         {/* The two facts, as label-and-value rows — which is where the sentence
             that used to be here went. It said what the machine and the account
@@ -150,15 +167,25 @@ function CliAuth() {
           ) : (
             <RowSkeleton tile={false} w={88} />
           )}
-          <Row title="Machine">
-            <span className="text-[13px] text-ink-2">{name}</span>
-          </Row>
+          {/* Only when a machine actually asked. `os.hostname()` is what the CLI
+              sends; with no CLI there is no machine to name. */}
+          {port ? (
+            <Row title="Machine">
+              <span className="text-[13px] text-ink-2">{name}</span>
+            </Row>
+          ) : null}
         </RowList>
 
         {state !== "done" ? (
           <Button className="w-full" disabled={state === "working" || !acct} onClick={authorize}>
             {state === "working" ? <Loader2 className="size-4 animate-spin" /> : null}
-            {state === "working" ? "Authorizing…" : "Authorize"}
+            {state === "working"
+              ? port
+                ? "Authorizing…"
+                : "Creating…"
+              : port
+                ? "Authorize"
+                : "Create a token"}
           </Button>
         ) : null}
 
