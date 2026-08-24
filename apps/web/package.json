@@ -21,7 +21,8 @@
     "github:check": "node --import tsx scripts/github-check.ts",
     "deadcode": "knip",
     "film": "esbuild components/film/entry.ts --bundle --format=iife --minify --target=es2020 --outfile=public/film/ship-it.js",
-    "prebuild": "npm run film"
+    "prebuild": "npm run film",
+    "check:prompts": "node ../../scripts/sync-prompt-rules.mjs --check"
   },
   "dependencies": {
     "@paper-design/shaders-react": "^0.0.80",
