@@ -63,6 +63,24 @@ export function GroupSkeleton({ rows = 3, tile = false }: { rows?: number; tile?
   );
 }
 
+/** The usage card's four meters, at the widths they will be. */
+export function UsageSkeleton() {
+  return (
+    <section className="flex flex-col gap-2.5">
+      <Skeleton className="h-5 w-16" />
+      <div className="flex flex-col gap-5 rounded-xl border border-border bg-card px-5 py-[18px]">
+        {[0, 1, 2, 3].map((i) => (
+          <div className="flex items-center gap-5" key={i}>
+            <Skeleton className="h-4 w-[120px]" />
+            <Skeleton className="hidden h-2 flex-1 rounded-full sm:block" />
+            <Skeleton className="h-4 w-16" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /**
  * The whole workbench, as geometry.
  *

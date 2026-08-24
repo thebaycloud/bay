@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { Check, Loader2, Trash2 } from "lucide-react";
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TopBar } from "@/components/TopBar";
 import { Row, RowGroup } from "@/components/panel/atoms";
-import { Billing, type BillingAccount } from "@/components/Billing";
+import { Plan, Usage, type BillingAccount } from "@/components/Billing";
 import { RowSkeleton } from "@/components/Skeleton";
 
 /**
@@ -30,27 +31,11 @@ interface Account extends BillingAccount {
   provider: string;
   hasPassword: boolean;
 }
-interface Tok {
-  id: string;
-  name: string | null;
-  created_at: string;
-  last_used_at: string | null;
-}
-
 const providerLabel: Record<string, string> = {
   google: "Google",
   github: "GitHub",
   credentials: "Email & password",
 };
-
-function shortDate(s: string | null): string {
-  if (!s) return "never";
-  try {
-    return new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-  } catch {
-    return "—";
-  }
-}
 
 export default function Settings() {
   const router = useRouter();
@@ -58,9 +43,6 @@ export default function Settings() {
   const [name, setName] = useState("");
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
-
-  const [tokens, setTokens] = useState<Tok[] | null>(null);
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const [confirm, setConfirm] = useState("");
   const [delBusy, setDelBusy] = useState(false);
@@ -76,10 +58,6 @@ export default function Settings() {
         }
       })
       .catch(() => {});
-    fetch("/api/account/tokens")
-      .then((r) => r.json())
-      .then((d) => setTokens(d.tokens ?? []))
-      .catch(() => setTokens([]));
   }, []);
 
   async function saveName() {
@@ -95,16 +73,6 @@ export default function Settings() {
       setNameSaved(true);
       setTimeout(() => setNameSaved(false), 2000);
     }
-  }
-
-  async function revoke(id: string) {
-    const r = await fetch("/api/account/tokens", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ revoke: id }),
-    });
-    setConfirmingId(null);
-    if (r.ok) setTokens((t) => (t ?? []).filter((x) => x.id !== id));
   }
 
   async function del() {
@@ -125,6 +93,9 @@ export default function Settings() {
     router.push("/login");
   }
 
+  /** Whether the field differs from what is stored, which is when Save exists. */
+  const dirty = Boolean(acct) && name.trim() !== (acct?.name ?? "").trim();
+
   const canDelete =
     !delBusy && confirm.trim().toLowerCase() === (acct?.email ?? "").toLowerCase() && Boolean(acct);
 
@@ -132,111 +103,82 @@ export default function Settings() {
     <>
       <TopBar />
       <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-7 px-6 py-10">
-        <header className="flex flex-col gap-1">
-          <h1 className="text-[28px] font-[450] tracking-[-0.02em] text-ink">Settings</h1>
-          <p className="text-[15px] text-ink-2">Your account, plan and CLI access</p>
-        </header>
+        <h1 className="text-[28px] font-[450] tracking-[-0.02em] text-ink">Settings</h1>
 
         <RowGroup title="Account">
-          {/* A skeleton, not `acct?.email ?? "…"`. An ellipsis beside the words
-              "how you sign in" reads as a value that IS an ellipsis, and the row
-              then jumps to a different width when the real one lands. */}
+          {/* Label on the left, value on the right — including the one value you
+              can change. A name field that looks like every other row's value is
+              a field somebody finds without being told it is there. */}
           {acct ? (
-            <Row sub="how you sign in" title={acct.email}>
+            <Row title="Email">
+              <span className="text-[13px] text-ink-2">{acct.email}</span>
+            </Row>
+          ) : (
+            <RowSkeleton tile={false} w={72} />
+          )}
+
+          {acct ? (
+            <Row title="Signs in with">
               <span className="text-[13px] text-ink-2">
                 {providerLabel[acct.provider] ?? acct.provider}
               </span>
             </Row>
           ) : (
-            <RowSkeleton tile={false} w={196} />
+            <RowSkeleton tile={false} w={104} />
           )}
 
-          {/* The form is a row of the list rather than a block under it: the
-              name being edited belongs beside the account it names. */}
           <form
-            className="flex items-center gap-2 px-4 py-3"
+            className="flex items-center gap-2 border-b border-border px-4 py-3 last:border-0"
             onSubmit={(e) => {
               e.preventDefault();
               saveName();
             }}
           >
+            <span className="shrink-0 text-[15px] font-[450] text-ink">Full name</span>
             <Input
-              aria-label="Your name"
-              className="h-9"
+              aria-label="Full name"
+              className="ml-auto h-9 w-[220px]"
+              disabled={!acct}
               onChange={(e) => setName(e.currentTarget.value)}
               placeholder="your name"
               value={name}
             />
-            <Button className="h-9 shrink-0" disabled={savingName || !acct} type="submit">
-              {savingName ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : nameSaved ? (
-                <Check className="size-4" />
-              ) : null}
-              {nameSaved ? "Saved" : "Save"}
-            </Button>
+            {/* Only when there is something to save. A permanently disabled
+                button beside a field reads as a field you are not allowed to
+                edit. */}
+            {dirty || savingName || nameSaved ? (
+              <Button className="h-9 shrink-0" disabled={savingName} type="submit">
+                {savingName ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : nameSaved ? (
+                  <Check className="size-4" />
+                ) : null}
+                {nameSaved ? "Saved" : "Save"}
+              </Button>
+            ) : null}
           </form>
         </RowGroup>
 
-        {/* Plan, usage and billing — its own component because it grew from a
-            plan badge and one button into four meters, a reset date and two
-            different ways to change plan. */}
-        <Billing acct={acct} />
+        {/* Plan and usage are separate sections: one is what you pay for, the
+            other is how much of it is left. Read as one list, the plan row
+            looked like the first of five limits. */}
+        <Plan acct={acct} />
+        <Usage acct={acct} />
 
-        <RowGroup title="CLI access">
-          {tokens === null ? (
-            <>
-              <RowSkeleton tile={false} w={168} />
-              <RowSkeleton tile={false} w={148} />
-            </>
-          ) : null}
-
-          {tokens?.length === 0 ? (
-            <Row sub="run `bay login` on a machine to create one" title="Nothing authorized yet" />
-          ) : null}
-
-          {tokens?.map((t) => (
-            <Row
-              key={t.id}
-              sub={`added ${shortDate(t.created_at)} · last used ${shortDate(t.last_used_at)}`}
-              title={t.name || "token"}
-            >
-              {/* Confirmed in place, because revoking is immediate and cannot be
-                  undone — that machine's next command is rejected. */}
-              {confirmingId === t.id ? (
-                <>
-                  <Button className="h-7 px-2.5 text-[13px]" onClick={() => revoke(t.id)} size="sm">
-                    Revoke it
-                  </Button>
-                  <Button
-                    className="h-7 px-2.5 text-[13px]"
-                    onClick={() => setConfirmingId(null)}
-                    size="sm"
-                    variant="ghost"
-                  >
-                    Keep
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  aria-label={`Revoke ${t.name || "token"}`}
-                  className="size-7 text-ink-3 hover:text-ink"
-                  onClick={() => setConfirmingId(t.id)}
-                  size="icon-sm"
-                  variant="ghost"
-                >
-                  <Trash2 className="size-3.5" />
-                </Button>
-              )}
-            </Row>
-          ))}
-        </RowGroup>
+        {/* One line, not a second copy of the list. /cli is where a machine is
+            authorized and revoked; a list here meant two screens showing the
+            same tokens and two revoke paths to keep in step. */}
+        <section className="flex flex-col gap-2.5">
+          <h2 className="px-0.5 text-[15px] text-ink">CLI access</h2>
+          <p className="px-0.5 text-[14px] text-ink-2">
+            <Link className="text-ink underline" href="/cli">
+              See the machines you have authorized
+            </Link>
+          </p>
+        </section>
 
         <RowGroup title="Delete account">
-          <Row
-            sub="every app you own, its database, its files and its address"
-            title="This cannot be undone"
-          />
+          <Row title="This cannot be undone" />
           <form
             className="flex items-center gap-2 px-4 py-3"
             onSubmit={(e) => {

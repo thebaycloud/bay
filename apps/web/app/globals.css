@@ -137,6 +137,12 @@
  * scroller inside, so the document never overflows for them either way, and the
  * fixed-inset pages (the workbench) never scrolled the document at all. */
 html, body { min-height: 100%; }
+/* No rubber-band. The document scrolls now, and on a trackpad that meant the
+ * whole page bouncing away from the top edge — which on a dashboard reads as the
+ * layout coming loose rather than as a gesture. `none` also stops a horizontal
+ * swipe becoming a browser back on the one screen (the workbench) whose panes
+ * scroll inside themselves. */
+html { overscroll-behavior: none; }
 body {
   margin: 0; background: var(--paper); color: var(--ink);
   font-family: var(--sans); font-size: 14.5px; line-height: 1.5;

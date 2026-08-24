@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, ExternalLink, Infinity as InfinityIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Row, RowGroup } from "@/components/panel/atoms";
 import { RowSkeleton } from "@/components/Skeleton";
 import { resetsOn } from "@/lib/billing-period";
@@ -37,72 +38,83 @@ export interface BillingAccount {
 const LABEL: Record<string, string> = { free: "Free", pro: "Pro", team: "Team" };
 const PRICE: Record<string, string> = { free: "$0 / forever", pro: "$20 / month", team: "Custom" };
 
-const TEAM_MAILTO =
-  "mailto:founders@thebay.cloud?subject=Bay%20Team%20plan"
-  + "&body=Hi%20—%20I'd%20like%20to%20set%20up%20a%20Team%20plan.%0A%0AHow%20many%20people%20will%20be%20deploying%3A%0AWhat%20you're%20building%3A";
-
 /**
- * One meter, as a row.
+ * One limit: what it is, how full it is, and how much is left.
  *
- * An unlimited ceiling gets a number and no bar — there is no proportion to
- * draw. Amber at 80%, red at the ceiling: the point is that somebody notices
- * BEFORE the refusal rather than during it, because a build quota reached with no
- * warning reads as the platform breaking rather than as a plan working.
+ * The shape is Claude's usage meter — a label with its reset beneath, a long
+ * track that takes the space, the number on the right. It replaces four rows of a
+ * hairline table whose entire content was "∞ 1", which said almost nothing and
+ * looked like a table of nothings.
+ *
+ * `N of M` rather than a percentage. A percentage is how you read a meter with a
+ * large ceiling; these ceilings are 3 and 10, and "33% used" of three apps is a
+ * worse sentence than "1 of 3".
  */
-function Meter({ label, used, max }: { label: string; used: number; max: number | null }) {
-  if (max == null) {
-    return (
-      <Row title={label}>
-        <span className="flex items-center gap-1.5 text-[13px] text-ink-2">
-          <InfinityIcon className="size-3.5" />
-          {used}
-        </span>
-      </Row>
-    );
-  }
-  const pct = Math.min(100, (used / (max || 1)) * 100);
-  const at = used >= max;
-  const near = !at && pct >= 80;
+function Meter({
+  label,
+  used,
+  max,
+  resets,
+}: {
+  label: string;
+  used: number;
+  max: number | null;
+  resets?: string;
+}) {
+  const unlimited = max == null;
+  const pct = unlimited ? 0 : Math.min(100, (used / (max || 1)) * 100);
+  const at = !unlimited && used >= max;
+  const near = !unlimited && !at && pct >= 80;
+
   return (
-    <Row title={label}>
-      <span className="flex items-center gap-3">
-        <span className="h-1.5 w-[120px] overflow-hidden rounded-full bg-tile">
+    <div className="flex items-center gap-5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-none sm:basis-[168px]">
+        <span className="text-[14px] font-[450] text-ink">{label}</span>
+        {resets ? <span className="text-[13px] text-ink-3">{resets}</span> : null}
+      </div>
+
+      {/* No track for an unlimited ceiling: there is no proportion to draw, and a
+          full-width empty bar suggests one that is merely nowhere near full. */}
+      {unlimited ? (
+        <span className="ml-auto flex items-center gap-1.5 text-[13px] text-ink-2">
+          <InfinityIcon className="size-3.5" />
+          {used} used
+        </span>
+      ) : (
+        <>
+          <span className="hidden h-2 flex-1 overflow-hidden rounded-full bg-tile sm:block">
+            {/* A floor of 4% on anything above zero: one of ten apps is 10% and
+                draws as a sliver, and a sliver reads as a rendering artefact
+                rather than as "you have used one". */}
+            <span
+              className={cn(
+                "block h-full rounded-full transition-[width]",
+                at ? "bg-red" : near ? "bg-[#B45309]" : "bg-ink",
+              )}
+              style={{ width: `${used > 0 ? Math.max(pct, 4) : 0}%` }}
+            />
+          </span>
           <span
             className={cn(
-              "block h-full rounded-full",
-              at ? "bg-red" : near ? "bg-[var(--amber,#B45309)]" : "bg-ink-3",
+              "shrink-0 text-[13px] tabular-nums",
+              at ? "text-red" : near ? "text-ink" : "text-ink-2",
             )}
-            style={{ width: `${pct}%` }}
-          />
-        </span>
-        <span
-          className={cn(
-            "text-[13px] tabular-nums",
-            at ? "text-red" : near ? "text-ink" : "text-ink-2",
-          )}
-        >
-          {used}/{max}
-        </span>
-      </span>
-    </Row>
+          >
+            {used} of {max}
+          </span>
+        </>
+      )}
+    </div>
   );
 }
 
-/**
- * Plan, usage and the way to change it.
- *
- * Deliberately shows the meters even to somebody who is nowhere near them.
- * Everywhere else in the product usage is silent until it matters — the banner
- * only appears near a limit — but settings is the one screen a person opens *to
- * find out*, so answering the question is the whole job.
- */
-export function Billing({ acct }: { acct: BillingAccount | null }) {
+/** The plan, and the way to change it. */
+export function Plan({ acct }: { acct: BillingAccount | null }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
 
   const plan = acct?.plan ?? "free";
   const paid = plan === "pro" || plan === "team";
-  const u = acct?.usage;
 
   async function go(path: string, body?: unknown) {
     setBusy(true);
@@ -128,24 +140,12 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
   return (
     <div className="flex flex-col gap-3">
       <RowGroup title="Plan">
-        {/* Skeletons until the account answers. Rendering the free plan's row
+        {/* Skeleton until the account answers. Rendering the free plan's row
             while the answer is unknown tells a Pro subscriber they are on Free
             for as long as the request takes — a placeholder that is wrong is
             worse than one that is blank. */}
-        {!acct ? (
-          <>
-            <RowSkeleton tile={false} w={120} />
-            <RowSkeleton tile={false} w={96} />
-            <RowSkeleton tile={false} w={132} />
-            <RowSkeleton tile={false} w={148} />
-          </>
-        ) : null}
-
         {acct ? (
-          <Row
-            sub={plan === "free" ? "no card, no time limit" : "manage or cancel any time"}
-            title={LABEL[plan]}
-          >
+          <Row title={LABEL[plan]}>
             <span className="text-[13px] text-ink-2">{PRICE[plan]}</span>
             {/* A subscriber manages their own subscription through Stripe's
                 portal — cancelling, changing card, invoices. We do not rebuild
@@ -171,37 +171,10 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
               </Button>
             )}
           </Row>
-        ) : null}
-
-        {u ? (
-          <>
-            <Meter label="Apps" max={u.maxApps} used={u.apps} />
-            <Meter label="Public apps" max={u.maxPublicApps} used={u.publicApps} />
-            <Meter label="Builds this month" max={u.monthlyBuilds} used={u.builds} />
-            {/* On free the monthly agent allowance is zero by design — the grant
-                is a single lifetime one — so a "0/0" meter would say nothing
-                true. The state that matters there is whether it is still
-                available. */}
-            {plan === "free" ? (
-              <Row title="Free auto-fix">
-                <span
-                  className={cn("text-[13px]", u.freeFixAvailable ? "text-ink-2" : "text-red")}
-                >
-                  {u.freeFixAvailable ? "available" : "used"}
-                </span>
-              </Row>
-            ) : (
-              <Meter label="Auto-fix this month" max={u.monthlyAgentRuns} used={u.agentRuns} />
-            )}
-          </>
-        ) : null}
+        ) : (
+          <RowSkeleton tile={false} w={120} />
+        )}
       </RowGroup>
-
-      {u ? (
-        <p className="px-0.5 text-[13px] text-ink-3">
-          Builds and auto-fix reset on {resetsOn(u.periodStart)}. Apps stay as they are.
-        </p>
-      ) : null}
 
       {/* What upgrading buys, only where there is something to buy. On Pro this
           block would be a list of things the reader already has. */}
@@ -225,29 +198,73 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
         </div>
       ) : null}
 
-      {acct ? (
-      <p className="px-0.5 text-[13px] text-ink-3">
-        {plan === "team" ? (
-          <>
-            Questions about your plan?{" "}
-            <a className="text-ink underline" href={TEAM_MAILTO}>
-              Email us
-            </a>
-            .
-          </>
-        ) : (
-          <>
-            Need seats for a whole team, or sign-in with your company domain?{" "}
-            <a className="text-ink underline" href={TEAM_MAILTO}>
-              Talk to us
-            </a>
-            .
-          </>
-        )}
-      </p>
-      ) : null}
-
       {note ? <p className="px-0.5 text-[14px] text-red">{note}</p> : null}
     </div>
+  );
+}
+
+/**
+ * Usage, as its own section.
+ *
+ * Split from Plan because they answer different questions — what am I paying
+ * for, and how much of it is left — and reading them as one list made the plan
+ * row look like the first of five limits.
+ *
+ * Shown even to somebody nowhere near a ceiling. Everywhere else usage is silent
+ * until it matters, but this is the screen a person opens *to find out*.
+ */
+export function Usage({ acct }: { acct: BillingAccount | null }) {
+  const u = acct?.usage;
+  const plan = acct?.plan ?? "free";
+  const resets = u ? `resets ${resetsOn(u.periodStart)}` : undefined;
+
+  return (
+    <section className="flex flex-col gap-2.5">
+      <h2 className="px-0.5 text-[15px] text-ink">Usage</h2>
+      <div className="flex flex-col gap-5 rounded-xl border border-border bg-card px-5 py-[18px]">
+        {!u ? (
+          [0, 1, 2, 3].map((i) => (
+            <div className="flex items-center gap-5" key={i}>
+              <Skeleton className="h-4 w-[120px]" />
+              <Skeleton className="hidden h-2 flex-1 rounded-full sm:block" />
+              <Skeleton className="h-4 w-16" />
+            </div>
+          ))
+        ) : (
+          <>
+            <Meter label="Apps" max={u.maxApps} used={u.apps} />
+            <Meter label="Public apps" max={u.maxPublicApps} used={u.publicApps} />
+
+            {/* A hairline where the meaning changes: the two above are standing
+                totals, the two below are spent and given back every month. */}
+            <span className="h-px bg-border" />
+
+            <Meter label="Builds" max={u.monthlyBuilds} resets={resets} used={u.builds} />
+            {/* On free the monthly agent allowance is zero by design — the grant
+                is a single lifetime one — so a "0 of 0" meter would say nothing
+                true. The state that matters there is whether it is still
+                available. */}
+            {plan === "free" ? (
+              <div className="flex items-center gap-5">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-none sm:basis-[168px]">
+                  <span className="text-[14px] font-[450] text-ink">Auto-fix</span>
+                  <span className="text-[13px] text-ink-3">one on the free plan</span>
+                </div>
+                <span
+                  className={cn(
+                    "ml-auto text-[13px]",
+                    u.freeFixAvailable ? "text-ink-2" : "text-red",
+                  )}
+                >
+                  {u.freeFixAvailable ? "not used yet" : "used"}
+                </span>
+              </div>
+            ) : (
+              <Meter label="Auto-fix" max={u.monthlyAgentRuns} resets={resets} used={u.agentRuns} />
+            )}
+          </>
+        )}
+      </div>
+    </section>
   );
 }
