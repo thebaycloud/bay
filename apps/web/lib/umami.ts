@@ -227,7 +227,17 @@ export async function websiteStats(
 
   const [statsRes, pagesRes, refsRes] = await Promise.all([
     api(`/api/websites/${websiteId}/stats?${q}`),
-    api(`/api/websites/${websiteId}/metrics?${q}&type=url&limit=10`),
+    // `path`, not `url`. Umami renamed this metric type, and the old name is not
+    // deprecated — it is rejected: `type=url` answers 400 Bad request while
+    // `type=path` returns the data. Verified against the running instance
+    // (`postgresql-latest`) on 24 Aug: url 400, path [{"x":"/","y":2}].
+    //
+    // The 400 was invisible because `list()` below turns any non-ok response
+    // into `[]`, which is indistinguishable from "this site has no pages yet".
+    // So the pages panel has been empty for every app for as long as this ran,
+    // and nothing anywhere said why. Every other type — referrer, browser, os,
+    // device, country — was and is fine.
+    api(`/api/websites/${websiteId}/metrics?${q}&type=path&limit=10`),
     api(`/api/websites/${websiteId}/metrics?${q}&type=referrer&limit=10`),
   ]);
   if (!statsRes || !statsRes.ok) return null;
