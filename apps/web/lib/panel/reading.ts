@@ -62,8 +62,6 @@ export type Reading = {
   missing: string | null;
   keys: { name: string; tone: string }[];
   jobs: unknown[];
-  tokens: { last_used_at?: string | null }[];
-  mcp: boolean;
   shipping: boolean;
   ships: Ship[];
   live: { path: string; hits: number; p50: number; ago: number; brokenFor?: number }[];
@@ -150,7 +148,7 @@ function keyName(k: Json | string): string {
  * answer arrived in 40ms sat behind `/jobs`, which spawns the gcloud CLI. Nothing
  * appeared until everything had.
  */
-export type Part = "share" | "env" | "db" | "store" | "jobs" | "dep" | "an" | "agent" | "live";
+export type Part = "share" | "env" | "db" | "store" | "jobs" | "dep" | "an" | "live";
 
 /** The raw answers, as they arrive. Absent means "not yet". */
 export type Raw = Partial<Record<Part, Json | null>>;
@@ -164,7 +162,6 @@ const PARTS: { key: Part; get: (slug: string, addr: string) => Promise<Json | nu
   { key: "jobs", get: (s) => api(s, "/jobs"), ms: 6000 },
   { key: "dep", get: (s) => api(s, "/deploy-status"), ms: 6000 },
   { key: "an", get: (s) => api(s, "/analytics"), ms: 6000 },
-  { key: "agent", get: (s) => api(s, "/agent"), ms: 6000 },
   {
     // Shortest deadline and first to be given up on: this is the one that reaches
     // umami, and it is cross-origin to the tenant's own host.
@@ -218,7 +215,6 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
   const jobs = (raw.jobs ?? {}) as Json;
   const dep = (raw.dep ?? {}) as Json;
   const an = (raw.an ?? {}) as Json;
-  const agent = (raw.agent ?? {}) as Json;
   const live = raw.live as Json | null | undefined;
 
   const grants: string[] = share.grants ?? [];
@@ -263,9 +259,6 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
     missing: db.error ?? null,
     keys: (env.keys ?? []).map((k: Json | string) => ({ name: keyName(k), tone: "" })),
     jobs: jobs.jobs ?? [],
-    // A token belongs to a person, not an app: one deploys everything they own.
-    tokens: agent.tokens ?? [],
-    mcp: Boolean(agent.mcp),
     // deploys.ts: status is live | building | deploying | pending | failed |
     // canceled, and there is no 'done'. Reading `stage` for doneness left every
     // finished app saying "Shipping" forever, because stage holds the last step

@@ -74,7 +74,7 @@ export function IssuesPanel({ slug }: { slug: string }) {
       {err ? <Row sub={err.slice(0, 140)} title="That could not be read" /> : null}
 
       {errors && errors.length === 0 && !err ? (
-        <Row sub="nothing in the last seven days" title="No errors" />
+        <Row title="No errors" />
       ) : null}
 
       {errors?.map((e, i) => (

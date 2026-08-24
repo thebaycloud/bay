@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DeployPlan } from "./opencode-deploy";
-import { databaseEnvNames } from "./lanes";
+import {
+  ALWAYS_OWNED_EXACT, ALWAYS_OWNED_PREFIXES,
+  DATABASE_OWNED_EXACT, DATABASE_OWNED_PREFIXES,
+} from "./env-owner";
 import type { ProcessConfig } from "./processes";
 
 /**
@@ -211,32 +214,14 @@ export class ConfigError extends Error {}
 
 const LANGUAGES = new Set(["node", "python", "static", "other"]);
 
-/**
- * Ours no matter what the app declares.
- *
- * `PORT` is assigned by Cloud Run and injected into the ingress container, and the
- * runtime contract says so outright; `SUPERSONIC_*` is this platform's own
- * namespace. Neither depends on anything the app asked for, so neither is ever
- * released back.
+/*
+ * The four name lists live in `lib/env-owner.ts` now, which is client-safe, so the
+ * Keys screen asks the same question from the same lists rather than keeping a
+ * second copy of the rule. `BAY_` was missing from the always-owned prefixes
+ * until that move — the rename shipped, the platform began writing `BAY_URL`, and
+ * this list still only knew `SUPERSONIC_`, so an app could declare `BAY_URL` and
+ * have it silently overwritten. Exactly the drift the comment here warned about.
  */
-const ALWAYS_OWNED_PREFIXES = [/^SUPERSONIC_/];
-const ALWAYS_OWNED_EXACT = new Set(["PORT"]);
-
-/**
- * Ours only while we are the one writing them.
- *
- * Derived from `databaseEnv()` rather than typed out again. The two lists were
- * maintained separately once — 6 protected names against 17 written — and every
- * name in the gap was a user value the platform silently overwrote, which reads
- * to the user as their own config being ignored.
- *
- * The prefixes are deliberately broad. `PGSSLMODE` is not written by
- * `databaseEnv()` today, but it configures the same connection, and a user setting
- * it while the platform supplies the endpoint is describing a connection they do
- * not control.
- */
-const DATABASE_OWNED_PREFIXES = [/^POSTGRES_/, /^PG/, /^DB_/];
-const DATABASE_OWNED_EXACT = new Set(databaseEnvNames());
 
 /**
  * Whether a name belongs to the platform rather than to the app.

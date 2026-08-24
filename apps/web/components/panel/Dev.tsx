@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  Bot,
   ChartColumn,
   ChevronLeft,
   Database,
@@ -29,6 +28,7 @@ import {
   StatusChip,
 } from "@/components/panel/atoms";
 import { DatabasePanel } from "@/components/DatabasePanel";
+import { KeysPanel } from "@/components/KeysPanel";
 import { StoragePanel } from "@/components/StoragePanel";
 import { JobsPanel } from "@/components/JobsPanel";
 import { IssuesPanel } from "@/components/IssuesPanel";
@@ -48,7 +48,7 @@ import {
  * Dev mode: the panel's cell grid, and the screens behind it.
  *
  * A port of homeScreen from services/proxy/panel/cells.js — Address full width,
- * then Analytics|Ships, Data|Keys, Infra|Access, and Agent full width. Each cell
+ * then Analytics|Ships, Data|Keys, Infra|Access. Each cell
  * carries one live fact and pushes into a screen; the back affordance pops.
  *
  * The screens REUSE the panels that already exist rather than being rewritten.
@@ -72,7 +72,6 @@ type View =
   | "keys"
   | "infra"
   | "access"
-  | "agent";
 
 /**
  * A mark per block.
@@ -90,7 +89,6 @@ const ICON = {
   keys: KeyRound,
   infra: Activity,
   access: Users,
-  agent: Bot,
 } as const;
 
 const TITLE: Record<View, string> = {
@@ -100,7 +98,6 @@ const TITLE: Record<View, string> = {
   keys: "Keys",
   infra: "Infra",
   access: "Access",
-  agent: "Agent",
 };
 
 export function Dev({ slug, address }: { slug: string; address: string }) {
@@ -321,28 +318,13 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
           </Chips>
         </Row>
 
-        <Row icon={ICON.agent} onOpen={() => setView("agent")} title="Agent">
-          <Chips>
-            {!has("agent") ? <ChipSkeleton w={140} /> : null}
-            {/* Two states said differently on purpose: no token is something to
-                fix, a token never used is something to try. */}
-            {has("agent") ? (
-              <StatusChip
-              text={
-                d.tokens.length
-                  ? d.tokens.some((t) => t.last_used_at)
-                    ? "connected"
-                    : "never used"
-                  : "not connected"
-              }
-              tone={d.tokens.some((t) => t.last_used_at) ? "green" : "red"}
-              />
-            ) : null}
-            {has("agent") ? (
-              <StatusChip text={d.mcp ? "MCP on" : "MCP not built"} tone="grey" />
-            ) : null}
-          </Chips>
-        </Row>
+        {/* There was an Agent row here, and it is gone rather than fixed.
+            It carried two facts. One was the number of CLI tokens — which belong
+            to the PERSON and not to the app, so it read the same on every app in
+            the account, and /cli already lists them with the device, the last use
+            and a revoke. The other said "MCP not built", which is a roadmap entry
+            wearing a status chip. Neither was something an owner could do
+            anything about from here. */}
       </RowGroup>
     </Screen>
   );
@@ -396,56 +378,20 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
             {d.ships[0].error}
           </pre>
         ) : null}
-        {/* Honest about the gap: deploy-status returns only the latest deploy, and
-            there is no deploys-list route to build a history from. */}
-        <p className="pt-1 text-sub text-ink-2">
-          Only the latest ship is on file — there is no deploys-list route yet, so
-          there is no history to show.
-        </p>
+        {/* One ship, because `deploy-status` returns only the latest and there is
+            no deploys-list route to build a history from. Said in the commit and
+            not on the screen: an owner reading this wants the ship, not our
+            roadmap. */}
       </Card>
     );
   }
   if (view === "keys") {
-    return (
-      <Card className="flex flex-col gap-3 rounded-xl border-border bg-card p-4 shadow-none">
-        {d.keys.length ? (
-          <div className="flex flex-col gap-2">
-            {d.keys.map((k: { name: string }) => (
-              <div className="flex items-center justify-between gap-3 border-b border-border pb-2 last:border-0 last:pb-0" key={k.name}>
-                <span className="text-val text-ink">{k.name}</span>
-                <StatusChip text="set" tone="green" />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sub text-ink-2">Nothing connected yet.</p>
-        )}
-        {/* The panel used to promise key health here. Nothing records upstream call
-            outcomes, so the promise is removed rather than left unmet. */}
-        <p className="text-sub text-ink-2">
-          Names only. Values are never read back, and whether a key still works is
-          not something anything records yet.
-        </p>
-      </Card>
-    );
-  }
-  if (view === "agent") {
-    return (
-      <Card className="flex flex-col gap-2 rounded-xl border-border bg-card p-4 shadow-none">
-        <div className="text-val text-ink">CLI tokens</div>
-        <p className="text-sub text-ink-2">
-          {d.tokens.length
-            ? `${d.tokens.length} ${d.tokens.length === 1 ? "token" : "tokens"} on file. A token belongs to you, not to this app — one deploys everything you own.`
-            : "No tokens yet."}
-        </p>
-        <div className="pt-1 text-val text-ink">MCP</div>
-        <p className="text-sub text-ink-2">
-          {d.mcp
-            ? "On."
-            : "Not built. There is no config to hand you, so none is offered — a config pointing at nothing is worse than none."}
-        </p>
-      </Card>
-    );
+    // `managedDatabase` is a fact this screen already has: the database read came
+    // back a moment ago. It decides whether the seventeen connection variables
+    // are ours or the app's — an app on Supabase owns its own DATABASE_URL, and
+    // treating those names as ours unconditionally would be a refusal aimed at
+    // the wrong app. See `envOwner`.
+    return <KeysPanel managedDatabase={!d.missing} onToast={toast} slug={slug} />;
   }
   // analytics
   return (

@@ -84,7 +84,6 @@ export function JobsPanel({ slug }: { slug: string }) {
     <section className="flex flex-col gap-2.5">
       <div className="flex items-center gap-3 px-0.5">
         <h2 className="text-[15px] text-ink">Jobs</h2>
-        <span className="text-[13px] text-ink-3">a POST to your app, on a cron</span>
         <Button className="ml-auto" onClick={() => setAdding((a) => !a)} size="sm" variant="outline">
           <Plus className="size-3.5" />
           Schedule
@@ -127,7 +126,7 @@ export function JobsPanel({ slug }: { slug: string }) {
         {err ? <Row sub={err.slice(0, 110)} title="That could not be read" /> : null}
 
         {jobs && jobs.length === 0 && !err ? (
-          <Row sub="Schedule adds one — it POSTs to your app on a cron" title="Nothing scheduled" />
+          <Row title="Nothing scheduled" />
         ) : null}
 
         {jobs?.map((j) => (
