@@ -130,7 +130,7 @@ test("the db tool refuses anything that is not one SELECT", async () => {
   // write would make "read-only" a claim about the prompt rather than about what the
   // agent was handed — and the prompt is the half an injected row gets to argue with.
   const { toolsFor } = await import("../lib/chat/tools");
-  const tools = toolsFor("q6doa");
+  const tools = toolsFor("q6doa", "owner-1");
   for (const bad of [
     "delete from users",
     "drop table users",

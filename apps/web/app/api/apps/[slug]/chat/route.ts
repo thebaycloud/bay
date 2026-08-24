@@ -76,7 +76,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
 
       try {
         const dir = seedTools(ws);
-        bridge = serveTools(dir, toolsFor(slug, cookie));
+        bridge = serveTools(dir, toolsFor(slug, uid, cookie));
         /**
          * What the workspace actually contains, said out loud.
          *

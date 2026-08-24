@@ -1,6 +1,12 @@
 import { getTenantReadPool, dbNameForSlug } from "@/lib/db";
+import { allShapes, readStats } from "@/lib/db-catalog";
 import { appLogs } from "@/lib/app-logs";
-import { describeService, getErrors } from "@/lib/gcloud";
+import {
+  bucketForSlug, describeService, getErrors, listBucketObjectsCached, listJobs,
+} from "@/lib/gcloud";
+import { listDomains } from "@/lib/domains";
+import { probeApp } from "@/lib/probe-run";
+import { orderingFor, describeOrdering, recencyColumn } from "@/lib/db-browse";
 import { getDeploy } from "@/lib/deploys";
 import { getAppBySlug, listGrants, listDomainGrants } from "@/lib/apps";
 import { listPending } from "@/lib/requests";
@@ -71,7 +77,7 @@ async function db(slug: string, sql: string): Promise<Answer> {
  * being fetched is the one that user is entitled to. Nothing is forwarded anywhere
  * except that user's own app.
  */
-export function toolsFor(slug: string, cookie?: string): Handler {
+export function toolsFor(slug: string, ownerId: string, cookie?: string): Handler {
   const asOwner: HeadersInit = {
     Accept: "application/json",
     ...(cookie ? { Cookie: cookie } : {}),
@@ -110,6 +116,47 @@ export function toolsFor(slug: string, cookie?: string): Handler {
       switch (op) {
         case "db":
           return await db(slug, arg);
+
+        /**
+         * The schema, before any query.
+         *
+         * This did not exist, and its absence was the single biggest thing wrong
+         * with the `db` tool: an agent asked "how many users" had no way to learn
+         * that the table is called `customers`. It either guessed — and reported
+         * `relation "users" does not exist` as though that answered the question —
+         * or wrote an `information_schema` query, which is a 1.2-second read it
+         * had to know to write.
+         *
+         * One round trip for the shapes and one for the counts, from the same
+         * functions the database viewer uses. The row counts and arrival times are
+         * included because "did the data land" is most of what gets asked, and
+         * answering it should not need a second call.
+         */
+        case "tables": {
+          const pool = getTenantReadPool(dbNameForSlug(slug));
+          const shapes = await allShapes(pool);
+          if (shapes.length === 0) {
+            return { ok: true, data: { tables: [], note: "this database has no tables yet" } };
+          }
+          const stats = new Map((await readStats(pool, shapes)).map((x) => [x.name, x]));
+          return {
+            ok: true,
+            data: {
+              tables: shapes.map((t) => ({
+                name: t.name,
+                columns: t.columns.map((c) => `${c.name} ${c.type}${c.nullable === false ? " not null" : ""}`),
+                primaryKey: t.primaryKey,
+                rows: stats.get(t.name)?.rows ?? null,
+                lastWriteAt: stats.get(t.name)?.lastWriteAt ?? null,
+                // Which column means "when this arrived", so a query about
+                // recency does not sort by `expires_at` or `updated_at`.
+                arrivalColumn: recencyColumn(t),
+                orderedBy: describeOrdering(orderingFor(t)),
+              })),
+              note: "rows is exact; lastWriteAt is null when the table records no arrival time",
+            },
+          };
+        }
 
         case "logs": {
           const limit = Math.min(Math.max(Number(arg) || 60, 1), CAP);
@@ -164,11 +211,88 @@ export function toolsFor(slug: string, cookie?: string): Handler {
               status: d.status,
               stage: d.stage,
               error: d.error ?? null,
-              url: d.url ?? null,
+              // The app's ADDRESS, derived, not the url recorded on the deploy
+              // row. That column holds whatever the pipeline wrote at the time,
+              // and for a fleet app that is the node's raw IP — so this tool was
+              // handing the agent `http://8.232.255.172` as the place to find the
+              // app. Verified on z1b3k before the fix.
+              address: appUrl(slug),
+              recordedUrl: d.url ?? null,
               name: d.name ?? null,
-              note: "status is whether it finished; stage is only the last step that ran",
+              note: "address is where the app answers; recordedUrl is what the deploy wrote and may be an internal address. status is whether it finished; stage is only the last step that ran",
             },
           };
+        }
+
+        /**
+         * What the app itself says, right now.
+         *
+         * Not the same question as `deploys` or `describe`. Cloud Run's `ready` is
+         * its opinion of the revision — true as soon as the container answered a
+         * startup probe once — and an app can clear that and refuse every real
+         * request afterwards, which is what a Django DisallowedHost does. This
+         * asks the app and reports the status it gave.
+         */
+        case "probe": {
+          const { probe, cached, reason } = await probeApp(slug, ownerId);
+          if (!probe) return { ok: false, error: reason ?? "the app could not be reached" };
+          return { ok: true, data: { ...probe, cached: Boolean(cached) } };
+        }
+
+        /**
+         * Every address, not just the one the dashboard shows.
+         *
+         * An app answers on its platform address AND on any domain attached to
+         * it, and "why does my custom domain 404" was unanswerable — the agent
+         * could not see that the domain existed, let alone that its certificate
+         * was still being issued.
+         */
+        case "domains": {
+          const domains = await listDomains(slug);
+          return {
+            ok: true,
+            data: {
+              platform: appUrl(slug),
+              attached: domains.map((d) => ({
+                hostname: d.hostname,
+                status: d.status,
+                // The reason, when there is one. A domain stuck on "pending" with
+                // a detail saying the DNS record is missing is a different
+                // problem from one whose certificate is still being issued.
+                detail: d.detail,
+                liveAt: d.liveAt,
+              })),
+              note: "a domain is only reachable once its status is live",
+            },
+          };
+        }
+
+        case "files": {
+          const bucket = bucketForSlug(slug);
+          try {
+            const objects = await listBucketObjectsCached(bucket);
+            const { rows, note } = trunc(objects);
+            return { ok: true, data: { bucket, objects: rows, note } };
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            // "The specified bucket does not exist" is not a failure — most apps
+            // never ask for storage, and reporting the ordinary case as an error
+            // teaches the agent to describe a working app as broken. Anything
+            // else IS a failure and says so, because "we could not look" and
+            // "there is nothing there" are opposite answers.
+            if (/does not exist|notFound|404/i.test(m)) {
+              return { ok: true, data: { bucket: null, objects: [], note: "this app has no storage bucket" } };
+            }
+            return { ok: false, error: m };
+          }
+        }
+
+        case "jobs": {
+          const jobs = await listJobs(slug);
+          if (jobs.length === 0) {
+            return { ok: true, data: { jobs: [], note: "nothing is scheduled for this app" } };
+          }
+          return { ok: true, data: { jobs } };
         }
 
         case "keys": {
