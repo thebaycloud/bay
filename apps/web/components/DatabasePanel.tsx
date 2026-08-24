@@ -1,15 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { ChevronLeft, Play, Table2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Check, Copy, Play, Table2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Chips, Row, RowList, StatusChip } from "@/components/panel/atoms";
+import { useQueryState } from "@/lib/use-query-state";
 
 /**
  * The app's data, answering "did it land".
  *
- * Each table is a cell carrying the two facts that answer that — how many rows,
- * and when the last one arrived — and pushing into its rows, newest first.
+ * Two panes: every table on the left, the open one on the right. It was one pane
+ * with a back button, which is the single biggest reason it did not feel like a
+ * database — five tables and you could not compare two of them without leaving
+ * the one you were reading. The left pane keeps the counts and the arrival times,
+ * so it is still the summary screen as well as the switcher.
+ *
+ * Which table is open lives in `?table=`, like `view` and `addr` above it, so a
+ * reload lands where you were and a link points at one table.
+ *
  * See docs/superpowers/specs/2026-08-20-database-view-design.md.
  *
  * The rule the whole surface follows: a number we cannot vouch for is LABELLED,
@@ -26,9 +33,14 @@ interface TableSummary {
   orderedBy: string;
 }
 
+interface Column {
+  name: string;
+  type: string;
+}
+
 interface Page {
   table: string;
-  columns: { name: string; type: string }[];
+  columns: Column[];
   rows: Record<string, unknown>[];
   total: number;
   totalExact: boolean;
@@ -58,12 +70,19 @@ function ago(iso: string | null): string | null {
   return `${Math.round(h / 24)} days ago`;
 }
 
+/** The same fact in a 224px column: "4 min ago", not "4 minutes ago". */
+function agoShort(iso: string | null): string | null {
+  const long = ago(iso);
+  if (!long) return null;
+  return long.replace(" minutes", " min").replace(" minute", " min").replace(" hours", " hr").replace(" hour", " hr").replace(" days", " d");
+}
+
 /**
- * A cell value, readable.
+ * A cell value in the grid, cut to fit.
  *
  * `null` is shown as a dimmed word rather than an empty cell, because an empty
  * cell and a NULL are different facts and the owner is here to tell them apart.
- * Objects are JSON, and long strings are cut with the full value on hover.
+ * Objects are JSON on one line — the whole value is one click away.
  */
 function fmt(v: unknown): { text: string; dim?: boolean } {
   if (v === null || v === undefined) return { text: "null", dim: true };
@@ -71,6 +90,35 @@ function fmt(v: unknown): { text: string; dim?: boolean } {
   if (typeof v === "object") return { text: JSON.stringify(v) };
   if (typeof v === "boolean") return { text: v ? "true" : "false" };
   return { text: String(v) };
+}
+
+/**
+ * The same value, whole.
+ *
+ * jsonb indented, arrays one element per line, everything else as it is. This is
+ * what the cell panel shows, and the reason `fmt` above is allowed to truncate:
+ * `orders.shipping` is jsonb and `products.tags` is an array, which are exactly
+ * the values somebody opens this screen to read.
+ *
+ * An empty string and an empty array are shown as their literals, dimmed, for the
+ * same reason `null` is: they are three different facts and only one of them is
+ * "there is nothing in this cell".
+ */
+function full(v: unknown): { text: string; dim?: boolean } {
+  if (v === null || v === undefined) return { text: "null", dim: true };
+  if (v instanceof Date) return { text: v.toISOString() };
+  if (Array.isArray(v)) {
+    if (v.length === 0) return { text: "[]", dim: true };
+    return {
+      text: v
+        .map((e) => (e !== null && typeof e === "object" ? JSON.stringify(e) : String(e)))
+        .join("\n"),
+    };
+  }
+  if (typeof v === "object") return { text: JSON.stringify(v, null, 2) };
+  if (typeof v === "boolean") return { text: v ? "true" : "false" };
+  const s = String(v);
+  return s === "" ? { text: '""', dim: true } : { text: s };
 }
 
 /**
@@ -102,7 +150,7 @@ function widthFor(type: string): string {
 export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean }) {
   const [tables, setTables] = useState<TableSummary[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
+  const [param, setParam] = useQueryState("table");
 
   useEffect(() => {
     if (!hasDb) return;
@@ -118,6 +166,15 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
     return () => { alive = false; };
   }, [slug, hasDb]);
 
+  // The URL is a request, not a fact. `?table=` is only honoured once the listing
+  // says such a table exists — otherwise a stale link fires a request that can
+  // only come back as an error, and the first table is a better answer than one.
+  const open = useMemo(() => {
+    if (!tables || tables.length === 0) return null;
+    if (param && tables.some((t) => t.name === param)) return param;
+    return tables[0].name;
+  }, [tables, param]);
+
   // Three different facts, and they used to be one sentence.
   //
   // `hasDb` is false whenever /db returned ANY error, so a read that failed —
@@ -128,55 +185,90 @@ export function DatabasePanel({ slug, hasDb }: { slug: string; hasDb: boolean })
   if (err) return <Empty>That could not be read. {err.slice(0, 160)}</Empty>;
   if (!hasDb) return <Empty>This app has no database.</Empty>;
   if (tables === null) return <Empty>Reading…</Empty>;
-  if (open) return <TableView onBack={() => setOpen(null)} slug={slug} table={open} />;
+  if (tables.length === 0) {
+    return (
+      <div className="flex flex-col gap-3">
+        <Empty>No tables yet — nothing has written to this database.</Empty>
+        <QueryBox slug={slug} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">
-      {tables.length === 0 ? (
-        <Empty>No tables yet — nothing has written to this database.</Empty>
-      ) : (
-        <RowList>
-          {tables.map((t) => {
-            const when = ago(t.lastWriteAt);
-            return (
-              <Row
-                key={t.name}
-                onOpen={() => setOpen(t.name)}
-                // Both facts, because they answer different halves of "did it
-                // land": the shape of the table, and when something last arrived.
-                // Arrival is omitted rather than hedged when the table records
-                // none — it does not say "never".
-                sub={
-                  <span className="tabular-nums">
-                    {t.columns} column{t.columns === 1 ? "" : "s"}
-                    {when ? ` · last ${when}` : ""}
-                  </span>
-                }
-                // Mono, because a table name is an identifier you type into a
-                // query — the one place on this screen that is not English.
-                title={<span className="font-mono text-[14px]">{t.name}</span>}
-              >
-                <Chips>
-                  <StatusChip text={count(t.rows, t.rowsExact)} tone={t.rows > 0 ? "green" : "grey"} />
-                </Chips>
-              </Row>
-            );
-          })}
-        </RowList>
-      )}
+      <div className="flex items-start gap-3">
+        <TableList onOpen={(t) => setParam(t)} open={open} tables={tables} />
+        <div className="min-w-0 flex-1">
+          {open ? <TableView key={open} slug={slug} table={open} /> : null}
+        </div>
+      </div>
       <QueryBox slug={slug} />
     </div>
   );
 }
 
-function TableView({ slug, table, onBack }: { slug: string; table: string; onBack: () => void }) {
+/**
+ * Every table, permanently.
+ *
+ * Still carries both facts it carried as a full-width row — the shape, and when
+ * something last arrived — because those answer the two halves of "did it land"
+ * and losing them to make room for a grid would be a bad trade. Arrival is
+ * omitted rather than hedged when the table records none.
+ */
+function TableList({
+  tables,
+  open,
+  onOpen,
+}: {
+  tables: TableSummary[];
+  open: string | null;
+  onOpen: (t: string) => void;
+}) {
+  return (
+    <div className="max-h-[560px] w-[224px] shrink-0 overflow-auto rounded-xl border border-border">
+      {tables.map((t) => {
+        const when = agoShort(t.lastWriteAt);
+        const is = t.name === open;
+        return (
+          <button
+            aria-current={is ? "true" : undefined}
+            className={[
+              "flex w-full flex-col gap-0.5 border-b border-border px-3 py-2 text-left last:border-b-0",
+              is ? "bg-tile" : "hover:bg-tile",
+            ].join(" ")}
+            key={t.name}
+            onClick={() => onOpen(t.name)}
+            title={ago(t.lastWriteAt) ? `last write ${ago(t.lastWriteAt)}` : undefined}
+            type="button"
+          >
+            {/* Mono, because a table name is an identifier you type into a query
+                — the one thing on this screen that is not English. */}
+            <span className={`truncate font-mono text-[13px] ${is ? "text-ink" : "text-ink-2"}`}>
+              {t.name}
+            </span>
+            <span className="truncate text-[11.5px] tabular-nums text-ink-3">
+              {count(t.rows, t.rowsExact)}
+              {when ? ` · ${when}` : ""}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TableView({ slug, table }: { slug: string; table: string }) {
   const [page, setPage] = useState<Page | null>(null);
   const [offset, setOffset] = useState(0);
   const [err, setErr] = useState<string | null>(null);
+  // Which cell is open, as a position on this page — reset whenever the page is
+  // replaced, because row 3 of the next page is a different row.
+  const [focus, setFocus] = useState<{ row: number; column: string } | null>(null);
 
   useEffect(() => {
     let alive = true;
     setPage(null);
+    setFocus(null);
     fetch(`/api/apps/${encodeURIComponent(slug)}/db?table=${encodeURIComponent(table)}&limit=${PAGE}&offset=${offset}`)
       .then((r) => r.json())
       .then((d) => {
@@ -191,19 +283,13 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
   const last = page ? Math.min(page.offset + page.rows.length, page.total) : 0;
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2.5">
-        <Button className="-ml-2" onClick={onBack} size="sm" variant="ghost">
-          <ChevronLeft className="size-4" />
-          Tables
-        </Button>
-        <span className="flex items-center gap-2">
-          <Table2 className="size-3.5 text-ink-3" />
-          <span className="font-mono text-[14px] text-ink">{table}</span>
-        </span>
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex h-7 items-center gap-2.5">
+        <Table2 className="size-3.5 shrink-0 text-ink-3" />
+        <span className="truncate font-mono text-[14px] text-ink">{table}</span>
         {/* Said, not assumed: the route decides the ordering and reports it, so
             this line and the SQL behind it cannot disagree. */}
-        {page ? <span className="text-[13px] text-ink-3">{page.orderedBy}</span> : null}
+        {page ? <span className="truncate text-[13px] text-ink-3">{page.orderedBy}</span> : null}
       </div>
 
       {err ? <Empty>That could not be read. {err.slice(0, 160)}</Empty> : null}
@@ -215,7 +301,7 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
         ) : (
           <>
             {/* A data grid, not a layout table.
-                
+
                 Everything here is one decision: the values are MACHINE data, so
                 they are set the way machine data is read. Mono, because an id and
                 a timestamp are compared character by character and the UI font
@@ -224,7 +310,7 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
                 followed down without losing your place. A sticky header, because
                 scrolling past the names is how you end up guessing which column
                 you are reading.
-                
+
                 None of this contradicts "no mono anywhere else": everywhere else
                 the text is English. */}
             <div className="max-h-[560px] overflow-auto rounded-xl border border-border">
@@ -265,17 +351,22 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
                       {page.columns.map((c) => {
                         const v = fmt(row[c.name]);
                         const num = isNumeric(c.type);
+                        const on = focus?.row === i && focus.column === c.name;
                         return (
                           <td
                             className={[
-                              "max-w-[22rem] truncate border-b border-r border-border px-2.5 py-[5px] last:border-r-0 group-hover:bg-tile",
+                              "max-w-[22rem] cursor-pointer truncate border-b border-r border-border px-2.5 py-[5px] last:border-r-0 group-hover:bg-tile",
                               num ? "text-right tabular-nums" : "text-left",
                               // `null` is dim AND italic. Dim alone reads as a
                               // pale string, and "null" is a value people also
                               // store as text.
                               v.dim ? "italic text-ink-3" : "text-ink",
+                              on ? "bg-tile ring-1 ring-inset ring-ink-3" : "",
                             ].join(" ")}
                             key={c.name}
+                            onClick={() =>
+                              setFocus(on ? null : { row: i, column: c.name })
+                            }
                             title={v.text}
                           >
                             {v.text}
@@ -287,6 +378,17 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
                 </tbody>
               </table>
             </div>
+
+            {focus && page.rows[focus.row] ? (
+              <CellPanel
+                column={focus.column}
+                columns={page.columns}
+                onClose={() => setFocus(null)}
+                onColumn={(name) => setFocus({ row: focus.row, column: name })}
+                ordinal={page.offset + focus.row + 1}
+                row={page.rows[focus.row]}
+              />
+            ) : null}
 
             <div className="flex items-center gap-2">
               {/* The count keeps its `~`: an estimate that looks exact is the one
@@ -317,6 +419,123 @@ function TableView({ slug, table, onBack }: { slug: string; table: string; onBac
           </>
         )
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * One cell, whole.
+ *
+ * Under the grid rather than beside it, because the values this exists for —
+ * indented jsonb, an array one element per line — want width, and the grid pane
+ * is the widest thing on the screen. Beside it, both would be too narrow.
+ *
+ * The rest of the row comes along on the right. The reason to open a cell is
+ * almost always to work out which row it belongs to, and each of those fields is
+ * itself a button, so reading across a row is clicking down a list rather than
+ * closing this and hunting for the next cell.
+ */
+function CellPanel({
+  columns,
+  column,
+  row,
+  ordinal,
+  onColumn,
+  onClose,
+}: {
+  columns: Column[];
+  column: string;
+  row: Record<string, unknown>;
+  ordinal: number;
+  onColumn: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const type = columns.find((c) => c.name === column)?.type;
+  const v = full(row[column]);
+
+  useEffect(() => setCopied(false), [column, ordinal]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const copy = useCallback(() => {
+    // The raw value, not the pretty one: `null` copies as nothing rather than as
+    // the four letters we drew, because pasting the word into a query is a bug.
+    const raw = row[column];
+    const text =
+      raw === null || raw === undefined
+        ? ""
+        : typeof raw === "object"
+          ? JSON.stringify(raw)
+          : String(raw);
+    void navigator.clipboard?.writeText(text).then(() => setCopied(true));
+  }, [row, column]);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border">
+      <div className="flex items-center gap-2 border-b border-border bg-tile px-3 py-2">
+        <span className="truncate font-mono text-[13px] text-ink">{column}</span>
+        {type ? <span className="truncate text-[11.5px] text-ink-3">{type}</span> : null}
+        <span className="ml-auto shrink-0 text-[12px] tabular-nums text-ink-3">row {ordinal}</span>
+        <Button
+          aria-label="Copy value"
+          className="size-6 shrink-0 text-ink-3 hover:text-ink"
+          onClick={copy}
+          size="icon-sm"
+          variant="ghost"
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        </Button>
+        <Button
+          aria-label="Close"
+          className="size-6 shrink-0 text-ink-3 hover:text-ink"
+          onClick={onClose}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <X className="size-3.5" />
+        </Button>
+      </div>
+
+      <div className="flex items-stretch">
+        <pre
+          className={`max-h-[280px] min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[12.5px] leading-[1.55] ${
+            v.dim ? "italic text-ink-3" : "text-ink"
+          }`}
+        >
+          {v.text}
+        </pre>
+        <div className="max-h-[280px] w-[212px] shrink-0 overflow-auto border-l border-border">
+          {columns.map((c) => {
+            const cell = fmt(row[c.name]);
+            const is = c.name === column;
+            return (
+              <button
+                className={[
+                  "flex w-full flex-col items-start gap-px border-b border-border px-2.5 py-1.5 text-left last:border-b-0",
+                  is ? "bg-tile" : "hover:bg-tile",
+                ].join(" ")}
+                key={c.name}
+                onClick={() => onColumn(c.name)}
+                type="button"
+              >
+                <span className="truncate font-mono text-[11px] text-ink-3">{c.name}</span>
+                <span
+                  className={`w-full truncate font-mono text-[12px] ${
+                    cell.dim ? "italic text-ink-3" : is ? "text-ink" : "text-ink-2"
+                  }`}
+                >
+                  {cell.text}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
