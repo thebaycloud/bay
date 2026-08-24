@@ -125,12 +125,23 @@
    as a designed palette, not as an inverted one. */
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* min-height, and the document scrolls.
+ *
+ * This was `height: 100%` with `overflow: hidden`, from the era when every page
+ * was a `.shell` whose inner `.scroll` did the scrolling. The pages rebuilt on
+ * the new design system scroll the DOCUMENT — the app list, /settings, /cli —
+ * and under that rule they simply could not: content past the fold was clipped
+ * with no scrollbar and no way to reach it.
+ *
+ * The `.shell` pages are unaffected. They are `height: 100dvh` with their own
+ * scroller inside, so the document never overflows for them either way, and the
+ * fixed-inset pages (the workbench) never scrolled the document at all. */
+html, body { min-height: 100%; }
 body {
   margin: 0; background: var(--paper); color: var(--ink);
   font-family: var(--sans); font-size: 14.5px; line-height: 1.5;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
-  letter-spacing: -.008em; overflow: hidden; position: relative;
+  letter-spacing: -.008em; position: relative;
 }
 button { font-family: inherit; cursor: pointer; color: inherit; letter-spacing: inherit; }
 ::selection { background: var(--ink); color: var(--paper); }
