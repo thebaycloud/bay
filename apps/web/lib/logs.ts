@@ -47,6 +47,34 @@ const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || "supersonic-deploy-prod";
  */
 const EDGE_SERVICE = process.env.EDGE_SERVICE_NAME || "supersonic-proxy";
 
+/**
+ * Where to look: the project, and the ten-year tenant bucket.
+ *
+ * BOTH, always, and that is not belt-and-braces — it is the only way to see a
+ * whole history. `_Default` holds thirty days of everything, including every line
+ * written before the tenant bucket existed. The bucket holds tenant lines for ten
+ * years, but only from the moment its sink was created. Either one alone has a
+ * hole in it, and the hole moves.
+ *
+ * Safe to ask for both: Cloud Logging deduplicates across resource names.
+ * Measured — the same query over `_Default` alone and over both returns the same
+ * twenty rows with zero repeated insertIds, not twenty-three.
+ *
+ * The tenant sink is ADDITIVE: nothing is excluded from `_Default`. Duplicating a
+ * tenant line costs about a tenth of a cent a month at today's volume, and it
+ * buys a thirty-day safety net for the case where the sink stops routing — which
+ * would otherwise lose the logs outright, silently, with the first sign being an
+ * empty screen. The exclusion is one command away if volume ever makes it worth
+ * the single point of failure.
+ */
+const TENANT_VIEW =
+  process.env.TENANT_LOG_VIEW ??
+  `projects/${PROJECT}/locations/global/buckets/bay-tenant-logs/views/_AllLogs`;
+
+function resourceNames(): string[] {
+  return TENANT_VIEW ? [`projects/${PROJECT}`, TENANT_VIEW] : [`projects/${PROJECT}`];
+}
+
 /** Our own published streams live under one log name per app. */
 export function logNameFor(slug: string): string {
   return `bay.app.${slug}`;
@@ -158,12 +186,17 @@ export function filterFor(slug: string, q: Query = {}): string {
     `(logName="projects/${PROJECT}/logs/${logNameFor(slug)}")`,
     // The edge. Its lines are written to the PROXY's stdout — its service account
     // has `roles/cloudsql.client` and nothing else, so it cannot call the Logging
-    // API, and Cloud Run turns a JSON line into a structured entry for free. That
-    // puts them under the proxy's own service rather than the app's, so they are
-    // claimed by the slug in the payload. Scoped to the proxy's service name as
-    // well, so a tenant that happens to print `{"slug":"someone-else"}` on its own
-    // stdout cannot inject lines into another app's log view.
-    `(resource.type="cloud_run_revision" AND resource.labels.service_name="${EDGE_SERVICE}" AND jsonPayload.slug="${slug}")`,
+    // API, and Cloud Run turns a JSON line into a structured entry for free.
+    //
+    // THREE conditions, and each one is load-bearing. The service name, so a
+    // tenant printing `{"slug":"someone-else"}` on its own stdout cannot inject
+    // lines into another app's view — the slug is the claim, this is the proof of
+    // who made it. The slug, to pick the app. And `source="edge"`, because the
+    // proxy prints plenty of its own diagnostics that happen to carry a slug:
+    // without this, `{"needsBody":true,"site":true,"owner":false}` appeared in a
+    // tenant's log view as though their app had said it. Seen in production
+    // before the third condition existed.
+    `(resource.type="cloud_run_revision" AND resource.labels.service_name="${EDGE_SERVICE}" AND jsonPayload.slug="${slug}" AND jsonPayload.source="edge")`,
   ];
   const parts = [`(${homes.join(" OR ")})`];
 
@@ -489,6 +522,7 @@ export async function readLogs(
 
   const [entries, next] = (await logging().getEntries({
     filter,
+    resourceNames: resourceNames(),
     orderBy: "timestamp desc",
     pageSize,
     autoPaginate: false,
@@ -521,7 +555,7 @@ export function tailLogs(
   const { since: _drop, until: _drop2, ...live } = q;
   const stream = logging().tailEntries({
     filter: filterFor(slug, live),
-    resourceNames: [`projects/${PROJECT}`],
+    resourceNames: resourceNames(),
   });
 
   // The tail hands back the same `{ metadata, data }` wrapper the paged reader
