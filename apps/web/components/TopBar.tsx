@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { productName } from "@/lib/brand";
+import { cn } from "@/lib/utils";
 
 /**
  * The whole chrome, in 52px.
@@ -9,40 +12,62 @@ import Link from "next/link";
  * and a health summary — and two of the four items were the page you were already
  * on. The two things people used were the palette and the account menu, so those
  * are what stayed.
- *
- * The mark links to the landing page rather than to `/`, which is what the mark on
- * every other page of this product does; the app list is one click along the bar.
  */
+
+/**
+ * Where each item goes, and what counts as being there.
+ *
+ * `exact` for the app list, because `/` is a prefix of every route in the
+ * product — without it, every page would light up Apps.
+ */
+const ITEMS: { href: string; label: string; exact?: boolean }[] = [
+  { href: "/", label: "Apps", exact: true },
+  { href: "/settings", label: "Settings" },
+  { href: "/cli", label: "CLI" },
+];
+
 export function TopBar() {
+  const path = usePathname();
+
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-card">
       <div className="mx-auto flex h-[52px] w-full max-w-[1080px] items-center gap-4 px-6">
         <Link className="flex items-center gap-2" href="/">
           <span className="flex size-6 items-center justify-center rounded-md bg-red text-[13px] font-semibold text-white">
-            B
+            {productName().slice(0, 1)}
           </span>
-          <span className="text-[15px] font-[450] tracking-[-0.01em] text-ink">Bay</span>
+          <span className="text-[15px] font-[450] tracking-[-0.01em] text-ink">
+            {productName()}
+          </span>
         </Link>
 
         <nav className="flex items-center gap-1">
-          <Link
-            className="rounded-md px-2.5 py-1.5 text-[14px] text-ink transition-colors hover:bg-tile"
-            href="/"
-          >
-            Apps
-          </Link>
-          <Link
-            className="rounded-md px-2.5 py-1.5 text-[14px] text-ink-2 transition-colors hover:bg-tile hover:text-ink"
-            href="/settings"
-          >
-            Settings
-          </Link>
-          <Link
-            className="rounded-md px-2.5 py-1.5 text-[14px] text-ink-2 transition-colors hover:bg-tile hover:text-ink"
-            href="/cli"
-          >
-            CLI
-          </Link>
+          {ITEMS.map((item) => {
+            // Read from the URL. The active item used to be a literal — Apps was
+            // always the dark one and the other two always dim — so the bar said
+            // you were on the app list from every page in the product.
+            const active = item.exact ? path === item.href : path.startsWith(item.href);
+            return (
+              <Link
+                className={cn(
+                  // Black, dimming on hover. The landing page's convention
+                  // (SiteNav's TRIGGER: `text-ink … hover:text-ink-2`), and the
+                  // reason the ACTIVE item is a filled chip rather than a darker
+                  // word: with every link already black there is no darker left
+                  // to go, so the current page is marked by its surface.
+                  "rounded-md px-2.5 py-1.5 text-[14px] transition-colors",
+                  active ? "bg-tile text-ink" : "text-ink hover:text-ink-2",
+                )}
+                href={item.href}
+                key={item.href}
+                // Announced, not just drawn. A colour and a fill say nothing to a
+                // screen reader.
+                {...(active ? { "aria-current": "page" as const } : {})}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
 
         {/* Nothing on the right. Search moved down beside the rows it searches —

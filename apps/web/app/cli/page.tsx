@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TopBar } from "@/components/TopBar";
 import { Row, RowGroup, RowList } from "@/components/panel/atoms";
 import { RowSkeleton } from "@/components/Skeleton";
 import { productName } from "@/lib/brand";
@@ -137,79 +138,85 @@ function CliAuth() {
   const command = `bay login --token ${token}`;
 
   return (
-    <div className="mx-auto flex w-full max-w-[520px] flex-col gap-6 px-6 py-[12vh]">
-      <header className="flex flex-col gap-1.5">
-        <h1 className="text-[24px] font-[450] tracking-[-0.02em] text-ink">Authorize the CLI</h1>
-        <p className="text-[15px] leading-[1.6] text-ink-2">
-          This connects <span className="text-ink">{name}</span> to your {productName()} account so
-          your coding agent can ship and manage apps from the terminal.
-        </p>
-      </header>
+    <>
+      {/* The bar belongs here too. This page is reached from a terminal, so it
+          used to be the one screen with no way back into the product — somebody
+          who opened it to check which account they were about to authorize had to
+          type a URL to get anywhere else. */}
+      <TopBar />
+      <div className="mx-auto flex w-full max-w-[520px] flex-col gap-6 px-6 py-14">
+        <header className="flex flex-col gap-1.5">
+          <h1 className="text-[24px] font-[450] tracking-[-0.02em] text-ink">Authorize the CLI</h1>
+          <p className="text-[15px] leading-[1.6] text-ink-2">
+            This connects <span className="text-ink">{name}</span> to your {productName()} account so
+            your coding agent can ship and manage apps from the terminal.
+          </p>
+        </header>
 
-      <RowList>
-        {/* The account, or its shape. `?? "…"` put an ellipsis where an email
-            goes, which reads as an address nobody has — on the one screen whose
-            job is telling you WHICH account you are about to authorize. */}
-        {acct ? (
-          <Row sub="signed in as" title={acct.email}>
-            <Button
-              className="h-7 px-2.5 text-[13px] text-ink-2 hover:text-ink"
-              onClick={switchAccount}
-              size="sm"
-              variant="ghost"
-            >
-              Not you?
-            </Button>
-          </Row>
-        ) : (
-          <RowSkeleton tile={false} w={208} />
-        )}
-      </RowList>
+        <RowList>
+          {/* The account, or its shape. `?? "…"` put an ellipsis where an email
+              goes, which reads as an address nobody has — on the one screen whose
+              job is telling you WHICH account you are about to authorize. */}
+          {acct ? (
+            <Row sub="signed in as" title={acct.email}>
+              <Button
+                className="h-7 px-2.5 text-[13px] text-ink-2 hover:text-ink"
+                onClick={switchAccount}
+                size="sm"
+                variant="ghost"
+              >
+                Not you?
+              </Button>
+            </Row>
+          ) : (
+            <RowSkeleton tile={false} w={208} />
+          )}
+        </RowList>
 
-      {state !== "done" ? (
-        <Button className="w-full" disabled={state === "working" || !acct} onClick={authorize}>
-          {state === "working" ? <Loader2 className="size-4 animate-spin" /> : null}
-          {state === "working" ? "Authorizing…" : "Authorize"}
-        </Button>
-      ) : null}
-
-      {state === "done" && port ? (
-        <p className="flex items-center gap-2 text-[14px] text-ink">
-          <Check className="size-4 shrink-0" />
-          Authorized. Close this tab and go back to your terminal.
-        </p>
-      ) : null}
-
-      {state === "done" && !port ? (
-        <div className="flex flex-col gap-2.5">
-          <p className="text-[14px] text-ink">Paste this into your terminal:</p>
-          {/* Mono here, and it earns it: this is characters somebody copies into
-              another program, where telling 0 from O is the whole job. */}
-          <button
-            className="cursor-copy rounded-lg border border-border bg-ground p-3.5 text-left transition-colors hover:border-ink-3 hover:bg-tile"
-            onClick={() => {
-              navigator.clipboard?.writeText(command).catch(() => {});
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1600);
-            }}
-            type="button"
-          >
-            <code className="block break-all font-mono text-[12.5px] leading-[1.7] text-ink-2">
-              {command}
-            </code>
-          </button>
-          <Button
-            className="w-full"
-            onClick={() => {
-              navigator.clipboard?.writeText(command).catch(() => {});
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1600);
-            }}
-            variant="outline"
-          >
-            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-            {copied ? "Copied" : "Copy command"}
+        {state !== "done" ? (
+          <Button className="w-full" disabled={state === "working" || !acct} onClick={authorize}>
+            {state === "working" ? <Loader2 className="size-4 animate-spin" /> : null}
+            {state === "working" ? "Authorizing…" : "Authorize"}
           </Button>
+        ) : null}
+
+        {state === "done" && port ? (
+          <p className="flex items-center gap-2 text-[14px] text-ink">
+            <Check className="size-4 shrink-0" />
+            Authorized. Close this tab and go back to your terminal.
+          </p>
+        ) : null}
+
+        {state === "done" && !port ? (
+          <div className="flex flex-col gap-2.5">
+            <p className="text-[14px] text-ink">Paste this into your terminal:</p>
+            {/* Mono here, and it earns it: this is characters somebody copies into
+                another program, where telling 0 from O is the whole job. */}
+            <button
+              className="cursor-copy rounded-lg border border-border bg-ground p-3.5 text-left transition-colors hover:border-ink-3 hover:bg-tile"
+              onClick={() => {
+                navigator.clipboard?.writeText(command).catch(() => {});
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1600);
+              }}
+              type="button"
+            >
+              <code className="block break-all font-mono text-[12.5px] leading-[1.7] text-ink-2">
+                {command}
+              </code>
+            </button>
+            <Button
+              className="w-full"
+              onClick={() => {
+                navigator.clipboard?.writeText(command).catch(() => {});
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1600);
+              }}
+              variant="outline"
+            >
+              {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+              {copied ? "Copied" : "Copy command"}
+            </Button>
         </div>
       ) : null}
 
@@ -286,7 +293,8 @@ function CliAuth() {
           to sign in again.
         </p>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
