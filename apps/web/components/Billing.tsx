@@ -1,8 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { CreditCard, Sparkles, ExternalLink, Check, Infinity as InfinityIcon } from "lucide-react";
+import { Check, ExternalLink, Infinity as InfinityIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Row, RowGroup } from "@/components/panel/atoms";
 import { resetsOn } from "@/lib/billing-period";
+import { productName } from "@/lib/brand";
+import { cn } from "@/lib/utils";
 
 /**
  * What the account payload carries about money. Every ceiling is `number | null`
@@ -33,28 +37,53 @@ const LABEL: Record<string, string> = { free: "Free", pro: "Pro", team: "Team" }
 const PRICE: Record<string, string> = { free: "$0 / forever", pro: "$20 / month", team: "Custom" };
 
 const TEAM_MAILTO =
-  "mailto:founders@supersonic.cv?subject=Supersonic%20Team%20plan"
+  "mailto:founders@thebay.cloud?subject=Bay%20Team%20plan"
   + "&body=Hi%20—%20I'd%20like%20to%20set%20up%20a%20Team%20plan.%0A%0AHow%20many%20people%20will%20be%20deploying%3A%0AWhat%20you're%20building%3A";
 
-/** One meter. An unlimited ceiling gets a number and no bar — there is no proportion to draw. */
+/**
+ * One meter, as a row.
+ *
+ * An unlimited ceiling gets a number and no bar — there is no proportion to
+ * draw. Amber at 80%, red at the ceiling: the point is that somebody notices
+ * BEFORE the refusal rather than during it, because a build quota reached with no
+ * warning reads as the platform breaking rather than as a plan working.
+ */
 function Meter({ label, used, max }: { label: string; used: number; max: number | null }) {
   if (max == null) {
     return (
-      <div className="bill-meter">
-        <div className="bill-meter-row"><span>{label}</span><span className="bill-unlimited"><InfinityIcon size={12} />{used}</span></div>
-      </div>
+      <Row title={label}>
+        <span className="flex items-center gap-1.5 text-[13px] text-ink-2">
+          <InfinityIcon className="size-3.5" />
+          {used}
+        </span>
+      </Row>
     );
   }
   const pct = Math.min(100, (used / (max || 1)) * 100);
-  // Amber at 80%, red at the ceiling. The point is that a person notices before
-  // the refusal rather than during it — a build quota reached with no warning
-  // reads as the platform breaking, not as a plan working.
-  const tone = used >= max ? " at" : pct >= 80 ? " near" : "";
+  const at = used >= max;
+  const near = !at && pct >= 80;
   return (
-    <div className="bill-meter">
-      <div className="bill-meter-row"><span>{label}</span><span className={"bill-count" + tone}>{used}/{max}</span></div>
-      <div className="bill-bar"><span className={tone.trim()} style={{ width: `${pct}%` }} /></div>
-    </div>
+    <Row title={label}>
+      <span className="flex items-center gap-3">
+        <span className="h-1.5 w-[120px] overflow-hidden rounded-full bg-tile">
+          <span
+            className={cn(
+              "block h-full rounded-full",
+              at ? "bg-red" : near ? "bg-[var(--amber,#B45309)]" : "bg-ink-3",
+            )}
+            style={{ width: `${pct}%` }}
+          />
+        </span>
+        <span
+          className={cn(
+            "text-[13px] tabular-nums",
+            at ? "text-red" : near ? "text-ink" : "text-ink-2",
+          )}
+        >
+          {used}/{max}
+        </span>
+      </span>
+    </Row>
   );
 }
 
@@ -62,10 +91,9 @@ function Meter({ label, used, max }: { label: string; used: number; max: number 
  * Plan, usage and the way to change it.
  *
  * Deliberately shows the meters even to somebody who is nowhere near them.
- * Everywhere else in the product usage is silent until it matters (the sidebar
- * only draws a bar with a ceiling, the banner only appears near a limit) — but
- * settings is the one screen a person opens *to find out*, so answering the
- * question is the whole job.
+ * Everywhere else in the product usage is silent until it matters — the banner
+ * only appears near a limit — but settings is the one screen a person opens *to
+ * find out*, so answering the question is the whole job.
  */
 export function Billing({ acct }: { acct: BillingAccount | null }) {
   const [busy, setBusy] = useState(false);
@@ -76,101 +104,127 @@ export function Billing({ acct }: { acct: BillingAccount | null }) {
   const u = acct?.usage;
 
   async function go(path: string, body?: unknown) {
-    setBusy(true); setNote("");
+    setBusy(true);
+    setNote("");
     try {
-      const r = await fetch(path, { method: "POST", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+      const r = await fetch(path, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      });
       const d = await r.json().catch(() => ({}));
-      if (d.url) { window.location.href = d.url; return; }
+      if (d.url) {
+        window.location.href = d.url;
+        return;
+      }
       setNote(d.error || "Billing isn't available yet.");
-    } catch { setNote("Something went wrong."); }
+    } catch {
+      setNote("Something went wrong.");
+    }
     setBusy(false);
   }
 
   return (
-    <div className="set-card">
-      <div className="set-head">
-        <CreditCard size={15} />
-        <div>
-          <div className="st">Plan &amp; billing</div>
-          <div className="ss">
-            {plan === "free"
-              ? "You're on the free plan — no card, no time limit."
-              : `You're on ${LABEL[plan]}. Manage or cancel any time.`}
-          </div>
-        </div>
-      </div>
-
-      <div className="set-body">
-        <div className="plan-line">
-          <span className={"plan-tag" + (paid ? " pro" : "")}><Sparkles size={12} />{LABEL[plan]}</span>
-          <span className="bill-price">{PRICE[plan]}</span>
-          {/* A subscriber manages their own subscription through Stripe's
-              portal — cancelling, changing card, invoices. We do not rebuild
-              any of that, and a Team account without a Stripe customer falls
-              back to email, which is how it was sold in the first place. */}
+    <div className="flex flex-col gap-3">
+      <RowGroup title="Plan">
+        <Row
+          sub={
+            plan === "free"
+              ? "no card, no time limit"
+              : "manage or cancel any time"
+          }
+          title={LABEL[plan]}
+        >
+          <span className="text-[13px] text-ink-2">{PRICE[plan]}</span>
+          {/* A subscriber manages their own subscription through Stripe's portal
+              — cancelling, changing card, invoices. We do not rebuild any of
+              that, and a Team account without a Stripe customer falls back to
+              email, which is how it was sold in the first place. */}
           {paid ? (
-            <button className="btn" disabled={busy} onClick={() => go("/api/billing/portal")}>
-              Manage billing <ExternalLink size={13} />
-            </button>
+            <Button disabled={busy} onClick={() => go("/api/billing/portal")} size="sm" variant="outline">
+              Manage billing
+              <ExternalLink className="size-3.5" />
+            </Button>
           ) : (
-            <button className="btn primary" disabled={busy} onClick={() => go("/api/billing/checkout", { plan: "pro" })}>
+            <Button disabled={busy} onClick={() => go("/api/billing/checkout", { plan: "pro" })} size="sm">
               Upgrade to Pro
-            </button>
+            </Button>
           )}
-        </div>
-      </div>
+        </Row>
 
-      {u && (
-        <>
-          <div className="bill-meters">
-            <Meter label="Apps" used={u.apps} max={u.maxApps} />
-            <Meter label="Public apps" used={u.publicApps} max={u.maxPublicApps} />
-            <Meter label="Builds this month" used={u.builds} max={u.monthlyBuilds} />
+        {u ? (
+          <>
+            <Meter label="Apps" max={u.maxApps} used={u.apps} />
+            <Meter label="Public apps" max={u.maxPublicApps} used={u.publicApps} />
+            <Meter label="Builds this month" max={u.monthlyBuilds} used={u.builds} />
             {/* On free the monthly agent allowance is zero by design — the grant
                 is a single lifetime one — so a "0/0" meter would say nothing
                 true. The state that matters there is whether it is still
                 available. */}
-            {plan === "free"
-              ? (
-                <div className="bill-meter">
-                  <div className="bill-meter-row">
-                    <span>Free auto-fix</span>
-                    <span className={"bill-count" + (u.freeFixAvailable ? "" : " at")}>
-                      {u.freeFixAvailable ? "available" : "used"}
-                    </span>
-                  </div>
-                </div>
-              )
-              : <Meter label="Auto-fix this month" used={u.agentRuns} max={u.monthlyAgentRuns} />}
-          </div>
-          <div className="bill-foot">
-            Builds and auto-fix reset on {resetsOn(u.periodStart)}. Apps stay as they are.
-          </div>
-        </>
-      )}
+            {plan === "free" ? (
+              <Row title="Free auto-fix">
+                <span
+                  className={cn("text-[13px]", u.freeFixAvailable ? "text-ink-2" : "text-red")}
+                >
+                  {u.freeFixAvailable ? "available" : "used"}
+                </span>
+              </Row>
+            ) : (
+              <Meter label="Auto-fix this month" max={u.monthlyAgentRuns} used={u.agentRuns} />
+            )}
+          </>
+        ) : null}
+      </RowGroup>
+
+      {u ? (
+        <p className="px-0.5 text-[13px] text-ink-3">
+          Builds and auto-fix reset on {resetsOn(u.periodStart)}. Apps stay as they are.
+        </p>
+      ) : null}
 
       {/* What upgrading buys, only where there is something to buy. On Pro this
           block would be a list of things the reader already has. */}
-      {plan === "free" && (
-        <div className="bill-upsell">
-          <div className="bill-upsell-h">Pro adds</div>
-          <ul>
-            <li><Check size={13} />Unlimited apps and unlimited public apps</li>
-            <li><Check size={13} />Your own domain</li>
-            <li><Check size={13} />Auto-fix on every failed deploy, not just the first</li>
-            <li><Check size={13} />No &ldquo;Runs on Supersonic&rdquo; badge</li>
-            <li><Check size={13} />Backups and restore</li>
+      {plan === "free" ? (
+        <div className="flex flex-col gap-2 rounded-xl border border-border bg-ground px-4 py-3.5">
+          <span className="text-[14px] font-[450] text-ink">Pro adds</span>
+          <ul className="flex flex-col gap-1.5">
+            {[
+              "Unlimited apps and unlimited public apps",
+              "Your own domain",
+              "Auto-fix on every failed deploy, not just the first",
+              `No “Runs on ${productName()}” badge`,
+              "Backups and restore",
+            ].map((line) => (
+              <li className="flex items-center gap-2 text-[13px] text-ink-2" key={line}>
+                <Check className="size-3.5 shrink-0 text-ink-3" />
+                {line}
+              </li>
+            ))}
           </ul>
         </div>
-      )}
+      ) : null}
 
-      <div className="bill-foot">
-        {plan === "team"
-          ? <>Questions about your plan? <a href={TEAM_MAILTO}>Email us</a>.</>
-          : <>Need seats for a whole team, or sign-in with your company domain? <a href={TEAM_MAILTO}>Talk to us</a>.</>}
-      </div>
+      <p className="px-0.5 text-[13px] text-ink-3">
+        {plan === "team" ? (
+          <>
+            Questions about your plan?{" "}
+            <a className="text-ink underline" href={TEAM_MAILTO}>
+              Email us
+            </a>
+            .
+          </>
+        ) : (
+          <>
+            Need seats for a whole team, or sign-in with your company domain?{" "}
+            <a className="text-ink underline" href={TEAM_MAILTO}>
+              Talk to us
+            </a>
+            .
+          </>
+        )}
+      </p>
 
-      {note && <div className="set-err">⚠ {note}</div>}
+      {note ? <p className="px-0.5 text-[14px] text-red">{note}</p> : null}
     </div>
   );
 }

@@ -3,17 +3,43 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { Check, Copy, Loader2, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Row, RowGroup, RowList } from "@/components/panel/atoms";
+import { productName } from "@/lib/brand";
 
-interface Tok { id: string; name: string | null; created_at: string; last_used_at: string | null }
-interface Acct { email: string; name: string | null }
+/**
+ * Authorizing the CLI, on the product's own design system.
+ *
+ * It was 90 lines of inline `style={{}}` — a monospace column with hand-written
+ * borders, its own button colours and a mid-page `1px solid var(--line)`
+ * constant. Rows, groups and shadcn buttons now, so it reads as the same product
+ * as the page it hands you back to.
+ *
+ * `position: relative; z-index: 1` was there to lift the content above the fixed
+ * graph-paper grid the old stylesheet painted at `body::before`. That grid is
+ * gone with the sidebar, so the lift is gone too.
+ */
+
+interface Tok {
+  id: string;
+  name: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+interface Acct {
+  email: string;
+  name: string | null;
+}
 
 function shortDate(s: string | null): string {
   if (!s) return "never";
-  try { return new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); }
-  catch { return "—"; }
+  try {
+    return new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  } catch {
+    return "—";
+  }
 }
-
-const line = "1px solid var(--line)";
 
 function CliAuth() {
   const sp = useSearchParams();
@@ -21,6 +47,7 @@ function CliAuth() {
   const name = sp.get("name") || "cli";
   const [state, setState] = useState<"idle" | "working" | "done" | "error">("idle");
   const [token, setToken] = useState("");
+  const [copied, setCopied] = useState(false);
   const [msg, setMsg] = useState("");
 
   // Who this authorization would attach to, and what is already attached. The
@@ -38,16 +65,24 @@ function CliAuth() {
       const r = await fetch("/api/cli/token");
       const d = await r.json();
       setTokens(d.tokens ?? []);
-    } catch { setTokens([]); }
+    } catch {
+      setTokens([]);
+    }
   }, []);
 
   useEffect(() => {
-    fetch("/api/account").then((r) => r.json()).then((d) => { if (d.email) setAcct(d); }).catch(() => {});
+    fetch("/api/account")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.email) setAcct(d);
+      })
+      .catch(() => {});
     loadTokens();
   }, [loadTokens]);
 
   async function authorize() {
-    setState("working"); setMsg("");
+    setState("working");
+    setMsg("");
     try {
       const r = await fetch("/api/cli/token", {
         method: "POST",
@@ -61,10 +96,13 @@ function CliAuth() {
         window.location.href = `http://127.0.0.1:${port}/callback?token=${encodeURIComponent(d.token)}`;
         return;
       }
-      setToken(d.token); setFreshId(d.id); setState("done");
+      setToken(d.token);
+      setFreshId(d.id);
+      setState("done");
       loadTokens();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e)); setState("error");
+      setMsg(e instanceof Error ? e.message : String(e));
+      setState("error");
     }
   }
 
@@ -81,7 +119,8 @@ function CliAuth() {
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
     } finally {
-      setRevoking(null); setConfirmingId(null);
+      setRevoking(null);
+      setConfirmingId(null);
     }
   }
 
@@ -94,104 +133,146 @@ function CliAuth() {
     window.location.href = `/login?callbackUrl=${encodeURIComponent(back)}`;
   }
 
-  // position:relative + z-index:1 lifts this above the fixed graph-paper grid
-  // (body::before, z-index:0), which otherwise paints over the content.
+  const command = `bay login --token ${token}`;
+
   return (
-    <div style={{ position: "relative", zIndex: 1, maxWidth: 480, margin: "14vh auto 8vh", padding: "0 24px", fontFamily: "var(--mono, ui-monospace, monospace)" }}>
-      <div style={{ border: line, background: "var(--card)", padding: 30 }}>
-        <div style={{ fontSize: 12, letterSpacing: 2, color: "var(--ink-2)", marginBottom: 8 }}>BAY / CLI</div>
-        <h1 style={{ fontSize: 22, margin: "0 0 12px", color: "var(--ink)" }}>Authorize the CLI</h1>
-        <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--ink-2)", margin: "0 0 18px" }}>
-          This connects <b style={{ color: "var(--ink)" }}>{name}</b> to your Bay account so your coding agent can ship and manage apps from the terminal.
+    <div className="mx-auto flex w-full max-w-[520px] flex-col gap-6 px-6 py-[12vh]">
+      <header className="flex flex-col gap-1.5">
+        <h1 className="text-[24px] font-[450] tracking-[-0.02em] text-ink">Authorize the CLI</h1>
+        <p className="text-[15px] leading-[1.6] text-ink-2">
+          This connects <span className="text-ink">{name}</span> to your {productName()} account so
+          your coding agent can ship and manage apps from the terminal.
         </p>
+      </header>
 
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, padding: "10px 12px", border: line, background: "var(--paper)", marginBottom: 22 }}>
-          <span style={{ fontSize: 12, color: "var(--ink-2)" }}>
-            signed in as <b style={{ color: "var(--ink)" }}>{acct?.email ?? "…"}</b>
-          </span>
-          <button onClick={switchAccount}
-            style={{ background: "none", border: "none", padding: 0, fontFamily: "inherit", fontSize: 12, color: "var(--ink-2)", textDecoration: "underline", cursor: "pointer" }}>
-            not you?
-          </button>
-        </div>
+      <RowList>
+        <Row sub="signed in as" title={acct?.email ?? "…"}>
+          <Button
+            className="h-7 px-2.5 text-[13px] text-ink-2 hover:text-ink"
+            onClick={switchAccount}
+            size="sm"
+            variant="ghost"
+          >
+            Not you?
+          </Button>
+        </Row>
+      </RowList>
 
-        {state !== "done" && (
-          <button onClick={authorize} disabled={state === "working"}
-            style={{
-              width: "100%", padding: "13px 16px", fontSize: 14, fontWeight: 600,
-              fontFamily: "inherit", background: "var(--ink)", color: "var(--paper)",
-              border: "1px solid var(--ink)", cursor: state === "working" ? "default" : "pointer",
-              opacity: state === "working" ? 0.6 : 1,
-            }}>
-            {state === "working" ? "Authorizing…" : "Authorize"}
-          </button>
-        )}
+      {state !== "done" ? (
+        <Button className="w-full" disabled={state === "working"} onClick={authorize}>
+          {state === "working" ? <Loader2 className="size-4 animate-spin" /> : null}
+          {state === "working" ? "Authorizing…" : "Authorize"}
+        </Button>
+      ) : null}
 
-        {state === "done" && port && (
-          <p style={{ fontSize: 13, color: "var(--ink)" }}>✓ Authorized. You can close this tab and return to your terminal.</p>
-        )}
+      {state === "done" && port ? (
+        <p className="flex items-center gap-2 text-[14px] text-ink">
+          <Check className="size-4 shrink-0" />
+          Authorized. Close this tab and go back to your terminal.
+        </p>
+      ) : null}
 
-        {state === "done" && !port && (
-          <div>
-            <p style={{ fontSize: 13, marginBottom: 8, color: "var(--ink)" }}>✓ Token created — paste this into your terminal:</p>
-            <code style={{ display: "block", padding: 12, background: "var(--paper)", border: line, wordBreak: "break-all", fontSize: 12, color: "var(--ink)" }}>
-              bay login --token {token}
+      {state === "done" && !port ? (
+        <div className="flex flex-col gap-2.5">
+          <p className="text-[14px] text-ink">Paste this into your terminal:</p>
+          {/* Mono here, and it earns it: this is characters somebody copies into
+              another program, where telling 0 from O is the whole job. */}
+          <button
+            className="cursor-copy rounded-lg border border-border bg-ground p-3.5 text-left transition-colors hover:border-ink-3 hover:bg-tile"
+            onClick={() => {
+              navigator.clipboard?.writeText(command).catch(() => {});
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1600);
+            }}
+            type="button"
+          >
+            <code className="block break-all font-mono text-[12.5px] leading-[1.7] text-ink-2">
+              {command}
             </code>
-          </div>
-        )}
+          </button>
+          <Button
+            className="w-full"
+            onClick={() => {
+              navigator.clipboard?.writeText(command).catch(() => {});
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1600);
+            }}
+            variant="outline"
+          >
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            {copied ? "Copied" : "Copy command"}
+          </Button>
+        </div>
+      ) : null}
 
-        {state === "error" && <p style={{ fontSize: 13, color: "#e5484d" }}>⚠ {msg}</p>}
-      </div>
+      {state === "error" ? <p className="text-[14px] text-red">{msg}</p> : null}
 
       {/* Everything already holding a key to this account. A machine you no
           longer use, or one you don't recognize, is revoked from here. */}
-      <div style={{ border: line, borderTop: "none", background: "var(--card)", padding: "22px 30px 26px" }}>
-        <div style={{ fontSize: 12, letterSpacing: 1, color: "var(--ink-2)", marginBottom: 14 }}>AUTHORIZED CLIS</div>
+      <RowGroup title="Authorized machines">
+        {tokens === null ? <Row sub="reading them…" title="Authorized machines" /> : null}
 
-        {tokens === null && <div style={{ fontSize: 13, color: "var(--ink-2)" }}>Loading…</div>}
-        {tokens?.length === 0 && (
-          <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
-            Nothing is authorized yet — this will be the first.
-          </div>
-        )}
+        {tokens?.length === 0 ? (
+          <Row sub="this will be the first" title="Nothing is authorized yet" />
+        ) : null}
 
         {tokens?.map((t) => (
-          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: line }}>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: 13, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <Row
+            key={t.id}
+            sub={`added ${shortDate(t.created_at)} · last used ${shortDate(t.last_used_at)}`}
+            title={
+              <>
                 {t.name || "cli"}
-                {t.id === freshId && <span style={{ marginLeft: 8, fontSize: 11, color: "var(--ink-2)" }}>· just now</span>}
-              </div>
-              <div style={{ fontSize: 11, color: "var(--ink-2)", marginTop: 3 }}>
-                added {shortDate(t.created_at)} · last used {shortDate(t.last_used_at)}
-              </div>
-            </div>
+                {t.id === freshId ? (
+                  <span className="ml-2 text-[13px] font-normal text-ink-3">just now</span>
+                ) : null}
+              </>
+            }
+          >
             {confirmingId === t.id ? (
-              <span style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                <button onClick={() => revoke(t.id)} disabled={revoking === t.id}
-                  style={{ fontFamily: "inherit", fontSize: 12, padding: "5px 10px", border: "1px solid #e5484d", background: "#e5484d", color: "var(--card)", cursor: "pointer" }}>
-                  {revoking === t.id ? "…" : "Revoke"}
-                </button>
-                <button onClick={() => setConfirmingId(null)}
-                  style={{ fontFamily: "inherit", fontSize: 12, padding: "5px 10px", border: line, background: "var(--card)", color: "var(--ink-2)", cursor: "pointer" }}>
-                  Cancel
-                </button>
-              </span>
+              <>
+                <Button
+                  className="h-7 px-2.5 text-[13px]"
+                  disabled={revoking === t.id}
+                  onClick={() => revoke(t.id)}
+                  size="sm"
+                >
+                  {revoking === t.id ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  Revoke it
+                </Button>
+                <Button
+                  className="h-7 px-2.5 text-[13px]"
+                  onClick={() => setConfirmingId(null)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  Keep
+                </Button>
+              </>
             ) : (
-              <button onClick={() => { setConfirmingId(t.id); setMsg(""); }}
-                style={{ flexShrink: 0, fontFamily: "inherit", fontSize: 12, padding: "5px 10px", border: line, background: "var(--card)", color: "var(--ink-2)", cursor: "pointer" }}>
-                Revoke
-              </button>
+              <Button
+                aria-label={`Revoke ${t.name || "cli"}`}
+                className="size-7 text-ink-3 hover:text-ink"
+                onClick={() => {
+                  setConfirmingId(t.id);
+                  setMsg("");
+                }}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
             )}
-          </div>
+          </Row>
         ))}
+      </RowGroup>
 
-        {tokens && tokens.length > 0 && (
-          <p style={{ fontSize: 11, color: "var(--ink-2)", lineHeight: 1.6, margin: "14px 0 0" }}>
-            Revoking takes effect immediately — that machine&apos;s next command is rejected and it has to sign in again.
-          </p>
-        )}
-      </div>
+      {tokens && tokens.length > 0 ? (
+        <p className="px-0.5 text-[13px] leading-[1.6] text-ink-3">
+          Revoking takes effect immediately — that machine’s next command is rejected and it has
+          to sign in again.
+        </p>
+      ) : null}
     </div>
   );
 }
