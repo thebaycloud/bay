@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Github, Loader2, Check, Unlink } from "lucide-react";
+import { Check, ExternalLink, Github, Loader2, Unlink } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Row, RowGroup } from "@/components/panel/atoms";
+import { RowSkeleton } from "@/components/Skeleton";
 
 /**
  * The repository this app follows, from the person's side.
@@ -13,8 +17,14 @@ import { Github, Loader2, Check, Unlink } from "lucide-react";
  *
  * Draws nothing at all when no repository is connected. An app deployed from a
  * folder or a public URL has no connection to show, and an empty card offering
- * to connect one would be a second, worse copy of the GitHub door on /new — the
+ * to connect one would be a second, worse copy of the GitHub door — the
  * connection is made there, where the repositories already are.
+ *
+ * Was written against the injected drawer's stylesheet — `set-card`, `dom-item`,
+ * `dom-host mono`, `btn primary`, `in mono` — which this app does not load, so
+ * every control on the one screen that explains what a push does rendered as an
+ * unstyled browser default on nothing. Same defect as the four dev panels, in
+ * the panel that arrived after they were fixed.
  */
 
 interface Link {
@@ -42,24 +52,37 @@ export function GitPanel({ slug, onToast }: { slug: string; onToast: (m: string)
     }
   }, [slug]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function save(body: Record<string, unknown>, said: string) {
-    setBusy(true); setErr("");
+    setBusy(true);
+    setErr("");
     try {
       const res = await fetch(`/api/apps/${slug}/git`, {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
       const d = await res.json();
-      if (!res.ok) { setErr(d.error || "That didn't save."); return; }
-      setLink(d); setBranch(d.branch ?? ""); onToast(said);
+      if (!res.ok) {
+        setErr(d.error || "That didn't save.");
+        return;
+      }
+      setLink(d);
+      setBranch(d.branch ?? "");
+      onToast(said);
     } catch {
       setErr("That didn't save. Try again in a moment.");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function disconnect() {
-    setBusy(true); setErr("");
+    setBusy(true);
+    setErr("");
     try {
       await fetch(`/api/apps/${slug}/git`, { method: "DELETE" });
       setLink({ connected: false });
@@ -68,70 +91,122 @@ export function GitPanel({ slug, onToast }: { slug: string; onToast: (m: string)
       onToast("Disconnected. Your app keeps running — pushes just won't ship it.");
     } catch {
       setErr("That didn't save. Try again in a moment.");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
-  if (!link?.connected) return null;
+  // `null` is "not read yet" and `{connected:false}` is "nothing to show" — one
+  // is a skeleton, the other is no section at all.
+  if (link === null) {
+    return (
+      <RowGroup title="Source">
+        <RowSkeleton tile={false} w={168} />
+      </RowGroup>
+    );
+  }
+  if (!link.connected) return null;
 
   const on = link.autoDeploy !== false;
   const changed = branch.trim() !== "" && branch.trim() !== link.branch;
 
   return (
-    <div className="set-card">
-      <div className="set-head">
-        <Github size={15} />
-        <div>
-          <div className="st">Source</div>
-          <div className="ss">Where this app&apos;s code comes from, and what a push to it does.</div>
-        </div>
-      </div>
-      <div className="dom-custom" style={{ borderTop: "none" }}>
-      <div className="dom-item">
-        <Github size={14} />
-        <a className="dom-host mono" href={link.url} target="_blank" rel="noreferrer">{link.repo}</a>
-        {on
-          ? <span className="dom-state ok"><Check size={12} />Ships on push</span>
-          : <span className="dom-state">Paused</span>}
-      </div>
-
-      <div className="dom-add">
-        <input
-          className="in mono"
-          value={branch}
-          disabled={busy}
-          onChange={(e) => setBranch(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && changed) void save({ branch: branch.trim() }, `Now shipping from ${branch.trim()}.`); }}
-          placeholder="main"
-          aria-label="Branch"
-        />
-        <button
-          className="btn primary"
-          disabled={busy || !changed}
-          onClick={() => void save({ branch: branch.trim() }, `Now shipping from ${branch.trim()}.`)}
+    <div className="flex flex-col gap-3">
+      <RowGroup title="Source">
+        <Row
+          icon={Github}
+          sub={
+            on
+              ? `every push to ${link.branch} ships this app`
+              : `pushes to ${link.branch} are ignored until you turn this back on`
+          }
+          title={link.repo ?? "repository"}
         >
-          {busy ? <Loader2 size={13} className="spin" /> : null}Change branch
-        </button>
-      </div>
+          {on ? (
+            <span className="flex items-center gap-1.5 text-[13px] text-ink-2">
+              <span
+                aria-hidden="true"
+                className="size-1.5 shrink-0 rounded-full bg-[var(--green)]"
+              />
+              ships on push
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-[13px] text-ink-2">
+              <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-ink-3" />
+              paused
+            </span>
+          )}
+          {link.url ? (
+            <Button
+              asChild
+              aria-label={`Open ${link.repo} on GitHub`}
+              className="size-7 text-ink-3 hover:text-ink"
+              size="icon-sm"
+              variant="ghost"
+            >
+              <a href={link.url} rel="noreferrer" target="_blank">
+                <ExternalLink className="size-3.5" />
+              </a>
+            </Button>
+          ) : null}
+        </Row>
 
-      <p className="dom-note">
-        {on
-          ? <>Every push to <span className="mono">{link.branch}</span> ships this app.</>
-          : <>Pushes to <span className="mono">{link.branch}</span> are ignored until you turn this back on.</>}
-      </p>
+        {/* The branch is the value of a row, like the name field in settings —
+            the thing you can change looks like the things you cannot. */}
+        <form
+          className="flex items-center gap-2 border-b border-border px-4 py-3 last:border-0"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (changed) void save({ branch: branch.trim() }, `Now shipping from ${branch.trim()}.`);
+          }}
+        >
+          <span className="shrink-0 text-[15px] font-[450] text-ink">Branch</span>
+          <Input
+            aria-label="Branch"
+            className="ml-auto h-9 w-[180px]"
+            disabled={busy}
+            onChange={(e) => setBranch(e.currentTarget.value)}
+            placeholder="main"
+            value={branch}
+          />
+          {/* Only when it differs from what is saved. A permanently disabled
+              button beside a field reads as a field you may not edit. */}
+          {changed ? (
+            <Button className="h-9 shrink-0" disabled={busy} type="submit">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+              Change
+            </Button>
+          ) : null}
+        </form>
 
-      <div className="dom-add">
-        <button
-          className="btn"
-          disabled={busy}
-          onClick={() => void save({ autoDeploy: !on }, on ? "Pushes won't ship this app any more." : "Pushes will ship this app again.")}
-        >{on ? "Pause shipping on push" : "Ship on push again"}</button>
-        <button className="btn" disabled={busy} onClick={() => void disconnect()}>
-          <Unlink size={13} />Disconnect
-        </button>
-      </div>
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void save(
+                { autoDeploy: !on },
+                on ? "Pushes won't ship this app any more." : "Pushes will ship this app again.",
+              )
+            }
+            size="sm"
+            variant="outline"
+          >
+            {on ? "Pause shipping on push" : "Ship on push again"}
+          </Button>
+          <Button
+            className="text-ink-2 hover:text-ink"
+            disabled={busy}
+            onClick={() => void disconnect()}
+            size="sm"
+            variant="ghost"
+          >
+            <Unlink className="size-3.5" />
+            Disconnect
+          </Button>
+        </div>
+      </RowGroup>
 
-      {err && <div className="set-err">⚠ {err}</div>}
-      </div>
+      {err ? <p className="px-0.5 text-[14px] text-red">{err}</p> : null}
     </div>
   );
 }
