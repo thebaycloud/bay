@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronDown } from "lucide-react";
 import { APP_URL, BRAND, GITHUB_REPO } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 import { fill, localePath, type Locale, type Messages } from "@/lib/i18n";
@@ -19,7 +18,7 @@ import { Stars } from "./Stars";
  * another route they navigate first and scroll on arrival.
  */
 
-const NAV_H = 64;
+export const NAV_H = 56;
 
 type Item =
   /** Scroll to an element id on the landing page. */
@@ -59,7 +58,7 @@ const BTN =
   "border px-[14px] font-sans text-[14px] font-[450] tracking-[-0.01em] h-[34px] transition-colors";
 
 const TRIGGER =
-  "inline-flex items-center gap-1 text-[13.5px] text-ink-2 transition-colors hover:text-ink";
+  "inline-flex items-center gap-1 text-[14px] text-ink transition-colors hover:text-ink-2";
 
 function NavMenu({
   label,
@@ -104,11 +103,6 @@ function NavMenu({
         className={TRIGGER}
       >
         {label}
-        <ChevronDown
-          size={13}
-          strokeWidth={2.2}
-          className={cn("transition-transform", open && "rotate-180")}
-        />
       </button>
 
       {open ? (
@@ -156,17 +150,9 @@ function NavMenu({
 }
 
 export function SiteNav({ t, locale }: { t: Messages; locale: Locale }) {
-  const [stuck, setStuck] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const onHome = pathname === localePath(locale, "/");
-
-  useEffect(() => {
-    const onScroll = () => setStuck(window.scrollY > 8);
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
 
   const scrollTo = useCallback(
     (id: string) => {
@@ -188,12 +174,7 @@ export function SiteNav({ t, locale }: { t: Messages; locale: Locale }) {
   );
 
   return (
-    <nav
-      className={cn(
-        "sticky top-0 z-50 h-16 border-b bg-ground/[0.88] backdrop-blur-[10px] backdrop-saturate-150 transition-colors",
-        stuck ? "border-line" : "border-transparent"
-      )}
-    >
+    <nav className="sticky top-0 z-50 h-14 bg-ground/[0.88] backdrop-blur-[10px] backdrop-saturate-150">
       <div className="relative mx-auto flex h-full w-full max-w-[1200px] items-center px-[22px] min-[900px]:px-10">
         <Link
           href={localePath(locale, "/")}
@@ -215,7 +196,7 @@ export function SiteNav({ t, locale }: { t: Messages; locale: Locale }) {
             pointer-events-none to let clicks through, and that combination makes
             the menu triggers unreliable to hit. This box is only as wide as the
             links, so nothing is covered and nothing needs excluding. */}
-        <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-7 min-[900px]:flex">
+        <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-10 min-[900px]:flex">
           <NavMenu label={t.nav.product} items={productItems(t)} onScrollTo={scrollTo} />
           <Link href={localePath(locale, "/templates")} className={TRIGGER}>
             {t.nav.templates}

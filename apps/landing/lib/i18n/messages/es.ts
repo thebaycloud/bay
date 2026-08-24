@@ -30,7 +30,7 @@ const es: Messages = {
 
   intro: {
     h2: "Todas las apps se publican desde aquí",
-    p: "No hay configuración. Cada app abre en una dirección que puedes compartir y su base de datos se respalda desde el primer despliegue. Vigilamos producción todo el día y explicamos qué falló, no solo mostramos un código de error.",
+    p: "No hay nada que configurar. Cada app se publica con una dirección para compartir y copias de seguridad de la base de datos desde el primer despliegue. Después la vigilamos y explicamos qué falló con palabras claras, no con un código de error.",
     link: "Conecta tu agente",
   },
 

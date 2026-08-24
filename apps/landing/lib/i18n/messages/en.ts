@@ -49,7 +49,11 @@ const en = {
 
   intro: {
     h2: "Every app ships from the bay",
-    p: "There is no setup step. Every app opens at an address you can share, its database is backed up from the first deploy, and we watch the live thing around the clock and tell you what broke in plain words instead of an error code.",
+    // The heading is the metaphor; this stays literal and borrows only the words
+    // that are the plain ones anyway. "Leaves port" and "keep watch" both mean
+    // exactly what they say here, which is the line between a storyline and a
+    // riddle.
+    p: "Nothing to set up. Every app leaves port with a live address and a database backed up from the first deploy. We keep watch after that, and tell you what broke in plain words.",
     link: "Onboard your agent",
   },
 

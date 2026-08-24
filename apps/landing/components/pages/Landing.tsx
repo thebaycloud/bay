@@ -20,11 +20,13 @@ import { Mark } from "@/components/Mark";
 import { cn } from "@/lib/utils";
 import { Dithering, MeshGradient } from "@paper-design/shaders-react";
 import { APP_URL, BRAND, CLI, CONTACT_EMAIL, DOMAIN, GITHUB_REPO, PKG } from "@/lib/brand";
-import { TEMPLATES, selfhostPrompt } from "@/lib/templates";
+import { TEMPLATES } from "@/lib/templates";
+import { onboardPrompt, selfhostPrompt } from "@/lib/prompts";
 import { Stars } from "@/components/Stars";
-import { SiteNav } from "@/components/SiteNav";
+import { NAV_H, SiteNav } from "@/components/SiteNav";
 import { LanguagePicker } from "@/components/LanguagePicker";
 import { CopyPrompt } from "@/components/CopyPrompt";
+import { PromptDialog } from "@/components/PromptDialog";
 import { fill, localePath, type Locale, type Messages } from "@/lib/i18n";
 
 
@@ -781,21 +783,6 @@ const TOOLS: { name: string; file: string; h: number; label?: string }[] = [
 // people, and these are tools.
 const ONBOARD_AGENTS = ["claude", "openai", "cursor"];
 
-const ONBOARD_PROMPT = `You are putting my app online with ${BRAND} (agent manual: https://${DOMAIN}/llms.txt). Work from my project's root folder and tell me what is happening in plain language.
-
-1. Install the CLI if it is missing:  npm i -g ${PKG}
-
-2. Ship it, and WAIT for the answer:
-   ${CLI} deploy --wait
-   The first run opens a browser for me to sign in. Without --wait the command returns as soon as the address is reserved and finishes building after you have stopped watching, so you would report success for a build that has not happened.
-
-3. It worked only when you see a line starting "✓ live:". Getting it green is your job, not mine:  ${CLI} logs <app>  shows what production actually saw and  ${CLI} diagnose <app>  hands you a fix. Fix the code, ship again, repeat. Do not paste me an error and ask what to do.
-
-4. The address will ask me to sign in. Every app is private until I say otherwise, so that is not a bug: tell me it is live and private, and that I can open it up later.
-
-My .env travels with the deploy, so do not copy keys across. Use  ${CLI} env <app> set KEY=VALUE  only for a value that is NOT in my .env, and skip DATABASE_URL, REDIS_URL and anything pointing at localhost: ${BRAND} provisions those and injects them itself.
-
-If a key is missing or is obviously a placeholder (sk_test_…, "changeme"), ask me for the real one in one sentence: what it is and where I get it. Never invent, hardcode, commit, or print a secret value.`;
 
 function OnboardAgent({ t }: { t: Messages }) {
   const [copied, setCopied] = useState(false);
@@ -810,7 +797,7 @@ function OnboardAgent({ t }: { t: Messages }) {
     <button
       type="button"
       onClick={() => {
-        navigator.clipboard?.writeText(ONBOARD_PROMPT).then(() => setCopied(true)).catch(() => {});
+        navigator.clipboard?.writeText(onboardPrompt()).then(() => setCopied(true)).catch(() => {});
       }}
       aria-label={t.onboard.aria}
       className="group inline-flex h-12 items-center gap-3 rounded-[6px] border border-line bg-white pl-2.5 pr-2 transition-colors hover:bg-tile"
@@ -897,7 +884,7 @@ function useScrollTarget() {
     // settles reads the pre-animation position.
     requestAnimationFrame(() => {
       window.scrollTo({
-        top: el.getBoundingClientRect().top + window.scrollY - 80,
+        top: el.getBoundingClientRect().top + window.scrollY - NAV_H - 16,
         behavior: "smooth",
       });
       // Drop the parameter so a refresh does not jump again.
@@ -910,6 +897,7 @@ function useScrollTarget() {
 
 export default function Landing({ t, locale }: { t: Messages; locale: Locale }) {
   const nightRef = useRef<HTMLElement | null>(null);
+  const [promptOpen, setPromptOpen] = useState(false);
   useRise();
   useNight(nightRef);
   useScrollTarget();
@@ -1012,10 +1000,10 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
               {t.intro.p}
             </p>
             <div className="mt-6 flex flex-wrap gap-[26px]">
-              <a className={ARROW} href="/llms.txt">
+              <button type="button" className={ARROW} onClick={() => setPromptOpen(true)}>
                 {t.intro.link}{" "}
                 <ArrowRight size={15} strokeWidth={2} className={ARROW_ICON} />
-              </a>
+              </button>
             </div>
           </div>
         </div>
@@ -1100,9 +1088,13 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
                   <p className="m-0 max-w-[30ch] text-pretty text-[clamp(21px,2.15vw,28px)] font-normal leading-[1.18] tracking-[-0.024em] text-ink-2">
                     {fill(t.features[f.id].p, { brand: BRAND })}
                   </p>
-                  <a className={cn(BTN, BTN_FILL, "mt-7 self-start")} href={`${APP_URL}/new`}>
+                  <button
+                    type="button"
+                    className={cn(BTN, BTN_FILL, "mt-7 self-start")}
+                    onClick={() => setPromptOpen(true)}
+                  >
                     {t.features.cta} <ArrowRight size={15} strokeWidth={2} />
-                  </a>
+                  </button>
                 </div>
 
                 <div
@@ -1223,7 +1215,10 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
           pointing at someone else's repository. Do not ship this before ours is
           public. */}
 
-      <section className="relative overflow-hidden py-[clamp(80px,10vw,140px)]" id="open-source">
+      <section
+        className="relative overflow-hidden border-t border-line py-[clamp(80px,10vw,140px)]"
+        id="open-source"
+      >
         <OssBackdrop />
 
         {/* The glow: a soft white pool over the pattern, so the type has paper
@@ -1331,12 +1326,19 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
               })}
             </div>
           ))}
-          <div className="mt-10 flex w-full flex-wrap justify-between gap-4 border-t border-line pt-5 font-mono text-[12px] text-ink-3">
+          <div className="mt-10 flex w-full flex-wrap justify-between gap-4 border-t border-line pt-5 text-[13px] text-ink-3">
             <span>{fill(t.footer.rights, { year: new Date().getFullYear() })}</span>
             <LanguagePicker label={t.footer.languageAria} />
           </div>
         </div>
       </footer>
+
+      <PromptDialog
+        open={promptOpen}
+        onOpenChange={setPromptOpen}
+        prompt={onboardPrompt()}
+        t={t}
+      />
     </div>
   );
 }

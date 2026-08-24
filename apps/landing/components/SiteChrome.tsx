@@ -26,7 +26,7 @@ export function SiteChrome({
       <SiteNav t={t} locale={locale} />
       {children}
       <footer className="border-t border-line py-10">
-        <div className="mx-auto flex w-full max-w-[1040px] flex-wrap items-center gap-x-6 gap-y-2 px-[22px] font-mono text-[12px] text-ink-3 min-[900px]:px-10">
+        <div className="mx-auto flex w-full max-w-[1040px] flex-wrap items-center gap-x-6 gap-y-2 px-[22px] text-[13px] text-ink-3 min-[900px]:px-10">
           <Link href={localePath(locale, "/")} className="hover:text-ink">
             {BRAND}
           </Link>

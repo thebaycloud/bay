@@ -1,6 +1,7 @@
-import { BRAND, CLI, DOMAIN, PKG, SITE } from "./brand";
+import { BRAND, CLI } from "./brand";
 import en from "./i18n/messages/en";
 import { fill } from "./i18n";
+import { MANUAL, RULES, SELFHOST_DOC, agentDoc, selfhostPrompt, templatePrompt } from "./prompts";
 
 /**
  * Self-host templates, as data.
@@ -141,23 +142,15 @@ export function templateBySlug(slug: string): Template | undefined {
 
 /** Where an agent reads the canonical instructions. */
 export function agentUrl(t: Template): string {
-  return `${SITE}/templates/${t.slug}/agent.md`;
+  return agentDoc(t.slug);
 }
 
-/**
- * What the copy button puts on the clipboard.
- *
- * Deliberately short, and it does not contain the instructions. It points at
- * agent.md, so a broken template is fixed by editing markdown rather than by
- * asking everyone who already copied a prompt to copy it again.
- */
+/** What the copy button puts on the clipboard. Composed in lib/prompts.ts. */
 export function promptFor(t: Template): string {
-  return `Self-host ${t.name} on ${BRAND} (${SITE}).
-
-Read ${agentUrl(t)} and follow it exactly. It is the canonical instructions and it supersedes anything you already believe about deploying this project.
-
-Keep me posted in plain language; I do not read build logs. If you need a secret only I can get, ask for it in one sentence: what it is and where I find it. Never invent, hardcode, commit, or print a secret value.`;
+  return templatePrompt(t.name, t.slug);
 }
+
+export { selfhostPrompt, SELFHOST_DOC };
 
 /** The markdown an agent fetches. Shared by the route and the detail page. */
 export function agentMarkdown(t: Template): string {
@@ -203,15 +196,11 @@ export function agentMarkdown(t: Template): string {
 
   lines.push("## Before you start");
   lines.push("");
-  lines.push(`Install the CLI if it is missing: \`npm i -g ${PKG}\``);
+  lines.push(RULES.install);
   lines.push("");
-  lines.push(
-    `Always pass \`--wait\`. Without it the command returns as soon as the address is reserved and finishes building after you have stopped watching, so you would report success for a build that has not happened.`
-  );
+  lines.push(RULES.wait);
   lines.push("");
-  lines.push(
-    `The deploy worked only when you see a line beginning \`✓ live:\`. Anything else is not done. Getting it green is your job: \`${CLI} logs <app>\` shows what production actually saw, \`${CLI} errors <app>\` shows what is failing now, and \`${CLI} diagnose <app>\` hands you a fix. Fix, deploy, repeat. Do not paste an error back to the user and ask what to do.`
-  );
+  lines.push(RULES.green);
   lines.push("");
 
   lines.push("## Steps");
@@ -249,18 +238,10 @@ export function agentMarkdown(t: Template): string {
 
   lines.push("## Rules");
   lines.push("");
-  lines.push(
-    `- The app's \`.env\` travels with the deploy. Do not copy keys across by hand. Use \`${CLI} env <app> set KEY=VALUE\` only for a value that is not already in it.`
-  );
-  lines.push(
-    `- Never set \`DATABASE_URL\`, \`REDIS_URL\` or \`STORAGE_BUCKET\`. ${BRAND} provisions those and injects them; a value you set will be wrong.`
-  );
-  lines.push(
-    `- Anything written outside \`/data\` does not survive a redeploy. \`/data\` is the persistent disk.`
-  );
-  lines.push(
-    `- If a key is missing or is obviously a placeholder (\`sk_test_…\`, \`changeme\`), ask for the real one in one sentence. Never invent, hardcode, commit, or print a secret value.`
-  );
+  lines.push(`- ${RULES.dotenv}`);
+  lines.push(`- ${RULES.injected}`);
+  lines.push(`- ${RULES.disk}`);
+  lines.push(`- ${RULES.secrets}`);
   lines.push("");
 
   if (caveats.length) {
@@ -270,7 +251,7 @@ export function agentMarkdown(t: Template): string {
     lines.push("");
   }
 
-  lines.push(`Full command reference: ${SITE}/llms.txt`);
+  lines.push(`Full command reference: ${MANUAL}`);
   lines.push("");
 
   return lines.join("\n");
@@ -282,16 +263,6 @@ export function agentMarkdown(t: Template): string {
 // to any public repo under an OSI licence, so the landing page needs a path that
 // does not depend on us having listed the thing someone wants. This is that
 // path. The agent asks which project; there is no list to be on.
-
-export const SELFHOST_DOC = `${SITE}/selfhost.md`;
-
-export function selfhostPrompt(): string {
-  return `I want to self-host an open source project on ${BRAND} (${SITE}).
-
-Ask me which project, then read ${SELFHOST_DOC} and follow it exactly.
-
-Keep me posted in plain language; I do not read build logs. If you need a secret only I can get, ask for it in one sentence: what it is and where I find it. Never invent, hardcode, commit, or print a secret value.`;
-}
 
 /** The generic instructions, for any project rather than a listed one. */
 export function selfhostMarkdown(): string {
@@ -309,21 +280,21 @@ export function selfhostMarkdown(): string {
     `## What ${BRAND} does for you`,
     "",
     "- Builds from source. If the repo ships a Dockerfile, that one is used, from the context it declares.",
-    "- Provisions Postgres, Redis and object storage on request, and injects `DATABASE_URL`, `REDIS_URL` and `STORAGE_BUCKET`. Never set those yourself; a value you set will be wrong.",
-    "- Bind-mounts a persistent disk at `/data`. Anything written outside it does not survive a redeploy.",
+    `- Provisions Postgres, Redis and object storage on request. ${RULES.injected}`,
+    `- Bind-mounts a persistent disk at \`/data\`. ${RULES.disk}`,
     "- Runs `release` to completion before starting `web`, which is where migrations belong.",
     "- Reserves the address before the build finishes, so an app that needs to know its own URL can be told it.",
     "- Keeps every app private until its owner says otherwise.",
     "",
     "## Steps",
     "",
-    `1. Install the CLI if it is missing: \`npm i -g ${PKG}\``,
+    `1. ${RULES.install}`,
     "2. Clone the repo they named and work inside it. Keep the git remote intact: it is how the open source year is detected.",
     `3. Read the project's own docs for its required environment. Generate anything that is only entropy (session secrets, encryption keys) yourself and set it with \`${CLI} env <app> set KEY=VALUE\`. Do not ask a person to invent a random string.`,
     `4. If it needs migrations, add a \`Procfile\` with a \`release:\` line for them and a \`web:\` line for the start command.`,
-    `5. Run \`${CLI} deploy --wait\`. Always \`--wait\`: without it the command returns as soon as the address is reserved and finishes building after you have stopped watching.`,
+    `5. Run \`${CLI} deploy --wait\`. ${RULES.wait}`,
     `6. If the app needs its own URL in its environment, take it from the \`✓ live:\` line, set it, and deploy AGAIN. Values baked in at build time do not update without a rebuild.`,
-    `7. It worked only when you see \`✓ live:\`. Otherwise: \`${CLI} logs <app>\` for what production saw, \`${CLI} errors <app>\` for what is failing, \`${CLI} diagnose <app>\` for a fix. Fix, deploy, repeat. Do not paste an error back and ask what to do.`,
+    `7. ${RULES.green}`,
     "",
     "## The free year",
     "",
@@ -333,7 +304,7 @@ export function selfhostMarkdown(): string {
     "",
     "The address, that the app is private until they say otherwise, and anything they still have to supply themselves (an OAuth client, an SMTP host, an API key).",
     "",
-    `Full command reference: ${SITE}/llms.txt`,
+    `Full command reference: ${MANUAL}`,
     "",
   ].join("\n");
 }
