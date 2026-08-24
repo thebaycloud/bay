@@ -448,25 +448,111 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
     );
   }
   // analytics
+  return <AnalyticsScreen d={d} slug={slug} />;
+}
+
+/**
+ * The Analytics screen: the four numbers, then WHERE and WHENCE.
+ *
+ * The lists are the reason this screen exists at all. Four totals tell an owner
+ * that somebody came; the pages and the referrers tell them what for and from
+ * where, which is the only part anybody acts on. Both were already being fetched
+ * on every read of this screen and thrown away one function upstream, so drawing
+ * them costs no request that was not already being made.
+ *
+ * The switch is here rather than in settings for the reason the route it calls
+ * gives: this is other people's users' data, and an owner who does not want
+ * their visitors counted has to be able to say so from the same surface that
+ * shows them the count. The route and `setAnalyticsEnabled` have existed since
+ * the day analytics shipped with nothing anywhere calling them.
+ */
+function AnalyticsScreen({ d, slug }: { d: Reading; slug: string }) {
+  // Seeded from the reading, then owned here: the reading is re-derived from a
+  // poll that lags the write by up to its own interval, and a switch that flicks
+  // back under the finger is a switch nobody trusts again.
+  const [on, setOn] = useState(d.anOn);
+  const [saving, setSaving] = useState(false);
+
+  async function flip(next: boolean) {
+    setSaving(true);
+    setOn(next);
+    try {
+      const r = await fetch(`/api/apps/${encodeURIComponent(slug)}/analytics`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!r.ok) throw new Error(String(r.status));
+      // The edge caches app rows for thirty seconds, so the tracker keeps being
+      // injected for up to that long after the switch is off. Said out loud
+      // rather than discovered by an owner who flipped it and reloaded twice.
+      toast(next ? "Counting visitors again." : "Off. The last pages already served still count, for up to 30s.");
+    } catch {
+      setOn(!next);
+      toast("That did not save. Nothing changed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <Card className="flex flex-col gap-2 rounded-xl border-border bg-card p-4 shadow-none">
-      {d.an ? (
-        <div className="grid grid-cols-2 gap-4">
-          <Stat label="visitors" value={d.an.visitors.toLocaleString()} />
-          <Stat label="views" value={d.an.views.toLocaleString()} />
-          <Stat label="bounce" value={d.an.returning} />
-          <Stat label="change" value={d.an.dv || "—"} />
+    <div className="flex flex-col gap-3">
+      <Card className="flex flex-col gap-4 rounded-xl border-border bg-card p-4 shadow-none">
+        {d.an ? (
+          <>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Stat label="visitors" value={d.an.visitors.toLocaleString()} />
+              <Stat label="views" value={d.an.views.toLocaleString()} />
+              <Stat label="bounce" value={d.an.bounce} />
+              <Stat label="change" value={d.an.dv || "—"} />
+            </div>
+            <div className="grid gap-6 sm:grid-cols-2">
+              <RankList title="Pages" rows={d.an.pages} empty="No page has been opened yet." />
+              <RankList title="From" rows={d.an.from} empty="Nobody arrived from a link yet." />
+            </div>
+          </>
+        ) : (
+          <p className="text-sub text-ink-2">
+            {!on
+              ? "Analytics is off, so nobody is being counted."
+              : !d.anReady
+                ? "Analytics is still being set up for this app."
+                : "The count could not be read just now — which is not the same as nobody having visited."}
+          </p>
+        )}
+      </Card>
+      <Card className="flex items-center justify-between gap-4 rounded-xl border-border bg-card p-4 shadow-none">
+        <div className="flex flex-col gap-0.5">
+          <div className="text-val text-ink">Count visitors</div>
+          <p className="text-sub text-ink-2">
+            First-party, from this app&apos;s own address. No cookie, no third-party script, and nothing
+            leaves the hostname your visitors already chose to trust.
+          </p>
         </div>
+        <Button variant="outline" size="sm" disabled={saving} onClick={() => flip(!on)}>
+          {on ? "Turn off" : "Turn on"}
+        </Button>
+      </Card>
+    </div>
+  );
+}
+
+/** One ranked list. Empty says so in words — an empty box is a broken box. */
+function RankList({ title, rows, empty }: { title: string; rows: [string, number][]; empty: string }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-[13px] text-ink-3">{title}</div>
+      {rows.length === 0 ? (
+        <p className="text-sub text-ink-2">{empty}</p>
       ) : (
-        <p className="text-sub text-ink-2">
-          {!d.anOn
-            ? "Analytics is off, so nobody is being counted."
-            : !d.anReady
-              ? "Analytics is still being set up for this app."
-              : "The count could not be read just now — which is not the same as nobody having visited."}
-        </p>
+        rows.map(([name, n]) => (
+          <div key={name} className="flex items-baseline justify-between gap-3">
+            <span className="truncate text-val text-ink">{name}</span>
+            <span className="text-val text-ink-2 tabular-nums">{n.toLocaleString()}</span>
+          </div>
+        ))
       )}
-    </Card>
+    </div>
   );
 }
 

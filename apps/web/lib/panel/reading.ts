@@ -45,9 +45,17 @@ export type Reading = {
     visitors: number;
     views: number;
     mins: string;
-    returning: string;
+    /** Share of sessions that were one page and gone, as a percentage. */
+    bounce: string;
+    /** Change in visitors against the window before, e.g. "+40%". Empty when
+     *  the previous window had nobody in it: percent change from zero is
+     *  infinity, and every honest rendering of it is a sentence, not a number. */
     dv: string;
     dvUp: boolean;
+    /** Ranked, already trimmed. Empty is an ANSWER — nobody visited a page yet;
+     *  the read failing is `an: null`, which the screen says differently. */
+    pages: [string, number][];
+    from: [string, number][];
   } | null;
   anOn: boolean;
   anReady: boolean;
@@ -136,6 +144,37 @@ function tableRow(t: Json | string): [string, number] {
   const name = t.table_name ?? t.tablename ?? t.name ?? String(t);
   const n = t.n_live_tup ?? t.rows ?? 0;
   return [String(name), Number(n) || 0];
+}
+
+/**
+ * A ranked list from umami, trimmed and made presentable.
+ *
+ * `x` is null or empty for a direct visit with no referrer, which is most of
+ * them for an app somebody shared as a link; it becomes "direct" rather than
+ * being dropped, because "where did they come from" with the largest answer
+ * missing is worse than useless. A `null` list — umami refused the question —
+ * is empty here, and the caller says which it was from `an` being null or not.
+ */
+export function rank(rows: { x: string | null; y: number }[] | null | undefined, blank: string): [string, number][] {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((r) => typeof r?.y === "number" && r.y > 0)
+    .slice(0, 6)
+    .map((r) => [r.x && String(r.x).trim() ? String(r.x) : blank, Math.round(r.y)] as [string, number]);
+}
+
+/**
+ * Percent change against the previous window, or "" when there is nothing to
+ * compare against. Zero visitors last week and two this week is not "+200%" and
+ * not "+0%" — it is a comparison that cannot be drawn, and an empty string is
+ * what the tile renders as "—".
+ */
+export function change(now: number | undefined, prev: number | undefined): string {
+  const a = now ?? 0;
+  const b = prev ?? 0;
+  if (b <= 0) return "";
+  const pct = Math.round(((a - b) / b) * 100);
+  return `${pct >= 0 ? "+" : ""}${pct}%`;
 }
 
 function keyName(k: Json | string): string {
@@ -244,10 +283,20 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
           views: stats.views,
           mins: String(Math.round((stats.totalTime || 0) / Math.max(stats.visits || 1, 1))),
           // Umami gives bounces and visits, not a returning count. Say what the
-          // number is rather than what we wished it were.
-          returning: `${Math.round(((stats.bounces || 0) / Math.max(stats.visits || 1, 1)) * 100)}%`,
-          dv: "",
-          dvUp: true,
+          // number is rather than what we wished it were — this tile was fed by
+          // a field called `returning` and labelled "bounce", which is two
+          // people's worth of confusion for one number.
+          bounce: `${Math.round(((stats.bounces || 0) / Math.max(stats.visits || 1, 1)) * 100)}%`,
+          // Against the window before this one, which /stats already carries in
+          // whichever of its three shapes this umami speaks. It was hardcoded to
+          // "" and the tile therefore always read "—", on every app, forever.
+          dv: change(stats.visitors, stats.prevVisitors),
+          dvUp: (stats.visitors ?? 0) >= (stats.prevVisitors ?? 0),
+          // Fetched since the day this screen shipped and thrown away here. The
+          // reader asks umami for both lists on every read, so drawing them costs
+          // no request that was not already made.
+          pages: rank(stats.pages, "/"),
+          from: rank(stats.referrers, "direct"),
         }
       : null,
     anOn: an.enabled !== false,
