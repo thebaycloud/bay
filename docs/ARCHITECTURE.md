@@ -1,4 +1,4 @@
-# Supersonic — Architecture
+# Bay — Architecture
 
 ## The spine
 
@@ -18,7 +18,7 @@ user / their coding agent
   control-plane API ──► deploy-agent (Gemini, sandbox)
         │                     │ detect stack, plan the build (Railpack), fix-to-green
         │                     ▼
-        │               a node in the fleet ◄─ load balancer ◄─ *.supersonic.cv (wildcard DNS+SSL)
+        │               a node in the fleet ◄─ load balancer ◄─ *.thebay.cloud (wildcard DNS+SSL)
         │                 (gVisor sandbox, one resident process per declared process)
         │
         │               static apps instead publish to a bucket served by
