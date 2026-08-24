@@ -1,10 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { wantsMarkdown } from "./lib/wants-markdown";
+import { legacyRedirect } from "./lib/legacy-domain";
 import { DEFAULT_LOCALE, isLocale } from "./lib/i18n/locales";
 
 /**
- * Two jobs, in this order: serve the manual to terminals, then put every page
- * under a locale.
+ * Three jobs, and the order is the point: get off the old domain, then answer a
+ * terminal with the manual, then put every page under a locale.
+ *
+ * ── the old domain ──
+ *
+ * First, and for every path. Somebody following a link to supersonic.cv/pricing
+ * has to arrive at the new pricing page, not at the new home page, and certainly
+ * not at a page that says Bay at the old address. 301 because the move is
+ * permanent and we want it cached and indexed as such.
  *
  * ── the manual ──
  *
@@ -19,9 +27,9 @@ import { DEFAULT_LOCALE, isLocale } from "./lib/i18n/locales";
  * precisely the failure this exists to remove. The body arrives on the first
  * request, at status 200.
  *
- * `Vary` is not decoration. The response for `/` now depends on two request
- * headers, and any cache between here and the reader that does not know that
- * will eventually hand a browser the manual, or a terminal the markup.
+ * `Vary` is not decoration. The response for `/` depends on two request headers,
+ * and any cache between here and the reader that does not know that will
+ * eventually hand a browser the manual, or a terminal the markup.
  *
  * ── the locale ──
  *
@@ -37,6 +45,9 @@ import { DEFAULT_LOCALE, isLocale } from "./lib/i18n/locales";
  * unprefixed form.
  */
 export function middleware(req: NextRequest) {
+  const moved = legacyRedirect(req.headers.get("host"), req.nextUrl.pathname + req.nextUrl.search);
+  if (moved) return NextResponse.redirect(moved, 301);
+
   const { pathname } = req.nextUrl;
 
   if (pathname === "/" && wantsMarkdown(req.headers.get("accept"), req.headers.get("user-agent"))) {
@@ -45,6 +56,11 @@ export function middleware(req: NextRequest) {
     res.headers.set("Cache-Control", "public, max-age=0, must-revalidate");
     return res;
   }
+
+  // The API is not a page and must never be prefixed. It stays inside the
+  // matcher rather than outside it so the legacy redirect above still catches a
+  // request that arrived at the old host.
+  if (pathname === "/api" || pathname.startsWith("/api/")) return NextResponse.next();
 
   // A dot in the last segment means a file, not a page: /llms.txt, /favicon.ico,
   // /changelog.xml, /selfhost.md, and the per-template /templates/x/agent.md.
@@ -61,11 +77,23 @@ export function middleware(req: NextRequest) {
 
   if (isLocale(first)) return NextResponse.next();
 
-  return NextResponse.rewrite(new URL(`/${DEFAULT_LOCALE}${pathname}`, req.url));
+  // `pathname` is "/" at the root, and appending it would ask for "/en/" with a
+  // trailing slash. Next normalises trailing slashes on a REDIRECT and not on a
+  // rewrite, so that spelling simply 404s.
+  const target = pathname === "/" ? `/${DEFAULT_LOCALE}` : `/${DEFAULT_LOCALE}${pathname}`;
+  return NextResponse.rewrite(new URL(target, req.url));
 }
 
 /**
- * Everything except Next's own internals and the API. `_next` carries the build
- * output and prefixing it would break every asset on the page.
+ * Everything except Next's own assets.
+ *
+ * It was `"/"` while the only job here was the markdown rewrite. Both of the
+ * other two need every path: the legacy redirect so that a link to
+ * supersonic.cv/pricing lands on the right page, and the locale rewrite because
+ * that is how any page is reached at all.
+ *
+ * `_next` and `favicon.ico` are excluded because rewriting a chunk request costs
+ * a round trip and buys nothing: nobody bookmarks a hashed asset, and a locale
+ * prefix on one would 404.
  */
-export const config = { matcher: ["/((?!_next|api).*)"] };
+export const config = { matcher: ["/((?!_next|favicon.ico).*)"] };

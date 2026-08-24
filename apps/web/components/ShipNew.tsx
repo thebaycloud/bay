@@ -149,7 +149,7 @@ export function ShipNew() {
           d.reason === "no-installation"
             ? "That account isn’t connected any more. Connect it again to pick a repository."
             : d.reason === "bad-credentials"
-              ? "We can’t reach GitHub right now. This one is on us — nothing you do will fix it."
+              ? "We can’t reach GitHub right now. This one is on us — nothing you do will fix it, and the folder route above still works."
               : "GitHub isn’t answering. Try again in a moment.",
         );
         setRepos([]);
@@ -354,6 +354,12 @@ export function ShipNew() {
                     </div>
                   ) : null}
 
+                  {/* No list at all when the listing failed. It used to render
+                      the box with an empty string in it, so a refusal came with
+                      an empty bordered rectangle under it — which reads as a
+                      list of nothing rather than as a question we could not
+                      ask. */}
+                  {trouble ? null : (
                   <div className="max-h-[176px] overflow-y-auto rounded-lg border border-border">
                     {shown === null ? (
                       <p className="flex items-center gap-2 px-3 py-5 text-[14px] text-ink-2">
@@ -362,11 +368,9 @@ export function ShipNew() {
                       </p>
                     ) : shown.length === 0 ? (
                       <p className="px-3 py-5 text-[14px] text-ink-2">
-                        {trouble
-                          ? ""
-                          : query.trim()
-                            ? `Nothing here matches “${query.trim()}”.`
-                            : "No repositories were shared with us yet."}
+                        {query.trim()
+                          ? `Nothing here matches “${query.trim()}”.`
+                          : "No repositories were shared with us yet."}
                       </p>
                     ) : (
                       shown.map((r) => (
@@ -389,6 +393,7 @@ export function ShipNew() {
                       ))
                     )}
                   </div>
+                  )}
 
                   {/* Always, not only once a listing has arrived. "I can't see my
                       repository" is answered by this link, and it was hidden in

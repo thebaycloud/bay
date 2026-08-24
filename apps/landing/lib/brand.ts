@@ -36,12 +36,18 @@ export const CLI = env("NEXT_PUBLIC_CLI_NAME", DEFAULT_CLI);
  *
  * Kept separate from DOMAIN and pointed at the OLD host until cutover, because
  * this is the one link on the page that must resolve to a live control plane.
- * `app.thebay.cloud` exists but its certificate is still being issued; a button
- * that leads nowhere is worse than one that leads to the old name.
+ * It pointed at app.supersonic.cv from 23 Aug until the cutover, because
+ * app.thebay.cloud existed with no certificate yet and a button that leads
+ * nowhere is worse than one that leads to the old name.
  *
- * Flipping this is the last edit of the migration.
+ * Flipped 24 Aug. The old host still answers — it 307s here — so the only cost
+ * of having left this behind was a redirect the person could see in the address
+ * bar, on the one button the page exists to get them to press.
+ *
+ * Derived from DOMAIN rather than written out, so it cannot be left behind a
+ * second time.
  */
-export const APP_URL = env("NEXT_PUBLIC_APP_URL", "https://app.supersonic.cv");
+export const APP_URL = env("NEXT_PUBLIC_APP_URL", `https://app.${DOMAIN}`);
 
 /** Where somebody writes to us. */
 export const CONTACT_EMAIL = env("NEXT_PUBLIC_CONTACT_EMAIL", `founders@${DOMAIN}`);
@@ -50,17 +56,20 @@ export const CONTACT_EMAIL = env("NEXT_PUBLIC_CONTACT_EMAIL", `founders@${DOMAIN
 export const SITE = env("NEXT_PUBLIC_SITE_URL", `https://${DOMAIN}`);
 
 /**
- * The npm package that provides the CLI.
+ * The npm package that provides the CLI. Usually the same word as the command,
+ * but not necessarily: a name can be taken on npm and free as a binary.
+ */
+/**
+ * The npm package that installs the CLI.
  *
- * NOT the command name. This defaulted to CLI ("bay") and every prompt on the
- * site therefore told an agent to run `npm i -g bay`, which succeeds and
- * installs a real, unrelated package: `bay` on npm is a web framework at
- * 0.6.2 owned by somebody else. The agent then has no `bay` binary and step one
- * of the prompt has already failed, quietly and with a zero exit code.
+ * NOT the command. `bay` is what a person types; `@thebaycloud/cli` is what npm
+ * installs, and they differ because npm refused `bay-cli` as too close to
+ * `cpy-cli` and `bay` itself belongs to somebody else — a real package at 0.6.2.
  *
- * The published package is the scoped one, which is also what public/llms.txt
- * has always said. A name can be taken on npm and free as a binary, so these two
- * are related by nothing except habit and must be set separately.
+ * Defaulting this to CLI put `npm i -g bay` and `npx bay@latest deploy` on the
+ * live site and inside the prompt people paste into a coding agent: an
+ * instruction to install and execute a stranger's package. Never derive this
+ * from the command name.
  */
 export const PKG = env("NEXT_PUBLIC_CLI_PACKAGE", "@thebaycloud/cli");
 
