@@ -88,10 +88,10 @@ function CliAuth() {
       const r = await fetch("/api/cli/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // The CLI sends `os.hostname()`. A direct visit sends nothing, and the
-        // token is labelled for what it is rather than "cli" — a row in the
-        // table below that says which of these you made by hand.
-        body: JSON.stringify({ name: port ? name : "pasted by hand" }),
+        // The CLI sends `os.hostname()`; a direct visit sends nothing and lets
+        // the route label it from the User-Agent — "Chrome on macOS", which is
+        // to a browser session what a hostname is to a machine.
+        body: JSON.stringify(port ? { name } : {}),
       });
       const d = await r.json();
       if (!r.ok || d.error) throw new Error(d.error || "failed to mint token");
