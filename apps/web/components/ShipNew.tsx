@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { Check, Copy, Github, Loader2, Plus, Search, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { stateFor } from "@/lib/github-setup";
+import { stateFor } from "@/lib/github-state";
 import {
   Dialog,
   DialogContent,

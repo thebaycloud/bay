@@ -64,71 +64,11 @@ export function installationFromCallback(url: URL): CallbackDecision {
  * through a third party, and a redirect target taken from a string like that is
  * an open redirect — the one bug this function exists to not have.
  */
-/**
- * Where a person came from, and what they had named, in ONE opaque slot.
- *
- * GitHub hands an App's install URL a single `state` parameter and gives it back
- * on the setup redirect. That is the only channel: the install happens on
- * github.com, in a flow we do not control, and everything we knew before it is
- * gone by the time they return. So two facts have to share one string.
- *
- * They used to share it by COLLIDING. `returnPathFromCallback` read `state` and
- * checked it against the literal "apps"; `nameFromCallback` read the same `state`
- * and validated it as a slug. Since "apps" is a valid slug, somebody naming their
- * app `apps` was sent to the app list with their name silently dropped — and
- * every flow that did not send "apps" at all (Reconfigure, Add an account, both
- * links in Settings) fell through to `/new`, the standalone page, instead of the
- * dialog they were standing in.
- *
- * `~` is the separator because a slug cannot contain one: `[a-z0-9-]` is the
- * whole alphabet, so `apps~my-app` parses in exactly one way and no name can
- * forge a destination.
- *
- * The destination is still an ALLOW LIST and never a path from the query string.
- * `state` crosses a third party and comes back; appending it to our own origin is
- * an open redirect, and no amount of validating a path is as safe as not having
- * one.
- */
-const RETURNS = { apps: "/", settings: "/settings" } as const;
-export type ReturnKey = keyof typeof RETURNS;
-export type ReturnPath = (typeof RETURNS)[ReturnKey];
-
-/** Build the `state` for an install link. */
-export function stateFor(to: ReturnKey, name = ""): string {
-  return `${to}~${/^[a-z0-9][a-z0-9-]{0,38}$/.test(name) ? name : ""}`;
-}
-
-/**
- * Where to send them back to.
- *
- * Defaults to the app list, which is where the Ship-new dialog lives and reopens.
- * `/new` is no longer a destination anything redirects to: it is a page you can
- * still visit, not somewhere the product decides to put you.
- */
-export function returnPathFromCallback(url: URL): ReturnPath {
-  const raw = (url.searchParams.get("state") ?? "").trim();
-  const key = raw.includes("~") ? raw.slice(0, raw.indexOf("~")) : "";
-  return (RETURNS as Record<string, ReturnPath>)[key] ?? "/";
-}
-
-/**
- * The app name a person had already typed before they were sent to GitHub.
- *
- * Validated as a slug rather than trusted, because it is a string that left our
- * origin and came back through a third party — it lands in a query string on a
- * page we render, and the set of characters that can be in a Cloud Run name is
- * far smaller than the set that can hurt. Anything else answers empty, which
- * means "name it from the repository", exactly as before.
- *
- * Reads the half after the separator, and falls back to the whole string when
- * there is none — so an install link minted by a version of this page that is
- * still open in somebody's tab keeps working.
- */
-export function nameFromCallback(url: URL): string {
-  const raw = (url.searchParams.get("state") ?? "").trim();
-  const name = raw.includes("~") ? raw.slice(raw.indexOf("~") + 1) : raw;
-  return /^[a-z0-9][a-z0-9-]{0,38}$/.test(name) ? name : "";
-}
+// The `state` scheme lives in `./github-state`, which imports nothing: this
+// module reaches `node:crypto` through `github-app`, and the dialog that WRITES
+// a state runs in the browser. Re-exported so server callers are unchanged.
+export { stateFor, returnPathFromCallback, nameFromCallback } from "./github-state";
+export type { ReturnKey, ReturnPath } from "./github-state";
 
 export interface Account { login: string; type: string }
 

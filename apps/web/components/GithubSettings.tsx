@@ -5,7 +5,7 @@ import { ExternalLink, Github, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Row, RowGroup } from "@/components/panel/atoms";
 import { RowSkeleton } from "@/components/Skeleton";
-import { stateFor } from "@/lib/github-setup";
+import { stateFor } from "@/lib/github-state";
 
 /**
  * GitHub, as a thing you can check rather than a thing you can only start.
