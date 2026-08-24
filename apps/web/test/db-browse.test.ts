@@ -4,6 +4,7 @@ import {
   recencyColumn, orderingFor, describeOrdering, pageQuery,
   pageSize, pageOffset, MAX_PAGE, DEFAULT_PAGE,
   countQuery, describeSort, parseFilter, parseSort, opTakesValue, FILTER_OPS,
+  checkKey, editRefusal, updateRowQuery,
   type TableShape,
 } from "../lib/db-browse";
 
@@ -289,4 +290,78 @@ test("the WHERE comes before the ORDER BY, which is the only order Postgres acce
     filter: { column: "id", op: "gt", value: "10" },
   });
   assert.match(sql.text, /FROM "orders" WHERE "id" > \$1 ORDER BY "id" DESC NULLS LAST LIMIT 25 OFFSET 50/);
+});
+
+/* ── what may be changed ─────────────────────────────────────────────────── */
+
+test("a table with no primary key cannot be edited at all", () => {
+  // The whole reason this is a refusal and not a warning: an UPDATE matched on
+  // every other column hits the row's duplicates too, so "change this one" is a
+  // promise we would be unable to keep.
+  const t = table([["a", "text"], ["b", "text"]], []);
+  assert.match(editRefusal(t, t.columns[0])!, /no primary key/);
+});
+
+test("the column that names the row is not editable, nor is a generated one", () => {
+  const t = table([["id", "integer"], ["slug", "text"], ["searchable", "tsvector"]], ["id"]);
+  assert.match(editRefusal(t, { name: "id", type: "integer" })!, /names the row/);
+  assert.match(editRefusal(t, { name: "searchable", type: "tsvector", generated: true })!, /generates/);
+  // And an ordinary column is editable, which is the point of the other three.
+  assert.equal(editRefusal(t, { name: "slug", type: "text" }), null);
+});
+
+test("arrays and binary are refused, because the cell shows a rendering of them", () => {
+  // What the panel draws for these is not the database's own text, so what
+  // somebody typed back would not be what they were shown.
+  const t = table([["id", "integer"], ["tags", "ARRAY"], ["blob", "bytea"]], ["id"]);
+  assert.match(editRefusal(t, { name: "tags", type: "ARRAY" })!, /arrays/);
+  assert.match(editRefusal(t, { name: "tags", type: "_text" })!, /arrays/);
+  assert.match(editRefusal(t, { name: "blob", type: "bytea" })!, /binary/);
+});
+
+test("a partial key is refused: it names a set of rows, not a row", () => {
+  const t = table([["order_id", "integer"], ["sku", "text"], ["qty", "integer"]], ["order_id", "sku"]);
+  assert.equal(checkKey(t, { order_id: 3 }).ok, false);
+  assert.equal(checkKey(t, { order_id: 3, sku: "A" }).ok, true);
+  // And a key carrying something that is not part of it is refused rather than
+  // quietly ignored — an ignored extra reads as a narrower match than happened.
+  const extra = checkKey(t, { order_id: 3, sku: "A", qty: 1 });
+  assert.equal(extra.ok, false);
+  assert.match(extra.ok === false ? extra.error : "", /qty/);
+});
+
+test("a key that is not an object at all is refused", () => {
+  const t = table([["id", "integer"]], ["id"]);
+  for (const bad of [null, undefined, 3, "id=3", [1]]) {
+    assert.equal(checkKey(t, bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test("the old value is in the WHERE, so two tabs cannot silently overwrite", () => {
+  const t = table([["id", "integer"], ["status", "text"]], ["id"]);
+  const sql = updateRowQuery(t, "status", { id: 7 }, "pending", "shipped");
+  assert.match(sql.text, /UPDATE "orders" SET "status" = \$1/);
+  assert.match(sql.text, /WHERE "id" = \$3/);
+  // IS NOT DISTINCT FROM and not `=`: `=` is never true of NULL, so a cell
+  // reading `null` could never be changed — and a WHERE that matches nothing
+  // looks exactly like somebody else getting there first.
+  assert.match(sql.text, /AND "status" IS NOT DISTINCT FROM \$2/);
+  assert.match(sql.text, /RETURNING \*/);
+  assert.deepEqual(sql.values, ["shipped", "pending", 7]);
+});
+
+test("a composite key puts every column in the WHERE, in order", () => {
+  const t = table([["order_id", "integer"], ["sku", "text"], ["qty", "integer"]], ["order_id", "sku"]);
+  const sql = updateRowQuery(t, "qty", { sku: "A", order_id: 3 }, 1, 2);
+  assert.match(sql.text, /WHERE "order_id" = \$3 AND "sku" = \$4/);
+  assert.deepEqual(sql.values, [2, 1, 3, "A"]);
+});
+
+test("an identifier that could carry an injection cannot reach an UPDATE", () => {
+  const t = table([["id", "integer"], ["a", "text"]], ["id"]);
+  assert.throws(() => updateRowQuery(t, 'a" = 1, "id', { id: 1 }, "x", "y"), /unsafe column name/);
+  const badTable = { name: 'orders"; DROP TABLE users --', columns: [], primaryKey: ["id"] };
+  assert.throws(() => updateRowQuery(badTable, "a", { id: 1 }, "x", "y"), /unsafe table name/);
+  const keyless = table([["a", "text"]], []);
+  assert.throws(() => updateRowQuery(keyless, "a", {}, "x", "y"), /no primary key/);
 });

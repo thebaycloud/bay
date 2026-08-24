@@ -56,8 +56,19 @@ const isTimeout = (e: unknown): boolean =>
 
 /** Every table in `public`, with its columns and primary key, in one round trip. */
 async function shapes(c: PoolClient): Promise<TableShape[]> {
-  const cols = await c.query<{ table_name: string; column_name: string; data_type: string }>(
-    `SELECT table_name, column_name, data_type
+  // `is_nullable`, `is_generated` and `identity_generation` come along so the
+  // panel can tell which cells are editable without a second request. The rule
+  // itself is `editRefusal`, which the write route also calls — see
+  // app/api/apps/[slug]/db/row/route.ts.
+  const cols = await c.query<{
+    table_name: string;
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+    is_generated: string;
+    identity_generation: string | null;
+  }>(
+    `SELECT table_name, column_name, data_type, is_nullable, is_generated, identity_generation
        FROM information_schema.columns
       WHERE table_schema = 'public'
       ORDER BY table_name, ordinal_position`,
@@ -73,7 +84,12 @@ async function shapes(c: PoolClient): Promise<TableShape[]> {
   const byTable = new Map<string, TableShape>();
   for (const r of cols.rows) {
     const t = byTable.get(r.table_name) ?? { name: r.table_name, columns: [], primaryKey: [] };
-    t.columns.push({ name: r.column_name, type: r.data_type });
+    t.columns.push({
+      name: r.column_name,
+      type: r.data_type,
+      nullable: r.is_nullable === "YES",
+      generated: r.is_generated === "ALWAYS" || r.identity_generation !== null,
+    });
     byTable.set(r.table_name, t);
   }
   for (const r of keys.rows) byTable.get(r.table_name)?.primaryKey.push(r.column_name);
@@ -119,8 +135,17 @@ async function summarise(c: PoolClient, t: TableShape, estimates: Map<string, nu
   let lastWriteAt: string | null = null;
   if (clock) {
     try {
-      const r = await c.query<{ t: Date | null }>(`SELECT max("${clock}") AS t FROM "${t.name}"`);
-      lastWriteAt = r.rows[0]?.t ? new Date(r.rows[0].t).toISOString() : null;
+      // `to_json` and not the bare value, because tenant pools now return
+      // temporal types as Postgres's own text — see `tenantTypes` in lib/db.ts —
+      // and "2026-08-24 10:42:26.343+00" is not ISO 8601. V8 happens to parse it;
+      // `Date.parse` on a non-ISO string is implementation-defined, and this
+      // string is parsed in whatever browser the owner is using.
+      //
+      // Postgres's own JSON rendering is ISO: "…T10:42:26.343217+00:00" for a
+      // timestamptz, and "2026-08-24" for a date, which is also the only form
+      // that does not shift a date by a timezone on the way out.
+      const r = await c.query<{ t: string | null }>(`SELECT to_json(max("${clock}")) AS t FROM "${t.name}"`);
+      lastWriteAt = r.rows[0]?.t ? String(r.rows[0].t) : null;
     } catch (e) {
       if (!isTimeout(e)) throw e;
     }

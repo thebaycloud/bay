@@ -16,6 +16,10 @@ export interface Column {
   name: string;
   /** `data_type`: "integer", "timestamp with time zone", "text", … */
   type: string;
+  /** False when the database will refuse a NULL here. Absent means unknown. */
+  nullable?: boolean;
+  /** True for GENERATED and IDENTITY columns, which are never written. */
+  generated?: boolean;
 }
 
 /** Everything the rules below need to know about a table. */
@@ -379,4 +383,109 @@ export function describeSort(s: Sort): string {
 function assertIdent(name: string): string {
   if (!isSafeIdent(name)) throw new Error(`unsafe column name: ${name}`);
   return name;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  What may be changed, and why not.                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Why this cell cannot be edited, or null when it can be.
+ *
+ * ONE function, used twice: as the server's guard and as the sentence the panel
+ * shows. Two copies of a rule like this drift, and the drift is always in the
+ * same direction — a UI that offers something the route then refuses, which
+ * reads as a broken product rather than as a deliberate limit.
+ *
+ * Every branch is a limit we chose, not a gap:
+ *
+ *  - **No primary key.** If we cannot name the row, we cannot promise to change
+ *    only that one. An UPDATE matched on every other column would hit its
+ *    duplicates too.
+ *  - **Generated or identity.** The database computes these. Writing one is
+ *    either refused by Postgres or silently ignored, and neither is a thing to
+ *    put a text box in front of.
+ *  - **Part of the key.** Changing what names a row is a delete and an insert
+ *    wearing an edit's clothes, and every foreign key pointing at it disagrees.
+ *  - **Arrays and bytea.** A text box is not an editor for these. The value in
+ *    the cell panel is already a rendering rather than the database's own text,
+ *    so what somebody typed back would not be what they were shown.
+ */
+export function editRefusal(table: TableShape, column: Column): string | null {
+  if (table.primaryKey.length === 0) {
+    return "this table has no primary key, so there is no way to name one row";
+  }
+  if (column.generated) return "the database generates this column";
+  if (table.primaryKey.includes(column.name)) return "this column is what names the row";
+  const t = column.type.trim().toLowerCase();
+  if (t === "array" || t.startsWith("_")) return "arrays are not edited here";
+  if (t === "bytea") return "binary values are not edited here";
+  return null;
+}
+
+/**
+ * The UPDATE for one cell of one row, compare-and-set.
+ *
+ * `IS NOT DISTINCT FROM` and not `=`, because `=` is never true of NULL: a cell
+ * that reads `null` could never be changed, and — worse — a WHERE that silently
+ * matches nothing looks exactly like somebody else got there first.
+ *
+ * The old value is in the WHERE, so two tabs cannot overwrite each other without
+ * one of them being told. Nothing matched means either the row moved on or it is
+ * gone, and the caller says so rather than reporting a successful write of
+ * nothing.
+ *
+ * Values are bound; only identifiers are interpolated, and only after
+ * `assertIdent`. The caller has already checked that every one of these names is
+ * a real column of a real table — this cannot check that and does not pretend to.
+ */
+export function updateRowQuery(
+  table: TableShape,
+  column: string,
+  key: Record<string, unknown>,
+  from: unknown,
+  to: unknown,
+): Sql {
+  if (!isSafeIdent(table.name)) throw new Error(`unsafe table name: ${table.name}`);
+  if (table.primaryKey.length === 0) throw new Error("no primary key");
+
+  const values: unknown[] = [to, from];
+  const where = table.primaryKey.map((k) => {
+    values.push(key[k]);
+    return `"${assertIdent(k)}" = $${values.length}`;
+  });
+
+  return {
+    text:
+      `UPDATE "${table.name}" SET "${assertIdent(column)}" = $1` +
+      ` WHERE ${where.join(" AND ")}` +
+      ` AND "${assertIdent(column)}" IS NOT DISTINCT FROM $2` +
+      ` RETURNING *`,
+    values,
+  };
+}
+
+/**
+ * The primary key of the row a caller named, or a reason it is not one.
+ *
+ * Every key column, exactly — a partial key names a SET of rows, and "update the
+ * row where id = 3" and "update the rows where order_id = 3" are different
+ * requests that would look identical here.
+ */
+export function checkKey(
+  table: TableShape,
+  raw: unknown,
+): { ok: true; key: Record<string, unknown> } | { ok: false; error: string } {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "no row was named" };
+  }
+  const given = raw as Record<string, unknown>;
+  const key: Record<string, unknown> = {};
+  for (const k of table.primaryKey) {
+    if (!(k in given)) return { ok: false, error: `the row is named by ${table.primaryKey.join(", ")}` };
+    key[k] = given[k];
+  }
+  const extra = Object.keys(given).filter((k) => !table.primaryKey.includes(k));
+  if (extra.length > 0) return { ok: false, error: `${extra.join(", ")} is not part of the key` };
+  return { ok: true, key };
 }

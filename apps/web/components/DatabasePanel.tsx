@@ -3,14 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown, ArrowUp, Check, ChevronDown, Copy, Filter as FilterIcon, KeyRound,
-  Play, RefreshCw, Table2, Terminal, X,
+  Pencil, Play, RefreshCw, Table2, Terminal, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { FILTER_OPS, opTakesValue, type Filter, type FilterOp, type Sort } from "@/lib/db-browse";
+import {
+  FILTER_OPS, editRefusal, opTakesValue,
+  type Column, type Filter, type FilterOp, type Sort, type TableShape,
+} from "@/lib/db-browse";
 import { useQueryRecord } from "@/lib/use-query-state";
 
 /**
@@ -51,11 +54,6 @@ interface TableSummary {
   rowsExact: boolean;
   lastWriteAt: string | null;
   orderedBy: string;
-}
-
-interface Column {
-  name: string;
-  type: string;
 }
 
 interface Page {
@@ -128,7 +126,11 @@ function agoShort(iso: string | null): string | null {
  */
 function fmt(v: unknown): { text: string; dim?: boolean } {
   if (v === null || v === undefined) return { text: "null", dim: true };
-  if (v instanceof Date) return { text: v.toISOString().replace("T", " ").slice(0, 19) };
+  // No `Date` branch, and there never should have been one: this reads a JSON
+  // payload, and JSON has no date type. It was dead code claiming to trim a
+  // timestamp, while timestamps went through `String(v)` untouched. They now
+  // arrive as Postgres's own text — see `tenantTypes` in lib/db.ts — which is
+  // both shorter and, for a `date`, the right day.
   if (typeof v === "object") return { text: JSON.stringify(v) };
   if (typeof v === "boolean") return { text: v ? "true" : "false" };
   return { text: String(v) };
@@ -148,7 +150,6 @@ function fmt(v: unknown): { text: string; dim?: boolean } {
  */
 function full(v: unknown): { text: string; dim?: boolean } {
   if (v === null || v === undefined) return { text: "null", dim: true };
-  if (v instanceof Date) return { text: v.toISOString() };
   if (Array.isArray(v)) {
     if (v.length === 0) return { text: "[]", dim: true };
     return {
@@ -161,6 +162,20 @@ function full(v: unknown): { text: string; dim?: boolean } {
   if (typeof v === "boolean") return { text: v ? "true" : "false" };
   const s = String(v);
   return s === "" ? { text: '""', dim: true } : { text: s };
+}
+
+/**
+ * The value as the database would spell it, not as we drew it.
+ *
+ * `null` becomes nothing rather than the four letters the grid renders, because
+ * pasting the word `null` into a query is a bug and typing it back into a cell
+ * would store it as text. Shared by Copy and by the editor, so what you copy is
+ * exactly what you would be handing back.
+ */
+function raw(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
 }
 
 /**
@@ -499,8 +514,19 @@ function TableView({
                 columns={page.columns}
                 onClose={() => setFocus(null)}
                 onColumn={(name) => setFocus({ row: focus.row, column: name })}
+                // The saved row goes straight back into the page. Re-reading
+                // would be a second request whose answer we already hold — and
+                // on a sorted or filtered table it could move the row out from
+                // under the panel that is still open on it.
+                onSaved={(saved) =>
+                  setPage((p) =>
+                    p ? { ...p, rows: p.rows.map((r, i) => (i === focus.row ? saved : r)) } : p,
+                  )
+                }
                 ordinal={page.offset + focus.row + 1}
                 row={page.rows[focus.row]}
+                shape={{ name: page.table, columns: page.columns, primaryKey: page.primaryKey }}
+                slug={slug}
               />
             ) : null}
 
@@ -790,7 +816,7 @@ function Picker({
 
 
 /**
- * One cell, whole.
+ * One cell, whole — and, when it is a cell we can name, changeable.
  *
  * Under the grid rather than beside it, because the values this exists for —
  * indented jsonb, an array one element per line — want width, and the grid pane
@@ -800,53 +826,125 @@ function Picker({
  * almost always to work out which row it belongs to, and each of those fields is
  * itself a button, so reading across a row is clicking down a list rather than
  * closing this and hunting for the next cell.
+ *
+ * EDITING lives here and nowhere else. `shape` is null for a query's results, and
+ * then there is no edit at all — the rows of a join have no identity to write
+ * back to, and pretending otherwise would be the most expensive kind of guess. On
+ * a table, `editRefusal` decides, and its answer is SHOWN when it is no: "why
+ * can't I change this" is a question, and the sentence is the answer to it.
  */
 function CellPanel({
   columns,
   column,
   row,
   ordinal,
+  shape,
+  slug,
   onColumn,
   onClose,
+  onSaved,
 }: {
   columns: Column[];
   column: string;
   row: Record<string, unknown>;
   ordinal: number;
+  /** The table these rows came from, or null for a query's results. */
+  shape: TableShape | null;
+  slug: string;
   onColumn: (name: string) => void;
   onClose: () => void;
+  onSaved?: (row: Record<string, unknown>) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const type = columns.find((c) => c.name === column)?.type;
-  const v = full(row[column]);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
 
-  useEffect(() => setCopied(false), [column, ordinal]);
+  const col = columns.find((c) => c.name === column);
+  const v = full(row[column]);
+  const refusal = shape && col ? editRefusal(shape, col) : null;
+  const canEdit = Boolean(shape && col && onSaved && !refusal);
+
+  // A different cell is a different edit. Leaving a draft behind would offer
+  // somebody the last cell's text as this cell's new value.
+  useEffect(() => {
+    setCopied(false);
+    setEditing(false);
+    setSaveErr(null);
+  }, [column, ordinal]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Escape backs out one step at a time: out of the edit, then out of the
+      // panel. Closing the whole thing on the first press would throw away
+      // something somebody typed.
+      if (editing) setEditing(false);
+      else onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, editing]);
 
   const copy = useCallback(() => {
-    // The raw value, not the pretty one: `null` copies as nothing rather than as
-    // the four letters we drew, because pasting the word into a query is a bug.
-    const raw = row[column];
-    const text =
-      raw === null || raw === undefined
-        ? ""
-        : typeof raw === "object"
-          ? JSON.stringify(raw)
-          : String(raw);
-    void navigator.clipboard?.writeText(text).then(() => setCopied(true));
+    void navigator.clipboard?.writeText(raw(row[column])).then(() => setCopied(true));
   }, [row, column]);
+
+  async function save(to: string | null) {
+    if (!shape || !col) return;
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/db/row`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          table: shape.name,
+          column: col.name,
+          // Every key column, from the row we are looking at.
+          key: Object.fromEntries(shape.primaryKey.map((k) => [k, row[k]])),
+          // The value we were SHOWN, so the write refuses if somebody else got
+          // here first. Not the rendered text — the value, as it arrived.
+          from: row[col.name] ?? null,
+          to,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        setSaveErr(String(d.error ?? "That did not save."));
+        return;
+      }
+      onSaved?.(d.row);
+      setEditing(false);
+    } catch {
+      setSaveErr("That did not save. Try again in a moment.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="overflow-hidden rounded-xl border border-border">
       <div className="flex items-center gap-2 border-b border-border bg-tile px-3 py-2">
         <span className="truncate font-mono text-[13px] text-ink">{column}</span>
-        {type ? <span className="truncate text-[11.5px] text-ink-3">{type}</span> : null}
+        {col?.type ? <span className="truncate text-[11.5px] text-ink-3">{col.type}</span> : null}
         <span className="ml-auto shrink-0 text-[12px] tabular-nums text-ink-3">row {ordinal}</span>
+
+        {refusal ? (
+          <span className="shrink-0 text-[12px] text-ink-3">{refusal}</span>
+        ) : canEdit && !editing ? (
+          <Button
+            className="h-6 shrink-0 px-2 text-[12px] text-ink-2 hover:text-ink"
+            onClick={() => { setDraft(raw(row[column])); setEditing(true); }}
+            size="sm"
+            variant="ghost"
+          >
+            <Pencil className="size-3" />
+            Edit
+          </Button>
+        ) : null}
+
         <Button
           aria-label="Copy value"
           className="size-6 shrink-0 text-ink-3 hover:text-ink"
@@ -868,13 +966,63 @@ function CellPanel({
       </div>
 
       <div className="flex items-stretch">
-        <pre
-          className={`max-h-[280px] min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[12.5px] leading-[1.55] ${
-            v.dim ? "italic text-ink-3" : "text-ink"
-          }`}
-        >
-          {v.text}
-        </pre>
+        <div className="flex min-w-0 flex-1 flex-col">
+          {editing ? (
+            <>
+              <textarea
+                aria-label={`New value for ${column}`}
+                autoFocus
+                className="block max-h-[280px] min-h-[92px] w-full resize-y bg-card px-3 py-2.5 font-mono text-[12.5px] leading-[1.55] text-ink outline-none"
+                onChange={(e) => setDraft(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void save(draft); }
+                }}
+                spellCheck={false}
+                value={draft}
+              />
+              <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
+                <Button className="h-7 px-2.5 text-[13px]" disabled={saving} onClick={() => void save(draft)} size="sm">
+                  Save
+                </Button>
+                <span className="text-[12px] text-ink-3">⌘↵</span>
+                {/* An empty box means an empty string. NULL is a different value
+                    and gets its own button, offered only where the column admits
+                    one — the two are exactly what this screen exists to tell
+                    apart. */}
+                {col?.nullable && row[column] !== null ? (
+                  <Button
+                    className="h-7 px-2.5 text-[13px]"
+                    disabled={saving}
+                    onClick={() => void save(null)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    Set null
+                  </Button>
+                ) : null}
+                <Button
+                  className="h-7 px-2 text-[13px] text-ink-2 hover:text-ink"
+                  disabled={saving}
+                  onClick={() => setEditing(false)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  Cancel
+                </Button>
+                {saveErr ? <span className="text-[12.5px] text-red">{saveErr}</span> : null}
+              </div>
+            </>
+          ) : (
+            <pre
+              className={`max-h-[280px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[12.5px] leading-[1.55] ${
+                v.dim ? "italic text-ink-3" : "text-ink"
+              }`}
+            >
+              {v.text}
+            </pre>
+          )}
+        </div>
+
         <div className="max-h-[280px] w-[212px] shrink-0 overflow-auto border-l border-border">
           {columns.map((c) => {
             const cell = fmt(row[c.name]);
@@ -1067,6 +1215,10 @@ function SqlPane({
                 onColumn={(name) => setFocus({ row: focus.row, column: name })}
                 ordinal={focus.row + 1}
                 row={out.rows[focus.row]}
+                // No shape, so no edit. A row of a join or a GROUP BY has no
+                // identity to write back to.
+                shape={null}
+                slug={slug}
               />
             ) : null}
             <span className="text-[13px] tabular-nums text-ink-2">
