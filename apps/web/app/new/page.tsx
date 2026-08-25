@@ -57,6 +57,8 @@ export default function NewApp() {
   // below prints, so the picture can never be ahead of, or behind, the log.
   const [film, setFilm] = useState<FilmDrive>(FILM_START);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The dry dock's log column, pinned to its own bottom as lines arrive.
+  const logRef = useRef<HTMLDivElement>(null);
   const cloneToken = useRef<string | null>(null);
 
   // The GitHub door. `null` means "not asked yet" and is distinct from an empty
@@ -327,15 +329,22 @@ export default function NewApp() {
   }
 
   const busy = phase === "deploying";
+  /* The deploy has the page from the moment it starts. `/new` exists to do
+     exactly this one thing, so the form does not sit behind the picture
+     waiting to be dimmed — it is simply not what this page is about any more. */
+  const docked = phase === "deploying" || phase === "done";
 
-  /* Nothing scrolls behind the cinema. The overlay covers the window, so a
-     wheel over it would otherwise move a page nobody can see. */
+  /* The newest line is the one being waited on, so the log follows it down.
+     Only when the reader is already at the bottom: somebody who has scrolled
+     up to read what the detector said should not be yanked back every 250ms.
+     A line and a half of slack: a fractional scroll height rarely lands on
+     zero, and a reader one line off the bottom meant to be at it. */
   useEffect(() => {
-    if (phase !== "deploying" && phase !== "done") return;
-    const was = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = was; };
-  }, [phase]);
+    const el = logRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 40) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logs, busy]);
 
   return (
     <div className="shell">
@@ -349,6 +358,7 @@ export default function NewApp() {
       </header>
 
       <div className="content">
+        {!docked && (
         <div className="wrap">
           <div className="ruler reveal" />
           <div className="newflow reveal" style={{ animationDelay: ".03s" }}>
@@ -556,12 +566,13 @@ export default function NewApp() {
               </div>
             )}
 
-            {/* A deploy that is RUNNING is the whole screen — see `cinema` at
-                the bottom of this file. What is left here is the wreckage of one
-                that failed: the words, without the picture. The film's break and
-                its repair drone are worth watching while the agent is actually
-                working, which is in the cinema; by the time this screen is up the
-                story is over and the fix below is what has to be read. */}
+            {/* A deploy that is RUNNING is watched in the dry dock — see
+                `drydock` at the bottom of this file. What is left here is the
+                wreckage of one that failed: the words, without the picture. The
+                film's break and its repair drone are worth watching while the
+                agent is actually working, which is in the window; by the time
+                this screen is up the story is over and the fix below is what
+                has to be read. */}
             {phase === "error" && (
               <div className="stage">
                 <div className="stage-head">
@@ -639,55 +650,115 @@ export default function NewApp() {
             )}
           </div>
         </div>
-      </div>
+        )}
 
-      {/* THE CINEMA — a deploy that is running, at the size it deserves.
+        {/* THE DRY DOCK — a deploy that is running, in a window built for it.
 
-          A container deploy is 90 seconds during which this page has exactly
-          one thing on it worth looking at, and it was a 2.40:1 card in the
-          middle of a column of white. It gets the window now, the same way the
-          room does at the app's own address, and everything the page was
-          saying underneath is said over the picture: the name and the clock in
-          one corner, the build's last six lines in the other.
+            A container deploy is 90 seconds during which this page has exactly
+            one thing on it worth looking at. That used to be the entire screen,
+            edge to edge, with the last six log lines written over the water in a
+            corner — and a full-bleed render with no chrome around it reads as a
+            screensaver. Nothing on it said this was YOUR app being built, and the
+            log was there to be glanced at rather than read.
 
-          Fixed, and mounted HERE rather than inside `.newflow` — an ancestor
-          with a transform on it (the reveal animation) is a containing block
-          for `position: fixed`, and this would have been fixed to that column
-          rather than to the window.
+            It is a window now, and the window does the explaining the picture
+            cannot: a title in the film's own language, the build's log down the
+            left where a log belongs, the picture taking the rest. She is built in
+            the yard, and when she goes out under the bridge the app is live.
 
-          It stays up when the deploy lands, because the ending is the point:
-          the sun comes up, she sails under the bridge, and the address is the
-          film's own endcard. These are what to do about it. */}
-      {(phase === "deploying" || phase === "done") && (
-        <div className={"cinema" + (phase === "done" ? " done" : "")}>
-          <DeployFilm drive={film} elapsed={elapsed} full />
-          <div className="cinema-bar">
-            <span className="nm">{slug || "…"}</span>
-            <span className="clock">{elapsed}s</span>
-          </div>
-          <div className="cinema-log">
-            {logs.slice(-6).map((l, i) => {
-              const ok = /^(Detected|Provision|Live at|Injecting|Agent fixed)/.test(l);
-              const agent = /^agent · /.test(l);
-              return (
-                <div key={`${i}-${l}`}>
-                  <span className={"k" + (ok ? " g" : agent ? " a" : "")}>{ok ? "✓" : agent ? "◆" : "·"}</span>
-                  <span className="m">{l}</span>
+            It is the PAGE, not a modal over one. `/new` is already the screen
+            for this — putting a window over its own form meant dimming a form
+            nobody could use and locking the scroll of a page nobody could see.
+            So the form gives way and the dock takes the content area, with the
+            top bar left where it is: a deploy runs on the server, and somebody
+            who wants to go and look at their other apps should be able to.
+
+            It stays up when the deploy lands, because the ending is the point:
+            the sun comes up, she sails under the bridge, and the address is the
+            film's own endcard. The footer is what to do about it. */}
+        {docked && (
+          <div className={"dockpage" + (phase === "done" ? " done" : "")}>
+            {/* No `role="dialog"`: this is the page's own content and its
+                heading says so. A dialog role here would tell a screen reader
+                to expect something dismissable, which it is not. */}
+            <section className="drydock">
+              <header className="drydock-head">
+                <div className="t">
+                  <b>{phase === "done" ? "Shipped." : "Your app is being shipped"}</b>
+                  {/* Only at the end. While she is being built the title says
+                      it, the picture shows it, and a line explaining the
+                      picture underneath is one voice too many. */}
+                  {phase === "done" && (
+                    <span>She left the yard in {elapsed}s and is under the bridge. Your app is live.</span>
+                  )}
                 </div>
-              );
-            })}
-            {busy && <div><span className="k">▸</span><span className="m">working…</span></div>}
+                <div className="meta">
+                  <span className={"dot" + (phase === "done" ? " live" : "")} />
+                  <span className="nm">{slug || "…"}</span>
+                  <span className="clock">{elapsed}s</span>
+                </div>
+              </header>
+
+              <div className="drydock-body">
+                {/* The build's own words — all of them, in order, wrapped rather
+                    than cut, and pinned to the bottom as they arrive. */}
+                <aside className="drydock-log">
+                  <div className="lh">Build log</div>
+                  <div className="lb" ref={logRef}>
+                    {logs.map((l, i) => {
+                      const ok = /^(Detected|Provision|Live at|Injecting|Agent fixed)/.test(l);
+                      const agent = /^agent · /.test(l);
+                      return (
+                        <div key={`${i}-${l}`}>
+                          <span className={"k" + (ok ? " g" : agent ? " a" : "")}>{ok ? "✓" : agent ? "◆" : "·"}</span>
+                          <span className="m">{l}</span>
+                        </div>
+                      );
+                    })}
+                    {busy && (
+                      <div className="working">
+                        <span className="k">▸</span>
+                        <span className="m">working…</span>
+                      </div>
+                    )}
+                  </div>
+                </aside>
+
+                <div className="drydock-film">
+                  <DeployFilm drive={film} elapsed={elapsed} full />
+                </div>
+              </div>
+
+              <footer className="drydock-foot">
+                {phase === "done" ? (
+                  <a className="addr" href={liveUrl} target="_blank" rel="noreferrer">
+                    {liveUrl.replace(/^https?:\/\//, "")}
+                  </a>
+                ) : (
+                  /* The only thing a person watching a 90-second wait wants told,
+                     and both halves of it are true: how long this takes, and that
+                     the picture is following the deploy rather than a clock. */
+                  <span className="hint">
+                    Most ships leave the yard in about 90 seconds.
+                    {/* Dropped on a narrow window, where the row has one line in
+                        it and the first half is the half that answers "how long". */}
+                    <span className="more"> The film waits on your deploy, not on a timer.</span>
+                  </span>
+                )}
+                {phase === "done" && (
+                  <div className="acts">
+                    <a className="btn" href={liveUrl} target="_blank" rel="noreferrer">Visit<ArrowRight size={13} /></a>
+                    <Link href={`/apps/${slug}`} className="btn primary">Open cockpit<ArrowRight size={13} /></Link>
+                    {/* The way out of a picture that has finished playing. */}
+                    <button className="btn" onClick={reset}><RotateCcw size={13} />Deploy another</button>
+                  </div>
+                )}
+              </footer>
+            </section>
           </div>
-          {phase === "done" && (
-            <div className="cinema-acts">
-              <a className="btn" href={liveUrl} target="_blank" rel="noreferrer">Visit<ArrowRight size={13} /></a>
-              <Link href={`/apps/${slug}`} className="btn primary">Open cockpit<ArrowRight size={13} /></Link>
-              {/* The way out of a picture that has finished playing. */}
-              <button className="btn" onClick={reset}><RotateCcw size={13} />Deploy another</button>
-            </div>
-          )}
-        </div>
-      )}
+        )}
+
+      </div>
 
       {/* Always dismissable: there is no state a person can be in where the
           only thing behind this modal is a locked account. Free is always

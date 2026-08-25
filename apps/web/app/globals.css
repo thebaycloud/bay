@@ -1383,85 +1383,161 @@ a.door { text-decoration: none; }
 .dfilm-bar .url.on { opacity: 1; }
 
 /* ------------------------------------------------------------
-   FULLSCREEN — a deploy running is the whole screen.
+   THE DRY DOCK — what `/new` becomes once a deploy is running.
 
-   The same treatment the ROOM already gives this film
-   (services/proxy/src/room-page.ts): the picture takes the window and
-   everything the page has to say is written over it, because a deploy is 90
-   seconds of nothing else happening and a 2.40:1 card in a column of white
-   spends the screen on the parts of the page nobody is reading.
+   It was the whole screen — a fixed overlay over this page's own form, with the
+   log written over the picture in a corner.
+   A full-bleed render with no chrome around it reads as a screensaver: nothing
+   on it said this was YOUR app being built, and a log of six ellipsised lines
+   over moving water is there to be glanced at rather than read.
 
-   The frame can no longer be assumed here, and that is handled in the film
+   So: a window. A title that says, in the film's own words, what is happening;
+   the log down the left where a log belongs and can be read to the end; the
+   picture taking everything left over. The chrome is the product's own light
+   palette and the frame is the only dark thing on screen, which is what makes
+   it read as a picture rather than as the page.
+
+   The film's aspect cannot be assumed here, and that is handled in the film
    rather than in CSS: `framed()` in ship-it.js holds the HORIZONTAL field each
-   shot was composed with, so a 16:9 window shows more sky and water instead of
-   cropping the bridge and the yard off the sides.
+   shot was composed with, so a taller or wider box shows more sky and water
+   instead of cropping the bridge and the yard off the sides.
    ------------------------------------------------------------ */
-/* `overflow: hidden` is structural, not tidiness: this is fixed, so anything
-   inside it that does not fit widens the DOCUMENT instead of the box, and then
-   every `right:` in here is measured off a viewport that is wider than the
-   screen — the name slides off the right edge and the buttons go with it.
-   100dvh rather than 100vh: on a phone the toolbars come and go, and vh is the
-   tallest of those states, which puts the stage bar under the browser's own
-   chrome for the first half of the deploy. */
-.cinema { position: fixed; inset: 0; z-index: 50; background: #0a100e; height: 100dvh; overflow: hidden; }
-/* absolute, not fixed: `.cinema` is the fixed box, and the words below have to
-   stack over the picture inside it. */
+/* The page the dock sits on: the content area under the top bar, which is
+   already exactly the window minus 56px of chrome — `.shell` is a 100dvh flex
+   column and `.content` is its one growing child, so `height: 100%` here has
+   something real to resolve against.
+
+   `overflow: hidden` is structural, not tidiness: `.content` scrolls, and a
+   window that overflowed would put a second scrollbar inside a box that is
+   supposed to be exactly one screen.
+
+   The explicit `minmax(0, 1fr)` tracks are the whole reason the window can be
+   narrower than its own content. An auto track is sized to the item's
+   max-content — a row of three buttons, a log line nobody wrapped — and the
+   `100%` below would then resolve against THAT, so on a phone the window came
+   out wider than the phone and everything on its right was clipped. */
+.dockpage { height: 100%; overflow: hidden; padding: clamp(10px, 2.2vh, 26px);
+  display: grid; place-items: center;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+
+/* `minmax(0, 1fr)` on the middle row and `min-height: 0` here are what let the
+   log scroll instead of growing the window: a grid item's default minimum is
+   its content, and a hundred-line build would otherwise push the footer off. */
+.drydock { width: min(1240px, 100%); height: 100%; min-height: 0;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-xl); overflow: hidden;
+  /* A panel on the page, not a sheet over it — so this is the lift the rest of
+     the product's cards have, not a modal's drop shadow. */
+  box-shadow: 0 1px 2px rgba(9, 14, 12, .04), 0 12px 32px -22px rgba(9, 14, 12, .3);
+  animation: drydock-in .42s var(--ease) both; }
+@keyframes drydock-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+
+/* The title — the one place the ship is named as one, so the picture below
+   does not have to be decoded. */
+.drydock-head { display: flex; align-items: center; gap: 20px; padding: 15px 20px;
+  border-bottom: 1px solid var(--line); background: var(--card); }
+/* `min-width: 0` so the title column can give way rather than push the name
+   and the clock off the right edge of a narrow window. */
+.drydock-head .t { flex: 1 1 auto; min-width: 0; }
+.drydock-head .t b { display: block; font-size: 15.5px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+.drydock-head .t span { display: block; margin-top: 3px; font-size: 12.5px; color: var(--ink-2); }
+.drydock-head .meta { margin-left: auto; flex: none; display: flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+.drydock-head .meta .nm { color: var(--ink); max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drydock-head .meta .clock { font-variant-numeric: tabular-nums; }
+.drydock-head .dot { flex: none; width: 7px; height: 7px; border-radius: var(--r-pill);
+  background: var(--ink-3); animation: drydock-pulse 1.6s var(--ease) infinite; }
+.drydock-head .dot.live { background: var(--live); animation: none; }
+@keyframes drydock-pulse { 50% { opacity: .25; } }
+
+.drydock-body { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); min-height: 0; }
+
+/* The log, read as a log: all of it, oldest at the top, scrolled as it grows
+   (the page holds the ref and pins it to the bottom). */
+.drydock-log { display: flex; flex-direction: column; min-height: 0;
+  border-right: 1px solid var(--line); background: var(--paper); }
+.drydock-log .lh { padding: 10px 16px; border-bottom: 1px solid var(--line); font-family: var(--mono);
+  font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); }
+.drydock-log .lb { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 16px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.85; color: var(--ink-2); }
+.drydock-log .lb > div { display: flex; gap: 8px; }
+.drydock-log .lb .k { flex: none; width: 1em; color: var(--ink-3); }
+.drydock-log .lb .k.g { color: var(--live); }
+.drydock-log .lb .k.a { color: var(--ink); }
+/* Wrapped, not ellipsised: this column is narrow and a truncated line is the
+   thing the old overlay got wrong. */
+.drydock-log .lb .m { min-width: 0; overflow-wrap: anywhere; }
+.drydock-log .lb .working .m { color: var(--faint); }
+
+/* The picture. The dark ground is under the canvas rather than on it, so the
+   letterboxing a contained fit leaves is the same colour as the frame. */
+.drydock-film { position: relative; min-width: 0; background: #0a100e; }
+
+/* absolute, not fixed: `.drydock-film` is the box, and the film fills it. */
 .dfilm.full { position: absolute; inset: 0; border: 0; border-radius: 0; background: #0a100e; }
 .dfilm.full .dfilm-frame { position: absolute; inset: 0; }
 /* The holder the film appends its canvas into has to have a height of its own.
    It never needed one in the card: the canvas sizes itself with
    `aspect-ratio`, which resolves against an auto-height parent perfectly well.
    `height:100%` does not — it resolves to auto, and the picture would sit in a
-   band across the top of the window with dead space under it. */
+   band across the top of the frame with dead space under it. */
 .dfilm.full .dfilm-canvas { position: absolute; inset: 0; }
 /* `contain`, and it is not decoration: the film sizes its own drawing buffer
    to this box, so the fit is normally an identity — but an older film still
-   frames its buffer at 2.40:1, and stretched to a 16:9 window that is the
-   whole picture squashed. Contained, it letterboxes instead. */
+   frames its buffer at 2.40:1, and stretched to a taller box that is the whole
+   picture squashed. Contained, it letterboxes instead. */
 .dfilm.full .dfilm-frame canvas { width: 100%; height: 100%; aspect-ratio: auto; object-fit: contain; }
-/* The two bars were the cinema the card sat in. There is no card now. */
+/* The two bars were the cinema the card sat in. The window is that now. */
 .dfilm.full .dfilm-bar { display: none; }
-.dfilm.full .dfilm-slate { left: 22px; top: 18px; }
-.dfilm.full .dfilm-stagebar { left: 22px; right: 22px; bottom: 18px; }
+.dfilm.full .dfilm-slate { left: 16px; top: 13px; }
+.dfilm.full .dfilm-stagebar { left: 16px; right: 16px; bottom: 13px; }
 .dfilm.full .dfilm-fallback { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); }
 
-/* what the page has to say, over the picture.
-   Top RIGHT, not spread across the top: the film puts its slate in the top
-   left corner and a name at the left edge would print over it. */
-.cinema-bar { position: absolute; right: 22px; top: 18px; display: flex; gap: 12px; align-items: baseline;
-  font-family: var(--mono); font-size: 12px; color: rgba(233,239,235,.55); pointer-events: none;
-  text-shadow: 0 1px 3px rgba(0,0,0,.75); }
-.cinema-bar .nm { color: #e9efeb; }
-.cinema-bar .clock { font-variant-numeric: tabular-nums; }
-/* The build's own words: the last six lines, which is what fits without the
-   log becoming the page. Above the film's stage bar, not over it. */
-.cinema-log { position: absolute; left: 22px; bottom: 52px; width: min(62ch, 52vw);
-  display: flex; flex-direction: column; font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
-  color: rgba(233,239,235,.60); text-shadow: 0 1px 3px rgba(0,0,0,.75); pointer-events: none; }
-.cinema-log > div { display: flex; gap: 8px; min-width: 0; }
-.cinema-log .k { flex: none; width: 1em; color: rgba(233,239,235,.34); }
-.cinema-log .k.g { color: #4ec585; }
-.cinema-log .k.a { color: #7fa8d8; }
-.cinema-log .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The address is the film's own endcard, bottom centre. These are what to do
-   about it, and they clear the stage bar on a short window. */
-.cinema-acts { position: absolute; left: 50%; bottom: max(64px, 7%); transform: translateX(-50%);
-  display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 44px); }
-/* Under the endcard is where these belong, and there is room for them there on
-   a wide window. On a narrower one the log — `min(62ch, 52vw)` — reaches the
-   middle of the screen, and a long line would run under the buttons, so they
-   go to the corner the stage bar leaves empty instead. */
-@media (max-width: 1200px) {
-  .cinema-acts { left: auto; right: 22px; bottom: 44px; transform: none; justify-content: flex-end; }
+/* What to do about it, once there is something to do. While the deploy runs
+   this row carries the one thing a person waiting actually wants told: that
+   the wait is normal, and that nothing here is faked. */
+.drydock-foot { display: flex; align-items: center; gap: 16px; padding: 12px 20px; min-height: 56px;
+  border-top: 1px solid var(--line); background: var(--card); }
+.drydock-foot .hint { font-size: 12px; color: var(--faint); }
+.drydock-foot .addr { font-family: var(--mono); font-size: 12.5px; color: var(--live); text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drydock-foot .addr:hover { text-decoration: underline; }
+/* `min-width: 0` is what makes `flex-wrap` mean anything here: a flex item's
+   default minimum is its content, so without it three buttons on a phone run
+   off the end of the row instead of stacking. */
+.drydock-foot .acts { margin-left: auto; min-width: 0; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* One column, and the window becomes the screen again — but a window-shaped
+   one: the picture on top, the log under it still readable, the title still
+   saying what it is. The log gets a fixed share rather than `auto`, so a long
+   build cannot squeeze the film out of the frame. */
+@media (max-width: 900px) {
+  .dockpage { padding: 0; }
+  .drydock { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; animation: none; }
+  .drydock-head { padding: 13px 16px; }
+  .drydock-head .t b { font-size: 14px; }
+  .drydock-head .t span { font-size: 11.5px; }
+  .drydock-head .meta .nm { display: none; }
+  .drydock-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 38%); }
+  /* Second in the DOM because the log is the thing a screen reader should
+     reach first; first on screen because it is the thing to look at. */
+  .drydock-film { order: -1; }
+  .drydock-log { border-right: 0; border-top: 1px solid var(--line); }
+  /* One row of three buttons does not fit a phone next to an address, so the
+     footer stacks: the address on its own line, the buttons under it. */
+  .drydock-foot { padding: 10px 16px; flex-wrap: wrap; gap: 8px; text-align: center; }
+  .drydock-foot .hint .more { display: none; }
+  .drydock-foot .addr { flex: 1 0 100%; }
+  .drydock-foot .acts { flex: 1 0 100%; margin-left: 0; justify-content: center; }
 }
-@media (max-width: 640px) {
-  .cinema-log { width: auto; right: 22px; }
-  /* The film's own caption and the app's name are both one line across the top
-     of a screen that has room for one of them. The name is the one a person
-     came for. */
-  .dfilm.full .dfilm-slate { display: none; }
-  /* A phone has one column and the deploy is over: the address on the endcard
-     and what to do about it are the screen. The log has had its whole run. */
-  .cinema.done .cinema-log { display: none; }
-  .cinema-acts { left: 22px; right: 22px; bottom: 44px; justify-content: center; }
+/* A short window — a laptop with the browser at half height — has no room for
+   a subtitle and a log both. The subtitle is the one that has already been
+   read by the time this matters. */
+@media (max-height: 620px) {
+  .drydock-head .t span { display: none; }
+  .drydock-head { padding: 11px 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drydock { animation: none; }
+  .drydock-head .dot { animation: none; }
 }
