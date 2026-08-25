@@ -1,0 +1,65 @@
+# The documentation site, checked before it is published rather than after.
+#
+# apps/docs deploys on every push to main — Mintlify watches the branch, and a
+# merge is the publish. So there is no step between "merged" and "live" in which
+# a person notices that a page was renamed and the navigation still names the old
+# one. This runs in the only place left: the pull request.
+#
+# Two commands, because they fail on different things and neither implies the
+# other. `validate` builds the site and refuses a docs.json that names a page
+# with no file; `broken-links` reads the rendered pages and finds a link inside
+# one that points nowhere. A navigation entry can be perfect while every link on
+# the page is dead, and the reverse.
+#
+# Neither needs a Mintlify account. That is the whole reason they can live here:
+# a check that needs a secret is red for every outside contributor, because
+# secrets do not reach a workflow triggered by a fork's pull request.
+name: Docs
+
+on:
+  pull_request:
+    paths:
+      - "apps/docs/**"
+      - ".github/workflows/docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: docs site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/docs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/docs/package-lock.json
+
+      # `npm ci`, not `npm install`: the version of the tool that judges the docs
+      # is part of what makes a run reproducible. mint ships a new build most
+      # days, and a check that silently changes its mind is worse than no check.
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Validate the build
+        run: npx mint validate
+
+      - name: Check for broken links
+        run: npx mint broken-links
