@@ -81,18 +81,24 @@ export const SITE_NAME = env("NEXT_PUBLIC_SITE_NAME", `${DEFAULT_BRAND} Cloud`);
  * PostalAddress with its parts named; a model reading "123 Main St, SF" has to
  * guess which half is the locality.
  *
- * Unset by default, and the JSON-LD leaves the address out entirely when it is:
- * an incomplete address in structured data is worse than none, because it is the
- * version quoted back. Set all four in the deploy environment to publish it.
+ * Written out rather than left to the environment, for the same reason the brand
+ * and the domain are: the landing site is deployed from source with no build
+ * args, so a value that only exists as an env var is a value that ships empty.
+ * This is a registered address on a public website, not a secret. The overrides
+ * stay for a fork that is not this company.
+ *
+ * The JSON-LD leaves the address out entirely if any of the three required parts
+ * is blank: an incomplete PostalAddress in structured data is worse than none,
+ * because it is the version quoted back.
  */
 export const LEGAL_NAME = env("NEXT_PUBLIC_LEGAL_NAME", "Supersonic Software, Inc.");
 
 export const ADDRESS = {
-  street: env("NEXT_PUBLIC_ADDRESS_STREET", ""),
-  locality: env("NEXT_PUBLIC_ADDRESS_LOCALITY", ""),
-  region: env("NEXT_PUBLIC_ADDRESS_REGION", ""),
-  postalCode: env("NEXT_PUBLIC_ADDRESS_POSTAL_CODE", ""),
-  country: env("NEXT_PUBLIC_ADDRESS_COUNTRY", ""),
+  street: env("NEXT_PUBLIC_ADDRESS_STREET", "1111B South Governors Avenue"),
+  locality: env("NEXT_PUBLIC_ADDRESS_LOCALITY", "Dover"),
+  region: env("NEXT_PUBLIC_ADDRESS_REGION", "DE"),
+  postalCode: env("NEXT_PUBLIC_ADDRESS_POSTAL_CODE", "19904"),
+  country: env("NEXT_PUBLIC_ADDRESS_COUNTRY", "US"),
 };
 
 /** True only when every part is set, which is the only way it gets published. */
