@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { BRAND, CLI, GITHUB_URL, PKG, SITE_NAME } from "@/lib/brand";
+import { BRAND, CLI, DOCS_HOST, DOCS_URL, GITHUB_URL, PKG, SITE_NAME } from "@/lib/brand";
 import { getMessages, localePath } from "@/lib/i18n";
 import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
 import { alternatesFor } from "@/lib/i18n/alternates";
@@ -20,6 +20,12 @@ import "../changelog/changelog.css";
  *
  * So this is not a second set of documentation. It is `content/manual.md`,
  * rendered — the same file, the same words, the same day. See lib/manual.ts.
+ *
+ * The guides are a different document and live on Mintlify, at bay.mintlify.app.
+ * This page links them rather than repeating them: the manual is the command
+ * reference, complete and one screen long, and the guides are the long-form
+ * walk-throughs. Both are linked from the top and the bottom of this page, so
+ * neither is the one you have to already know about.
  *
  * English only, like the changelog and the about page: a command reference that
  * is three releases out of date in five languages is worse than one that is
@@ -63,6 +69,14 @@ export default function Docs({ params }: { params: { locale: string } }) {
           </a>
           , rendered for a person — one source, so the two cannot drift.
         </p>
+        <p className="mt-3 max-w-[62ch] text-[15px] leading-[1.6] text-ink-3">
+          Looking for the guides rather than the commands — databases, secrets, custom
+          domains, shipping from GitHub? Those are at{" "}
+          <a className="text-brand-ink hover:text-brand" href={DOCS_URL}>
+            {DOCS_HOST}
+          </a>
+          .
+        </p>
       </header>
 
       {/* The section list is the table of contents and the machine-readable
@@ -88,6 +102,13 @@ export default function Docs({ params }: { params: { locale: string } }) {
       <section className={`${WRAP} pb-[clamp(72px,9vw,128px)]`}>
         <div className="border-t border-line pt-6 text-[14.5px] text-ink-2">
           <p className="m-0">
+            The guides, in twenty-two pages:{" "}
+            <a className="text-brand-ink hover:text-brand" href={DOCS_URL}>
+              {DOCS_HOST}
+            </a>
+            .
+          </p>
+          <p className="m-0 mt-2">
             The same document in other shapes:{" "}
             <a className="text-brand-ink hover:text-brand" href="/llms.txt">
               /llms.txt

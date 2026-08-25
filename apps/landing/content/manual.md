@@ -269,6 +269,8 @@ is guessing:
 - This manual, as markdown: https://thebay.cloud/llms.txt — also at
   `/agents.md`, `/AGENTS.md`, `/cli.md`, and at the bare domain under `curl`.
 - The same manual, as a page: https://thebay.cloud/docs
+- The long-form guides — databases, secrets, custom domains, shipping from
+  GitHub, what to do when it breaks: https://bay.mintlify.app
 - Every page we publish: https://thebay.cloud/sitemap.xml
 - What shipped, and when: https://thebay.cloud/changelog (RSS at
   `/changelog.xml`)
