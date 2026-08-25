@@ -151,7 +151,7 @@ jobs:
       # is exactly why it was invisible until CI ran the check.
       # setup-python rather than the runner's system python3: on Ubuntu 24.04 the
       # system interpreter is PEP 668 externally-managed and refuses pip install.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install fontTools
