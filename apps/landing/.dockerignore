@@ -1,4 +1,5 @@
 node_modules
 .next
+.next-verify
 .git
 npm-debug.log
