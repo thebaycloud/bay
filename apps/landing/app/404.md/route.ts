@@ -28,6 +28,8 @@ reachable from here.
 - [The manual](${SITE}/llms.txt) — every command, in markdown. Also answers at
   \`/agents.md\`, \`/AGENTS.md\` and \`/cli.md\`, and at the bare domain under \`curl\`.
 - [Documentation](${DOCS_URL}) — guides, the CLI reference, the config reference.
+- [The API, described](${SITE}/openapi.json) — OpenAPI 3.1, every operation the
+  CLI speaks.
 - [Sitemap](${SITE}/sitemap.xml) — every page we publish, in six languages.
 - [Pricing](${SITE}/pricing) — what it costs.
 - [Changelog](${SITE}/changelog) — what shipped, with an [RSS feed](${SITE}/changelog.xml).

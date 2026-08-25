@@ -102,6 +102,14 @@ export default function RootLayout({
       lang={locale}
       className={`${GeistSans.variable} ${GeistMono.variable} ${displaySerif.variable}`}
     >
+      <head>
+        {/* RFC 8631: where this site's API describes itself. It is the link
+            relation a client follows to find a description from a page, which
+            is the only path available to something that has the brand and not
+            the API. The file is the same one app.thebay.cloud serves; see
+            scripts/sync-openapi.mjs for why there are two copies. */}
+        <link rel="service-desc" type="application/openapi+json" href="/openapi.json" />
+      </head>
       <body>
         <StructuredData />
         {children}

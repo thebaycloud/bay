@@ -158,10 +158,12 @@ jobs:
         working-directory: services/fleet/agent
         run: go test ./...
 
-  # Two drift checks that already exist as scripts and were run by hand: the
-  # prompt rules shared between the control plane and the landing page, and the
-  # subset fonts the OG image generator depends on. Both fail loudly and cost
-  # seconds, which is exactly the shape of thing CI should be holding.
+  # Three drift checks that already exist as scripts and were run by hand: the
+  # prompt rules shared between the control plane and the landing page, the
+  # subset fonts the OG image generator depends on, and the published OpenAPI
+  # description, which is served from two apps and authored in neither. All fail
+  # loudly and cost seconds, which is exactly the shape of thing CI should be
+  # holding.
   drift:
     name: generated files are current
     runs-on: ubuntu-latest
@@ -192,3 +194,8 @@ jobs:
       - name: OG fonts are the current subset
         working-directory: apps/landing
         run: npm run check:og-fonts
+      # No working-directory and no install: the script imports the spec module
+      # directly and writes plain JSON, so it needs nothing but Node. It checks
+      # both copies at once, which is the point of it.
+      - name: The published OpenAPI description matches its source
+        run: node scripts/sync-openapi.mjs --check

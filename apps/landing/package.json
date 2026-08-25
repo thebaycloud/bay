@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "next lint",
     "check:prompts": "node ../../scripts/sync-prompt-rules.mjs --check",
-    "check:og-fonts": "node ../../scripts/subset-og-fonts.mjs --check"
+    "check:og-fonts": "node ../../scripts/subset-og-fonts.mjs --check",
+    "check:openapi": "node ../../scripts/sync-openapi.mjs --check"
   },
   "dependencies": {
     "@paper-design/shaders-react": "^0.0.80",

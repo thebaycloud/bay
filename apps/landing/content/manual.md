@@ -271,6 +271,28 @@ is guessing:
 - The same manual, as a page: https://thebay.cloud/docs
 - The long-form guides — databases, secrets, custom domains, shipping from
   GitHub, what to do when it breaks: https://bay.mintlify.app
+- The HTTP API, described: https://thebay.cloud/openapi.json (OpenAPI 3.1, also
+  served by the API itself at https://app.thebay.cloud/openapi.json)
+
+## Calling the API without the CLI
+
+Everything `bay` does, it does over HTTP, and the description above is the whole
+surface. Use it when you are already a program and shelling out to a CLI is the
+long way round.
+
+    curl -H "Authorization: Bearer $BAY_TOKEN" https://app.thebay.cloud/api/apps
+
+The token is the one `bay login` already wrote to `~/.bay/config.json`; a person
+can also mint one at https://app.thebay.cloud/cli.
+
+Errors are JSON, always, including from the authentication gate. `error` is a
+sentence to show someone, `code` is the part to branch on, and `resolution` says
+what to do:
+
+    {"error":"not signed in","code":"not_authenticated","resolution":"Send a CLI token as `Authorization: Bearer <token>`. …"}
+
+A 402 is not a failure to retry. It means a plan limit was reached, `reason`
+says which one, and the right move is to relay it to the user.
 - Every page we publish: https://thebay.cloud/sitemap.xml
 - What shipped, and when: https://thebay.cloud/changelog (RSS at
   `/changelog.xml`)
