@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CircleAlert, CircleCheck, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FixPrompt } from "@/components/FixPrompt";
 
 /**
  * What the last deploy did, as a transcript.
@@ -32,7 +33,15 @@ interface Transcript {
   error?: string;
 }
 
-export function DeployLog({ slug }: { slug: string }) {
+export function DeployLog({
+  slug,
+  /** The failure as the app list knows it, so the prompt can be asked for before
+   *  the transcript has finished loading. */
+  error: known,
+}: {
+  slug: string;
+  error?: string | null;
+}) {
   const [t, setT] = useState<Transcript | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
