@@ -55,15 +55,6 @@ const zhHans: Messages = {
     },
   },
 
-  mock: {
-    files: "文件",
-    processes: "进程",
-    cacheAndQueues: "缓存和队列",
-    live: "线上",
-    forYourAgent: "提供给你的智能体",
-    diagnosis:
-      "迁移从未运行，因此架构为空。添加发布步骤，在 Web 进程启动前运行迁移，然后重新部署。",
-  },
 
   interfaces: {
     h2: "用 MCP 和 CLI，不用控制面板",

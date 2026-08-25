@@ -78,17 +78,6 @@ const en = {
     },
   },
 
-  // The readable labels inside the product drawings. Everything else in those
-  // mocks is mono and stays English.
-  mock: {
-    files: "Files",
-    processes: "Processes",
-    cacheAndQueues: "cache and queues",
-    live: "Live",
-    forYourAgent: "For your agent",
-    diagnosis:
-      "Migrations never ran, so the schema is empty. Add a release step that runs them before the web process starts, then deploy again.",
-  },
 
   interfaces: {
     h2: "MCP and CLI instead of a dashboard",

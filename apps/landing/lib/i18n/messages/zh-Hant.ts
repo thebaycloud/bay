@@ -55,15 +55,6 @@ const zhHant: Messages = {
     },
   },
 
-  mock: {
-    files: "檔案",
-    processes: "程序",
-    cacheAndQueues: "快取與佇列",
-    live: "正式環境",
-    forYourAgent: "交給你的代理",
-    diagnosis:
-      "移轉從未執行，因此結構是空的。加入發布步驟，在 Web 程序啟動前執行移轉，再重新部署。",
-  },
 
   interfaces: {
     h2: "使用 MCP 與 CLI，不用儀表板",

@@ -116,19 +116,6 @@ function Win({
   );
 }
 
-function Row({ k, v, tag }: { k: string; v: string; tag?: string }) {
-  return (
-    <div className="flex items-center gap-3 border-b border-line py-[10px] last:border-b-0">
-      <span className="w-[72px] shrink-0 text-[12px] text-ink-3">{k}</span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">{v}</span>
-      {tag ? (
-        <span className="shrink-0 rounded-full bg-live/[0.13] px-2 text-[11px] text-[#0f7a3d]">
-          {tag}
-        </span>
-      ) : null}
-    </div>
-  );
-}
 
 // The who-can-open-it picker. `on` is the selected state.
 function Opt({ t, d, on }: { t: string; d: string; on?: boolean }) {
@@ -158,6 +145,49 @@ const CODE = "overflow-hidden whitespace-pre font-mono text-[11.5px] leading-[1.
 const KEY = "font-medium text-ink";
 const DIM = "text-ink-3";
 
+
+// A recording of the real product, framed like the drawn mocks beside it.
+//
+// No `Win` chrome around it: these are captures of a browser and already carry
+// their own address bar and tabs, so the fake one would be a second window
+// drawn around a real one.
+//
+// Muted, looping, playsInline and preload="none" are what make autoplay legal
+// on iOS and in Chrome and keep the file off the critical path. The poster is a
+// real frame, so first paint and first playable frame are the same picture, and
+// it stands in on its own where the system asks for less motion.
+function Clip({ src, bleed, alt }: { src: string; bleed: boolean; alt: string }) {
+  return (
+    <div
+      className={cn(
+        "shrink-0 overflow-hidden rounded-t-[6px] border border-black/[0.07] bg-white",
+        bleed
+          ? "w-full border-r-0 shadow-[-14px_-14px_40px_-18px_rgba(20,20,40,0.22)] min-[900px]:w-[128%]"
+          : "w-full shadow-[0_-14px_40px_-18px_rgba(20,20,40,0.20)]"
+      )}
+    >
+      <video
+        aria-label={alt}
+        autoPlay
+        className="block aspect-[16/10] w-full object-cover object-top motion-reduce:hidden"
+        loop
+        muted
+        playsInline
+        poster={`/demo/${src}-poster.jpg`}
+        preload="none"
+        tabIndex={-1}
+      >
+        <source src={`/demo/${src}.mp4`} type="video/mp4" />
+      </video>
+      <div
+        aria-hidden
+        className="hidden aspect-[16/10] w-full bg-cover bg-top motion-reduce:block"
+        style={{ backgroundImage: `url(/demo/${src}-poster.jpg)` }}
+      />
+    </div>
+  );
+}
+
 // ── the features ───────────────────────────────────────────────────────────
 
 // Structure only. The heading and the sentence live in the catalogues, keyed by
@@ -168,7 +198,7 @@ const FEATURES: {
    *  the heading, so rewording a feature does not break the link to it. */
   id: "ship" | "services" | "fixes";
   tint: keyof typeof TINT;
-  mock: (bleed: boolean, t: Messages) => React.ReactNode;
+  mock: (bleed: boolean) => React.ReactNode;
 }[] = [
   {
     id: "ship",
@@ -191,44 +221,16 @@ const FEATURES: {
   {
     id: "services",
     tint: "cool",
-    mock: (bleed, t) => (
-      <Win title="Data" bleed={bleed}>
-        <div className={cn(CODE, "mb-[14px]")}>
-          <span className={DIM}># injected into your app. you never write these.</span>
-          {"\n"}
-          <span className={KEY}>DATABASE_URL</span>=postgres://…
-          {"\n"}
-          <span className={KEY}>REDIS_URL</span>=redis://…
-          {"\n"}
-          <span className={KEY}>STORAGE_BUCKET</span>=…
-        </div>
-        <Row k="Postgres" v="16.4 · 240 MB" tag={t.mock.live} />
-        <Row k="Redis" v={`${t.mock.cacheAndQueues} · 128 MB`} tag={t.mock.live} />
-        <Row k={t.mock.files} v="1,204 objects · 2.1 GB" tag={t.mock.live} />
-        <Row k={t.mock.processes} v="web · worker · cron" tag={t.mock.live} />
-      </Win>
-    ),
+    // The Data screen, recorded. It shows the tables an app got without anyone
+    // provisioning them, which is the claim the heading makes.
+    mock: (bleed) => <Clip alt="The Data screen listing tables Bay provisioned" bleed={bleed} src="services" />,
   },
   {
     id: "fixes",
     tint: "warm",
-    mock: (bleed, t) => (
-      <Win title="Issues" bleed={bleed}>
-        {/* A real error string and a real log line. Both stay English. */}
-        <div className="whitespace-pre-wrap border-l-2 border-brand py-[3px] pl-3 font-mono text-[11.5px] leading-[1.75] text-ink-2">
-          <span className="font-medium text-brand-ink">
-            relation &quot;orders&quot; does not exist
-          </span>
-          {"\n"}POST /api/checkout · 500 · 14 times in 3 min
-        </div>
-        <div className="mt-[15px] rounded-[4px] bg-ground px-[13px] py-3 text-[12.5px] leading-[1.6] text-ink-2">
-          <div className="mb-1.5 text-[10.5px] uppercase tracking-[0.12em] text-ink-3">
-            {t.mock.forYourAgent}
-          </div>
-          {t.mock.diagnosis}
-        </div>
-      </Win>
-    ),
+    // A ship that did not land, and the app screen offering the fix. The drawn
+    // version of this said the same thing; this one happened.
+    mock: (bleed) => <Clip alt="A failed ship, and the fix offered for it" bleed={bleed} src="fix" />,
   },
 ];
 
@@ -1105,7 +1107,7 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
                     flip ? "min-[900px]:px-[34px]" : "min-[900px]:pl-[34px] min-[900px]:pr-0"
                   )}
                 >
-                  {f.mock(!flip, t)}
+                  {f.mock(!flip)}
                 </div>
               </div>
             );
