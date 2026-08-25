@@ -52,6 +52,23 @@ export const authConfig = {
       const isPublic =
         p.startsWith("/login") || p.startsWith("/signup") ||
         p.startsWith("/api/auth") || p.startsWith("/api/signup") ||
+        // Password recovery, and it has to be here for the obvious reason: the
+        // person who needs it is by definition unable to sign in. Left off this
+        // list, /forgot 307s to /login — which is the page they just failed at —
+        // and the only route back into an account is a loop. Verified against
+        // production before it was fixed.
+        p.startsWith("/forgot") || p.startsWith("/reset") ||
+        // The confirmation link, clicked from a mail client that has no session
+        // and cannot get one. The token IS the credential here; it proves control
+        // of the mailbox, which is the whole point, so it needs no cookie.
+        p.startsWith("/verify") ||
+        // The error sweep, called by a scheduler with no cookie and never by a
+        // person — it authenticates itself with a shared secret in constant time,
+        // and answers 404 without one. Behind the cookie gate it would 307 and
+        // the sweep would simply never run: no error, no warning, no mail, which
+        // is the same silent failure this file already records for woff2 and
+        // /film.
+        p.startsWith("/api/internal/") ||
         // The design-block gallery. It renders no user data, but it is a
         // working surface rather than a product one, so it is reachable only
         // off production — in prod it stays behind the cookie gate like
