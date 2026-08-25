@@ -308,3 +308,23 @@ export async function countPublicApps(userId: string, excludeSlug?: string): Pro
   );
   return r.rows[0]?.n ?? 0;
 }
+
+/**
+ * Who a Stripe customer is, here.
+ *
+ * Every billing email needs this: Stripe's webhooks identify people by
+ * `cus_...`, and an email needs an address and a user id. Returns null when the
+ * customer is unknown to us, which happens for a subscription created in the
+ * Stripe dashboard before the account was linked.
+ */
+export async function userByStripeCustomer(
+  stripeCustomerId: string,
+): Promise<{ id: string; email: string } | null> {
+  if (!stripeCustomerId) return null;
+  const r = await getPool(DB).query(
+    "SELECT id, email FROM users WHERE stripe_customer_id = $1 LIMIT 1",
+    [stripeCustomerId],
+  );
+  const row = r.rows[0];
+  return row?.email ? { id: row.id, email: row.email } : null;
+}

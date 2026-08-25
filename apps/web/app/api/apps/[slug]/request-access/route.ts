@@ -3,11 +3,10 @@ export const dynamic = "force-dynamic";
 
 import { getAppBySlug } from "@/lib/apps";
 import { getPool } from "@/lib/db";
-import { sendEmail } from "@/lib/email";
+import { sendAccessRequested } from "@/lib/emails";
 import { addRequest } from "@/lib/requests";
 import { currentUserId } from "@/lib/session";
 import { corsFor } from "@/lib/cors";
-import { controlPlaneUrl } from "@/lib/brand";
 
 const DB = "supersonic_platform";
 
@@ -63,11 +62,11 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   // Record it so the owner can approve/deny from the Share panel, not just email.
   if (requester) await addRequest(app.id, requester);
 
-  const link = `${controlPlaneUrl()}/apps/${slug}`;
-  const result = await sendEmail({
-    to: owner,
-    subject: `${requester ?? "Someone"} is requesting access to ${slug}`,
-    text: `${requester ?? "Someone"} asked for access to your app "${slug}".\n\nGrant or deny it from your app's Share settings:\n${link}`,
+  const result = await sendAccessRequested({
+    ownerEmail: owner,
+    ownerId: app.owner_id,
+    requester: requester ?? null,
+    slug,
   });
 
   if (!result.ok) return Response.json({ error: "couldn't send the request" }, { status: 502, headers });

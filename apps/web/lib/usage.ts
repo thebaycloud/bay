@@ -1,4 +1,6 @@
 import { getPool } from "./db";
+import { getAccount } from "./users";
+import { sendApproachingLimit } from "./emails";
 
 const DB = "supersonic_platform";
 
@@ -76,7 +78,17 @@ export async function countIfUnder(userId: string, meter: Meter, limit: number):
        RETURNING ${col}`,
       [userId, periodStart(), limit]
     );
-    return (r.rowCount ?? 0) > 0;
+    const allowed = (r.rowCount ?? 0) > 0;
+    // The warning goes HERE because this is the only place a build is counted.
+    // Notifying from the deploy route instead would be the mistake this codebase
+    // already documents twice — "apply the plan" implemented seven times,
+    // `notifyDeployFinished` reading the row rather than being called at each of
+    // six endings. A second deploy lane added later would silently warn nobody.
+    //
+    // Free of extra queries: RETURNING already hands back the new count, so the
+    // crossing is known without asking again.
+    if (allowed) await warnIfApproaching(userId, meter, limit, Number(r.rows[0]?.[col] ?? 0));
+    return allowed;
   } catch {
     return true;
   }
@@ -137,4 +149,52 @@ export async function freeFixAvailable(userId: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Warn at four fifths of the ceiling. Far enough out to act, close enough to be real. */
+const WARN_AT = 0.8;
+
+/**
+ * Tell somebody they are nearly out of builds, once per period.
+ *
+ * Before this, the first signal a user got was a 402 in the middle of a deploy —
+ * the platform knew for the previous six builds and said nothing.
+ *
+ * Only on the CROSSING, so the twenty-fifth build of thirty mails and the
+ * twenty-sixth does not. The dedupe key is period-scoped anyway, which makes the
+ * mail idempotent even if the crossing is somehow computed twice; this check is
+ * about not doing the work, not about correctness.
+ *
+ * Never throws and never blocks the build: a warning is strictly less important
+ * than the deploy that triggered it.
+ */
+async function warnIfApproaching(userId: string, meter: Meter, limit: number, count: number): Promise<void> {
+  // Builds only. `agentRuns` on the free plan is zero, so there is no approach to
+  // warn about — the first one is already the refusal.
+  if (meter !== "builds") return;
+  if (!Number.isFinite(limit) || limit <= 0) return;
+  const threshold = Math.floor(limit * WARN_AT);
+  // The crossing, not the region: `>=` would re-check on every build after it.
+  if (count !== threshold) return;
+  try {
+    const account = await getAccount(userId);
+    if (!account?.email) return;
+    await sendApproachingLimit({
+      userId,
+      email: account.email,
+      used: count,
+      limit,
+      // Ceilings are calendar-monthly (see periodStart), so the reset is always
+      // the 1st of next month.
+      resetsOn: nextPeriodLabel(),
+    });
+  } catch (e) {
+    console.error("approaching-limit mail:", e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** "September 1" — when this month's counters go back to zero. */
+function nextPeriodLabel(now: Date = new Date()): string {
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  return next.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" });
 }

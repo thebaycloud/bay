@@ -593,3 +593,96 @@ export function tailLogs(
 export function appAddress(slug: string): string {
   return `${slug}.${rootDomain()}`;
 }
+
+/* ------------------------------------------------------------- error sweep */
+
+/**
+ * Errors across EVERY app in a window, grouped by app.
+ *
+ * Everything else here is scoped to one slug, because everything else is
+ * answering "show me this app". The error email asks the opposite question —
+ * which apps are broken right now — and asking it one app at a time is a
+ * subprocess or an API round trip per app on a timer, which is how a sweep
+ * becomes the most expensive thing the platform does.
+ *
+ * So: one query. The cost is that the slug has to be recovered from the entry
+ * rather than supplied to the filter, and it lives in a different place for each
+ * runtime — the ops-agent file path for a fleet app, our own log name for
+ * anything we publish, the service name on Cloud Run. `slugOf` handles the three.
+ *
+ * OUR OWN SERVICES ARE EXCLUDED, and that is the arm most likely to rot: every
+ * platform service is `supersonic-*`, so a future one named otherwise would start
+ * mailing its errors to whichever tenant shares its name. Hence the belt of the
+ * prefix test in `slugOf` as well as the filter's own exclusion.
+ */
+export interface AppErrorBurst {
+  slug: string;
+  count: number;
+  /** The most recent one, already trimmed to something an email can carry. */
+  newest: string;
+  newestAt: string;
+}
+
+/** Which app produced an entry, or null when it is one of ours. */
+function slugOf(e: RawEntry): string | null {
+  const path = (e as { labels?: Record<string, string> }).labels?.["agent.googleapis.com/log_file_path"];
+  const fromPath = typeof path === "string" ? /^\/srv\/apps\/([a-z0-9][a-z0-9-]*)\//.exec(path)?.[1] : null;
+  if (fromPath) return fromPath;
+
+  const logName = typeof e.logName === "string" ? e.logName : "";
+  const fromLog = /\/logs\/bay\.app\.([a-z0-9][a-z0-9-]*)$/.exec(decodeURIComponent(logName))?.[1];
+  if (fromLog) return fromLog;
+
+  const svc = (e as { resource?: { labels?: Record<string, string> } }).resource?.labels?.service_name;
+  // A platform service is never a tenant. The filter excludes these too; this is
+  // the check that survives somebody editing the filter.
+  if (typeof svc === "string" && svc && !svc.startsWith("supersonic-") && SLUG.test(svc)) return svc;
+  return null;
+}
+
+/**
+ * Read one window's errors and fold them per app.
+ *
+ * `since` is always supplied, never left to the library — `getEntries` silently
+ * appends its own 24-hour bound when a filter carries no timestamp clause, which
+ * for a sweep on a schedule would mean quietly reporting a day of errors as an
+ * hour of them.
+ */
+export async function errorsByApp(sinceIso: string, opts: { max?: number } = {}): Promise<AppErrorBurst[]> {
+  const max = Math.min(Math.max(opts.max ?? 500, 1), 1000);
+  const filter = [
+    `severity>="ERROR"`,
+    `timestamp>=${quote(sinceIso)}`,
+    `(`,
+    [
+      `(resource.type="gce_instance" AND labels."agent.googleapis.com/log_file_path"=~"^/srv/apps/")`,
+      `(logName=~"projects/${PROJECT}/logs/bay\\.app\\..*")`,
+      `(resource.type="cloud_run_revision" AND NOT resource.labels.service_name=~"^supersonic-")`,
+    ].join(" OR "),
+    `)`,
+  ].join(" ");
+
+  const [entries] = (await logging().getEntries({
+    filter,
+    resourceNames: resourceNames(),
+    orderBy: "timestamp desc",
+    pageSize: max,
+    autoPaginate: false,
+  })) as unknown as [{ metadata: RawEntry; data?: unknown }[], unknown];
+
+  const byApp = new Map<string, AppErrorBurst>();
+  for (const x of entries) {
+    if (isLibraryNoise(x.data)) continue;
+    const slug = slugOf(x.metadata);
+    if (!slug) continue;
+    const row = normalise(x.metadata, x.data);
+    const seen = byApp.get(slug);
+    if (seen) {
+      seen.count += 1;
+      continue;
+    }
+    // Entries arrive newest-first, so the first one per app IS the newest.
+    byApp.set(slug, { slug, count: 1, newest: row.msg.slice(0, 1200), newestAt: row.at });
+  }
+  return [...byApp.values()].sort((a, b) => b.count - a.count);
+}

@@ -32,6 +32,9 @@ function safeCallback(): string {
 
 export default function Login() {
   const router = useRouter();
+  // Arrived from a completed reset. Worth saying, because the alternative is a
+  // bare sign-in form that looks like the reset did not work.
+  const justReset = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("reset") === "1";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -62,6 +65,11 @@ export default function Login() {
           </span>
         </div>
         <h1>Sign in</h1>
+        {justReset && (
+          <div className="mb-3 text-[13px] leading-relaxed text-ink-3">
+            Your password has been changed. Sign in with the new one.
+          </div>
+        )}
         <form onSubmit={submit}>
           <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
           <input type="password" placeholder="password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -75,6 +83,9 @@ export default function Login() {
           <button className="btn" type="button" onClick={() => signIn("github", { callbackUrl: safeCallback() || "/" })}>
             <Github size={14} />Continue with GitHub
           </button>
+        </div>
+        <div className="authalt">
+          <Link href="/forgot">Forgot your password?</Link>
         </div>
         <div className="authalt">No account? <Link href="/signup">Sign up</Link></div>
       </div>

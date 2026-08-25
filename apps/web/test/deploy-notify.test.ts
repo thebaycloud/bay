@@ -1,6 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deployEmail } from "../lib/deploy-notify";
+import { renderEmail } from "../lib/email-template";
+
+/**
+ * Both bodies, always.
+ *
+ * These assertions used to read `m.text`, a single hand-built string. The message
+ * is now described as content and rendered into an HTML part and a plaintext
+ * part, so a check against one half can pass while the other leaks — which
+ * matters most for the redaction test at the bottom, where the whole point is
+ * that a connection string reaches no mailbox by any route.
+ */
+function bodies(m: { content: Parameters<typeof renderEmail>[0] }): string {
+  const { html, text } = renderEmail(m.content);
+  return `${html}\n${text}`;
+}
 
 test("a deploy that is still running sends nothing", () => {
   // The hook that calls this runs on every exit from the pipeline, including
@@ -18,13 +33,13 @@ test("a failure names the app and carries the reason", () => {
   })!;
 
   assert.match(m.subject, /tasks/);
-  assert.match(m.text, /Missing script/);
+  assert.match(bodies(m), /Missing script/);
 });
 
 test("a clean success gives the address and nothing alarming", () => {
   const m = deployEmail({ slug: "abc12", name: "tasks", status: "live" })!;
 
-  assert.match(m.text, /abc12\.thebay\.cloud/);
+  assert.match(bodies(m), /abc12\.thebay\.cloud/);
   assert.doesNotMatch(m.subject, /not|fail/i);
 });
 
@@ -41,7 +56,7 @@ test("a deploy whose sibling never came up does not report plain success", () =>
 
   assert.doesNotMatch(m.subject, /^✓/);
   assert.match(m.subject, /part|partly|not all/i);
-  assert.match(m.text, /\/api/);
+  assert.match(bodies(m), /\/api/);
 });
 
 test("a connection string in the reason never reaches the mailbox", () => {
@@ -53,6 +68,6 @@ test("a connection string in the reason never reaches the mailbox", () => {
     error: "could not connect to postgresql://app:s3cret@10.1.2.3:5432/db",
   })!;
 
-  assert.doesNotMatch(m.text, /s3cret/);
-  assert.doesNotMatch(m.text, /postgresql:\/\//);
+  assert.doesNotMatch(bodies(m), /s3cret/);
+  assert.doesNotMatch(bodies(m), /postgresql:\/\//);
 });

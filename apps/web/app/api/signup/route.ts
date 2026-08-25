@@ -4,6 +4,8 @@ import bcrypt from "bcryptjs";
 import { findUserByEmailAndProvider, createUser } from "@/lib/users";
 import { takeToken } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
+import { sendWelcome, sendVerifyEmail } from "@/lib/emails";
+import { createEmailVerification } from "@/lib/auth-tokens";
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
@@ -60,6 +62,25 @@ export async function POST(req: Request) {
     }
     const hash = await bcrypt.hash(String(password), 10);
     const user = await createUser(String(email), String(name || ""), hash, "credentials");
+
+    // AWAITED, which on this runtime is not the obvious choice and is the right
+    // one. Cloud Run throttles an instance's CPU once the response is sent, so
+    // work started and not awaited may simply never run — a fire-and-forget send
+    // here would deliver in development and silently do nothing in production,
+    // which is the worst available outcome for a welcome email.
+    //
+    // Safe to await because the provider call is bounded (see SEND_TIMEOUT_MS)
+    // and `send()` never throws: the account is already created, and a mail
+    // failure lands in the ledger rather than in this response.
+    try {
+      await sendWelcome({ userId: user.id, email: String(email), name: String(name || "") });
+      const token = await createEmailVerification(user.id, String(email));
+      await sendVerifyEmail({ userId: user.id, email: String(email), token });
+    } catch (e) {
+      // Belt and braces: a signup must not fail because mail did.
+      console.error("signup mail:", e instanceof Error ? e.message : String(e));
+    }
+
     return Response.json({ ok: true, id: user.id });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

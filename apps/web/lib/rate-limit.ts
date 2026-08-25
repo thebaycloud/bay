@@ -24,7 +24,7 @@ const DB = "supersonic_platform";
  * `Meter` in lib/usage.ts is closed for the same reason and says so: a
  * caller-supplied name would be an injection.
  */
-export type Scope = "signup:ip" | "signup:email-domain" | "login:email-ip";
+export type Scope = "signup:ip" | "signup:email-domain" | "login:email-ip" | "reset:email" | "reset:ip";
 
 export type Verdict = { ok: true } | { ok: false; retryAfterSec: number };
 
@@ -67,6 +67,18 @@ export const CEILINGS: Record<Scope, Ceiling> = {
   // forgotten which password they used gets several tries; a dictionary does
   // not get a second page.
   "login:email-ip": { limit: 10, windowSec: 900, failClosed: true },
+  // Password reset is an email-sending oracle pointed at an address the caller
+  // chooses, so an unbounded one lets anybody mail-bomb a stranger from our
+  // domain and take our sending reputation with it. Three per address per hour
+  // covers somebody who deleted the first mail and asked again.
+  //
+  // Fails OPEN, unlike login: being wrong here costs a few duplicate emails,
+  // while failing closed during an outage means nobody can recover an account
+  // for as long as it lasts — and there is no other way back in.
+  "reset:email": { limit: 3, windowSec: 3600, failClosed: false },
+  // And a ceiling on the caller, which the per-address one cannot see: walking a
+  // list of a thousand addresses is one request each and never trips it.
+  "reset:ip": { limit: 10, windowSec: 3600, failClosed: false },
 };
 
 /**

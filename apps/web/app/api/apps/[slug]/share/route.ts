@@ -9,7 +9,7 @@ import {
 } from "@/lib/apps";
 import { listPending, resolveRequest } from "@/lib/requests";
 import { profilesFor } from "@/lib/users";
-import { sendAccessGranted } from "@/lib/email";
+import { sendAccessGranted } from "@/lib/emails";
 import { currentUserId } from "@/lib/session";
 import { entitlement, countPublicApps } from "@/lib/entitlements";
 import { publicLimitMessage, noAccountMessage } from "@/lib/plan-copy";
@@ -145,7 +145,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     // request and tell the person they're in.
     await addGrant(slug, email);
     await resolveRequest(slug, email, "approved");
-    await sendAccessGranted(email, slug);
+    await sendAccessGranted({ email, slug });
   }
   if (body.addDomain) {
     const domain = normalizeDomain(String(body.addDomain));
