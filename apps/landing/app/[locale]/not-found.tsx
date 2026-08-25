@@ -13,17 +13,19 @@ import { BRAND } from "@/lib/brand";
  * guessed a URL wrong is usually looking for the manual, then the sitemap, then
  * the pages a person is most likely to have wanted.
  *
- * Serving this as `text/markdown` to a client that asked for markdown is not
- * possible from here: a not-found component renders through the normal HTML
- * pipeline and cannot set its own content type. Doing it properly would mean
- * middleware holding a list of every valid route so it could recognise a 404
- * before routing happens, and that list would go stale the first time somebody
- * adds a page. The links below are in the markup either way.
+ * Serving this as `text/markdown` is not possible from here: a not-found
+ * component renders through the normal HTML pipeline and cannot set its own
+ * content type. That answer lives at `/404.md`, and middleware sends a client
+ * that reads text there instead — which needs the list of pages that used to be
+ * the argument against doing it at all, and is now lib/pages.ts, imported by the
+ * sitemap too so there is only one. The two bodies are the same recovery map in
+ * the same order; keep them in step.
  */
 const WRAP = "mx-auto w-full max-w-[1040px] px-[22px] min-[900px]:px-10";
 
 const WAYS_BACK: { href: string; label: string; note: string }[] = [
   { href: "/llms.txt", label: "The manual", note: "every command, in markdown" },
+  { href: "/docs", label: "Documentation", note: "the same manual, as a page" },
   { href: "/sitemap.xml", label: "Sitemap", note: "every page we publish" },
   { href: "/pricing", label: "Pricing", note: "what it costs" },
   { href: "/changelog", label: "Changelog", note: "what we shipped" },
@@ -32,7 +34,7 @@ const WAYS_BACK: { href: string; label: string; note: string }[] = [
 export default function NotFound() {
   return (
     <div className="bay flex min-h-screen flex-col bg-ground font-sans text-[16px] leading-[1.55] tracking-[-0.008em] text-ink antialiased">
-      <section className={`${WRAP} pt-[clamp(80px,12vw,160px)]`}>
+      <main className={`${WRAP} pt-[clamp(80px,12vw,160px)]`}>
         <p className="m-0 text-[14px] uppercase tracking-[0.16em] text-ink-3">404</p>
         <h1 className="m-0 mt-5 font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
           There is nothing at this address
@@ -60,7 +62,7 @@ export default function NotFound() {
             Back to {BRAND}
           </Link>
         </p>
-      </section>
+      </main>
     </div>
   );
 }
