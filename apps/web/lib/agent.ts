@@ -10,6 +10,9 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { accessToken as restAccessToken, invalidateToken } from "./gcp-rest";
 import type { Runtime } from "./fleet";
+// The product names itself in every system prompt below, so the agent cannot
+// introduce itself as a product that no longer exists.
+import { productName } from "./brand";
 
 const PROJECT = "supersonic-deploy-prod";
 const LOCATION = "us-central1";
@@ -103,7 +106,7 @@ function runCommand(dir: string, command: string): Promise<string> {
  */
 const RUNTIME_NAMES: Record<Runtime, string> = {
   cloudrun: "Google Cloud Run",
-  fleet: "the Supersonic fleet (the app's container, run under gVisor on our own VM)",
+  fleet: `the ${productName()} fleet (the app's container, run under gVisor on our own VM)`,
 };
 
 const toolsFor = (runtime: Runtime) => [
@@ -115,7 +118,7 @@ const toolsFor = (runtime: Runtime) => [
   { name: "give_up", description: "Stop and tell the user exactly what they must fix themselves (e.g. a required secret).", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
 ];
 
-const systemFor = (runtime: Runtime) => `You are Supersonic's deployment repair agent. A vibe-coded app failed to deploy to ${RUNTIME_NAMES[runtime]}, and that is where your redeploy goes — the app is not moving anywhere else. Your ONLY goal is to make it deploy successfully and serve HTTP on the port given by the PORT environment variable (the platform sets PORT, usually 8080, on either runtime).
+const systemFor = (runtime: Runtime) => `You are ${productName()}'s deployment repair agent. A vibe-coded app failed to deploy to ${RUNTIME_NAMES[runtime]}, and that is where your redeploy goes — the app is not moving anywhere else. Your ONLY goal is to make it deploy successfully and serve HTTP on the port given by the PORT environment variable (the platform sets PORT, usually 8080, on either runtime).
 ${runtime === "fleet" ? `
 - This app runs on our own VM, not on Cloud Run. Its database is reached through a proxy on the host at 10.200.0.1:5432, so a DATABASE_URL, PGHOST or POSTGRES_HOST naming 10.200.0.1 is CORRECT and must not be "fixed" to localhost or to a public address. If the database is unreachable, that is our proxy and not this repository — call give_up and say so.
 ` : ""}
@@ -221,7 +224,7 @@ const DIAGNOSE_TOOLS = [
   { name: "report_fix", description: "Return the final, surgical fix-prompt for the user's own coding agent.", parameters: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] } },
 ];
 
-const DIAGNOSE_SYSTEM = `You are Supersonic's diagnosis assistant. A deployed app is throwing an error in production. Read the relevant repo files, then produce a SHORT, surgical fix-prompt the user can paste into their own coding agent (e.g. Claude Code) to fix it — reference the exact file(s), line(s), and the change to make. Do NOT rewrite whole files or edit anything. When ready, call report_fix with the prompt. Act only through tools.`;
+const DIAGNOSE_SYSTEM = `You are ${productName()}'s diagnosis assistant. A deployed app is throwing an error in production. Read the relevant repo files, then produce a SHORT, surgical fix-prompt the user can paste into their own coding agent (e.g. Claude Code) to fix it — reference the exact file(s), line(s), and the change to make. Do NOT rewrite whole files or edit anything. When ready, call report_fix with the prompt. Act only through tools.`;
 
 export async function diagnoseError(opts: { dir?: string; error: string; about?: Record<string, unknown> }): Promise<string> {
   const { dir, error, about } = opts;

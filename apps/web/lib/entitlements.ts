@@ -46,7 +46,7 @@ export interface Limits {
    * deploy tool does, for a bounded price.
    */
   lifetimeFreeFixes: number;
-  /** Whether the "Runs on Supersonic" badge can be removed. */
+  /** Whether the "Runs on <product>" badge can be removed. The badge text itself comes from PRODUCT_NAME on the edge, which is "Bay". */
   canRemoveBadge: boolean;
   /** Whether the owner may attach a domain they own. */
   customDomains: boolean;

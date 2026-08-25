@@ -2,6 +2,12 @@
 
 import { useState } from "react";
 import { Sparkles, Check, X } from "lucide-react";
+// Not the literal. This card promised to remove the "Supersonic badge" while the
+// badge itself has said "Runs on Bay" since PRODUCT_NAME was set on the edge, so
+// the one sentence selling the feature named a thing the product no longer calls
+// itself. `productName()` reads NEXT_PUBLIC_PRODUCT_NAME, which Next inlines into
+// this client bundle, so it agrees with the proxy that renders the badge.
+import { productName } from "@/lib/brand";
 
 // Free is not offered here, because everybody looking at this is already on it.
 // The card that would say "Free — $0 — you have this" is the one thing a person
@@ -15,7 +21,7 @@ const PLANS = [
       "Unlimited public apps",
       "Your own domain",
       "Auto-fix on every failed deploy",
-      "Remove the Supersonic badge",
+      `Remove the ${productName()} badge`,
       "Backups and restore",
     ],
   },
@@ -62,7 +68,7 @@ const HEAD: Record<PaywallReason, { title: string; sub: string }> = {
     sub: "You'll still get a paste-ready fix for your coding agent on every failure. Pro has our agent do it for you.",
   },
   choose_plan: {
-    title: "Upgrade Supersonic",
+    title: `Upgrade ${productName()}`,
     sub: "You're on the free plan. Here's what the paid ones add.",
   },
   no_account: {
