@@ -1,17 +1,10 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { stripe, WEBHOOK_SECRET, planForPrice } from "@/lib/stripe";
-import { setPlanByUser, setPlanByCustomer, setStatusByCustomer, type Plan, type SubStatus } from "@/lib/entitlements";
+import { stripe, WEBHOOK_SECRET, planForPrice, mapStatus } from "@/lib/stripe";
+import { setPlanByUser, setPlanByCustomer, setStatusByCustomer, type Plan } from "@/lib/entitlements";
 import type Stripe from "stripe";
 
-// Collapse Stripe's subscription statuses into ours. active/trialing = usable;
-// past_due/unpaid = grace (Stripe is retrying); everything else = locked.
-function mapStatus(s: string): SubStatus {
-  if (s === "active" || s === "trialing") return "active";
-  if (s === "past_due" || s === "unpaid") return "past_due";
-  return "canceled";
-}
 
 // Stripe → our plan column. The signature is verified against the raw body, so
 // this must read req.text() (not req.json()). Unconfigured = 503; a bad
