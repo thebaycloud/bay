@@ -137,3 +137,24 @@ test("mode count never refuses, and keeps counting PAST the ceiling", async () =
   assert.doesNotMatch(sent[0].sql, /WHERE rate_limits\.hits </);
   setModeForTest("enforce");
 });
+
+// ------------------------------------------------------------- housekeeping
+
+test("the sweep is bounded by window_start and nothing else", async () => {
+  const { sweepOldWindows } = await rl$;
+  withDb(() => ({ rows: [], rowCount: 4 }));
+  assert.equal(await sweepOldWindows(), 4);
+  assert.match(sent[0].sql, /DELETE FROM rate_limits WHERE window_start < now\(\)/);
+  // A sweep that could match on bucket would eventually be given a bucket
+  // pattern to match on, and a DELETE with a caller-shaped predicate over the
+  // table that decides who is refused is not a thing worth having.
+  assert.doesNotMatch(sent[0].sql, /bucket/);
+});
+
+test("a failed sweep is zero, not a thrown reconcile", async () => {
+  const { sweepOldWindows } = await rl$;
+  // The reconcile job does several unrelated things. Limiter housekeeping
+  // failing must not take the domain checks down with it.
+  withDb(() => ({ rows: [], rowCount: 0 }), new Error("connection terminated"));
+  assert.equal(await sweepOldWindows(), 0);
+});
