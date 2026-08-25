@@ -72,7 +72,7 @@ export default function TemplatePage({
 
   return (
     <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-8 pt-[clamp(36px,4.5vw,64px)]`}>
+      <section className={`${WRAP} pb-8 pt-[clamp(36px,4.5vw,64px)]`}>
         <BackLink href={localePath(locale, "/templates")} label={t.nav.templates} />
 
         <div className="mt-8 flex h-12 items-center">
@@ -104,7 +104,7 @@ export default function TemplatePage({
         <p className="mt-4 max-w-[54ch] text-[14px] leading-[1.6] text-ink-3">
           {t.templatePage.copyNote}
         </p>
-      </header>
+      </section>
 
       <section className={`${WRAP} pb-[clamp(64px,8vw,112px)]`}>
         <div className="grid gap-8 border-t border-line pt-10 min-[760px]:grid-cols-2">

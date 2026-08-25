@@ -56,7 +56,7 @@ export default function Docs({ params }: { params: { locale: string } }) {
 
   return (
     <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
+      <section className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
         <BackLink href={localePath(locale, "/")} label={BRAND} />
         <h1 className="m-0 mt-8 font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
           {SITE_NAME} documentation
@@ -77,7 +77,7 @@ export default function Docs({ params }: { params: { locale: string } }) {
           </a>
           .
         </p>
-      </header>
+      </section>
 
       {/* The section list is the table of contents and the machine-readable
           outline at once: every h2 in the manual, linked by the id lib/manual.ts

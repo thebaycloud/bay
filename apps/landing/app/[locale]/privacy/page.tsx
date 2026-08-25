@@ -41,7 +41,7 @@ export default function Privacy({ params }: { params: { locale: string } }) {
 
   return (
     <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
+      <section className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
         <BackLink href={localePath(locale, "/")} label={BRAND} />
         <h1 className="m-0 mt-8 font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
           Privacy
@@ -50,7 +50,7 @@ export default function Privacy({ params }: { params: { locale: string } }) {
           {BRAND} is built by Supersonic Software, Inc. This page says what we hold and why,
           in the same words we would use to describe it to each other.
         </p>
-      </header>
+      </section>
 
       <section className={`${WRAP} prose pb-[clamp(72px,9vw,128px)]`}>
         <h2>What an account is</h2>

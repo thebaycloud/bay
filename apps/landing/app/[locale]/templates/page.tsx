@@ -33,7 +33,7 @@ export default function TemplatesIndex({ params }: { params: { locale: string } 
 
   return (
     <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-10 pt-[clamp(40px,5vw,72px)]`}>
+      <section className={`${WRAP} pb-10 pt-[clamp(40px,5vw,72px)]`}>
         <BackLink href={localePath(locale, "/")} label={BRAND} />
         <h1 className="m-0 mt-8 font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
           {t.templatesPage.h1}
@@ -41,7 +41,7 @@ export default function TemplatesIndex({ params }: { params: { locale: string } 
         <p className="mt-4 max-w-[56ch] text-pretty text-[17px] leading-[1.6] text-ink-2">
           {t.templatesPage.p}
         </p>
-      </header>
+      </section>
 
       <section className={`${WRAP} pb-[clamp(72px,9vw,128px)]`}>
         <div className="grid gap-4 min-[760px]:grid-cols-3">

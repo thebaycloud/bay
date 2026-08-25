@@ -936,8 +936,16 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
       {/* ── hero ─────────────────────────────────────────────────────── */}
 
       {/* Roughly 380px of content and then air. Both references leave more than
-          half the fold empty; that is the whole trick. */}
-      <header className="pb-[clamp(40px,5vw,60px)] pt-[clamp(68px,8vw,108px)]">
+          half the fold empty; that is the whole trick.
+
+          A <section> and not a <header>, which it was. <header> is the tag for a
+          masthead, and a reader that strips boilerplate — every extractor does,
+          and the ones grading this page for agent-readability do — throws away
+          <header>, <nav> and <footer> before it looks at anything. That took the
+          h1 and its paragraph with it: the page measured ~490 characters lighter
+          than it is and read as having no h1 at all. The heading is the start of
+          the document, not furniture around it. */}
+      <section className="pb-[clamp(40px,5vw,60px)] pt-[clamp(68px,8vw,108px)]">
         <div className={WRAP}>
           <h1 className="m-0 font-sans text-balance text-[clamp(30px,3.1vw,40px)] font-normal leading-[1.16] tracking-[-0.022em]">
             {t.hero.h1}
@@ -949,7 +957,7 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
             <OnboardAgent t={t} />
           </div>
         </div>
-      </header>
+      </section>
 
       {/* ── the picture ──────────────────────────────────────────────── */}
 
