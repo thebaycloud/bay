@@ -1,0 +1,44 @@
+---
+title: "Access and domains"
+description: "bay share and bay domains."
+---
+
+## Who can open it
+
+```bash
+bay share <app>                          # the visibility, the people, the rules
+bay share <app> private|shared|public    # change it
+bay share <app> add ada@acme.com         # invite one person (they get an email)
+bay share <app> add @acme.com            # everyone with an address there
+bay share <app> remove <email|@domain>
+```
+
+<ParamField path="private" type="visibility" default="true">
+  Only you. This is where every app starts.
+</ParamField>
+
+<ParamField path="shared" type="visibility">
+  You, plus the people and domains you invited.
+</ParamField>
+
+<ParamField path="workspace" type="visibility">
+  Everyone in your workspace.
+</ParamField>
+
+<ParamField path="public" type="visibility">
+  Anyone with the link, no sign-in.
+</ParamField>
+
+## Its own address
+
+```bash
+bay domains <app>                    # what is attached, and the DNS record to create
+bay domains <app> add acme.com       # attach a domain you own
+bay domains <app> remove acme.com
+```
+
+Attaching a domain adds a Door. It never replaces the original one: the app keeps
+answering at `<name>.thebay.cloud`, which is the address every share link, log
+line and rebuild is still built from.
+
+See [Domains](/guides/domains) for the DNS and certificate detail.

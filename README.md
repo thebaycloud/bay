@@ -1,133 +1,335 @@
-# Bay
+<div align="center">
 
-A cloud for small software. Point it at a folder or a repository and it comes back with
-an address you can send to somebody — a built image, a running process, a Postgres
-database, a certificate, and a URL — without asking you to configure any of it.
+<img src=".github/assets/banner.jpg" alt="Bay — the cloud for the agentic era" width="100%">
 
-Live at **[thebay.cloud](https://thebay.cloud)**. The CLI is
-`npm i -g @thebaycloud/cli`, and the command is `bay`.
+**Bay — the cloud for the agentic era.**
+
+You don't pick a database, a region, or an instance size. Your coding agent and Bay
+work that out, ship it to a real address, and keep it alive.
+
+[![npm](https://img.shields.io/npm/v/@thebaycloud/cli?label=%40thebaycloud%2Fcli&color=e63f2c)](https://www.npmjs.com/package/@thebaycloud/cli)
+[![installs](https://img.shields.io/npm/dm/@thebaycloud/cli?label=installs&color=e63f2c)](https://www.npmjs.com/package/@thebaycloud/cli)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-e63f2c)](LICENSE)
+
+[**thebay.cloud**](https://thebay.cloud) · [Templates](https://thebay.cloud/templates) · [Changelog](https://thebay.cloud/changelog)
+
+<br>
+
+[![Give this README to your coding agent](https://img.shields.io/badge/%F0%9F%A4%96_Give_this_page_to_your_coding_agent-it_sets_up_Bay_and_ships_your_app-e63f2c?style=for-the-badge&labelColor=1a1a1a)](https://raw.githubusercontent.com/thebaycloud/bay/main/README.md)
+
+<sub>Paste that link into Claude Code, Cursor, Codex or Copilot and say "set this up".
+No account, no dashboard step, no keys to find first — the agent reads the manual at
+[thebay.cloud/llms.txt](https://thebay.cloud/llms.txt) and drives the rest.</sub>
 
 ```bash
-bay ship          # publish the folder you are standing in
+npm install -g @thebaycloud/cli && bay ship
 ```
+
+</div>
+
+---
+
+## Ship anything in one CLI command
+
+<video src="https://github.com/thebaycloud/bay/raw/main/.github/assets/demo.mp4" controls muted loop width="100%"></video>
+
+<sup>One unedited take: a coding agent is asked to put the app online, installs the
+CLI, ships, and verifies the app is serving with Postgres wired in — ending on the
+live URL with the owner's toolbar on it.
+[Watch it directly](https://github.com/thebaycloud/bay/raw/main/.github/assets/demo.mp4) if the player does not load. Recorded before the
+rename, so the recording says Supersonic and the address ends `.supersonic.cv`; the
+product is Bay and new apps get `*.thebay.cloud`.</sup>
+
+Point Bay at a folder or a repository. It reads the code, works out how to build it,
+provisions the database and storage the code implies, injects the credentials, and
+serves the result on a real address with a certificate. Next, Django, Rails, Go,
+Phoenix, or anything that can be put in a container.
+
+There is no configuration step you have to get through first. `examples/pgapp`
+contains no Dockerfile, no infrastructure, and no mention of a database — just
+`require("pg")` and a `DATABASE_URL` it expects somebody else to set. That
+dependency is the request; Bay reads it, provisions Postgres, isolates it, and
+fills the variable in.
+
+**The shape of it.** One control plane decides, and nothing pushes to a machine:
+
+```
+     you  ·  your coding agent
+              │  CLI · GitHub push · git URL
+              ▼
+       control plane            resolve the config, plan the build, provision
+              │
+     ┌────────┴────────┐
+     ▼                 ▼
+  the fleet         static apps
+  one sandbox       published to a bucket
+  per app, a
+  resident agent
+  pulling desired
+  state
+              │
+              ▼
+   load balancer ◄── wildcard DNS + SSL
+```
+
+Each node pulls its desired state, compares it to what is running, and makes the
+difference go away. That single loop is the whole runtime — which is why a node
+that falls behind catches up on its own rather than needing anybody to reach into
+it. Images are built on the fleet's own BuildKit, whose cache is local to the node
+and stays warm, and are deployed **by digest**, so "the new version" is a fact
+rather than a tag.
+
+## Star the Repository
+
+If Bay is useful to you, a star is the cheapest way to say so — and the thing that
+decides whether the next person finds it.
+
+<div align="center">
+<img src=".github/assets/star.gif" alt="Starring the thebaycloud/bay repository on GitHub" width="100%">
+</div>
+
+## Quickstart
+
+```bash
+npm install -g @thebaycloud/cli
+cd your-project
+bay ship --wait
+```
+
+<img src=".github/assets/ship.svg" alt="bay ship --wait: uploading, detecting Node, provisioning Postgres, building on the fleet, live URL" width="100%">
+
+<sup>A real `bay ship --wait` against [`examples/pgapp`](examples/pgapp), which is
+still up.</sup>
+
+The first run opens a browser once so you can sign in; after that the token is on
+disk and your agent inherits it. Without `--wait`, `ship` returns as soon as the URL
+is live and the build continues behind it; with `--wait` it stays attached and
+streams the build to completion, which is the mode to give an agent that needs to
+know the deploy finished before it does anything else.
+
+Two commands worth knowing before the first ship, because both are local — no
+cloud, no build, about two seconds each:
+
+```bash
+bay init     # writes a draft supersonic.json, and names what it could NOT determine
+bay check    # resolves and validates that file exactly as a deploy would
+```
+
+<img src=".github/assets/authoring.svg" alt="bay init writes a draft config and names what it could not determine; bay check prints what each phase would run" width="100%">
+
+`bay init` prints its open questions rather than guessing at them — which service
+owns `/`, whether a migration runs before traffic, which env names are secrets.
+None of those are answerable from files, and a guess would be indistinguishable
+from a decision.
+
+## Builds every service
+
+Postgres, MySQL, Mongo and Redis come up with your app, picked from what your code
+already imports. Object storage sits behind a CDN. Workers and cron run beside the
+web process, and a `release` phase runs before any traffic reaches it. You
+provision none of it.
+
+<img src=".github/assets/services.gif" alt="The Data view of a live app: its Postgres tables with row counts, and its storage bucket" width="100%">
+
+<sup>Nobody provisioned that database. It is one app's own Postgres, with the tables
+its code created, browsable from the app's page.</sup>
+
+The result of that pgapp deploy is live right now, and you can open it:
+**[xf4u7.thebay.cloud](https://xf4u7.thebay.cloud)**
+
+<img src=".github/assets/live-app.png" alt="The deployed app: pgapp is live, Postgres connected, auto-provisioned DB, visit counter" width="100%">
+
+| | |
+|---|---|
+| **Database** | Postgres / MySQL / Mongo / Redis, picked from your ORM |
+| **Auth** | end-user auth, owned by your app |
+| **Storage** | object storage behind a CDN |
+| **Secrets** | the only thing we ever ask you for |
+| **Jobs** | `release` before traffic, `worker` and `cron` alongside it |
+| **Domains** | `*.thebay.cloud` immediately, your own when you point it |
+| **Analytics** | who's in the app, embedded |
+| **Backups** | daily, with restore |
+
+## Hands your agent bug fixes
+
+Bay watches the app after it is live. When something breaks in production, it reads
+the logs and the repository together and returns an instruction written for the
+thing that wrote the code:
+
+```bash
+bay errors <app>     # production errors, last 7 days
+bay diagnose <app>   # a fix prompt, ready to paste into your coding agent
+```
+
+<img src=".github/assets/fix.gif" alt="A failed ship on the Ships screen: the error the pipeline hit, what it decided, and a fix prompt for the agent" width="100%">
+
+<sup>A real failed deploy. Bay says what broke, shows what the pipeline decided on
+the way there, and hands back the instruction — not a stack trace to interpret.</sup>
+
+`diagnose` does not print a stack trace and leave you to it. It prints the actual
+sentence — *migrations never ran, so the schema is empty; add a release step that
+runs them before the web process starts, then deploy again* — because a trace is
+the symptom and the agent needs the cause.
+
+## MCP and CLI instead of a dashboard
+
+Everything the dashboard does, the CLI does, and every command takes `--json`:
+
+```bash
+bay apps                          # everything you have shipped
+bay status <app>                  # revision, url, env, database
+bay logs <app> --follow           # what production actually saw, live
+bay share <app> add ada@acme.com  # let one person in, or a whole domain
+bay domains <app> add acme.com    # a domain you own, and the record to create
+bay db <app> --sql "select ..."   # its tables, row counts, one read-only statement
+bay exec <app> -- <command>       # run something in the app's environment
+bay rollback <app>                # back to the version that worked
+bay env <app> set KEY=VALUE       # secrets, never in the code
+```
+
+`bay help --all` lists the rest. Anything that can run a command can run your
+infrastructure — which is the point, because the thing running commands is usually
+not a person any more.
+
+**MCP is next.** Your agent will call Bay as tools instead of shelling out —
+deploy, read the logs, apply a fix, without leaving the editor it is already in.
+Not shipped yet, and labelled that way here for the same reason it is labelled that
+way on the site.
+
+## Watch it get built, at its own address
+
+The address answers **before the app does**. Until the app is ready, the URL you
+were handed serves the build itself, and every movement in it stands for one real
+line of that build.
+
+<img src=".github/assets/room-film.gif" alt="The Room: a harbour scene where a ship is built and launched, the live build log along the bottom and a stage counter" width="100%">
+
+<sup>Frames from one real build at `m1d9l.thebay.cloud`. The log along the bottom is
+that build's own output and the counter is its real stage. Only the owner sees this —
+send the link to anybody else and they get a page with no build on it.</sup>
+
+## Self-host something you already use
+
+Bay runs software you did not write as happily as software you did, and
+**self-hosting a public repository is free for the first year.**
+
+The [templates](https://thebay.cloud/templates) — Excalidraw, Open WebUI, Cal.com —
+are prompts rather than buttons. You copy one, your agent reads it, clones the
+source and ships it. No form and no dashboard step, since the agent is already
+holding everything the deploy needs.
+
+Each template page says up front what gets provisioned, which secrets are generated
+for you, and the one or two only you can supply. A one-click deploy that then
+demands a Google OAuth client is worse than a page that warned you.
+
+<br>
+
+---
+
+<div align="center"><sub><b>Everything below is how it is built.</b><br>
+Nothing above needs it.</sub></div>
 
 ---
 
 ## Read this before cloning
 
-**This repository is open to read, not to run.**
+**This repository is open to read, not yet to run.** Bay is welded to one Google
+Cloud project — Cloud Run, Cloud SQL, Cloud Build, Certificate Manager, Artifact
+Registry, Secret Manager and Compute for the fleet — not as configuration you could
+point elsewhere, but as the assumption underneath the code. There is no
+`docker compose up` and no local mode.
 
-Bay is welded to one Google Cloud project. Cloud Run, Cloud SQL, Cloud Build,
-Certificate Manager, Artifact Registry, Secret Manager, and Compute instances for the
-fleet — not as configuration you could point elsewhere, but as the assumption underneath
-the code. There is no `docker compose up`, no local mode, and no seam where another
-provider would go.
+You can read every line and run the test suites. You cannot stand up your own copy
+without a GCP project, billing, and a day of work nobody has written down yet. That
+is said here rather than discovered after a clone. If self-hosting Bay itself
+matters to you, [open an issue](https://github.com/thebaycloud/bay/issues) — it is
+a question of demand, not of principle.
 
-You can read every line, run the test suites, and follow how the thing is built. You
-cannot stand up your own copy without a GCP project, billing, and a day of work that
-nobody has written down yet.
-
-That is said here rather than discovered after a clone. If self-hosting matters to you,
-[open an issue](https://github.com/thebaycloud/bay/issues) — it is a question of demand,
-not of principle.
-
----
-
-## What is in here
+## Repository
 
 | Path | What it is |
 |---|---|
-**`apps/` — what a person opens**
+| `apps/web` | **The control plane.** API, dashboard, deploy pipeline, build orchestration, billing, GitHub integration. Next.js 14 · Postgres · NextAuth. Every decision the platform makes happens here — including `lib/buildplane.ts`, which drives BuildKit |
+| `apps/landing` | [thebay.cloud](https://thebay.cloud) — the marketing site, changelog, self-host templates, and `/llms.txt`, the manual coding agents read |
+| `packages/cli` | `bay` — the CLI on npm ([MIT](packages/cli/LICENSE)) |
+| `packages/detector` | The stack detector. One implementation, compiled into the CLI at publish time so the CLI and the server cannot disagree about what a project is |
+| `packages/prompts` | The rules handed to coding agents. One source, copied into each app by `scripts/sync-prompt-rules.mjs` |
+| `services/fleet` | `supersonicd` — the Go agent on each VM: reconcile loop, sandboxes, router. Plus the node image and `fleetctl.sh` |
+| `services/proxy` | The front door. Resolves a hostname to an app, decides who may open it, and serves the Room |
+| `services/static` | Serves static apps out of a bucket |
+| `services/screenshots` | One screenshot per app after it deploys, for the dashboard |
+| `scripts/` | The GCP setup scripts — the domain, the deploy worker, the deploy job, BuildKit provisioning |
+| `examples/` | Small apps used as deploy fixtures, including ones that are broken on purpose |
+| `adrs/` | Where a contribution starts. See [CONTRIBUTING.md](CONTRIBUTING.md) |
+| `docs/` | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`VM-FLEET.md`](docs/VM-FLEET.md), and the [ADRs](docs/adr) |
 
-| Path | What it is |
-|---|---|
-| `apps/web` | The control plane. Next.js: the dashboard, the API, the deploy pipeline, billing, GitHub integration. Everything the platform decides happens here. Named `web` for the monorepo convention, not because it is only a website. |
-| `apps/landing` | [thebay.cloud](https://thebay.cloud) itself. Also serves `/llms.txt`, the manual coding agents read. |
+Two documents are worth reading before you change anything:
 
-**`services/` — what runs continuously**
+- [`CONTEXT.md`](CONTEXT.md) — the vocabulary. There are two languages here,
+  platform and product, and they do not mix. A word in the wrong one is a bug.
+- [`AGENTS.md`](AGENTS.md) — how agents work in this repo: the issue tracker,
+  the triage labels, where domain docs live.
 
-| Path | What it is |
-|---|---|
-| `services/proxy` | The edge. Resolves a hostname to an app, checks who is asking, injects the badge and the owner's toolbar. |
-| `services/fleet` | The Go agent on each VM: pulls images, starts processes, routes requests to them. **Fleet** is a defined term — see `CONTEXT.md`. |
-| `services/static` | Serves static sites. |
-| `services/screenshots` | Thumbnails of live apps. |
+## Local development
 
-**`packages/` — libraries and tools**
+```bash
+git clone https://github.com/thebaycloud/bay.git && cd bay
+```
 
-| Path | What it is |
-|---|---|
-| `packages/cli` | `@thebaycloud/cli` — the `bay` command. |
-| `packages/detector` | Reads a repository and works out what it is: language, framework, runtime, install, build, start, database. Deterministic — no model, no network. The CLI bundles the same source, so `bay check` answers what the server would answer. |
-| `packages/prompts` | The sentences every prompt and agent document here restates. |
+The control plane talks to two Cloud SQL instances — its own tables on one,
+every app's database on the other — so running `apps/web` against real data means
+one `cloud-sql-proxy` per instance:
 
-**And**
-
-| Path | What it is |
-|---|---|
-| `scripts/` | Setup and provisioning, run by hand. Includes `scripts/buildkit`, which provisions the long-lived BuildKit host builds go through. |
-| `examples/` | Small apps used as deploy fixtures — a broken one, a Postgres one, a static one. |
-| `docs/` | Architecture, decision records, plans, and the research behind them. |
-
-## How this code is written
-
-Worth knowing before reading it, because it is unusual and deliberate.
-
-**Comments explain WHY, at length, and often name the incident that caused the code.**
-`lib/source.ts` explains which repository broke a build on 10 August and why the fix
-lives where it does. `lib/apps.ts` explains which column, added in which migration, would
-have failed every deploy at go-live. These are not decoration — they are the reason the
-codebase can be changed safely by somebody who was not there.
-
-**`CONTEXT.md` is the vocabulary.** One glossary, two languages: what the tables and logs
-say, and what a person reads. A term in both means the same thing in both. New terms are
-added when they are resolved, not in batches.
-
-**`docs/adr/`** holds the decisions that were argued rather than assumed — why a domain
-somebody owns is a row the edge looks up, why a GitHub connection is an installation a
-workspace owns.
-
-## Working on it
+```bash
+cloud-sql-proxy -g --port 5433 <project>:<region>:supersonic-platform-pg
+cloud-sql-proxy -g --port 5434 <project>:<region>:supersonic-shared-pg
+```
 
 ```bash
 cd apps/web
 npm install
-npm test          # 1500+ tests, node:test, no framework
-npx tsc --noEmit
+npm run dev        # http://localhost:3000
+npm test
+npm run lint
+npm run deadcode   # knip
 ```
 
-Every package has its own suite:
+Migrations in `apps/web/db/*.sql` are applied deliberately, never automatically:
 
 ```bash
-cd packages/cli   && npm test
-cd services/proxy && npm test
-cd services/fleet/agent && go test ./...
+npm run db:migrate
 ```
 
-One caveat, and it costs an afternoon if nobody tells you:
-`apps/web/test/deploy-pipeline.test.ts` **hangs when run alone** and passes as part of
-`npm test`. Do not chase it, and do not trust a solo run of that file either.
+> **Careful:** never run the `apps/web` suite under `git bisect run` — the
+> fixtures write into the real `.git`.
 
-`npm run dev` starts the dashboard, but most of it needs a database. The platform's
-Postgres is reached through a Cloud SQL proxy on port 5433 — which brings you back to
-needing the GCP project.
+**No GCP account?** Most of the repo doesn't need one. The CLI, the fleet agent
+and the fixtures all build and test on their own:
 
-## Security
+```bash
+cd packages/cli         && npm install && npm test
+cd services/fleet/agent && go build ./... && go test ./...
+cd apps/landing         && npm install && npm run dev
+```
 
-Reporting a vulnerability: **`SECURITY.md`**. Private reporting is enabled on
-this repository — please use it rather than a public issue.
+CI runs all of it on every pull request.
 
-Note that `docs/` holds historical documents. Several describe security
-weaknesses in present tense that were closed when the Cloud Run application
-lane was removed on 16 August 2026. `SECURITY.md` names the two that get
-reported most.
+## Contributing
 
-## Status
+**We take contributions as human-written text, not code** — see
+[CONTRIBUTING.md](CONTRIBUTING.md). Describe the change you would like informally
+in a `.txt` or `.md` file in [`adrs/`](adrs/) and open a pull request with just
+that file. If we are aligned, we handle the implementation.
 
-In production, serving real apps. Small: a handful of apps and users at the time of
-writing.
+That is not a filter on your writing. A change to the deploy pipeline, the edge, or
+the fleet agent lands on live tenant applications minutes after it merges, and
+reviewing a patch against that costs more than reading a paragraph does.
 
-The name changed from Supersonic to Bay on 24 August 2026. `supersonic.cv` still answers
-and redirects, `<slug>.supersonic.cv` still serves the apps that were deployed there, and
-the old CLI still works — the old names are read everywhere the new ones are written, and
-they come out when the people using them have been told, not when the code looks tidy.
+Bugs are [issues](https://github.com/thebaycloud/bay/issues). Vulnerabilities are
+private — [SECURITY.md](SECURITY.md), never a public issue. Before writing anything
+here, read [`CONTEXT.md`](CONTEXT.md) and match the vocabulary.
+
+## License
+
+[AGPL-3.0](LICENSE), except `packages/cli`, which is [MIT](packages/cli/LICENSE)
+so it can be installed anywhere without pulling its licence along.

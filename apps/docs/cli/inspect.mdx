@@ -1,0 +1,52 @@
+---
+title: "Inspecting"
+description: "bay apps, status, logs, errors, diagnose, exec."
+---
+
+```bash
+bay apps                # list your apps
+bay status <app>        # revision, url, env, database
+bay open <app>          # open it in a browser
+```
+
+## Logs
+
+```bash
+bay logs <app>
+bay logs <app> --severity error --limit 50 --since 1h
+bay logs <app> --follow
+```
+
+## Errors
+
+```bash
+bay errors <app>        # production errors, last 7 days
+```
+
+## Diagnose
+
+```bash
+bay diagnose <app>
+bay diagnose <app> --error "TypeError: cannot read property 'id' of undefined"
+```
+
+Produces a fix-prompt aimed at **your own** coding agent, holding the error, the
+surrounding logs and what Bay knows about how the app is built. Bay does not
+silently commit to your source.
+
+## Exec
+
+```bash
+bay exec <app> -- <command>
+```
+
+Runs a command in the app's environment — the same variables and the same
+database credentials — isolated from the running app.
+
+```bash
+bay exec my-app -- npx prisma migrate status
+```
+
+<Tip>
+Every command on this page takes `--json`, which is how an agent reads them.
+</Tip>

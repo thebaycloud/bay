@@ -1,0 +1,69 @@
+---
+title: "Resources"
+description: "What is provisioned once per app, and how to bring your own."
+---
+
+`resources` is provisioned **once per app**, not once per service. Two services
+declaring `uses: ["database"]` share one database.
+
+```json
+{
+  "resources": {
+    "database": { "engine": "postgres" },
+    "bucket": true
+  }
+}
+```
+
+## A database Bay owns
+
+<ResponseField name="database.provider" type='"managed"' default="managed">
+  Bay creates it, owns it, and injects the credentials.
+</ResponseField>
+
+<ResponseField name="database.engine" type='"postgres"' required />
+
+<ResponseField name="database.version" type="string" />
+
+This is the zero-config path, and usually you write nothing at all: import `pg`
+or `psycopg` or Prisma, and detection provisions Postgres because the dependency
+is the declaration.
+
+Each app connects as its own role — `app_<slug>` — and no other app can reach it.
+
+## A database that already exists
+
+The mode that matters if you are already on Supabase, Neon or RDS:
+
+```json
+{
+  "resources": {
+    "database": {
+      "provider": "external",
+      "engine": "postgres",
+      "urlFrom": "DATABASE_URL"
+    }
+  }
+}
+```
+
+<ResponseField name="database.urlFrom" type="string" required>
+  The **secret name** holding the connection URL — never the URL itself.
+
+  Bay does not need to know your connection string, only that a value exists
+  under that name and reached the revision. So the credential travels the same
+  path as every other secret and is never committed to a file.
+</ResponseField>
+
+<Note>
+`provider: "external"` means Bay provisions nothing and touches nothing. It was
+inexpressible before, and its absence excluded every app that already had
+infrastructure of its own.
+</Note>
+
+## A bucket
+
+<ResponseField name="bucket" type="boolean">
+  Object storage behind a CDN. Credentials are injected into every service that
+  lists `"bucket"` in `uses`.
+</ResponseField>

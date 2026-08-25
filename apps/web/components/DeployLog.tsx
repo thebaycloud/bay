@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CircleAlert, CircleCheck, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FixPrompt } from "@/components/FixPrompt";
 
 /**
  * What the last deploy did, as a transcript.
@@ -32,7 +33,15 @@ interface Transcript {
   error?: string;
 }
 
-export function DeployLog({ slug }: { slug: string }) {
+export function DeployLog({
+  slug,
+  /** The failure as the app list knows it, so the prompt can be asked for before
+   *  the transcript has finished loading. */
+  error: known,
+}: {
+  slug: string;
+  error?: string | null;
+}) {
   const [t, setT] = useState<Transcript | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -101,6 +110,13 @@ export function DeployLog({ slug }: { slug: string }) {
         <pre className="overflow-x-auto rounded-xl border border-red/30 bg-red/5 p-3 font-mono text-[12px] leading-[1.55] text-ink">
           {d.error}
         </pre>
+      ) : null}
+
+      {/* And immediately under it, the thing to do about it. Somebody who
+          followed "Look at it" from a failed ship came here to act, not to read:
+          the prompt goes above both transcripts rather than at the end of them. */}
+      {t.failed || d?.error || known ? (
+        <FixPrompt error={d?.error ?? known ?? null} slug={slug} />
       ) : null}
 
       {t.narration.length > 0 ? (

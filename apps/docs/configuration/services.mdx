@@ -1,0 +1,128 @@
+---
+title: "Services"
+description: "One entry per thing that gets built and run."
+---
+
+A service is one buildable, runnable unit. A monorepo with a web app and an API
+is two services in one app, on one hostname, split by path.
+
+## Identity and location
+
+<ResponseField name="name" type="string">
+  What this service is called. Used in logs and in `bay check` output.
+</ResponseField>
+
+<ResponseField name="dir" type="string" default=".">
+  Where this service's commands run, relative to the repository root.
+</ResponseField>
+
+<ResponseField name="path" type="string" default="/">
+  The path prefix this service serves, on the app's single hostname.
+
+  Path routing rather than a hostname each: same origin means no CORS, and
+  nothing to bake into a frontend bundle at build time.
+</ResponseField>
+
+## What it is
+
+<ResponseField name="language" type='"node" | "python" | "static" | "other"' />
+
+<ResponseField name="runtime" type="string">
+  The interpreter or SDK this service needs — `python3.12`, `node22`, `java21`.
+
+  Declared rather than detected, because the platform has exactly one version of
+  each and the app is the only thing that knows which it was written against.
+  Without it the pipeline notices a mismatch, logs that the build will probably
+  fail on it, and builds anyway.
+</ResponseField>
+
+<ResponseField name="framework" type="string">
+  One token that lets Bay inject proxy-awareness — `ALLOWED_HOSTS` for Django,
+  `basePath` for Next, `ROOT_PATH` for FastAPI.
+
+  Not decoration and not detection-as-a-service: an app behind a TLS-terminating
+  proxy cannot configure itself for a proxy it has no way to know exists, so
+  somebody has to say which mapping applies, and only the app knows.
+</ResponseField>
+
+## The phases
+
+<ResponseField name="install" type="string" />
+<ResponseField name="build" type="string" />
+
+<ResponseField name="release" type="string">
+  One-shot steps that run **once per deploy, before any traffic** — migrations,
+  above all.
+
+  Separate from `start` because folding a migration into the start command
+  re-runs it on every cold start and every scale-out instance, concurrently.
+  Prisma takes an advisory lock and survives that; Alembic does not.
+</ResponseField>
+
+<ResponseField name="start" type="string">
+  The long-running command. Serves HTTP on `$PORT`.
+</ResponseField>
+
+<ResponseField name="processes" type="object">
+  What this service runs beyond one web process — workers and crons, keyed by
+  name. See [Processes](/configuration/processes).
+</ResponseField>
+
+## Static services
+
+<ResponseField name="outputDir" type="string">
+  The built directory, relative to `dir`.
+</ResponseField>
+
+<ResponseField name="spaFallback" type="boolean">
+  Serve `index.html` for a path that matches no file.
+
+  Without it a React Router app 404s on a refresh at `/about` — and nothing in
+  the config can infer this, because the same directory is a correct answer for a
+  multi-page site and a broken one for an SPA.
+</ResponseField>
+
+## Bringing your own image
+
+<ResponseField name="dockerfile" type="string">
+  A Dockerfile relative to the repository root.
+</ResponseField>
+
+<ResponseField name="context" type="string" default="dir">
+  The build context that Dockerfile expects.
+</ResponseField>
+
+## Values
+
+<ResponseField name="env" type="object">
+  Non-secret literals, committed, deploy-shaping — `NODE_ENV`, `LOG_LEVEL`.
+</ResponseField>
+
+<ResponseField name="buildEnv" type="object">
+  Baked into the bundle at **build** time and useless at runtime — `VITE_*`,
+  `NEXT_PUBLIC_*`. A separate field because they are set at a different moment:
+  setting them after the build means the build ran without them and the value
+  never reached the shipped JavaScript.
+</ResponseField>
+
+<ResponseField name="secrets" type="string[]">
+  Secret **names**, never values. Enforced: a name declared here and missing at
+  deploy time fails before the build, rather than at runtime.
+</ResponseField>
+
+<ResponseField name="uses" type='("database" | "bucket" | "redis" | "elasticsearch")[]'>
+  Which shared resources this service receives credentials for. This is the unit
+  that per-app database isolation is scoped to.
+</ResponseField>
+
+## Health and size
+
+<ResponseField name="health" type="object">
+  `{ "path": "/", "expect": 200 }`. What "the app responds" means — so success
+  stops meaning "the process did not exit".
+</ResponseField>
+
+<ResponseField name="scale" type="object">
+  `memory`, `cpu`, `maxInstances`, `timeout`, `concurrency`, `cpuBoost`. Every
+  field optional; declaring one overrides only that one.
+</ResponseField>
