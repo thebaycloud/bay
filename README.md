@@ -10,6 +10,7 @@ work that out, ship it to a real address, and keep it alive.
 [![npm](https://img.shields.io/npm/v/@thebaycloud/cli?label=%40thebaycloud%2Fcli&color=e63f2c)](https://www.npmjs.com/package/@thebaycloud/cli)
 [![installs](https://img.shields.io/npm/dm/@thebaycloud/cli?label=installs&color=e63f2c)](https://www.npmjs.com/package/@thebaycloud/cli)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-e63f2c)](LICENSE)
+[![is-agentic](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fis-agentic.com%2Fapi%2Fv1%2Freport%3Furl%3Dhttps%3A%2F%2Fthebay.cloud&query=%24.score&suffix=%2F100&label=is-agentic&color=e63f2c)](https://is-agentic.com/scan/thebay.cloud)
 
 [**thebay.cloud**](https://thebay.cloud) · [Templates](https://thebay.cloud/templates) · [Changelog](https://thebay.cloud/changelog)
 
