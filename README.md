@@ -10,8 +10,9 @@ work that out, ship it to a real address, and keep it alive.
 [![npm](https://img.shields.io/npm/v/@thebaycloud/cli?label=%40thebaycloud%2Fcli&color=e63f2c)](https://www.npmjs.com/package/@thebaycloud/cli)
 [![installs](https://img.shields.io/npm/dm/@thebaycloud/cli?label=installs&color=e63f2c)](https://www.npmjs.com/package/@thebaycloud/cli)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-e63f2c)](LICENSE)
+[![docs](https://img.shields.io/badge/docs-bay.mintlify.app-e63f2c)](https://bay.mintlify.app)
 
-[**thebay.cloud**](https://thebay.cloud) · [Templates](https://thebay.cloud/templates) · [Changelog](https://thebay.cloud/changelog)
+[**thebay.cloud**](https://thebay.cloud) · [Docs](https://bay.mintlify.app) · [Templates](https://thebay.cloud/templates) · [Changelog](https://thebay.cloud/changelog)
 
 <br>
 
