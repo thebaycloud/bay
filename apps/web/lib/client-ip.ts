@@ -22,21 +22,25 @@
 /**
  * How far from the END of the list the trustworthy address sits.
  *
- * NOT YET MEASURED. Zero — the last element — is the shape Cloud Run's
- * behaviour is expected to produce for a service reached through a domain
- * mapping, and it is a default rather than a fact.
+ * MEASURED, 25 Aug 2026, against a throwaway Cloud Run service in this project
+ * that echoed the header back — not read out of any documentation. Three
+ * requests, from one client at 88.225.225.125:
  *
- * The measurement is task 3 of docs/superpowers/plans/2026-08-25-rate-limiting.md:
- * a throwaway Cloud Run service that echoes the header, curled once honestly
- * and once with a forged value, checked against `httpRequest.remoteIp` in the
- * request log — the field Google computes rather than one the request carries.
+ *   no header sent            → `88.225.225.125`
+ *   `X-Forwarded-For: A`      → `A,88.225.225.125`
+ *   `X-Forwarded-For: A, B`   → `A, B,88.225.225.125`
  *
- * Until that is done, RATE_LIMIT_MODE must stay `off`. A wrong offset costs
- * nothing while nothing is counted; the moment counting starts it silently
- * poisons the very numbers the real ceilings get chosen from, and the moment
- * enforcement starts it is the difference between a limiter and a decoration.
+ * Google appends the address it accepted the connection from, at the END, and
+ * appends it however many entries the caller invented. Cross-checked against
+ * `httpRequest.remoteIp` in the Cloud Run request log — the field the platform
+ * computes rather than one the request carries — which read 88.225.225.125 for
+ * all three. So the honest value is the last element: zero from the end.
  *
- * It must also be re-measured if the control plane ever moves behind a load
+ * Read the second line of that table again before changing anything here. Under
+ * a first-element rule, the attacker's `A` is the key, every request can pick a
+ * different one, and no bucket ever fills.
+ *
+ * It must be re-measured if the control plane ever moves behind a load
  * balancer, because that adds a hop and shifts the offset.
  */
 export const TRUSTED_FROM_END = 0;

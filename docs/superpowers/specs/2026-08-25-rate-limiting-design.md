@@ -181,14 +181,24 @@ protection is worth zero and reads as green.
 *"`x-forwarded-host` is set by our proxy and by anybody else who feels like
 it."*
 
-**This must be settled by measurement before the limiter ships.** Log the raw
-header on one route, compare against `httpRequest.remoteIp` in the Cloud Run
-request log — the value Google computes rather than one the request carries —
-and only then fix the parsing rule. Reading the documentation is not the check.
-This repository's own rule is to run the check rather than read for it, and the
-handoff's opening section is three incidents that came from doing the reverse.
+**SETTLED BY MEASUREMENT, 25 Aug 2026.** A throwaway Cloud Run service in this
+project echoed the header back to one client at 88.225.225.125:
 
-Until measured, the parse rule is an open question, not a design decision.
+| sent | received |
+|---|---|
+| nothing | `88.225.225.125` |
+| `X-Forwarded-For: A` | `A,88.225.225.125` |
+| `X-Forwarded-For: A, B` | `A, B,88.225.225.125` |
+
+Google appends the address it accepted the connection from, at the end, however
+many entries the caller invented. Cross-checked against `httpRequest.remoteIp`
+in the Cloud Run request log, which read 88.225.225.125 for all three. The
+trustworthy value is the last element: `TRUSTED_FROM_END = 0`.
+
+The probe was used rather than the documentation, and rather than instrumenting
+a production route, deliberately: this repository's rule is to run the check
+rather than read for it, and the previous handoff's opening section is three
+incidents that came from doing the reverse. The service was deleted afterwards.
 
 ### Connection points
 

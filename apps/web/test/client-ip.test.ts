@@ -63,10 +63,18 @@ test("an empty or comma-only header is null, not an empty-string bucket", () => 
   assert.equal(clientIp(req(" , , ")), null);
 });
 
-test("the trusted offset is still the unmeasured one", () => {
-  // A tripwire, not a preference. TRUSTED_FROM_END is currently a default and
-  // not a measurement; the day somebody runs the probe in task 3 and changes
-  // it, this test fails and makes them read the comment explaining that
-  // enforcement was waiting on exactly that number.
+test("the trusted offset is the one that was measured", () => {
+  // Not a preference: 0 is what a Cloud Run probe returned on 25 Aug 2026, and
+  // lib/client-ip.ts records the three requests it came from. Changing this
+  // number without re-running that probe is the change this test exists to
+  // stop, because the wrong offset produces a limiter that looks like it works.
   assert.equal(TRUSTED_FROM_END, 0);
+});
+
+test("the shape Cloud Run actually produced is the shape parsed", () => {
+  // The measured strings themselves, verbatim from the probe. One client at
+  // 88.225.225.125 sending nothing, one forged entry, then two.
+  assert.equal(clientIp(req("88.225.225.125")), "88.225.225.125");
+  assert.equal(clientIp(req("203.0.113.9,88.225.225.125")), "88.225.225.125");
+  assert.equal(clientIp(req("203.0.113.9, 198.51.100.1,88.225.225.125")), "88.225.225.125");
 });
