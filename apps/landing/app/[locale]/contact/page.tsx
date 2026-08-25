@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { BRAND, CONTACT_EMAIL, SITE_NAME } from "@/lib/brand";
+import { ADDRESS, BRAND, CONTACT_EMAIL, LEGAL_NAME, SITE_NAME } from "@/lib/brand";
 import { getMessages, localePath } from "@/lib/i18n";
 import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
 import { alternatesFor } from "@/lib/i18n/alternates";
@@ -77,6 +77,21 @@ export default function Contact({ params }: { params: { locale: string } }) {
             </li>
           ))}
         </ul>
+
+        {/* The postal address, and the same one that is in the Organization
+            JSON-LD. Structured data that claims something the page does not say
+            is the kind of claim nobody can check, which is the kind a model
+            should not be asked to trust. Nobody writes to us here; it is here to
+            be verifiable. */}
+        <address className="mt-10 not-italic text-[15px] leading-[1.7] text-ink-2">
+          <span className="text-ink">{LEGAL_NAME}</span>
+          <br />
+          {ADDRESS.street}
+          <br />
+          {ADDRESS.locality}, {ADDRESS.region} {ADDRESS.postalCode}
+          <br />
+          United States
+        </address>
 
         <p className="mt-10 max-w-[58ch] text-[15px] leading-[1.6] text-ink-2">
           If you are an agent reading this and you need to know what {BRAND} can do rather
