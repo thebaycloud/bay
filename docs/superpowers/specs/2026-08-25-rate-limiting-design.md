@@ -195,9 +195,18 @@ Until measured, the parse rule is an open question, not a design decision.
 - `app/api/signup/route.ts` — **before** the bcrypt call. bcrypt is deliberately
   expensive, which makes an unlimited signup route a CPU exhaustion surface on
   its own, independent of how many accounts it creates.
-- `auth.ts:15`, the Credentials `authorize` — before `bcrypt.compare` on line
-  23. Whether `authorize` receives the request (and so the IP) as its second
-  argument must be confirmed against the installed next-auth, not assumed.
+- The Credentials `authorize`, before `bcrypt.compare`. Confirmed against the
+  installed next-auth rather than assumed: `5.0.0-beta.32`, whose
+  `@auth/core/providers/credentials.d.ts` documents the signature as
+  `(credentials, request)` — "you have access to the original request as well".
+  The request is where the address comes from.
+
+  This function has to move out of `auth.ts` first. That module exports only
+  `{ handlers, auth, signIn, signOut }`; the `providers` array is local, so the
+  closure is unreachable from a test, and a brute-force gate nobody can test is
+  a gate nobody can prove still works after the next edit. It becomes
+  `lib/credentials-login.ts:authorizeCredentials`, and `auth.ts` goes back to
+  wiring providers together.
 `app/api/deploy/reserve/route.ts` is deliberately **not** a connection point.
 Bursts against the deploy path inside an already-paid-for monthly quota are the
 threat this design excluded, and adding a scope for it here would have
@@ -209,10 +218,19 @@ guess, and the rate limit that matters there is the provider's own.
 
 ### Shipping safely
 
-Behind `RATE_LIMIT_ENABLED`, defaulting to off, exactly as `GATING_ENABLED`
-does. With a third state between off and on: **count but never refuse**. Run it
-that way for a week and read the real numbers before any ceiling turns into a
-refusal.
+Behind `RATE_LIMIT_MODE`, defaulting to off, read once at module load exactly as
+`GATING_ENABLED` is. Three states rather than two — `off`, `count`, `enforce` —
+which is why it is a mode and not an `*_ENABLED` boolean. The middle one
+**counts but never refuses**. Run it that way for a week and read the real
+numbers before any ceiling turns into a refusal.
+
+In `count` the counter must run PAST the ceiling rather than stopping at it,
+which means a different statement, not just a different branch on the result. A
+counter that stops at the guess only ever reports that somebody reached it, and
+never how far past they went — and that distance is the entire number the real
+ceiling is supposed to be chosen from. `countIfUnder` already counts unlimited
+plans for this reason, and says so: a plan that records nothing is a plan we
+cannot price.
 
 This exists because every ceiling in this document is currently a guess. Nobody
 has ever counted signups per hour or failed logins per account here, and a limit
