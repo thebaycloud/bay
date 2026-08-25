@@ -1,4 +1,5 @@
 import type { NextAuthConfig } from "next-auth";
+import { notAuthenticated } from "./lib/api-error";
 
 const PROD = process.env.NODE_ENV === "production";
 
@@ -81,9 +82,24 @@ export const authConfig = {
         // send, and the route verifies an HMAC over the raw body before it
         // touches anything. The rest of /api/github stays behind the gate —
         // those routes answer a person, and a person has a session.
-        p.startsWith("/api/github/webhook");
+        p.startsWith("/api/github/webhook") ||
+        // The API's own description. It documents the surface a client needs a
+        // token to use, and describes nothing that is not already public — and
+        // a description you must already be authenticated to read is a
+        // description nobody discovers. Behind the gate it 307s to /login and
+        // every client that went looking for it finds a sign-in page instead.
+        p === "/openapi.json";
       if (isPublic) return true;
-      return !!auth?.user;
+      if (auth?.user) return true;
+
+      // Everything under /api answers a program, and a program cannot read a
+      // sign-in page. Returning `false` here hands it a 307 to /login and an
+      // HTML body — which is indistinguishable, to anything parsing JSON, from
+      // the request having worked. next-auth uses a Response returned from this
+      // callback as the answer, so the gate can say what it means instead.
+      if (p.startsWith("/api/")) return notAuthenticated();
+
+      return false;
     },
     session({ session, token }) {
       if (token.sub && session.user) (session.user as { id?: string }).id = token.sub;

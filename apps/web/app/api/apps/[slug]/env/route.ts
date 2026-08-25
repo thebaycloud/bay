@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
  * running app. The second is much worse than the first, and with
  * FLEET_PLACEMENT=1 every new app now lands where it applies.
  */
+import { forbiddenBody } from "@/lib/api-error";
 import { describeService, setEnv } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
@@ -24,7 +25,7 @@ import { withCors, optionsHandler } from "@/lib/cors";
 async function getHandler(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ keys: [], error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ keys: [], ...forbiddenBody() }, { status: 403 });
   try {
     // Shared with chat's `keys` tool, which used to call describeService alone and
     // therefore answered "no environment keys configured" about every fleet app.
@@ -64,7 +65,7 @@ async function getHandler(_req: Request, { params }: { params: { slug: string } 
 async function postHandler(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json(forbiddenBody(), { status: 403 });
   const { set = {}, unset = [] } = await req.json().catch(() => ({}));
   try {
     const target = await deployTargetForApp(slug);

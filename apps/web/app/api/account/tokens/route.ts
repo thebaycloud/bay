@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { notAuthenticatedBody } from "@/lib/api-error";
 import { currentUserId } from "@/lib/session";
 import { listTokens, revokeToken } from "@/lib/cli-tokens";
 
@@ -8,13 +9,13 @@ import { listTokens, revokeToken } from "@/lib/cli-tokens";
 // creating a token stays a deliberate `supersonic login` browser flow.
 export async function GET() {
   const uid = await currentUserId();
-  if (!uid) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!uid) return Response.json(notAuthenticatedBody(), { status: 401 });
   return Response.json({ tokens: await listTokens(uid) });
 }
 
 export async function POST(req: Request) {
   const uid = await currentUserId();
-  if (!uid) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!uid) return Response.json(notAuthenticatedBody(), { status: 401 });
   const body = await req.json().catch(() => ({}));
   const id = String(body.revoke ?? "");
   if (!id) return Response.json({ error: "missing token id" }, { status: 400 });

@@ -28,14 +28,28 @@ type Authorized = NonNullable<NonNullable<typeof authConfig.callbacks>["authoriz
 const authorized = authConfig.callbacks!.authorized! as Authorized;
 
 /** The callback only reads pathname, method and one header. */
-function allows(pathname: string, signedIn = false): boolean {
+function answer(pathname: string, signedIn = false) {
   const request = {
     nextUrl: { pathname },
     method: "GET",
     headers: new Headers(),
   } as unknown as Parameters<Authorized>[0]["request"];
   const auth = (signedIn ? { user: { id: "u1" } } : null) as Parameters<Authorized>[0]["auth"];
-  return Boolean(authorized({ auth, request }));
+  return authorized({ auth, request });
+}
+
+/**
+ * Whether the gate lets the request through.
+ *
+ * NOT `Boolean(...)`. The callback has three answers now, not two: `true` waves
+ * the request on, `false` sends a person to /login, and a Response is the gate
+ * answering for itself — which is what a refused API call gets, so that a
+ * program receives a 401 in JSON instead of a sign-in page. A Response is
+ * truthy, so coercing it would read a refusal as permission, which is the one
+ * mistake this file exists to catch.
+ */
+function allows(pathname: string, signedIn = false): boolean {
+  return answer(pathname, signedIn) === true;
 }
 
 const MUST_BE_PUBLIC = [
@@ -82,5 +96,21 @@ test("everything else still needs a session", () => {
   for (const p of MUST_BE_GATED) {
     assert.equal(allows(p), false, `${p} is reachable signed out`);
     assert.equal(allows(p, true), true, `${p} refuses a signed-in user`);
+  }
+});
+
+test("a gated page is refused with a redirect and a gated API with a 401", async () => {
+  // The two halves of "refused" and why they differ: a person can read a
+  // sign-in page, and a program cannot. `false` here means next-auth 307s to
+  // /login; a Response means the gate answered in JSON. See lib/api-error.ts.
+  for (const p of MUST_BE_GATED) {
+    const refusal = await answer(p);
+    if (p.startsWith("/api/")) {
+      assert.ok(refusal instanceof Response, `${p} refuses a program with a sign-in page`);
+      assert.equal(refusal.status, 401);
+      assert.equal((await refusal.json()).code, "not_authenticated");
+    } else {
+      assert.equal(refusal, false, `${p} no longer redirects a signed-out person to /login`);
+    }
   }
 });

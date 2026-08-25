@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
+import { forbiddenBody } from "@/lib/api-error";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +35,7 @@ function run(cmd: string, args: string[]) {
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json(forbiddenBody(), { status: 403 });
 
   let { error } = await req.json().catch(() => ({}));
   if (!error) {

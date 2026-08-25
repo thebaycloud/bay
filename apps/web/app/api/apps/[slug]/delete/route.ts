@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
+import { forbiddenBody } from "@/lib/api-error";
 import { deleteApp } from "@/lib/gcloud";
 import { getAppBySlug } from "@/lib/apps";
 import { getPool } from "@/lib/db";
@@ -17,7 +18,7 @@ import { detachAllDomains } from "@/lib/domains";
 async function postHandler(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid) return Response.json(forbiddenBody(), { status: 403 });
 
   // Ownership from the apps table — authoritative for BOTH lanes. The old check
   // asked Cloud Run about a service named <slug>, which static apps don't have,
@@ -34,7 +35,7 @@ async function postHandler(_req: Request, { params }: { params: { slug: string }
   // recorded for the slug is on the deploy row.
   const owns = app ? app.owner_id === uid
     : (await ownsApp(slug, uid)) || (await deployOwner(slug)) === uid;
-  if (!owns) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!owns) return Response.json(forbiddenBody(), { status: 403 });
 
   try {
     // Stop the deploy that is running right now, before anything is torn down.

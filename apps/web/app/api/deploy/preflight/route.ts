@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { notAuthenticatedBody } from "@/lib/api-error";
 import { cloudRunName } from "@/lib/slug";
 import { currentUserId } from "@/lib/session";
 import { resolveSlug } from "@/lib/gcloud";
@@ -22,7 +23,7 @@ import { appUrl } from "@/lib/brand";
  */
 export async function POST(req: Request) {
   const ownerId = await currentUserId();
-  if (!ownerId) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!ownerId) return Response.json(notAuthenticatedBody(), { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const hash = String(body.hash ?? "").trim().toLowerCase();

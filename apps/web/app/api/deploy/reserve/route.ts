@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
  * before a single byte is built. The real deploy then runs against the SAME slug
  * (pass it back as `body.slug` to /api/deploy) and publishes onto it.
  */
+import { notAuthenticatedBody } from "@/lib/api-error";
 import { currentUserId } from "@/lib/session";
 import { resolveSlug } from "@/lib/gcloud";
 import { createAppRecord } from "@/lib/apps";
@@ -23,7 +24,7 @@ import { appUrl } from "@/lib/brand";
 
 export async function POST(req: Request) {
   const uid = await currentUserId();
-  if (!uid) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!uid) return Response.json(notAuthenticatedBody(), { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const name = String(body.name ?? body.repo ?? "app").trim() || "app";

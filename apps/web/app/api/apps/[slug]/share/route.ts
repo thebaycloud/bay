@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { forbiddenBody } from "@/lib/api-error";
 import {
   getAppBySlug, setVisibility,
   listGrants, addGrant, removeGrant,
@@ -76,7 +77,7 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
   const slug = decodeURIComponent(params.slug);
   const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
-  if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
+  if (!app) return Response.json(forbiddenBody(), { status: 403, headers: cors });
   return Response.json(await state(slug, app.visibility), { headers: cors });
 }
 
@@ -84,7 +85,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   const slug = decodeURIComponent(params.slug);
   const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
-  if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
+  if (!app) return Response.json(forbiddenBody(), { status: 403, headers: cors });
 
   const body = await req.json().catch(() => ({}));
 

@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { forbiddenBody } from "@/lib/api-error";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { readLogs, MAX_PAGE } from "@/lib/logs";
@@ -23,7 +24,7 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) {
-    return Response.json({ error: "forbidden" }, { status: 403 });
+    return Response.json(forbiddenBody(), { status: 403 });
   }
   const sp = new URL(req.url).searchParams;
   const { q, window } = parseQuery(sp);

@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
+import { notAuthenticatedBody } from "@/lib/api-error";
 import { protocolHeader } from "@/lib/protocol-headers";
 import { cloudRunName } from "@/lib/slug";
 import { currentUserId } from "@/lib/session";
@@ -147,7 +148,7 @@ export async function POST(req: Request) {
   // build → Cloud Run deploy under our own service account. That is
   // unauthenticated code execution in our project, reachable by anyone who
   // sends one junk header. Refuse before anything else runs.
-  if (!ownerId) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!ownerId) return Response.json(notAuthenticatedBody(), { status: 401 });
   const ownerWorkspace = ownerId
     ? (await getPool("supersonic_platform").query(
         `SELECT workspace_id FROM users WHERE id = $1`, [ownerId]
