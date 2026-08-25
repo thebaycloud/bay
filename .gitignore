@@ -61,3 +61,11 @@ apps/web/.film-studio.html
 
 # The harness' own directory. Session state, not source.
 .claude/
+
+# The other editors' equivalent of the above, and the swap files any of them
+# leave behind. Personal to whoever is at the keyboard, never shared.
+.vscode/
+*.swp
+
+# A local ws tunnel used while debugging the fleet. Nothing here is source.
+services/tunnel/
