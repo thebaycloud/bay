@@ -112,6 +112,13 @@ export function DeployLog({
         </pre>
       ) : null}
 
+      {/* And immediately under it, the thing to do about it. Somebody who
+          followed "Look at it" from a failed ship came here to act, not to read:
+          the prompt goes above both transcripts rather than at the end of them. */}
+      {t.failed || d?.error || known ? (
+        <FixPrompt error={d?.error ?? known ?? null} slug={slug} />
+      ) : null}
+
       {t.narration.length > 0 ? (
         <Section title="What the pipeline decided">
           {t.narration.map((l, i) => (
