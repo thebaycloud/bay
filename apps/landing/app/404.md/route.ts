@@ -1,4 +1,4 @@
-import { BRAND, SITE } from "@/lib/brand";
+import { BRAND, DOCS_URL, SITE } from "@/lib/brand";
 
 /**
  * The 404 a terminal gets, in markdown.
@@ -27,7 +27,7 @@ reachable from here.
 
 - [The manual](${SITE}/llms.txt) — every command, in markdown. Also answers at
   \`/agents.md\`, \`/AGENTS.md\` and \`/cli.md\`, and at the bare domain under \`curl\`.
-- [Documentation](${SITE}/docs) — the same manual as a page.
+- [Documentation](${DOCS_URL}) — guides, the CLI reference, the config reference.
 - [Sitemap](${SITE}/sitemap.xml) — every page we publish, in six languages.
 - [Pricing](${SITE}/pricing) — what it costs.
 - [Changelog](${SITE}/changelog) — what shipped, with an [RSS feed](${SITE}/changelog.xml).

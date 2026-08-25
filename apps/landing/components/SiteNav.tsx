@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { APP_URL, BRAND, GITHUB_URL } from "@/lib/brand";
+import { APP_URL, BRAND, DOCS_URL, GITHUB_URL } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 import { fill, localePath, type Locale, type Messages } from "@/lib/i18n";
 import { Stars } from "./Stars";
@@ -46,11 +46,11 @@ function resourceItems(t: Messages): Item[] {
     // The changelog is English only and lives outside the locale tree, so this
     // link is deliberately not run through localePath.
     { label: t.nav.changelog, href: "/changelog" },
-    // Was /llms.txt, which is the same document and the wrong end of it for
-    // somebody who clicked a menu item labelled Docs: a browser handed a
-    // markdown file renders it as one wall of unstyled text. /docs is that file
-    // as a page; the manual is still one click away from the bottom of it.
-    { label: t.nav.docs, href: "/docs" },
+    // The documentation site, which is not this codebase — see lib/brand.ts.
+    // Was /docs, which rendered the manual as a page; that page now redirects
+    // here, and pointing the menu at the redirect would spend a hop on every
+    // click. The manual itself is still one item down, under its own name.
+    { label: t.nav.docs, href: DOCS_URL },
     // Issues, not Discussions. Discussions is switched off on the repo, so
     // /discussions is a 404, and a menu item that leads nowhere is worse than one
     // that leads somewhere plainer. Point this back at /discussions the day it is

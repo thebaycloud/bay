@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BRAND } from "@/lib/brand";
+import { BRAND, DOCS_URL } from "@/lib/brand";
 import { localePath, type Locale, type Messages } from "@/lib/i18n";
 import { LanguagePicker } from "./LanguagePicker";
 import { SiteNav } from "./SiteNav";
@@ -39,9 +39,9 @@ export function SiteChrome({
           <Link href={localePath(locale, "/pricing")} className="hover:text-ink">
             {t.nav.pricing}
           </Link>
-          <Link href={localePath(locale, "/docs")} className="hover:text-ink">
+          <a href={DOCS_URL} className="hover:text-ink">
             {t.footer.docs}
-          </Link>
+          </a>
           {/* A reader who landed on /privacy has no other way to /about from
               here: this footer is deliberately not the landing page's, and the
               three pages people check before trusting a platform were reachable
