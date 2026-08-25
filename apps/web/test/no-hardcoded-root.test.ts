@@ -40,10 +40,6 @@ const ALLOWED = new Map<string, string>([
   // fleet validates against this exact string, so changing it invalidates every
   // node token at once — a rename that takes the fleet down.
   ["lib/node-identity.ts", "NODE_AUDIENCE is a JWT audience, not a URL"],
-  // A real mailbox. Pointing Team-plan enquiries at an address that may not
-  // receive is worse than an old-looking one.
-  ["components/Paywall.tsx", "founders@ is a live mailbox"],
-  ["app/api/billing/checkout/route.ts", "founders@ is a live mailbox"],
 ]);
 
 const ROOTS = ["lib", "app", "components"];

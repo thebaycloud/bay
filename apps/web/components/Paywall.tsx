@@ -7,7 +7,7 @@ import { Sparkles, Check, X } from "lucide-react";
 // the one sentence selling the feature named a thing the product no longer calls
 // itself. `productName()` reads NEXT_PUBLIC_PRODUCT_NAME, which Next inlines into
 // this client bundle, so it agrees with the proxy that renders the badge.
-import { productName } from "@/lib/brand";
+import { productName, CONTACT_EMAIL } from "@/lib/brand";
 
 // Free is not offered here, because everybody looking at this is already on it.
 // The card that would say "Free — $0 — you have this" is the one thing a person
@@ -78,7 +78,7 @@ const HEAD: Record<PaywallReason, { title: string; sub: string }> = {
 };
 
 const TEAM_MAILTO =
-  "mailto:founders@supersonic.cv?subject=Bay%20Team%20plan"
+  `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(`${productName()} Team plan`)}`
   + "&body=Hi%20—%20I'd%20like%20to%20set%20up%20a%20Team%20plan.%0A%0AHow%20many%20people%20will%20be%20deploying%3A%0AWhat%20you're%20building%3A";
 
 /**

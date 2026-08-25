@@ -90,3 +90,15 @@ export const _brandForTesting = {
     cachedName = null;
   },
 };
+
+/**
+ * Where a Team lead reaches a human.
+ *
+ * Deliberately NOT derived from `rootDomain()`. Team is hand-priced, so this is
+ * the one address in the product that has to receive mail today rather than
+ * whenever DNS catches up — and it was `founders@supersonic.cv` in two separate
+ * literals, on the retiring domain, on the only screen that asks somebody to
+ * start a paid conversation with us. One constant, so the next change is one
+ * edit.
+ */
+export const CONTACT_EMAIL = "founderarsen@gmail.com";
