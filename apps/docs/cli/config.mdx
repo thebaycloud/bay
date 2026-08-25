@@ -1,0 +1,23 @@
+---
+title: "Environment"
+description: "bay env — the variables that are not secrets."
+---
+
+```bash
+bay env <app>                      # list env var keys
+bay env <app> set KEY=VALUE        # set one or more
+bay env <app> unset KEY            # remove one or more
+```
+
+Values are never printed back. `bay env <app>` lists **keys**, because a list of
+values is a leak wearing the shape of a convenience.
+
+## Where each kind of value belongs
+
+| Kind | Where it goes | Why |
+|---|---|---|
+| Non-secret literals — `NODE_ENV`, `LOG_LEVEL` | `env` in `supersonic.json` | Committed, deploy-shaping, visible in review |
+| Baked into the bundle at build time — `VITE_*`, `NEXT_PUBLIC_*` | `buildEnv` in `supersonic.json` | Set at a different moment: after the build is too late |
+| Anything that must not be in the repo | `secrets` in `supersonic.json`, set with `bay env` | Names in the file, values in Secret Manager |
+
+See [Secrets](/guides/secrets) for the whole picture.

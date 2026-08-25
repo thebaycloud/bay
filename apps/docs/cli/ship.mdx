@@ -1,0 +1,79 @@
+---
+title: "Shipping"
+description: "bay ship, reship, rollback, patch, delete."
+---
+
+## bay ship
+
+```bash
+bay ship
+```
+
+Ships the current folder. Returns as soon as the URL exists — the build runs
+behind it, and the URL serves the [Room](/concepts#room) until the app answers
+for itself.
+
+<ParamField path="--wait" type="flag">
+  Stay attached and stream the build: clone → detect stack → build → run. Prints
+  the live URL when the app is actually serving it.
+</ParamField>
+
+<ParamField path="--name <name>" type="string" default="the folder's name">
+  What to call the app.
+</ParamField>
+
+<ParamField path="--github [--repo <url>]" type="flag">
+  Ship from your git origin, or from any public repository URL, instead of
+  uploading the folder.
+</ParamField>
+
+<ParamField path="--run <cmd>" type="string">
+  How to run it in production, when you already know. For example
+  `--run "uvicorn main:app --host 0.0.0.0 --port $PORT"`.
+</ParamField>
+
+<ParamField path="--no-env" type="flag">
+  Do not carry `.env` up. By default Bay sets the variables your app does not
+  have yet.
+</ParamField>
+
+<ParamField path="--prebuilt" type="flag">
+  The old path: build locally and upload the result.
+</ParamField>
+
+<Note>
+`bay deploy` is the same command and always will be. Every flag here works with
+either name.
+</Note>
+
+## Shipping again
+
+```bash
+bay reship <app>      # rebuild from the app's source
+bay rollback <app>    # back to the previous version
+```
+
+Images are deployed **by digest**, so "the new version" is a fact rather than a
+tag, and a rollback is a real return to bytes that ran.
+
+## Repairing
+
+```bash
+bay diagnose <app>          # a fix-prompt for your own coding agent
+bay patch <app>             # the repair agent's fix, to pipe into git apply
+```
+
+```bash
+bay patch <app> | git apply
+```
+
+## Removing
+
+```bash
+bay delete <app> --yes
+```
+
+<Warning>
+Deleting an app keeps its database and its bucket. The data outlives the app on
+purpose — a delete is not a way to lose it.
+</Warning>

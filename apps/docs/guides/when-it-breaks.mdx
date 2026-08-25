@@ -1,0 +1,63 @@
+---
+title: "When it breaks"
+description: "Reading what happened, and turning it into a fix your own agent can apply."
+---
+
+## Look
+
+```bash
+bay status my-app                          # revision, url, env, database
+bay logs my-app --severity error --since 1h
+bay errors my-app                          # production errors, 7 days
+```
+
+## Ask for a fix-prompt
+
+```bash
+bay diagnose my-app
+bay diagnose my-app --error "TypeError: cannot read property 'id' of undefined"
+```
+
+This produces a prompt aimed at **your own** coding agent, carrying the error,
+the logs around it, and what Bay knows about how the app is built.
+
+<Info>
+Bay does not silently commit to your source. The repair agent operates on a copy
+and hands you a fix; what happens to your repository stays your decision.
+</Info>
+
+## Apply a patch
+
+```bash
+bay patch my-app | git apply
+```
+
+## Go back
+
+```bash
+bay rollback my-app
+```
+
+Deployments are by digest, so a rollback returns to bytes that actually ran —
+not to a tag that may since have been moved.
+
+## Run something in the app's environment
+
+```bash
+bay exec my-app -- npx prisma migrate status
+```
+
+Same variables, same database credentials, isolated from the running app.
+
+## When the build itself fails
+
+Reproduce the resolution locally first — it takes two seconds and touches no
+cloud:
+
+```bash
+bay check
+```
+
+If `bay check` passes and the build still fails, the difference is in the build
+environment rather than the config, and `bay logs` for the build carries the
+BuildKit output verbatim.
