@@ -117,7 +117,7 @@ jobs:
           workload_identity_provider: projects/540236122367/locations/global/workloadIdentityPools/github/providers/github-oidc
           service_account: supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
 
       # Content-addressed, then the pointer. In that order and never the reverse:
       # a pointer naming an object that is not there yet is a node that downloads

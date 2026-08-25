@@ -61,7 +61,7 @@ jobs:
           workload_identity_provider: projects/540236122367/locations/global/workloadIdentityPools/github/providers/github-oidc
           service_account: supersonic-deployer@supersonic-deploy-prod.iam.gserviceaccount.com
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
 
       # NEVER --set-env-vars, in any form.
       #
