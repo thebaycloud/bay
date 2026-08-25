@@ -31,7 +31,7 @@ npm install -g @thebaycloud/cli && bay ship
 
 ## Ship anything in one CLI command
 
-<video src="https://github.com/thebaycloud/bay/raw/main/.github/assets/demo.mp4" controls muted loop width="100%"></video>
+<video src="https://github.com/thebaycloud/bay/raw/main/.github/assets/demo.mp4" poster="https://github.com/thebaycloud/bay/raw/main/.github/assets/demo-poster.jpg" controls muted loop width="100%"></video>
 
 <sup>One unedited take: a coding agent is asked to put the app online, installs the
 CLI, ships, and verifies the app is serving with Postgres wired in — ending on the
