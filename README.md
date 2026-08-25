@@ -134,22 +134,6 @@ provision none of it.
 <sup>Nobody provisioned that database. It is one app's own Postgres, with the tables
 its code created, browsable from the app's page.</sup>
 
-The result of that pgapp deploy is live right now, and you can open it:
-**[xf4u7.thebay.cloud](https://xf4u7.thebay.cloud)**
-
-<img src=".github/assets/live-app.png" alt="The deployed app: pgapp is live, Postgres connected, auto-provisioned DB, visit counter" width="100%">
-
-| | |
-|---|---|
-| **Database** | Postgres / MySQL / Mongo / Redis, picked from your ORM |
-| **Auth** | end-user auth, owned by your app |
-| **Storage** | object storage behind a CDN |
-| **Secrets** | the only thing we ever ask you for |
-| **Jobs** | `release` before traffic, `worker` and `cron` alongside it |
-| **Domains** | `*.thebay.cloud` immediately, your own when you point it |
-| **Analytics** | who's in the app, embedded |
-| **Backups** | daily, with restore |
-
 ## Hands your agent bug fixes
 
 Bay watches the app after it is live. When something breaks in production, it reads
