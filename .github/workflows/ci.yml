@@ -82,6 +82,36 @@ jobs:
         working-directory: ${{ matrix.also }}
         run: npm ci --no-audit --no-fund
 
+      # The control plane's deploy pipeline spawns `railpack` to generate a
+      # Dockerfile, and test/deploy-pipeline.test.ts lets it through on purpose:
+      # its fakeSpawn intercepts `gcloud` and `npm` and hands everything else to
+      # the real binary, so the build directory the pipeline then reads is a real
+      # one rather than a fake that would make every detection assertion vacuous.
+      #
+      # "Everything else" quietly included railpack, which is not a POSIX utility
+      # that is simply present -- it is a third-party binary the deploy image
+      # installs. So seven assertions in that file depended on it being on PATH
+      # without anything saying so. They passed on a developer's machine, where
+      # the Dockerfile's pin is already installed, and failed here with `spawn
+      # railpack ENOENT`: the pipeline caught it, took its documented fallback,
+      # built no image, and the failures surfaced as "every app builds a
+      # generated image now" being false -- a message that points nowhere near
+      # the cause.
+      #
+      # The version is READ from the Dockerfile, not written again here. A second
+      # copy of a pinned version is a second thing to update, and this repository
+      # has already paid for that once: RUNTIME_VERSIONS drifted from the
+      # runner's Dockerfile and built an app on the wrong Python.
+      - name: Install railpack, at the version the deploy image pins
+        if: matrix.dir == 'apps/web'
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ARG RAILPACK_VERSION=//p' Dockerfile)"
+          test -n "$version"
+          curl -fsSL "https://github.com/railwayapp/railpack/releases/download/v${version}/railpack-v${version}-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin railpack
+          railpack --version
+
       - name: Test
         working-directory: ${{ matrix.dir }}
         run: npm test
