@@ -1,5 +1,6 @@
 {
   "name": "@supersonic/web",
+  "license": "AGPL-3.0-only",
   "version": "0.0.0",
   "private": true,
   "scripts": {

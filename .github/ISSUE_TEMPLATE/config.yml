@@ -1,0 +1,18 @@
+# Blank issues are off on purpose. Every issue that reaches us should be one of
+# the three things below, and the third one — a vulnerability — must never arrive
+# as an issue at all.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability (private)
+    url: https://github.com/thebaycloud/bay/security/advisories/new
+    about: >
+      Never in a public issue. This goes only to the maintainers. See SECURITY.md
+      for what is worth reporting and what is already known.
+  - name: Propose a change
+    url: https://github.com/thebaycloud/bay/blob/main/adrs/README.md
+    about: >
+      Contributions here are human-written text, not code. Add a .txt or .md to
+      adrs/ describing what you want and open a pull request with just that file.
+  - name: Ask a question
+    url: https://github.com/thebaycloud/bay/discussions
+    about: Anything that is not a bug and not yet a proposal.

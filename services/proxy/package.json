@@ -1,5 +1,6 @@
 {
   "name": "@supersonic/proxy",
+  "license": "AGPL-3.0-only",
   "version": "0.0.0",
   "private": true,
   "type": "module",
