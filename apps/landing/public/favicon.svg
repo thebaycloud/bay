@@ -1,1 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" fill="rgb(11, 94, 56)"/><polygon points="12.83,6.00 17.83,6.00 11.17,26.00 6.17,26.00" fill="#F5F4EF"/><polygon points="20.83,6.00 25.83,6.00 19.17,26.00 14.17,26.00" fill="#F5F4EF"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <rect width="16" height="16" fill="#C63A22"/>
+  <path d="M8 2 Q2.5 8 0 9.6" fill="none" stroke="#F4EFE6" stroke-width="1.4"/>
+  <path d="M8 2 Q13.5 8 16 9.6" fill="none" stroke="#F4EFE6" stroke-width="1.4"/>
+  <rect x="6" y="1.5" width="1.4" height="12" fill="#F4EFE6"/>
+  <rect x="8.6" y="1.5" width="1.4" height="12" fill="#F4EFE6"/>
+  <rect x="6" y="4" width="4" height="1.2" fill="#F4EFE6"/>
+  <rect x="6" y="8" width="4" height="1.2" fill="#F4EFE6"/>
+  <rect x="0" y="10.6" width="16" height="1.5" fill="#F4EFE6"/>
+</svg>

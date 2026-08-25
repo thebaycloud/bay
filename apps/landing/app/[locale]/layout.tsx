@@ -50,7 +50,14 @@ export const metadata: Metadata = {
   title: { default: TITLE, template: `%s - ${SITE_NAME}` },
   description: DESCRIPTION,
   // Each entry is its own drawing, not one file scaled, see docs/BRAND.md.
-  // SVG first: browsers that support it get the sharp one at every zoom level.
+  //
+  // The 16px is a cut-down bridge: the full mark has a tower, two cables, twenty
+  // hangers, a deck and sixteen rivets, and at 16px everything under about three
+  // device pixels turns to mush. Rendered and looked at rather than assumed. From
+  // 32px up the full drawing holds, so that is what the larger sizes carry.
+  //
+  // favicon.svg is the small drawing, not the full one, because a favicon is only
+  // ever shown at tab size.
   icons: {
     icon: [
       { url: "/favicon.svg", type: "image/svg+xml" },
