@@ -54,7 +54,7 @@ jobs:
       # file in db/ is additive and idempotent by rule, and migrate.ts applies
       # all of them in filename order on every run, so applying them ahead of the
       # code that uses them is exactly what the rule was written for.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
