@@ -50,11 +50,31 @@ export function FixPrompt({
         // from a truncated stack is a diagnosis of the wrong thing.
         body: JSON.stringify({ error }),
       });
-      const d = await r.json();
-      if (!r.ok || d.error) setErr(String(d.error ?? `That did not work (${r.status}).`));
-      else if (typeof d.fixPrompt === "string" && d.fixPrompt.trim()) setPrompt(d.fixPrompt);
-      else setErr("Nothing came back to hand over.");
+      // The body is read as TEXT first, because a route that throws answers with
+      // an HTML error page and `r.json()` on that throws — which landed in the
+      // catch below and reported "Couldn't reach the server" about a server that
+      // had answered, and answered with the reason. Two different failures were
+      // wearing one message, and it was the wrong one.
+      const raw = await r.text();
+      type Body = { fixPrompt?: unknown; error?: unknown };
+      let d: Body | null = null;
+      try {
+        d = JSON.parse(raw) as Body;
+      } catch {
+        d = null;
+      }
+      if (!d) {
+        setErr(r.ok ? "That came back in a shape we could not read." : `The server failed on this (${r.status}).`);
+      } else if (!r.ok || d.error) {
+        setErr(String(d.error ?? `That did not work (${r.status}).`));
+      } else if (typeof d.fixPrompt === "string" && d.fixPrompt.trim()) {
+        setPrompt(d.fixPrompt);
+      } else {
+        setErr("Nothing came back to hand over.");
+      }
     } catch {
+      // Only a genuine network failure reaches here now: the fetch itself did not
+      // complete. Everything the server said, however badly, is handled above.
       setErr("Couldn't reach the server.");
     } finally {
       setBusy(false);
