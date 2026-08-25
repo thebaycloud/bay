@@ -83,10 +83,29 @@ async function postHandler(req: Request, { params }: { params: { slug: string } 
       return Response.json({ ok: true, keys, note: "the node applies this within about ten seconds" });
     }
     await setEnv(slug, set as Record<string, string>, unset as string[]);
-    const svc = await describeService(slug);
-    return Response.json({ ok: true, keys: svc.envKeys, note: "a new revision is rolling out" });
+    // Guarded even here, where the runtime branch above has already established
+    // there IS a Cloud Run service. The write succeeded; reading the new key list
+    // back is a courtesy, and failing the whole call over the courtesy would
+    // report a successful `env set` as an error.
+    const svc = await describeService(slug).catch(() => null);
+    return Response.json({
+      ok: true,
+      keys: svc?.envKeys ?? Object.keys(set),
+      note: "a new revision is rolling out",
+    });
   } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    // Not the raw message: `setEnv` shells out to gcloud too, and a failed
+    // `env set` should say what happened rather than paste a Google Cloud stack
+    // trace into somebody's terminal.
+    const raw = e instanceof Error ? e.message : String(e);
+    return Response.json(
+      {
+        error: /gcloud|Cannot find service/i.test(raw)
+          ? "we could not apply that to this app just now"
+          : raw.slice(0, 200),
+      },
+      { status: 500 },
+    );
   }
 }
 
