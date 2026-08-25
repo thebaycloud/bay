@@ -80,7 +80,7 @@ USE `--wait`. Without it the command returns as soon as the URL is reserved and 
 
 Every app is PRIVATE until the user says otherwise, so the URL asks them to sign in. That is the default, not a broken ship. Tell the user the app is live and private, and that `bay share <app> public` opens it to anyone with the link.
 
-If the user is over their plan's limit, `bay ship` exits with a clear message telling them to pick a plan at https://app.supersonic.cv. Relay that; it is not a build failure.
+If the user is over their plan's limit, `bay ship` exits with a clear message telling them to pick a plan at https://app.thebay.cloud. Relay that; it is not a build failure.
 
 The project's local `.env` / `.env.local` travels with the ship automatically: the CLI
 reads it, holds the FILES back from the upload, and sends the values to be stored as
@@ -229,7 +229,7 @@ The browser handshake exists for a person at a keyboard. Where there isn't one:
     export BAY_TOKEN=<token>            # takes precedence over anything saved
     bay ship --wait
 
-The user mints a token at https://app.supersonic.cv/cli. That page also lists
+The user mints a token at https://app.thebay.cloud/cli. That page also lists
 every CLI already authorized on the account and revokes any of them. Otherwise
 `bay login --token <token>` saves it to `~/.bay/config.json`, and `BAY_URL`
 points the CLI at a different control plane. The old spellings,
@@ -253,7 +253,29 @@ People the user shares an app with are never charged.
 
 ## Links
 
-- App: https://app.supersonic.cv
-- Sign up: https://app.supersonic.cv/signup
-- Authorize a CLI: https://app.supersonic.cv/cli
-- This manual: https://thebay.cloud/llms.txt (or just `curl thebay.cloud`)
+Every address here is on `thebay.cloud`, and none of them is a redirect. The old
+`supersonic.cv` spellings still answer and 301 here, so anything already written
+down keeps working — but these are the ones to write down now.
+
+The control plane:
+
+- App: https://app.thebay.cloud
+- Sign up: https://app.thebay.cloud/signup
+- Authorize a CLI: https://app.thebay.cloud/cli
+
+The documentation, one file at four addresses because the guess depends on who
+is guessing:
+
+- This manual, as markdown: https://thebay.cloud/llms.txt — also at
+  `/agents.md`, `/AGENTS.md`, `/cli.md`, and at the bare domain under `curl`.
+- The same manual, as a page: https://thebay.cloud/docs
+- Every page we publish: https://thebay.cloud/sitemap.xml
+- What shipped, and when: https://thebay.cloud/changelog (RSS at
+  `/changelog.xml`)
+
+The company, for anything that needs to know who is behind this:
+
+- https://thebay.cloud/about, https://thebay.cloud/contact,
+  https://thebay.cloud/privacy
+- Source: https://github.com/thebaycloud/bay
+- CLI package: https://www.npmjs.com/package/@thebaycloud/cli
