@@ -31,10 +31,14 @@ npm install -g @thebaycloud/cli && bay ship
 
 ## Ship anything in one CLI command
 
-<img src=".github/assets/ship.svg" alt="bay ship --wait: uploading, detecting Node, provisioning Postgres, building on the fleet, live URL" width="100%">
+<video src="https://github.com/thebaycloud/bay/raw/main/.github/assets/demo.mp4" controls muted loop width="100%"></video>
 
-<sup>Recorded from a real `bay ship --wait`. Nothing is re-enacted — the app is
-[`examples/pgapp`](examples/pgapp), and it is still up.</sup>
+<sup>One unedited take: a coding agent is asked to put the app online, installs the
+CLI, ships, and verifies the app is serving with Postgres wired in — ending on the
+live URL with the owner's toolbar on it.
+[Watch it directly](https://github.com/thebaycloud/bay/raw/main/.github/assets/demo.mp4) if the player does not load. Recorded before the
+rename, so the recording says Supersonic and the address ends `.supersonic.cv`; the
+product is Bay and new apps get `*.thebay.cloud`.</sup>
 
 Point Bay at a folder or a repository. It reads the code, works out how to build it,
 provisions the database and storage the code implies, injects the credentials, and
@@ -81,14 +85,8 @@ If Bay is useful to you, a star is the cheapest way to say so — and the thing 
 decides whether the next person finds it.
 
 <div align="center">
-<img src=".github/assets/room-film.gif" alt="The Room: a harbour scene where a ship is built and launched, the live build log along the bottom and a stage counter" width="100%">
+<img src=".github/assets/star.gif" alt="Starring the thebaycloud/bay repository on GitHub" width="100%">
 </div>
-
-<sup>That is not a marketing animation — it is what your app's own URL serves while
-it is still being built. Frames from one real build at `m1d9l.thebay.cloud`: the log
-along the bottom is that build's own output and the counter is its real stage. Only
-the owner sees it. Send the link to anybody else and they get a page with no build
-on it.</sup>
 
 ## Quickstart
 
@@ -97,6 +95,11 @@ npm install -g @thebaycloud/cli
 cd your-project
 bay ship --wait
 ```
+
+<img src=".github/assets/ship.svg" alt="bay ship --wait: uploading, detecting Node, provisioning Postgres, building on the fleet, live URL" width="100%">
+
+<sup>A real `bay ship --wait` against [`examples/pgapp`](examples/pgapp), which is
+still up.</sup>
 
 The first run opens a browser once so you can sign in; after that the token is on
 disk and your agent inherits it. Without `--wait`, `ship` returns as soon as the URL
@@ -112,6 +115,8 @@ bay init     # writes a draft supersonic.json, and names what it could NOT deter
 bay check    # resolves and validates that file exactly as a deploy would
 ```
 
+<img src=".github/assets/authoring.svg" alt="bay init writes a draft config and names what it could not determine; bay check prints what each phase would run" width="100%">
+
 `bay init` prints its open questions rather than guessing at them — which service
 owns `/`, whether a migration runs before traffic, which env names are secrets.
 None of those are answerable from files, and a guess would be indistinguishable
@@ -124,7 +129,10 @@ already imports. Object storage sits behind a CDN. Workers and cron run beside t
 web process, and a `release` phase runs before any traffic reaches it. You
 provision none of it.
 
-<img src=".github/assets/authoring.svg" alt="bay init writes a draft config and names what it could not determine; bay check prints what each phase would run" width="100%">
+<img src=".github/assets/services.gif" alt="The Data view of a live app: its Postgres tables with row counts, and its storage bucket" width="100%">
+
+<sup>Nobody provisioned that database. It is one app's own Postgres, with the tables
+its code created, browsable from the app's page.</sup>
 
 The result of that pgapp deploy is live right now, and you can open it:
 **[xf4u7.thebay.cloud](https://xf4u7.thebay.cloud)**
@@ -152,6 +160,11 @@ thing that wrote the code:
 bay errors <app>     # production errors, last 7 days
 bay diagnose <app>   # a fix prompt, ready to paste into your coding agent
 ```
+
+<img src=".github/assets/fix.gif" alt="A failed ship on the Ships screen: the error the pipeline hit, what it decided, and a fix prompt for the agent" width="100%">
+
+<sup>A real failed deploy. Bay says what broke, shows what the pipeline decided on
+the way there, and hands back the instruction — not a stack trace to interpret.</sup>
 
 `diagnose` does not print a stack trace and leave you to it. It prints the actual
 sentence — *migrations never ran, so the schema is empty; add a release step that
@@ -182,6 +195,18 @@ not a person any more.
 deploy, read the logs, apply a fix, without leaving the editor it is already in.
 Not shipped yet, and labelled that way here for the same reason it is labelled that
 way on the site.
+
+## Watch it get built, at its own address
+
+The address answers **before the app does**. Until the app is ready, the URL you
+were handed serves the build itself, and every movement in it stands for one real
+line of that build.
+
+<img src=".github/assets/room-film.gif" alt="The Room: a harbour scene where a ship is built and launched, the live build log along the bottom and a stage counter" width="100%">
+
+<sup>Frames from one real build at `m1d9l.thebay.cloud`. The log along the bottom is
+that build's own output and the counter is its real stage. Only the owner sees this —
+send the link to anybody else and they get a page with no build on it.</sup>
 
 ## Self-host something you already use
 
