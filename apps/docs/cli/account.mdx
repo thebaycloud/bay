@@ -1,0 +1,17 @@
+---
+title: "Account"
+description: "bay plan and bay tokens."
+---
+
+```bash
+bay plan      # the plan, every limit, and what is left of it
+```
+
+```bash
+bay tokens              # every CLI signed in to this account
+bay tokens revoke <id>  # take one back
+```
+
+A token is what an agent or a CI job authenticates with. Revoking one takes
+effect immediately and does not touch the others, which is the point of listing
+them separately rather than offering a single "sign out everywhere".

@@ -1,0 +1,30 @@
+---
+title: "Data and GitHub"
+description: "bay db and bay git."
+---
+
+## Reading the database
+
+```bash
+bay db <app>                              # the tables, with row counts
+bay db <app> <table> --limit 50 --offset 0
+bay db <app> --sql "select count(*) from users"
+```
+
+<Warning>
+`--sql` takes exactly one read-only statement. The CLI is a way to look at your
+data, not a way to migrate it — use a `release` command for that, so it runs once
+per deploy before traffic rather than from a laptop.
+</Warning>
+
+## Shipping on push
+
+```bash
+bay git <app>                              # the repo it follows, and whether a push ships
+bay git <app> --branch main --auto on
+bay git <app> disconnect
+```
+
+One app follows one branch of one repository. A second repository is a second
+app. Once connected, every push to that branch is a build — see
+[Shipping from GitHub](/guides/from-github).

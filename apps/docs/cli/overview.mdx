@@ -1,0 +1,83 @@
+---
+title: "CLI overview"
+description: "Everything the dashboard does, the CLI does — and every command speaks JSON."
+---
+
+```bash
+npm install -g @thebaycloud/cli
+```
+
+The command is `bay`. It also installs as `supersonic`, the name it had before;
+that alias is permanent.
+
+## The shape of it
+
+<Columns cols={2}>
+  <Card title="Local, ~2s, no cloud" icon="laptop" href="/cli/authoring">
+    `bay init` · `bay check` — write a draft config, and see exactly what each
+    phase would run.
+  </Card>
+  <Card title="Ship" icon="rocket" href="/cli/ship">
+    `bay ship` · `bay reship` · `bay rollback` — a live URL first, the build
+    drawn on it while it runs.
+  </Card>
+  <Card title="Inspect" icon="magnifying-glass" href="/cli/inspect">
+    `bay logs` · `bay errors` · `bay status` · `bay diagnose` · `bay exec`.
+  </Card>
+  <Card title="Everything else" icon="sliders" href="/cli/access">
+    Sharing, domains, the database, GitHub, the account.
+  </Card>
+</Columns>
+
+## Global behaviour
+
+<ParamField path="--json" type="flag">
+  Machine-readable output, on **any** command. This is the flag that makes the
+  CLI an agent's interface rather than a person's.
+</ParamField>
+
+<ParamField path="BAY_TOKEN" type="env var">
+  A token to authenticate with, overriding anything saved by `bay login`.
+  `SUPERSONIC_TOKEN` is still honoured.
+</ParamField>
+
+<ParamField path="BAY_URL" type="env var" default="https://app.supersonic.cv">
+  Which control plane to talk to. Also settable per-login with
+  `bay login --url <u>`. `SUPERSONIC_URL` is still honoured.
+</ParamField>
+
+Your session is stored in `~/.bay/config.json`. An existing
+`~/.supersonic/config.json` is still read, so upgrading does not sign anyone out.
+
+## What is deliberately not renamed
+
+The config file is still `supersonic.json`, and the `x-supersonic-*` headers,
+`SUPERSONIC_RUN` and `SUPERSONIC_CODE_*` are still what they were. Those are read
+by the control plane, not typed by a person; they change when the server
+changes, not before.
+
+## Signing in
+
+<CodeGroup>
+
+```bash Browser
+bay login
+```
+
+```bash Headless
+bay login --token <t>
+# or: export BAY_TOKEN=<t>
+```
+
+```bash New account
+bay signup
+```
+
+</CodeGroup>
+
+```bash
+bay whoami    # who you are, and which control plane
+bay logout
+bay tokens    # every CLI signed in to this account
+bay tokens revoke <id>
+```

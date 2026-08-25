@@ -1,0 +1,40 @@
+---
+title: "Who can open it"
+description: "Every app starts private. Four settings, and what each one means."
+---
+
+```bash
+bay share my-app                 # where it stands now
+bay share my-app public          # change it
+```
+
+<CardGroup cols={2}>
+  <Card title="private" icon="lock">
+    Only you. Every app starts here.
+  </Card>
+  <Card title="shared" icon="user-plus">
+    You, plus the people and domains you invited.
+  </Card>
+  <Card title="workspace" icon="users">
+    Everyone in your workspace.
+  </Card>
+  <Card title="public" icon="globe">
+    Anyone with the link, no sign-in.
+  </Card>
+</CardGroup>
+
+## Inviting people
+
+```bash
+bay share my-app add ada@acme.com     # one person, who gets an email
+bay share my-app add @acme.com        # everyone with an address at that domain
+bay share my-app remove ada@acme.com
+```
+
+## What a visitor cannot see
+
+The [X-ray](/concepts#x-ray) — what the app is doing, what happened to it, who is
+in it — belongs to the owner. So does the Room. A person you sent a link to
+during a build gets a page with no build on it, not the same page with the
+details switched off: it is a different page, so there is nothing for a future
+edit to accidentally re-enable.

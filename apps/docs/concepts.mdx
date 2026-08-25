@@ -1,0 +1,101 @@
+---
+title: "Concepts"
+description: "The words this product uses, and what each one means."
+---
+
+Bay keeps a strict vocabulary, and this page is the product half of it. Every
+word here is one a ten-year-old already knows — not as decoration, but because
+these are also the words a coding agent learns the platform by, and a short,
+plain, self-describing vocabulary is the interface rather than the skin.
+
+<Info>
+The canonical source is [`CONTEXT.md`](https://github.com/thebaycloud/bay/blob/main/CONTEXT.md)
+in the repository, which also carries the internal vocabulary the code and the
+tables use. A term appearing in both means the same thing in both.
+</Info>
+
+## The app and its life
+
+<ResponseField name="App" type="the thing you made">
+  The only word for it. Not a project, a site, a service or a workload.
+</ResponseField>
+
+<ResponseField name="Ship" type="the act">
+  What you do when you send your work out. `bay ship` — and `bay deploy` is the
+  same command under its older name, permanently.
+</ResponseField>
+
+<ResponseField name="Build" type="one attempt at shipping">
+  Has a beginning, an end and an outcome. A ship that fails still produced a
+  build.
+</ResponseField>
+
+<ResponseField name="Timeline" type="every version, in order">
+  Walkable. Moving along it is **rewind**; going back to a version that worked is
+  **undo** — `bay rollback`.
+</ResponseField>
+
+<ResponseField name="Who did it" type="you, an agent, or the platform">
+  Asked of every build. When nobody said, the answer is *someone* — never a
+  guess, because a wrong name here is worse than no name.
+</ResponseField>
+
+## Watching and looking inside
+
+<ResponseField name="Room" type="where a build is watched">
+  At the app's own address, before the app has ever answered. Every movement in
+  it stands for a real event; a room that animates without something having
+  happened is a lie. Visible to the owner only.
+</ResponseField>
+
+<ResponseField name="Open" type="the moment the Room becomes the app">
+  Not a transition between two pages — the same address, now answering for
+  itself.
+</ResponseField>
+
+<ResponseField name="X-ray" type="what an owner sees inside their own app">
+  What it is doing, what happened to it, and who is in it. Reached two ways:
+  brought up over the live app at its own address, or opened as the app's own
+  page. One thing seen from two sides. Never visible to a visitor.
+</ResponseField>
+
+<ResponseField name="Reading" type="everything the X-ray shows at one moment">
+  A single thing, given identically to a person and to an agent — only the
+  rendering differs. Every reading says what window it is true for.
+</ResponseField>
+
+<ResponseField name="What happened" type="everything the app did">
+  In one place, for a person and for an agent to read. `bay logs`, `bay errors`.
+</ResponseField>
+
+<ResponseField name="Who's here" type="the people in an app right now">
+  Not sessions, not active users. The people in it.
+</ResponseField>
+
+## Ways in, and what is not code
+
+<ResponseField name="Door" type="a way into an app from outside">
+  Not a route, an endpoint or an ingress.
+</ResponseField>
+
+<ResponseField name="Your own domain" type="a domain you own, pointed at your app">
+  An additional Door, never a replacement one: the app keeps answering at
+  `<name>.thebay.cloud`, which is the address every share link, log line and
+  rebuild is still built from. See [Domains](/guides/domains).
+</ResponseField>
+
+<ResponseField name="Secrets" type="the only thing that cannot be written in the code">
+  Not environment variables, not config, not settings. See
+  [Secrets](/guides/secrets).
+</ResponseField>
+
+<ResponseField name="Shadow" type="a copy given real traffic that answers nobody">
+  Exists so a change can be watched before it is real.
+</ResponseField>
+
+## Two words that mean the same thing
+
+`bay ship` and `bay deploy` are one command. "Deploy" used to name two different
+things — the act you perform, and one recorded attempt at it — so the act became
+**ship** and one attempt became a **build**. `deploy` survives as an alias and
+always will, because every script and agent prompt already written says it.

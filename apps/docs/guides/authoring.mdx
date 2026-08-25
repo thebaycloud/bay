@@ -1,0 +1,66 @@
+---
+title: "Ship your first app"
+description: "The loop: init, check, ship — and what each one refuses to guess."
+---
+
+<Steps>
+  <Step title="Draft the config" icon="pencil">
+    ```bash
+    bay init
+    ```
+    Local, about two seconds. Writes a draft `supersonic.json` and then names
+    what it could not determine. Treat those lines as the work: they are the
+    questions no file in your repository answers.
+  </Step>
+  <Step title="Check it" icon="circle-check">
+    ```bash
+    bay check
+    ```
+    Resolves the file exactly as a deploy would and prints the command each phase
+    runs. Non-zero exit on any problem. No cloud touched.
+  </Step>
+  <Step title="Ship it" icon="rocket">
+    ```bash
+    bay ship --wait
+    ```
+    A URL immediately, the build streamed. Without `--wait` the command returns
+    and the build carries on behind the URL.
+  </Step>
+</Steps>
+
+## What you never have to write
+
+<CardGroup cols={2}>
+  <Card title="A Dockerfile" icon="docker">
+    The build is planned from your manifests. You may still supply one —
+    `dockerfile` in the service — and Bay will use it instead.
+  </Card>
+  <Card title="A database URL" icon="database">
+    Import the driver. The dependency is the declaration; the credentials are
+    injected under every name your stack is likely to read.
+  </Card>
+  <Card title="A port" icon="plug">
+    Bind to `$PORT`. Everything in front of it — TLS, the load balancer, the
+    router — is already there.
+  </Card>
+  <Card title="A CI pipeline" icon="arrows-rotate">
+    Connect the repository and a push is a build. See
+    [Shipping from GitHub](/guides/from-github).
+  </Card>
+</CardGroup>
+
+## Monorepos
+
+One app, one hostname, services split by path:
+
+```json
+{
+  "services": [
+    { "name": "web", "dir": "apps/web", "path": "/",    "start": "npm start" },
+    { "name": "api", "dir": "apps/api", "path": "/api", "start": "npm run serve" }
+  ]
+}
+```
+
+Same origin means no CORS, and no API base URL to bake into a frontend bundle at
+build time.

@@ -1,0 +1,68 @@
+---
+title: "supersonic.json"
+description: "The one file Bay reads, and the one command that writes a draft of it."
+---
+
+You do not have to write this file. `bay init` writes a draft from the
+repository, and a repo with no config at all still ships — detection runs
+instead. The file exists for everything detection cannot prove.
+
+```json
+{
+  "version": 1,
+  "resources": {
+    "database": { "engine": "postgres" }
+  },
+  "services": [
+    {
+      "name": "app",
+      "dir": ".",
+      "language": "node",
+      "runtime": "node22",
+      "install": "npm install",
+      "start": "npm start",
+      "path": "/",
+      "uses": ["database"],
+      "secrets": []
+    }
+  ]
+}
+```
+
+<Note>
+The filename is still `supersonic.json`, not `bay.json`. It is read by the
+control plane, not typed by a person, and renaming it would break every config
+already committed for no gain.
+</Note>
+
+## The three top-level keys
+
+<ResponseField name="version" type="number">
+  The config format. `1` today.
+</ResponseField>
+
+<ResponseField name="resources" type="object">
+  What is provisioned **once per app** — a database, a bucket. Two services share
+  one database. See [Resources](/configuration/resources).
+</ResponseField>
+
+<ResponseField name="services" type="array" required>
+  One entry per thing that gets built and run. See
+  [Services](/configuration/services).
+</ResponseField>
+
+## Validate before you ship
+
+```bash
+bay check
+```
+
+Resolves this file exactly as a deploy would and prints what each phase runs.
+Non-zero exit on any problem. It touches no cloud and takes about two seconds.
+
+## The lock file
+
+A ship writes `supersonic.lock.json` next to your config: what that ship
+decided — the runtime it picked, the base image, the commands it resolved. It is
+there so a decision made on your behalf is one you can read and change, rather
+than one you have to reverse-engineer from a build log.

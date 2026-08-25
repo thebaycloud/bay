@@ -1,0 +1,70 @@
+---
+title: "Authoring"
+description: "bay init and bay check — the local loop, about two seconds, no cloud."
+---
+
+Both commands are local: no cloud, no build, no model. They exist because the
+same loop through a real ship is minutes long, and an agent authoring a config
+needs a loop it can actually iterate in.
+
+## bay init
+
+```bash
+bay init [dir] [--force]
+```
+
+Reads the repository and writes a **draft** `supersonic.json` — the monorepo
+split, the install command from the lockfile, the build command and output
+directory, the start command bound to `$PORT`, the runtime version the manifests
+ask for, and the framework.
+
+Then it prints what it could not determine:
+
+```
+Two things I could not determine — check them:
+  · does `app` need a migration before traffic?  (release: …)
+  · which secrets does it read?                  (secrets: [])
+
+This is a draft, from a detector that has been confidently wrong before.
+Read it, fix what is wrong, then: bay check
+```
+
+<Warning>
+It refuses to overwrite an existing config without `--force`.
+</Warning>
+
+## bay check
+
+```bash
+bay check [dir]
+```
+
+Resolves and validates the config exactly as a deploy would, and prints, per
+service, the command each phase runs. Non-zero exit on any problem.
+
+```
+supersonic.json — 1 service, provisions postgres
+
+  app  ·  container lane  ·  /
+    runtime   node22
+    base      node:22  ·  package.json engines.node
+    install   npm install
+    release   —  (nothing runs before traffic)
+    start     npm start
+    health    GET / → 200
+    scale     2Gi · 1 cpu · max 10 · 900s
+    uses      database
+
+✓ nothing here fails before the build. No GCP was touched.
+```
+
+## Why it is the control plane's own resolver
+
+Both commands go through a bundle of `apps/web/lib/{resolve,app-config,
+infer-services,repo-facts,lanes,plan-deps}.ts` — the control plane's actual
+resolver, compiled into the package, not a port of it. A test fails on a stale
+bundle.
+
+That matters because a committed detector once spent two days answering
+`python:3.12` after the runner had moved to 3.14. A second implementation is a
+second thing to be wrong.
