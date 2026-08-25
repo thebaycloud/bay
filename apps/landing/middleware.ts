@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { wantsMarkdown } from "./lib/wants-markdown";
 import { legacyRedirect } from "./lib/legacy-domain";
 import { DEFAULT_LOCALE, isLocale } from "./lib/i18n/locales";
+import { isPublishedPath } from "./lib/pages";
 
 /**
  * Three jobs, and the order is the point: get off the old domain, then answer a
@@ -43,6 +44,20 @@ import { DEFAULT_LOCALE, isLocale } from "./lib/i18n/locales";
  * `/en/pricing` asked for directly is the same page at a second address, which
  * is a duplicate a crawler will find. That one redirects, permanently, to the
  * unprefixed form.
+ *
+ * ── the dead end ──
+ *
+ * Last, and it is the manual rule again in a different place. A path that
+ * matches no page is a 404 either way; the question is what the body says. A
+ * browser gets `app/[locale]/not-found.tsx`, which is written for a person. The
+ * same terminal that gets markdown at the apex gets markdown here too, from
+ * `/404.md`, because an agent that guessed a URL wrong and receives thirty
+ * kilobytes of markup has been handed a dead end rather than a way back.
+ *
+ * Knowing a path is not a page, here, before routing has happened, needs the
+ * list of pages — which is why lib/pages.ts exists and why the sitemap reads
+ * the same one. A second copy would go stale the first time somebody adds a
+ * page, and a stale copy here serves a 404 for a page that renders.
  */
 /** The image routes Next generates from page metadata. */
 const META_IMAGE = /\/(opengraph-image|twitter-image|icon|apple-icon)(-[A-Za-z0-9]+)?$/;
@@ -72,6 +87,25 @@ export function middleware(req: NextRequest) {
   if ((segments[segments.length - 1] ?? "").includes(".")) return NextResponse.next();
 
   const first = segments[1] ?? "";
+
+  // The path as it is published, with any locale prefix taken off, which is the
+  // spelling lib/pages.ts holds. Done before the redirect below so that a
+  // terminal asking for `/ru/nope` is answered rather than sent round a hop.
+  const bare = isLocale(first) ? pathname.slice(first.length + 1) || "/" : pathname;
+
+  // META_IMAGE is excluded for the same reason it is excluded from the redirect
+  // below: /opengraph-image is a real response, generated from page metadata,
+  // and it has no entry in lib/pages.ts because it is not a page. Answering a
+  // curl for it with a 404 would be a lie about a URL our own og: tags publish.
+  if (
+    !isPublishedPath(bare) &&
+    !META_IMAGE.test(pathname) &&
+    wantsMarkdown(req.headers.get("accept"), req.headers.get("user-agent"))
+  ) {
+    const res = NextResponse.rewrite(new URL("/404.md", req.url));
+    res.headers.set("Vary", "Accept, User-Agent");
+    return res;
+  }
 
   if (first === DEFAULT_LOCALE) {
     // Metadata images are the exception. Next builds og:image from the route it

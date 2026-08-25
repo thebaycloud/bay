@@ -3,14 +3,16 @@ import { SITE } from "@/lib/brand";
 import { DEFAULT_LOCALE, LOCALES } from "@/lib/i18n/locales";
 import { localePath } from "@/lib/i18n";
 import { allEntries } from "@/lib/changelog";
+import { PAGES } from "@/lib/pages";
 
 /**
  * Every indexable URL, in all six languages.
  *
- * NOT the templates. They carry `robots: { index: false }` in their own layout
- * until a prompt has been run end to end, and listing a noindex URL here asks a
- * crawler to fetch a page we have told it to ignore. Add them the same day that
- * block comes off.
+ * The page list moved to lib/pages.ts, because middleware needs the same one to
+ * tell a path that matches no page from one that does. What stays here is the
+ * `index` filter: /templates renders but carries `robots: { index: false }` in
+ * its own layout, and listing a noindex URL asks a crawler to fetch a page we
+ * have told it to ignore.
  *
  * `alternates.languages` is the hreflang set. It matters more here than the
  * usual amount of hreflang hand-wringing, because English lives at the unprefixed
@@ -26,13 +28,7 @@ function everyLanguage(path: string) {
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
 
-  const pages: { path: string; priority: number; changeFrequency: "weekly" | "monthly" }[] = [
-    { path: "/", priority: 1, changeFrequency: "weekly" },
-    { path: "/pricing", priority: 0.8, changeFrequency: "monthly" },
-    { path: "/changelog", priority: 0.6, changeFrequency: "weekly" },
-    { path: "/about", priority: 0.5, changeFrequency: "monthly" },
-    { path: "/contact", priority: 0.5, changeFrequency: "monthly" },
-  ];
+  const pages = PAGES.filter((p) => p.index);
 
   const entries: MetadataRoute.Sitemap = pages.flatMap((p) =>
     LOCALES.map((l) => ({
