@@ -1,0 +1,55 @@
+---
+title: "Processes"
+description: "Workers, crons, and the release step — everything an app runs that is not one web server."
+---
+
+`start` says one thing: one HTTP server on one port. That is why a Telegram bot,
+a queue consumer and a nightly job have nowhere to live in it.
+
+```json
+{
+  "services": [
+    {
+      "name": "app",
+      "start": "npm start",
+      "processes": {
+        "bot":     { "kind": "worker", "command": "python bot.py" },
+        "nightly": { "kind": "cron",   "command": "node jobs/nightly.js", "schedule": "0 3 * * *" }
+      }
+    }
+  ]
+}
+```
+
+## Keyed by name, not by kind
+
+An app may have two different workers, and the app's own Procfile already looks
+like this — `bot: python bot.py` resolves to a worker called `bot` with nobody
+having to learn a new dialect.
+
+<ResponseField name="kind" type='"web" | "release" | "worker" | "cron"'>
+  What sort of thing this is. The sizing rules differ per kind, which is why the
+  kind is declared rather than guessed from the command.
+</ResponseField>
+
+<ResponseField name="command" type="string" required />
+
+<ResponseField name="schedule" type="string">
+  Cron only. Run on the node's own scheduler.
+</ResponseField>
+
+## release
+
+The `release` command on a service is the same idea with a guarantee attached:
+it runs **once per deploy, before any traffic**, on the node, and the app does
+not start until it has finished.
+
+```json
+{ "release": "npx prisma migrate deploy" }
+```
+
+<Warning>
+Do not fold a migration into `start`. It will re-run on every cold start and
+every scale-out instance, concurrently. Prisma takes an advisory lock and
+survives that; Alembic does not.
+</Warning>

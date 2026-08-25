@@ -1,0 +1,86 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Bay",
+  "description": "Ship anything to a live URL in one command.",
+  "colors": {
+    "primary": "#0B5E38",
+    "light": "#57B283",
+    "dark": "#0B5E38"
+  },
+  "favicon": "/logo/favicon.svg",
+  "logo": {
+    "light": "/logo/mark.svg",
+    "dark": "/logo/mark-white.svg",
+    "href": "https://thebay.cloud"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Start here",
+            "pages": ["index", "quickstart", "concepts"]
+          },
+          {
+            "group": "Shipping",
+            "pages": [
+              "guides/authoring",
+              "guides/from-github",
+              "guides/secrets",
+              "guides/databases",
+              "guides/domains",
+              "guides/sharing",
+              "guides/when-it-breaks"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/services",
+              "configuration/resources",
+              "configuration/processes"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": [
+              "cli/overview",
+              "cli/ship",
+              "cli/authoring",
+              "cli/inspect",
+              "cli/config",
+              "cli/access",
+              "cli/data",
+              "cli/account"
+            ]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        { "anchor": "Templates", "href": "https://thebay.cloud/templates", "icon": "cubes" },
+        { "anchor": "Changelog", "href": "https://thebay.cloud/changelog", "icon": "clock-rotate-left" },
+        { "anchor": "GitHub", "href": "https://github.com/thebaycloud/bay", "icon": "github" }
+      ]
+    }
+  },
+  "navbar": {
+    "links": [{ "label": "Issues", "href": "https://github.com/thebaycloud/bay/issues" }],
+    "primary": { "type": "button", "label": "Open the dashboard", "href": "https://app.supersonic.cv" }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/thebaycloud/bay",
+      "website": "https://thebay.cloud"
+    }
+  }
+}

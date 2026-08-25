@@ -1,0 +1,56 @@
+---
+title: "Shipping from GitHub"
+description: "Connect a repository once; every push to its branch is a build."
+---
+
+## From the CLI, without connecting anything
+
+```bash
+bay ship --github                              # your git origin
+bay ship --github --repo https://github.com/you/thing
+```
+
+Any public repository URL works. Nothing is stored, and nothing ships again on
+its own.
+
+## Connecting a repository
+
+```bash
+bay git <app> --branch main --auto on
+bay git <app>              # what it follows, and whether a push ships
+bay git <app> disconnect
+```
+
+Once connected, every push to that branch is a build.
+
+<Note>
+One app follows one branch of one repository. A second repository is a second
+app — not a second configuration on the same one.
+</Note>
+
+## Private repositories
+
+Bay installs as a GitHub App. What is stored is the **installation** — which
+account, which repositories you granted — and never a token. A token is minted
+from that installation and lives an hour; the installation outlives every token
+made from it, which is the whole reason it is the thing that gets stored.
+
+One workspace can hold several: a personal account and two organisations are
+three connections and one workspace.
+
+## What a push actually does
+
+<Steps>
+  <Step title="The webhook arrives">
+    Matched against the connected repository and branch. A push to any other
+    branch is ignored.
+  </Step>
+  <Step title="A build starts">
+    Same pipeline as `bay ship` — resolve the config, plan, provision what is
+    missing, build on the fleet's BuildKit.
+  </Step>
+  <Step title="The new version is deployed by digest">
+    So "the new version" is a fact rather than a tag, and `bay rollback` returns
+    to bytes that actually ran.
+  </Step>
+</Steps>
