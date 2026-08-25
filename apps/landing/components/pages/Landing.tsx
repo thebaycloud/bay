@@ -19,7 +19,7 @@ import { ArrowRight, Check, Copy, Lock, Terminal } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { cn } from "@/lib/utils";
 import { Dithering, MeshGradient } from "@paper-design/shaders-react";
-import { APP_URL, BRAND, CLI, DOMAIN, GITHUB_REPO, GITHUB_URL, PKG } from "@/lib/brand";
+import { APP_URL, BRAND, CLI, DOCS_URL, DOMAIN, GITHUB_REPO, GITHUB_URL, PKG } from "@/lib/brand";
 import { TEMPLATES } from "@/lib/templates";
 import { onboardPrompt, selfhostPrompt } from "@/lib/prompts";
 import { Stars } from "@/components/Stars";
@@ -1309,7 +1309,7 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
             {
               head: t.footer.build,
               links: [
-                [t.footer.docs, "/docs"],
+                [t.footer.docs, DOCS_URL],
                 [t.footer.agentManual, "/llms.txt"],
                 [t.footer.shipAnApp, `${APP_URL}/new`],
                 [t.footer.signIn, APP_URL],
