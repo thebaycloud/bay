@@ -13,8 +13,23 @@ import assert from "node:assert/strict";
 
 const takes: { scope: string; key: string }[] = [];
 let verdict: { ok: boolean; retryAfterSec?: number } = { ok: true };
-let bcryptCalls = 0;
+let lookups = 0;
 let existing: unknown = null;
+
+/**
+ * bcrypt is REAL here, not mocked.
+ *
+ * `mock.module("bcryptjs", { defaultExport: ... })` does not take — a CJS
+ * module reached through a default import, where the mock silently fails to
+ * apply. That was measured, not assumed, and it matters more here than
+ * anywhere: an assertion that bcrypt was NOT called is trivially true when the
+ * mock is inert, so the first version of this file passed while proving
+ * nothing.
+ *
+ * The ordering assertions ride on the database lookup instead. Both expensive
+ * steps — the duplicate check and the hash — sit inside the same try block
+ * after the gate, so a gate that ran before the lookup ran before both.
+ */
 
 mock.module("@/lib/rate-limit", {
   namedExports: {
@@ -29,19 +44,12 @@ mock.module("@/lib/client-ip", {
   namedExports: { clientIp: () => "203.0.113.7" },
 });
 
-mock.module("bcryptjs", {
-  defaultExport: {
-    hash: async () => {
-      bcryptCalls++;
-      return "hashed";
-    },
-    compare: async () => true,
-  },
-});
-
 mock.module("@/lib/users", {
   namedExports: {
-    findUserByEmailAndProvider: async () => existing,
+    findUserByEmailAndProvider: async () => {
+      lookups++;
+      return existing;
+    },
     createUser: async () => ({ id: "u1" }),
   },
 });
@@ -55,10 +63,10 @@ function post(email: string): Request {
   });
 }
 
-test("a refused signup never reaches bcrypt", async () => {
+test("a refused signup never reaches the database or bcrypt", async () => {
   const { POST } = await route$;
   takes.length = 0;
-  bcryptCalls = 0;
+  lookups = 0;
   existing = null;
   verdict = { ok: false, retryAfterSec: 42 };
   const res = await POST(post("a@example.com"));
@@ -66,9 +74,10 @@ test("a refused signup never reaches bcrypt", async () => {
   assert.equal(res.headers.get("retry-after"), "42");
   // bcrypt at cost 10 is deliberately slow, which makes an unlimited signup
   // route a CPU exhaustion surface on its own -- separately from how many
-  // accounts it creates. The gate must run BEFORE it, and this is the assertion
-  // that says so rather than hoping the lines stay in that order.
-  assert.equal(bcryptCalls, 0);
+  // accounts it creates. The gate must run BEFORE it, and the lookup counter is
+  // how that is asserted: the duplicate check and the hash are both inside the
+  // try block that follows the gate, so no lookup means neither ran.
+  assert.equal(lookups, 0);
 });
 
 test("signup is keyed on both the address and the email domain", async () => {
