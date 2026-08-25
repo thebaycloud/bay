@@ -48,6 +48,13 @@ jobs:
             dir: apps/web
           - name: edge proxy
             dir: services/proxy
+            # src/bearer.test.ts imports apps/web/lib/cli-tokens.ts on purpose —
+            # the whole assertion is that the two files hash a token the same
+            # way, and a copy of the hash would be the bug it is testing for.
+            # That import reaches apps/web/lib/db.ts, which needs `pg`, so this
+            # suite needs the control plane's node_modules too. It passed on
+            # laptops because they already had them.
+            also: apps/web
           - name: static server
             dir: services/static
           - name: bay CLI
@@ -70,22 +77,9 @@ jobs:
         working-directory: ${{ matrix.dir }}
         run: npm ci --no-audit --no-fund
 
-      # The proxy's bearer.test.ts asserts that its token hash agrees with
-      # apps/web/lib/cli-tokens.ts -- a drift check that is only worth anything
-      # because it reads the other package's real source. That import chain
-      # reaches apps/web/lib/db.ts, which requires `pg`, so the test needs
-      # apps/web's dependencies and not just its files.
-      #
-      # It passed on every developer machine, where apps/web has been installed
-      # for other reasons, and failed here with "Cannot find module 'pg'" --
-      # reported as a token hash disagreement, which is not what went wrong.
-      #
-      # Installing them here rather than loosening the test: a drift check that
-      # spans two packages is a job that needs two packages. Cutting the import
-      # would leave the hash agreeing with a copy of itself.
-      - name: Install the control plane's dependencies too
-        if: matrix.dir == 'services/proxy'
-        working-directory: apps/web
+      - name: Install the packages this suite reaches into
+        if: matrix.also != ''
+        working-directory: ${{ matrix.also }}
         run: npm ci --no-audit --no-fund
 
       # The control plane's deploy pipeline spawns `railpack` to generate a
@@ -137,8 +131,13 @@ jobs:
           cache-dependency-path: packages/cli/package-lock.json
       - working-directory: packages/cli
         run: npm ci --no-audit --no-fund
+      # Not `npm test`. That script is `node --test 'test/**/*.test.js'`, and
+      # --test only expands a glob from Node 21 — on 20 it looks for a directory
+      # literally named `**` and exits 1. The directory form runs the same files
+      # on every version, and changing the script instead would mean the
+      # published package's own test command depended on which Node ran it.
       - working-directory: packages/cli
-        run: npm test
+        run: node --test test/
 
   # The same tests publish-agent.yml gates a release on, run before the merge
   # rather than after it.
@@ -177,16 +176,16 @@ jobs:
       - name: Install
         working-directory: apps/landing
         run: npm ci --no-audit --no-fund
-
-      # scripts/subset-og-fonts.mjs shells out to python3 and imports fontTools,
-      # which the runner does not have -- so the check died on
-      # ModuleNotFoundError rather than on anything about the fonts. brotli comes
-      # with it because the subset is written as woff2.
-      #
-      # Same shape as the railpack step above and the pg one before it: a check
-      # that silently depended on a tool a developer's machine happened to have.
-      - name: Install fontTools, which the subset check shells out to
-        run: python3 -m pip install --quiet fonttools brotli
+      # scripts/subset-og-fonts.mjs shells out to python3 and imports fontTools.
+      # It is not in any package.json because it is not a node dependency, which
+      # is exactly why it was invisible until CI ran the check.
+      # setup-python rather than the runner's system python3: on Ubuntu 24.04 the
+      # system interpreter is PEP 668 externally-managed and refuses pip install.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install fontTools
+        run: python3 -m pip install --quiet fonttools
       - name: Prompt rules are in sync
         working-directory: apps/landing
         run: npm run check:prompts

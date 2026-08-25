@@ -1,0 +1,125 @@
+---
+title: "Quickstart"
+description: "From an empty terminal to a live URL, using an app that has no infrastructure in it."
+---
+
+## Install and sign in
+
+```bash
+npm install -g @thebaycloud/cli
+bay login
+```
+
+`bay login` opens a browser once. For CI and headless agents, pass a token
+instead — `bay login --token <t>`, or set `BAY_TOKEN` in the environment, which
+overrides anything saved.
+
+<Note>
+The command installs as both `bay` and `supersonic`. The second name is what it
+had before and every existing script, CI job and agent prompt still says it —
+that alias is permanent, not deprecated.
+</Note>
+
+## Look before you ship
+
+These two commands are local. No cloud, no build, no model, about two seconds
+each.
+
+<Steps>
+  <Step title="Write a draft config">
+    ```bash
+    bay init
+    ```
+
+    Reads the repository and writes a draft `supersonic.json`: the monorepo
+    split, the install command from the lockfile, the build command and output
+    directory, the start command bound to `$PORT`, and the runtime version the
+    manifests ask for.
+
+    Then it prints what it could not work out, because those answers are not in
+    the files:
+
+    ```
+    Two things I could not determine — check them:
+      · does `app` need a migration before traffic?  (release: …)
+      · which secrets does it read?                  (secrets: [])
+    ```
+  </Step>
+
+  <Step title="Check what would run">
+    ```bash
+    bay check
+    ```
+
+    Resolves and validates that file exactly as a deploy would, then prints, per
+    service, the command each phase runs:
+
+    ```
+    supersonic.json — 1 service, provisions postgres
+
+      app  ·  container lane  ·  /
+        runtime   node22
+        install   npm install
+        release   —  (nothing runs before traffic)
+        start     npm start
+        health    GET / → 200
+        uses      database
+
+    ✓ nothing here fails before the build. No GCP was touched.
+    ```
+
+    Non-zero exit on any problem, which is what makes it usable in a loop.
+  </Step>
+</Steps>
+
+## Ship it
+
+```bash
+bay ship --wait
+```
+
+Without `--wait` the command returns as soon as the URL exists and leaves the
+build running behind it. With `--wait` it stays attached and streams the build:
+
+```
+⧗ shipping — your app will be live at https://xf4u7.thebay.cloud
+▸ uploading pgapp…
+  Detected Node · JavaScript (60%)
+  Provision postgres (via pg)
+  Provisioning Postgres…
+  Provisioned Postgres database xf4u7
+  Database isolated — this app connects as app_xf4u7 and no other app can reach it
+  Stored DATABASE_URL, POSTGRES_PASSWORD, PGPASSWORD… in Secret Manager
+  Deploying xf4u7 to the fleet…
+  Built sha256:da8ae063698b… — deployed by digest
+✓ live: https://xf4u7.thebay.cloud
+```
+
+<Tip>
+Nothing in that app declared a database. It imports `pg` and reads
+`DATABASE_URL`; the dependency is the declaration, and everything from
+`Provision postgres` onward follows from it.
+</Tip>
+
+## What you have now
+
+<CardGroup cols={2}>
+  <Card title="A live app" icon="globe">
+    At `<name>.thebay.cloud`, private by default. `bay share <app> public` opens
+    it to anyone with the link.
+  </Card>
+  <Card title="A lock file" icon="lock">
+    `supersonic.lock.json` — what this ship decided, written next to your config
+    so you can read it and change it.
+  </Card>
+</CardGroup>
+
+## Ship again
+
+```bash
+bay reship <app>     # rebuild from the app's source
+bay rollback <app>   # back to the previous version
+```
+
+Or connect the repository and let a push do it — see
+[Shipping from GitHub](/guides/from-github).

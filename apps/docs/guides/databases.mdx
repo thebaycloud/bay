@@ -1,0 +1,82 @@
+---
+title: "Databases"
+description: "The one you did not ask for, and the one you already had."
+---
+
+## The dependency is the declaration
+
+An app that imports a driver gets a database. Nothing else is required — no
+config, no dashboard step, no connection string.
+
+```js
+const { Pool } = require("pg");
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+```
+
+Ship that and the build says:
+
+```
+Provision postgres (via pg)
+Provisioning Postgres…
+Provisioned Postgres database xf4u7
+Database isolated — this app connects as app_xf4u7 and no other app can reach it
+Stored DATABASE_URL, POSTGRES_PASSWORD, PGPASSWORD… in Secret Manager
+```
+
+## Isolation
+
+Each app connects as its own role, `app_<slug>`. No app can reach another app's
+data, and this is enforced at the database rather than by convention.
+
+## Migrations
+
+Put them in `release`, which runs once per deploy, before any traffic:
+
+```json
+{ "release": "npx prisma migrate deploy" }
+```
+
+<Warning>
+Never fold a migration into `start`. It re-runs on every cold start and every
+scale-out instance, concurrently.
+</Warning>
+
+## Looking at the data
+
+```bash
+bay db <app>                                  # tables, with row counts
+bay db <app> users --limit 50
+bay db <app> --sql "select count(*) from users"
+```
+
+One read-only statement at a time. The CLI is for looking, not for migrating.
+
+## Keeping the database you already have
+
+```json
+{
+  "resources": {
+    "database": {
+      "provider": "external",
+      "engine": "postgres",
+      "urlFrom": "DATABASE_URL"
+    }
+  }
+}
+```
+
+```bash
+bay env my-app set DATABASE_URL=postgresql://...
+```
+
+`urlFrom` names a **secret**, not a URL. Bay provisions nothing, touches nothing,
+and only needs to know that a value exists under that name and reached the
+revision.
+
+## Deleting an app
+
+```bash
+bay delete <app> --yes
+```
+
+The database and the bucket are kept. The data outlives the app on purpose.

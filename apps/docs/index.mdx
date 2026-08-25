@@ -1,0 +1,91 @@
+---
+title: "Bay"
+sidebarTitle: "Introduction"
+description: "Ship anything to a live URL in one command."
+mode: "wide"
+---
+
+Bay takes an app you have already written and runs it. You do not describe your
+infrastructure to it, and you do not write a Dockerfile: it reads the repository,
+works out how to build it, provisions what the code implies it needs, and serves
+it on a real address.
+
+<CodeGroup>
+
+```bash Ship a folder
+npm install -g @thebaycloud/cli
+bay ship
+```
+
+```bash Ship a repo
+bay ship --github --repo https://github.com/you/thing
+```
+
+```bash From an agent
+npx @thebaycloud/cli ship --wait --json
+```
+
+</CodeGroup>
+
+## What it does on its own
+
+The list below is not configuration you write. It is what Bay infers from the
+code and creates for you.
+
+<CardGroup cols={2}>
+  <Card title="A database" icon="database" href="/guides/databases">
+    Postgres, MySQL, Mongo or Redis, chosen from the driver or ORM you import.
+    Isolated per app, with the credentials injected under every name your stack
+    is likely to read.
+  </Card>
+  <Card title="Secrets" icon="key" href="/guides/secrets">
+    The only thing Bay ever asks you for. Stored in Secret Manager, delivered to
+    the build and the runtime, never written to a file.
+  </Card>
+  <Card title="An address" icon="globe" href="/guides/domains">
+    `<name>.thebay.cloud` the moment you ship, and a domain of your own whenever
+    you point one at it.
+  </Card>
+  <Card title="Jobs" icon="repeat" href="/configuration/processes">
+    A `release` step that runs once before traffic, plus any number of workers
+    and crons declared alongside the web process.
+  </Card>
+</CardGroup>
+
+## The two things worth knowing first
+
+<AccordionGroup>
+  <Accordion title="The address answers before the app does" icon="hourglass-start">
+    A ship returns a URL in about a tenth of a second — long before anything has
+    been built. Until the app is ready that URL serves **the Room**: the build
+    itself, drawn, at the app's own address. Every movement in it stands for one
+    real line of the build.
+
+    Only the owner sees the Room. Send the link to someone else while it is
+    building and they get a page with no build on it — not the same page with
+    parts switched off.
+  </Accordion>
+  <Accordion title="Nothing is guessed silently" icon="scale-balanced">
+    `bay init` writes a draft config and then prints what it could **not**
+    determine — which service owns `/`, whether a migration must run before
+    traffic, which environment names are secrets. None of those are answerable
+    from files, and a guess would be indistinguishable from a decision.
+
+    That is the shape of the whole product: it infers what code can prove, and
+    asks about the rest.
+  </Accordion>
+</AccordionGroup>
+
+## Where to go next
+
+<Columns cols={3}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    From an empty terminal to a live URL.
+  </Card>
+  <Card title="Concepts" icon="book" href="/concepts">
+    The words this product uses, and what each one means.
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/cli/overview">
+    Every command, and the `--json` behind each.
+  </Card>
+</Columns>

@@ -1,0 +1,42 @@
+---
+title: "Domains"
+description: "The address you get, and the one you bring."
+---
+
+Every app answers at `<name>.thebay.cloud` from the moment you ship — before the
+build has finished, in fact, which is what the [Room](/concepts#room) is for.
+
+## Attaching your own
+
+```bash
+bay domains my-app add acme.com
+```
+
+The command prints the DNS record to create. Once it resolves, a certificate is
+issued and the domain starts serving.
+
+```bash
+bay domains my-app              # what is attached, and the record to create
+bay domains my-app remove acme.com
+```
+
+## An addition, never a replacement
+
+<Info>
+The app keeps answering at `<name>.thebay.cloud`. That address is what every
+share link, log line and rebuild is still built from — a custom domain is another
+Door into the same app, not a move.
+</Info>
+
+That property is what makes attaching a domain safe: nothing you have already
+sent to somebody stops working, and nothing internal has to be rewritten.
+
+## Access is separate from address
+
+A domain does not make an app public. Visibility is its own setting:
+
+```bash
+bay share my-app public
+```
+
+See [Access and domains](/cli/access).
