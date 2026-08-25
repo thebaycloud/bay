@@ -32,6 +32,23 @@ export interface Ceiling {
   limit: number;
   windowSec: number;
   /**
+   * Whether this ceiling holds even when RATE_LIMIT_MODE is `off`.
+   *
+   * Almost nothing needs this: the mode exists so guessed ceilings can be
+   * counted before they are ever allowed to refuse anybody, and `off` is a
+   * legitimate resting state for a limiter guarding OUR OWN resources — a
+   * signup farm costs us rows.
+   *
+   * Password reset is the exception, because what it spends is not ours. It
+   * mails an address the CALLER chooses, so an unbounded one is a way to
+   * mail-bomb a stranger from our domain and take our sending reputation with
+   * it — and reputation is shared by every email we send, so the damage lands
+   * on password resets for everybody else. That is not a cost worth deferring
+   * to an observation week, and `off` was the production default with
+   * RATE_LIMIT_MODE unset.
+   */
+  always?: boolean;
+  /**
    * What a database failure means for THIS scope.
    *
    * Almost everything fails open, mirroring countIfUnder: an outage must not be
@@ -75,10 +92,10 @@ export const CEILINGS: Record<Scope, Ceiling> = {
   // Fails OPEN, unlike login: being wrong here costs a few duplicate emails,
   // while failing closed during an outage means nobody can recover an account
   // for as long as it lasts — and there is no other way back in.
-  "reset:email": { limit: 3, windowSec: 3600, failClosed: false },
+  "reset:email": { limit: 3, windowSec: 3600, failClosed: false, always: true },
   // And a ceiling on the caller, which the per-address one cannot see: walking a
   // list of a thousand addresses is one request each and never trips it.
-  "reset:ip": { limit: 10, windowSec: 3600, failClosed: false },
+  "reset:ip": { limit: 10, windowSec: 3600, failClosed: false, always: true },
 };
 
 /**
@@ -129,9 +146,11 @@ const UNBOUNDED = `INSERT INTO rate_limits (bucket, window_start, hits)
    RETURNING hits`;
 
 export async function takeToken(scope: Scope, key: string): Promise<Verdict> {
-  if (MODE === "off") return { ok: true };
-
   const c = CEILINGS[scope];
+  // `off` is honoured for every scope EXCEPT the ones marked `always`. See the
+  // field: those spend somebody else's inbox rather than our own resources, so
+  // "we have not measured this yet" is not a reason to leave them open.
+  if (MODE === "off" && !c.always) return { ok: true };
   const start = windowStart(c.windowSec);
   const bucket = `${scope}:${key}`;
   const retryAfterSec = Math.max(
@@ -146,7 +165,10 @@ export async function takeToken(scope: Scope, key: string): Promise<Verdict> {
   // is the entire number the real ceiling gets chosen from. countIfUnder does
   // the same for unlimited plans, and gives the reason: a plan that records
   // nothing is a plan we cannot price.
-  const bounded = MODE === "enforce";
+  // `|| c.always`, so a scope that must not be unbounded is bounded even in
+  // `count`: a counted-but-unbounded mail sender is an unbounded mail sender,
+  // and the observation week is not worth somebody else's inbox.
+  const bounded = MODE === "enforce" || Boolean(c.always);
 
   try {
     const r = await getPool(DB).query(

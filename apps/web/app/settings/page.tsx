@@ -38,6 +38,41 @@ const providerLabel: Record<string, string> = {
   credentials: "Email & password",
 };
 
+/**
+ * The outcome of clicking a confirmation link.
+ *
+ * `/verify` redeems the token and redirects here with the result, because it has
+ * nothing of its own to render — either the address is confirmed or the link is
+ * stale, and both are one line on a page the user already has. Without this the
+ * click ended on a settings page that looked exactly the same as before, which
+ * reads as a link that did nothing.
+ */
+function VerifiedNotice() {
+  const [state, setState] = useState<"1" | "0" | null>(null);
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("verified");
+    if (v === "1" || v === "0") {
+      setState(v);
+      // Take it out of the URL, so a refresh or a shared link does not repeat a
+      // one-off message about something that already happened.
+      const u = new URL(window.location.href);
+      u.searchParams.delete("verified");
+      window.history.replaceState({}, "", u.toString());
+    }
+  }, []);
+  if (!state) return null;
+  return state === "1" ? (
+    <div className="flex items-center gap-2 rounded-md border border-line bg-card px-3.5 py-2.5 text-[13px] text-ink-2">
+      <Check className="size-3.5 shrink-0 text-ink" />
+      Your email address is confirmed.
+    </div>
+  ) : (
+    <div className="rounded-md border border-line bg-card px-3.5 py-2.5 text-[13px] text-ink-3">
+      That confirmation link has expired or was already used. We can send another one.
+    </div>
+  );
+}
+
 export default function Settings() {
   const router = useRouter();
   const [acct, setAcct] = useState<Account | null>(null);
@@ -105,6 +140,7 @@ export default function Settings() {
       <TopBar />
       <div className="mx-auto flex w-full max-w-[1080px] flex-col gap-7 px-6 py-10">
         <h1 className="text-[28px] font-[450] tracking-[-0.02em] text-ink">Settings</h1>
+        <VerifiedNotice />
 
         <RowGroup title="Account">
           {/* Label on the left, value on the right — including the one value you
