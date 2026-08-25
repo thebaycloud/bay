@@ -1,0 +1,46 @@
+# Dependency updates, grouped and monthly.
+#
+# Monthly and grouped rather than the daily-per-package default, which on eight
+# lockfiles produces enough pull requests that the real ones stop being read.
+# Security updates are separate from this file — they are enabled in the
+# repository's settings and they arrive immediately, regardless of the schedule
+# below.
+#
+# One entry per lockfile because there is no root package.json: each app, service
+# and package installs on its own, and that is deliberate — see the per-directory
+# npm ci in .github/workflows/ci.yml.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /apps/web
+      - /apps/landing
+      - /packages/cli
+      - /packages/detector
+      - /services/proxy
+      - /services/static
+      - /services/screenshots
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      # Patch and minor together, one pull request. A major gets its own, because
+      # a major is a decision and not an update.
+      routine:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: gomod
+    directory: /services/fleet/agent
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+
+  # The workflows in here hold `id-token: write` and mint OIDC tokens Google
+  # trusts. A stale third-party action is the most plausible way this repository
+  # gets compromised, so these are watched more closely than the app deps.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

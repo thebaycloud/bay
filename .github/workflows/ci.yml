@@ -1,0 +1,137 @@
+# Every pull request runs what a person used to run on a laptop.
+#
+# Until this file existed there was no CI at all. The four other workflows in
+# here deploy and publish — they run on push to main, after the decision has been
+# made — and none of them runs the control plane's test suite. So an outside
+# contributor had no way to learn whether their change passed, and a merge to
+# main deployed to production with the 1,645-assertion suite unrun.
+#
+# NOTE ON MAIN BEING RED: at the time this was written, seven assertions in
+# apps/web/test/deploy-pipeline.test.ts fail on main — "every app builds a
+# generated image now", the has_web recording for a worker-only app, and the
+# rollback of a deploy that comes up broken. They are real failures, not
+# environment flakiness, and they are left visible on purpose. A CI that is
+# green because the failing suite was excluded teaches everyone to ignore CI.
+#
+# Nothing here needs a cloud project, a credential, or a database. If a test ever
+# does, it belongs behind a skip, not behind a secret in a public repository:
+# secrets do not reach workflows triggered by a fork's pull request, so a test
+# that needs one is a test that is red for every contributor.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A superseded pull request run is wasted capacity. Pushes to main are not
+# cancelled — a green tick on main is a record of a specific commit.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # One red suite should not hide the state of the other five.
+      fail-fast: false
+      matrix:
+        include:
+          - name: control plane
+            dir: apps/web
+          - name: edge proxy
+            dir: services/proxy
+          - name: static server
+            dir: services/static
+          - name: bay CLI
+            dir: packages/cli
+          - name: stack detector
+            dir: packages/detector
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22, matching every other workflow here and the runtime the control
+          # plane is built on. The CLI declares node>=20 and is tested on both,
+          # below.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+
+      - name: Install
+        working-directory: ${{ matrix.dir }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Test
+        working-directory: ${{ matrix.dir }}
+        run: npm test
+
+  # The CLI is the one thing here that runs on other people's machines, on
+  # whatever Node they have. package.json says >=20, so >=20 is tested.
+  cli-oldest-node:
+    name: bay CLI on Node 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/cli/package-lock.json
+      - working-directory: packages/cli
+        run: npm ci --no-audit --no-fund
+      - working-directory: packages/cli
+        run: npm test
+
+  # The same tests publish-agent.yml gates a release on, run before the merge
+  # rather than after it.
+  fleet-agent:
+    name: fleet agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: services/fleet/agent/go.sum
+      - name: Vet
+        working-directory: services/fleet/agent
+        run: go vet ./...
+      - name: Test
+        working-directory: services/fleet/agent
+        run: go test ./...
+
+  # Two drift checks that already exist as scripts and were run by hand: the
+  # prompt rules shared between the control plane and the landing page, and the
+  # subset fonts the OG image generator depends on. Both fail loudly and cost
+  # seconds, which is exactly the shape of thing CI should be holding.
+  drift:
+    name: generated files are current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/landing/package-lock.json
+      - name: Install
+        working-directory: apps/landing
+        run: npm ci --no-audit --no-fund
+      - name: Prompt rules are in sync
+        working-directory: apps/landing
+        run: npm run check:prompts
+      - name: OG fonts are the current subset
+        working-directory: apps/landing
+        run: npm run check:og-fonts

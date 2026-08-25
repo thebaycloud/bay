@@ -373,6 +373,10 @@ func (a *Agent) mayStart(id, image string, now time.Time) bool {
 		if a.quiet.allow("start:"+key, now, giveUpEvery) {
 			log.Printf("%s: has failed to start %d times, not trying again — deploy a new image to reset",
 				id, maxAttempts)
+			// No per-app note here: `mayStart` holds an id and an image, not the
+			// App, and `recordStartFailure` below already tells the app about
+			// every failure including the last — "failed to start (5/5)" says
+			// the same thing without threading a struct through this signature.
 		}
 		return false
 	}
@@ -394,6 +398,7 @@ func (a *Agent) mayStart(id, image string, now time.Time) bool {
 func (a *Agent) recordStartFailure(id string, app App, proc Process, err error, now time.Time) {
 	n := a.startFail.failWith(startKey(id, imageFor(app, proc)), now, err.Error())
 	log.Printf("%s: start failed (%d/%d): %v", id, n, maxAttempts, err)
+	notef(app, "error", "failed to start (%d/%d): %v", n, maxAttempts, err)
 
 	fault := classifyStartError(err)
 	a.mu.Lock()
@@ -1201,11 +1206,13 @@ func (a *Agent) reconcileOnce() error {
 					if a.quiet.allow("died:"+key, time.Now(), giveUpEvery) {
 						log.Printf("%s: has died %d times, not restarting — deploy a new image to reset",
 							id, maxAttempts)
+						notef(u.app, "error", "has died %d times, not restarting — ship a new image to reset", maxAttempts)
 					}
 					continue
 				}
 				n := a.startFail.fail(key, time.Now())
 				log.Printf("%s: not running, restarting (%d/%d)", id, n, maxAttempts)
+				notef(u.app, "warn", "was not running — restarting (%d/%d)", n, maxAttempts)
 			} else {
 				// Which of the three, because the answer changes what a person
 				// looks at next: a new image is a deploy, a new command is a
@@ -1220,6 +1227,7 @@ func (a *Agent) reconcileOnce() error {
 					}
 				}
 				log.Printf("%s: %s changed, restarting", id, what)
+				notef(u.app, "info", "restarting: the %s changed", what)
 				// A changed image means the release process has to run again
 				// before anything serves the new one.
 				needRelease[u.app.Slug] = u.app

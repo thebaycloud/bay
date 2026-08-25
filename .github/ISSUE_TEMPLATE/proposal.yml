@@ -1,0 +1,38 @@
+name: Proposal (something should be different)
+description: An idea, a missing feature, or a rough edge. Prose is the deliverable.
+labels: ["proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        **This repository takes contributions as text, not code** — see
+        [CONTRIBUTING.md](https://github.com/thebaycloud/bay/blob/main/CONTRIBUTING.md).
+        An issue is a fine place to start. If we are aligned, it becomes a file in
+        `adrs/` and we implement it.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong, missing, or slower than it should be
+    validations:
+      required: true
+
+  - type: textarea
+    id: want
+    attributes:
+      label: What you would like instead
+      description: >
+        One paragraph is a complete answer. So is one sentence, if the sentence is
+        specific.
+    validations:
+      required: true
+
+  - type: textarea
+    id: known
+    attributes:
+      label: Anything you already know
+      description: >
+        Where in the tree it lives, why the obvious fix does not work, what you
+        tried. Optional.
+    validations:
+      required: false

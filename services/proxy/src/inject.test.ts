@@ -9,6 +9,23 @@ process.env.AUTH_SECRET ??= "test-only-config-secret-do-not-log";
 const { injectOverlay, hasOverlay, isHtmlDocument } = await import("./inject");
 
 const asOwner = () => injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
+
+/**
+ * The OVERLAY's script, not merely the first one on the page.
+ *
+ * Two tests below used `/<script>...<\/script>/` and got the first block, which
+ * was the overlay while it was the only script. The browser collector is injected
+ * ahead of it now, so both silently started checking the collector instead — they
+ * still PASSED, which is the worst version of that: coverage lost with nothing to
+ * show for it. Selected by a marker only the overlay has.
+ */
+const overlayBlock = (html: string): string => {
+  const block = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map((m) => m[1])
+    .find((b) => b.includes("__ssOverlay"));
+  if (!block) throw new Error("no overlay script in the injected HTML");
+  return block;
+};
 const asVisitor = () => injectOverlay("<html><body>hi</body></html>", "q6doa", false, true);
 
 test("a visitor is never told the dashboard exists", () => {
@@ -28,15 +45,36 @@ test("the x-ray asks the app's own origin, not the control plane", () => {
   assert.equal(/fetch\((["'])https?:\/\/[^)]*_xray/.test(asOwner()), false);
 });
 
-test("the overlay script parses as JavaScript", () => {
-  // It is built as a string, so nothing in the type system checks it — a stray
-  // backtick or quote in a comment silently breaks the whole overlay, badge and
-  // toolbar included, on every hosted app at once.
+test("every injected script parses as JavaScript", () => {
+  // They are built as strings, so nothing in the type system checks them — a
+  // stray backtick or quote in a comment silently breaks them on every hosted app
+  // at once.
+  //
+  // EVERY block, not the first. This was one greedy match, which was right while
+  // there was one script; the browser collector made it span from the first
+  // `<script>` to the last `</script>` and try to parse `</script><script>` as
+  // JavaScript. Iterating is also strictly better: the collector is hand-written
+  // string too, and it now gets the same check.
   for (const html of [asOwner(), asVisitor()]) {
-    const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1];
-    assert.ok(script && script.length > 500, "no overlay script found");
-    assert.doesNotThrow(() => new Function(script as string));
+    const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    assert.ok(blocks.length >= 1, "no injected script found");
+    for (const [i, script] of blocks.entries()) {
+      assert.doesNotThrow(() => new Function(script), `script block ${i} does not parse`);
+    }
+    assert.ok(blocks.some((b) => b.length > 500), "the overlay script is missing");
   }
+});
+
+test("the browser collector is on every page, including one with no overlay", () => {
+  // An error happens to whoever is looking — usually a stranger, often on a Pro
+  // app with the badge removed, which is exactly the visit an owner cannot
+  // reproduce. Collecting only where an overlay is earned would have reported
+  // errors from every app except the ones paying us.
+  const bare = injectOverlay("<html><body></body></html>", "shop", false, false, null);
+  assert.match(bare, /_log/, "no collector on a page with no badge and no owner");
+  assert.doesNotThrow(() => {
+    for (const m of bare.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]);
+  });
 });
 
 test("an app with nothing to inject is left alone", () => {
@@ -81,8 +119,7 @@ test("the injected script never defines a global that would silently kill it", (
   // one of those names makes the WHOLE script fail to evaluate, with no error and
   // nothing rendered. This is how the recovered prototype was broken, and it
   // outlived the panel it was found in — the pill is still injected source.
-  const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
-  const script = /<script>([\s\S]*?)<\/script>/.exec(overlay)![1];
+  const script = overlayBlock(injectOverlay("<html><body>hi</body></html>", "q6doa", true, true));
   const globals = [...script.matchAll(/^(?:var|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
   const unforgeable = ["window", "document", "location", "top", "self", "parent", "frames", "closed", "length"];
   assert.deepEqual(globals.filter((n) => unforgeable.includes(n)), []);
@@ -93,8 +130,7 @@ test("the injected script evaluates, so a stray backtick cannot ship silently", 
   // closes the literal early: the browser then evaluates something that PARSES,
   // throws nothing, leaves the console clean, and renders wrong. That is how the
   // stylesheet once became the string "NaN".
-  const overlay = injectOverlay("<html><body>hi</body></html>", "q6doa", true, true);
-  const script = /<script>([\s\S]*?)<\/script>/.exec(overlay)![1];
+  const script = overlayBlock(injectOverlay("<html><body>hi</body></html>", "q6doa", true, true));
   assert.doesNotThrow(() => new Function(script));
 });
 

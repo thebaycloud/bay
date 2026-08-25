@@ -137,9 +137,15 @@ test("`app` is identified by the ABSENCE of a source field", () => {
   assert.match(both, /NOT jsonPayload\.source:\*/);
 });
 
-test("no sources asked for means no source restriction at all", () => {
+test("no sources asked for means no source RESTRICTION at all", () => {
+  // The edge arm mentions `source="edge"` as part of identifying who wrote a
+  // line — that is not a restriction the caller asked for, so it must survive.
+  // Asserted on the trailing clause instead: with no sources, nothing is ANDed on.
   const f = filterFor("shop", { sources: [] });
-  assert.doesNotMatch(f, /jsonPayload\.source/);
+  assert.doesNotMatch(f, /\) AND \(jsonPayload\.source=/);
+  assert.doesNotMatch(f, /NOT jsonPayload\.source:\*/);
+  // And with one, it is.
+  assert.match(filterFor("shop", { sources: ["browser"] }), /AND \(jsonPayload\.source="browser"\)/);
 });
 
 test("every level and every source is expressible", () => {
@@ -338,4 +344,53 @@ test("a window is always in the filter, because the library adds one otherwise",
   // retention we decided to make unlimited.
   const f = filterFor("shop", { since: "2020-01-01T00:00:00Z" });
   assert.match(f, /timestamp>="2020-01-01T00:00:00Z"/);
+});
+
+/* ── the two streams that used to be thrown away ─────────────────────────── */
+
+test("the edge's lines are claimed by a slug AND pinned to the proxy", () => {
+  // Edge lines are written to the PROXY's stdout — its service account has
+  // cloudsql.client and nothing else, so it cannot call the Logging API. That
+  // puts them under the proxy's service, so they are found by the slug in the
+  // payload. Pinning the writer too is what stops a tenant printing
+  // `{"slug":"someone-else","source":"edge"}` on its own stdout from appearing in
+  // that app's log view.
+  const f = filterFor("shop");
+  assert.match(f, /service_name="supersonic-proxy" AND jsonPayload\.slug="shop"/);
+});
+
+test("a platform line is named by its FILE, not by a field", () => {
+  // The ops agent ships every .log under /srv/apps/<slug>/ and parses none of
+  // them, so there is no field to read. The filename is the label, which is why
+  // this needed no config change on the node.
+  const r = normalise(
+    { severity: "DEFAULT", labels: { "agent.googleapis.com/log_file_path": "/srv/apps/shop/platform.log" } },
+    { message: '{"at":"2026-08-25T00:00:00Z","level":"warn","msg":"was not running — restarting (1/5)"}' },
+  );
+  assert.equal(r.source, "platform");
+  assert.equal(r.msg, "was not running — restarting (1/5)", "the JSON is unwrapped, not shown as braces");
+  // DEFAULT would have made a restart read as info; the node said `warn`.
+  assert.equal(r.level, "warn");
+  assert.equal(r.face, null, "platform is not a side of the app");
+});
+
+test("a half-written platform line is shown, not swallowed", () => {
+  // A node can die mid-line. Showing the raw text is worse than the message and
+  // far better than dropping evidence of the thing that killed it.
+  const r = normalise(
+    { labels: { "agent.googleapis.com/log_file_path": "/srv/apps/shop/platform.log" } },
+    { message: '{"level":"error","msg":"gave up sta' },
+  );
+  assert.equal(r.source, "platform");
+  assert.match(r.msg, /gave up sta/);
+});
+
+test("app.log is still app stdout, and platform.log is not", () => {
+  const app = normalise(
+    { labels: { "agent.googleapis.com/log_file_path": "/srv/apps/shop/app.log" } },
+    { message: "listening on 8080" },
+  );
+  assert.equal(app.source, "app");
+  assert.equal(app.face, "backend");
+  assert.equal(app.process, "web");
 });

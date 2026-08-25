@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { Check, Copy, Github, Loader2, Plus, Search, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { stateFor } from "@/lib/github-state";
 import {
   Dialog,
   DialogContent,
@@ -171,11 +172,14 @@ export function ShipNew() {
    * there — an older tab mid-flow keeps working — and an absent name means the
    * repository names the app, which is what it did before the name step existed.
    */
-  // `state=apps` so the setup redirect comes back HERE, to the app list, where
-  // this dialog can reopen. Without it the install landed on /new — a different
+  // Come back to the app list, where this dialog reopens. `stateFor` rather than
+  // the bare literal "apps" this used to send: `state` also carries a typed app
+  // name, and since "apps" is itself a valid slug the two facts were colliding —
+  // somebody naming their app `apps` was sent home with the name dropped. There
+  // is no name field on this screen today, so the second half is empty. Without it the install landed on /new — a different
   // page with the dialog gone, which is an install that worked and looked like
   // nothing had happened.
-  const connectUrl = links?.installUrl ? `${links.installUrl}?state=apps` : "#";
+  const connectUrl = links?.installUrl ? `${links.installUrl}?state=${stateFor("apps")}` : "#";
 
   /**
    * The rows the search leaves.

@@ -64,14 +64,11 @@ export function installationFromCallback(url: URL): CallbackDecision {
  * through a third party, and a redirect target taken from a string like that is
  * an open redirect — the one bug this function exists to not have.
  */
-export function returnPathFromCallback(url: URL): "/" | "/new" {
-  return (url.searchParams.get("state") ?? "").trim() === "apps" ? "/" : "/new";
-}
-
-export function nameFromCallback(url: URL): string {
-  const raw = (url.searchParams.get("state") ?? "").trim();
-  return /^[a-z0-9][a-z0-9-]{0,38}$/.test(raw) ? raw : "";
-}
+// The `state` scheme lives in `./github-state`, which imports nothing: this
+// module reaches `node:crypto` through `github-app`, and the dialog that WRITES
+// a state runs in the browser. Re-exported so server callers are unchanged.
+export { stateFor, returnPathFromCallback, nameFromCallback } from "./github-state";
+export type { ReturnKey, ReturnPath } from "./github-state";
 
 export interface Account { login: string; type: string }
 

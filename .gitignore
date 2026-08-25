@@ -54,3 +54,10 @@ apps/web/public/film/
 # fetches nothing. Generated; the source is the two files it is built from.
 apps/web/.film-studio.html
 .cache/
+
+# JetBrains project files. They were tracked until 25 Aug 2026, which put one
+# machine's module layout and Go import settings in a public repository.
+.idea/
+
+# The harness' own directory. Session state, not source.
+.claude/

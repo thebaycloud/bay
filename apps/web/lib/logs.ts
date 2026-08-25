@@ -36,6 +36,45 @@ import { rootDomain } from "./roots";
 
 const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || "supersonic-deploy-prod";
 
+/**
+ * The Cloud Run service the edge runs as.
+ *
+ * Named here because the fourth filter arm has to be scoped to it: edge lines are
+ * claimed by a slug inside the payload, and without also pinning the writer, any
+ * tenant printing `{"slug":"someone-else","source":"edge"}` to its own stdout
+ * would appear in that app's log view. The slug is the claim; this is the proof
+ * of who made it.
+ */
+const EDGE_SERVICE = process.env.EDGE_SERVICE_NAME || "supersonic-proxy";
+
+/**
+ * Where to look: the project, and the ten-year tenant bucket.
+ *
+ * BOTH, always, and that is not belt-and-braces — it is the only way to see a
+ * whole history. `_Default` holds thirty days of everything, including every line
+ * written before the tenant bucket existed. The bucket holds tenant lines for ten
+ * years, but only from the moment its sink was created. Either one alone has a
+ * hole in it, and the hole moves.
+ *
+ * Safe to ask for both: Cloud Logging deduplicates across resource names.
+ * Measured — the same query over `_Default` alone and over both returns the same
+ * twenty rows with zero repeated insertIds, not twenty-three.
+ *
+ * The tenant sink is ADDITIVE: nothing is excluded from `_Default`. Duplicating a
+ * tenant line costs about a tenth of a cent a month at today's volume, and it
+ * buys a thirty-day safety net for the case where the sink stops routing — which
+ * would otherwise lose the logs outright, silently, with the first sign being an
+ * empty screen. The exclusion is one command away if volume ever makes it worth
+ * the single point of failure.
+ */
+const TENANT_VIEW =
+  process.env.TENANT_LOG_VIEW ??
+  `projects/${PROJECT}/locations/global/buckets/bay-tenant-logs/views/_AllLogs`;
+
+function resourceNames(): string[] {
+  return TENANT_VIEW ? [`projects/${PROJECT}`, TENANT_VIEW] : [`projects/${PROJECT}`];
+}
+
 /** Our own published streams live under one log name per app. */
 export function logNameFor(slug: string): string {
   return `bay.app.${slug}`;
@@ -145,6 +184,26 @@ export function filterFor(slug: string, q: Query = {}): string {
     `(resource.type="cloud_run_revision" AND resource.labels.service_name="${slug}")`,
     `(resource.type="gce_instance" AND labels."agent.googleapis.com/log_file_path"=~"^/srv/apps/${slug}/")`,
     `(logName="projects/${PROJECT}/logs/${logNameFor(slug)}")`,
+    // The edge. Its lines are written to the PROXY's stdout — its service account
+    // has `roles/cloudsql.client` and nothing else, so it cannot call the Logging
+    // API, and Cloud Run turns a JSON line into a structured entry for free.
+    //
+    // THREE conditions, and each one is load-bearing. The service name, so a
+    // tenant printing `{"slug":"someone-else"}` on its own stdout cannot inject
+    // lines into another app's view — the slug is the claim, this is the proof of
+    // who made it. The slug, to pick the app. And `source="edge"`, because the
+    // proxy prints plenty of its own diagnostics that happen to carry a slug:
+    // without this, `{"needsBody":true,"site":true,"owner":false}` appeared in a
+    // tenant's log view as though their app had said it. Seen in production
+    // before the third condition existed.
+    //
+    // `browser` rides the same path: the collector posts to the app's own origin,
+    // which is the proxy, so those lines are written by the same process to the
+    // same stdout. Deliberately NOT in the tenant sink's filter, which is how
+    // browser events get thirty days while everything else gets ten years —
+    // retention expressed by which arm a line matches rather than by a second
+    // policy somebody has to remember.
+    `(resource.type="cloud_run_revision" AND resource.labels.service_name="${EDGE_SERVICE}" AND jsonPayload.slug="${slug}" AND (jsonPayload.source="edge" OR jsonPayload.source="browser"))`,
   ];
   const parts = [`(${homes.join(" OR ")})`];
 
@@ -233,6 +292,23 @@ function processOf(path: string | undefined): string | null {
   return file === "app" ? "web" : file || null;
 }
 
+/**
+ * The node's account of what it did to an app.
+ *
+ * Named by the FILE, not by a field, and that is the whole trick. The ops agent
+ * already ships every `.log` under `/srv/apps/<slug>/` and the node arm of the
+ * filter already
+ * anchors on that slug, so the fleet agent writing `platform.log` beside `app.log`
+ * gets its lines labelled with the right app through plumbing that exists —
+ * no config change on the node, no new permission, no second pipeline.
+ *
+ * The trade is that the payload arrives as text rather than parsed, so the source
+ * is derived here instead of read from a field.
+ */
+function isPlatformFile(path: string | undefined): boolean {
+  return Boolean(path && path.endsWith("/platform.log"));
+}
+
 function timeOf(t: RawEntry["timestamp"]): string {
   if (!t) return "";
   if (typeof t === "string") return t;
@@ -305,9 +381,10 @@ export function isLibraryNoise(payload: unknown): boolean {
 export function normalise(e: RawEntry, decoded?: unknown): LogRow {
   const j = ((decoded && typeof decoded === "object" ? decoded : plain(e.jsonPayload)) ??
     {}) as Record<string, unknown>;
-  const ours = str(j.source) as Source | null;
-  const source: Source = ours && SOURCES.includes(ours) ? ours : "app";
   const filePath = e.labels?.["agent.googleapis.com/log_file_path"];
+  const ours = str(j.source) as Source | null;
+  const source: Source =
+    ours && SOURCES.includes(ours) ? ours : isPlatformFile(filePath) ? "platform" : "app";
 
   // PRESENCE, not truthiness. `str()` treats "" as absent, so a blank line — of
   // which npm prints plenty — fell through to the JSON blob and rendered as
@@ -315,7 +392,21 @@ export function normalise(e: RawEntry, decoded?: unknown): LogRow {
   const text = [j.msg, e.textPayload, j.message].find((v) => typeof v === "string") as
     | string
     | undefined;
-  const msg = text ?? (Object.keys(j).length ? JSON.stringify(j) : "");
+  let msg = text ?? (Object.keys(j).length ? JSON.stringify(j) : "");
+  let noted: { level?: string; msg?: string } | null = null;
+
+  // The node writes JSON into platform.log; the ops agent ships files as text and
+  // parses nothing, so what arrives is the JSON as a string. Unwrapped here —
+  // once, for the one file we know does this — rather than shown to somebody as
+  // a line of braces.
+  if (isPlatformFile(filePath) && msg.startsWith("{")) {
+    try {
+      const o = JSON.parse(msg) as { level?: string; msg?: string };
+      if (typeof o.msg === "string") { noted = o; msg = o.msg; }
+    } catch {
+      // Not ours, or half-written by a node that died mid-line. Shown as it is.
+    }
+  }
 
   const face = str(j.face);
   const status = num(j.status);
@@ -327,7 +418,12 @@ export function normalise(e: RawEntry, decoded?: unknown): LogRow {
     at: timeOf(e.timestamp),
     source,
     face: face === "frontend" || face === "backend" ? face : source === "app" ? "backend" : null,
-    level: levelOf(e.severity),
+    // The node's own word for it when it said one: these lines arrive as
+    // severity DEFAULT like everything else from a file, so without this a
+    // platform error would read as info.
+    level: (noted?.level && (LEVELS as string[]).includes(noted.level)
+      ? (noted.level as Level)
+      : levelOf(e.severity)),
     msg: msg.length > 4000 ? `${msg.slice(0, 4000)}…` : msg,
     process: str(j.process) ?? processOf(filePath),
     release: str(j.release),
@@ -433,6 +529,7 @@ export async function readLogs(
 
   const [entries, next] = (await logging().getEntries({
     filter,
+    resourceNames: resourceNames(),
     orderBy: "timestamp desc",
     pageSize,
     autoPaginate: false,
@@ -465,7 +562,7 @@ export function tailLogs(
   const { since: _drop, until: _drop2, ...live } = q;
   const stream = logging().tailEntries({
     filter: filterFor(slug, live),
-    resourceNames: [`projects/${PROJECT}`],
+    resourceNames: resourceNames(),
   });
 
   // The tail hands back the same `{ metadata, data }` wrapper the paged reader

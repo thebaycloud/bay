@@ -7,6 +7,7 @@ import { config } from "./config";
 import { injectOverlay, isHtmlDocument, needsBody } from "./inject";
 import { page502 } from "./pages";
 import { record } from "./xray";
+import { publishRequest } from "./publish";
 
 export async function forward(
   req: IncomingMessage,
@@ -113,6 +114,16 @@ export async function forward(
       // key is per-connection so two anonymous people are two people.
       who: visitor.email ?? "",
       anonId: String(req.socket?.remotePort ?? Math.random()),
+    });
+    // The same measurement, kept rather than only counted. `record` above is the
+    // in-memory aggregate that answers "what is happening"; this is the line that
+    // answers "what happened", which nothing kept until now.
+    publishRequest({
+      slug: inject?.slug ?? "",
+      method: req.method ?? "GET",
+      url: req.url ?? "/",
+      status,
+      ms: Date.now() - startedAt,
     });
   };
 

@@ -1,0 +1,4 @@
+# Every path, all three of us. This is not a review-routing table — it is what
+# makes GitHub name a reviewer on an outside pull request instead of leaving it
+# unassigned in a public repository.
+*  @arsenkylyshbek @onlytenders @Ilmak17

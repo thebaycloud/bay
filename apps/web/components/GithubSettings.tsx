@@ -5,6 +5,7 @@ import { ExternalLink, Github, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Row, RowGroup } from "@/components/panel/atoms";
 import { RowSkeleton } from "@/components/Skeleton";
+import { stateFor } from "@/lib/github-state";
 
 /**
  * GitHub, as a thing you can check rather than a thing you can only start.
@@ -59,7 +60,7 @@ export function GithubSettings() {
           title="Not connected"
         >
           <Button asChild size="sm">
-            <a href={links?.installUrl ?? "#"}>
+            <a href={links?.installUrl ? `${links.installUrl}?state=${stateFor("settings")}` : "#"}>
               <Github className="size-3.5" />
               Connect GitHub
             </a>
@@ -82,6 +83,12 @@ export function GithubSettings() {
           title={c.accountLogin}
         >
           <Button asChild className="h-7 px-2.5 text-[13px]" size="sm" variant="outline">
+            {/* No `state` on this one, and it cannot have one. "Choose
+                repositories" goes to GitHub's own installation settings page,
+                which is not our install URL and takes no parameters of ours —
+                GitHub sends the person to the App's Setup URL afterwards with
+                only its own. So this flow lands on the app list rather than back
+                here, and that is GitHub's shape, not a decision. */}
             <a href={links?.configureUrl ?? "#"}>Choose repositories</a>
           </Button>
           <Button
@@ -104,7 +111,7 @@ export function GithubSettings() {
       {conns?.length ? (
         <div className="flex items-center gap-2 px-4 py-3">
           <Button asChild size="sm" variant="outline">
-            <a href={links?.installUrl ?? "#"}>
+            <a href={links?.installUrl ? `${links.installUrl}?state=${stateFor("settings")}` : "#"}>
               <Plus className="size-3.5" />
               Add another account
             </a>

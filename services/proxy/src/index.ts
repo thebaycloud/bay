@@ -8,6 +8,7 @@ import { assembleReading, liveDeps } from "./reading";
 import { wantsHtml } from "./negotiate";
 import { viewerOnce, authUrls, hasCredential } from "./session";
 import { decideAccess, domainOf } from "./access";
+import { handleBrowserLog } from "./browserlog";
 import { decideEdge } from "./edge";
 import { doorFor, mustReturnToPlatform, platformUrl } from "./door";
 import { pickRoute, pickPrefix } from "./routes";
@@ -77,6 +78,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // bay.ts for why this is a proxy and not a script tag.
   const site = app.umami_website_id && app.analytics_enabled ? { websiteId: app.umami_website_id } : null;
   if (await serveBay(req, res, site)) return;
+
+  // What the app's own pages report from the browser — the one stream we cannot
+  // see from this side of the wire.
+  //
+  // HERE, right after the app is resolved and before anything else looks at the
+  // request, because `slug` is the whole security design: it comes from the Host
+  // the proxy already matched, never from the body, so a page cannot claim to be
+  // another app any more than it can serve another app's traffic. Same origin, so
+  // no CORS and no credentials. POST only, so a tenant with its own /_log keeps
+  // it for every other method.
+  if (await handleBrowserLog(req, res, slug)) return;
 
   // Who is asking, resolved on demand and only ever once. Three of the branches
   // below need it and no two of them are on the same path, so each asks for it
