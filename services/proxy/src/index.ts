@@ -17,11 +17,29 @@ import { forward } from "./forward";
 import { serveBay } from "./bay";
 import { analyticsDetail } from "./analytics";
 
-function html(res: ServerResponse, status: number, body: string) {
+/**
+ * A page WE generated, not the app's.
+ *
+ * `x-bay-page` is the whole point of this function having a fourth argument. A
+ * building app is served its holding page with status **200** — line 252 below —
+ * so anything treating 200 as "the app is up" reports a deploy as live while the
+ * build is still queued. That is not hypothetical: it cost somebody twenty
+ * minutes and a deploy report, watching an address answer 200 for two stalled
+ * builds that never produced a revision.
+ *
+ * The status alone cannot carry the fact, because 200 is the correct status for
+ * this page — it IS a page, successfully served. So the fact goes in a header,
+ * from the one place every platform-generated page passes through, and the health
+ * probe reads it instead of inferring from a number. See `lib/probe-run.ts`.
+ */
+function html(res: ServerResponse, status: number, body: string, kind = "page") {
   res.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "private, no-store",
     "Vary": "Accept, Cookie",
+    // Present on our pages and absent on the app's, so "is this the app" is a
+    // header lookup rather than a guess about content.
+    "x-bay-page": kind,
   });
   res.end(body);
 }
@@ -48,9 +66,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // carries nothing and has to be looked up. See door.ts — nothing below this
   // point cares which of the two it was, except the return immediately after it.
   const door = doorFor(req.headers.host, config.rootDomains);
-  if (door.kind === "nowhere") return html(res, 404, page404());
+  if (door.kind === "nowhere") return html(res, 404, page404(), "unknown-host");
   const app = door.kind === "issued" ? await lookupApp(door.slug) : await lookupAppByHost(door.hostname);
-  if (!app) return html(res, 404, page404());
+  if (!app) return html(res, 404, page404(), "no-such-app");
   const slug = app.slug;
 
   // A non-public app cannot be opened on a domain the session cookie does not
@@ -229,7 +247,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // A 5xx here says the platform is broken, which is what it said about a
     // working bot for two days. Checked before the room, because an app that
     // deployed fine as a worker was never being born — there is nothing to watch.
-    if (action.page === "noweb") return html(res, 404, pageNoWeb(slug));
+    if (action.page === "noweb") return html(res, 404, pageNoWeb(slug), "no-web-process");
 
     // The room. An app that has never once come up gets it, whatever state the
     // deploy is in — building, failed, or stopped — because for that app all
@@ -249,13 +267,20 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       // reads that as healthy and an agent reads it as shipped. The visitor sees
       // the same room either way, which is the honest picture; the status line is
       // for the machines.
-      return html(res, action.page === "building" ? 200 : 503, pageRoom(slug, { owner }));
+      // 200 for a building app, because this page is a page and it rendered.
+      // The header is what stops that being read as "the app is up".
+      return html(
+        res,
+        action.page === "building" ? 200 : 503,
+        pageRoom(slug, { owner }),
+        action.page === "building" ? "building" : "waiting",
+      );
     }
 
     // 503, not 200 and not 502. 502 ("deployed but not answering") describes a
     // working app having a bad moment, which is not what either of these is.
-    if (action.page === "failed") return html(res, 503, pageFailed(slug, action.reason));
-    return html(res, 503, pageStalled(slug));
+    if (action.page === "failed") return html(res, 503, pageFailed(slug, action.reason), "deploy-failed");
+    return html(res, 503, pageStalled(slug), "stalled");
   }
 
   // Which service gets this request. One-service apps have no routes and land on
@@ -317,7 +342,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // Soft gate instead of an abrupt login redirect: offer sign-in or sign-up,
     // both carrying a callback so they land back on this app afterward.
     const { loginUrl, signupUrl } = authUrls(req);
-    return html(res, 401, pageGate(loginUrl, signupUrl));
+    return html(res, 401, pageGate(loginUrl, signupUrl), "sign-in");
   }
 
   // A domain rule is only asked about for a `shared` app, and only then is the
@@ -337,9 +362,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     // sends them to bother the owner for something they already have — so they
     // are told the one move that opens it.
     if (domainRuleMatches && !visitorEmailVerified) {
-      return html(res, 403, pageProve(visitorDomain, authUrls(req).loginUrl));
+      return html(res, 403, pageProve(visitorDomain, authUrls(req).loginUrl), "prove-address");
     }
-    return html(res, 403, page403(slug, `https://app.${config.rootDomains[0]}`));
+    return html(res, 403, page403(slug, `https://app.${config.rootDomains[0]}`), "no-access");
   }
 
   const workspaceDomain = (await workspaceDomainOf(app.workspace_id)) ?? "";

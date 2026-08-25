@@ -31,10 +31,32 @@ async function getHandler(_req: Request, { params }: { params: { slug: string } 
     const { keys, note } = await envKeysFor(slug);
     // Not placed is not the same as having no variables, and answering `[]` to the
     // first would read as an app that simply has none.
-    if (!keys) return Response.json({ keys: [], error: note });
+    //
+    // `note`, NOT `error`. The CLI prints any `error` field it receives, prefixed
+    // with `!`, so returning an explanation here made every `bay env` on an
+    // unplaced app look like a failure — and a deploy report recorded exactly
+    // that: `bay env` saying "no env vars set" for an app that had been told it
+    // was carrying one.
+    if (!keys) return Response.json({ keys: [], note });
     return Response.json({ keys });
   } catch (e) {
-    return Response.json({ keys: [], error: e instanceof Error ? e.message : String(e) });
+    // NOT the raw message. `envKeysFor` reaches `describeService`, which shells
+    // out to `gcloud run services describe` and fails with
+    // `ERROR: (gcloud.run.services.describe) Cannot find service [slug]` for
+    // every app on a fleet node — which is every new app. The CLI printed that
+    // verbatim on every successful ship, so a green deploy ended with a Google
+    // Cloud stack trace that read like a failure.
+    //
+    // The fourth place this same mistake has been found. `envKeysFor` exists
+    // because of the first.
+    const raw = e instanceof Error ? e.message : String(e);
+    const ours = /gcloud|Cannot find service/i.test(raw);
+    return Response.json({
+      keys: [],
+      note: ours
+        ? "we could not read this app's environment just now"
+        : raw.slice(0, 200),
+    });
   }
 }
 

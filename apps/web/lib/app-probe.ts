@@ -12,6 +12,19 @@
  */
 
 export interface ProbeResult {
+  /**
+   * Set when the EDGE answered rather than the app: `building`, `stalled`,
+   * `deploy-failed`, `sign-in`, `no-access`, `no-such-app`. Absent when the app's
+   * own process answered — which is the only case in which a 200 means what it
+   * looks like.
+   *
+   * A building app is served the platform's holding page with status 200, because
+   * that page is a page and it rendered. Two stalled builds answered 200 for
+   * twenty minutes while producing no revision and no image, and a deploy report
+   * had to note that "anyone treating a 200 as success would have reported this
+   * deploy as live". The number cannot carry the fact; this can.
+   */
+  platformPage?: string;
   /** HTTP status, or 0 when nothing answered. */
   code: number;
   ms: number;
@@ -80,6 +93,38 @@ export function bodyPreview(body: string | undefined, contentType: string | unde
 export function probeSummary(r: ProbeResult): ProbeSummary {
   const preview = bodyPreview(r.body, r.contentType);
   if (!r.code) return { verdict: "down", label: "no answer", preview };
+
+  // OUR page is never a verdict about their app.
+  //
+  // A building app is served the platform's holding page with status 200, so this
+  // function used to answer `ok` — about an app whose build had not started. Two
+  // stalled builds answered 200 for twenty minutes with no revision and no image,
+  // and the only reason anybody noticed was that a person went and read the
+  // status separately.
+  //
+  // `warn` and not `down`: the app is not broken, it is not there yet, and those
+  // are different things. The label says which page it was, because "200" and
+  // "still building" are the same number and opposite news.
+  if (r.platformPage) {
+    const said: Record<string, string> = {
+      building: "still building — this is our holding page, not your app",
+      waiting: "waiting to start — this is our holding page, not your app",
+      stalled: "the deploy stalled — this is our page",
+      "deploy-failed": "the last deploy failed — this is our page",
+      "sign-in": "asking the visitor to sign in — this is our page",
+      "prove-address": "asking the visitor to prove their address — this is our page",
+      "no-access": "refusing the visitor — this is our page",
+      "no-such-app": "no app at that address",
+      "unknown-host": "no app at that address",
+      "no-web-process": "this app serves no web process",
+    };
+    return {
+      verdict: "warn",
+      label: said[r.platformPage] ?? `our page (${r.platformPage})`,
+      preview,
+    };
+  }
+
   const verdict = r.code >= 500 ? "down" : r.code >= 400 ? "warn" : "ok";
   return { verdict, label: `${r.code} · ${Math.round(r.ms)} ms`, preview };
 }

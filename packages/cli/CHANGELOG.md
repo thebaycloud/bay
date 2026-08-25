@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.1.0
+
+**Everything below `Unreleased` was already written and none of it was shipped.**
+
+`1.0.0` sat in main looking released while npm held a tarball without
+`bay share`, without `ship --name`, and without the thebay.cloud rename. The
+publish workflow guards on the version field and a no-op publish reports success,
+so every push since said "Publish CLI: success" and changed nothing anybody could
+install. Its own comment records this happening twice before: "BOTH times the
+version sat in main looking released."
+
+Found from the outside, by a deploy report: `bay ship --name` was rejected as an
+unknown flag and `bay share <app> public` printed help, both of which the manual
+documents and the repository implements. Verified by pulling the published
+tarball and diffing `SHIP_FLAGS`.
+
+So this is a version bump and nothing else. What it releases:
+
+- `bay share <app> public|private|shared`, and the whole access surface — add and
+  remove people, company rules, pending requests. Implemented, never published.
+- `bay ship --name <name>`, so an app is not stuck with a generated slug.
+- The rename: `bay` as the command, `thebay.cloud` as the domain, `~/.bay` with
+  `~/.supersonic` still honoured.
+- `bay logs` as a filter rather than a line count — a level, `source=`, `status=`,
+  `path=`, or free text — and `--follow` as a real stream over server-sent events
+  instead of polling every 2.5 seconds against a set of every line it had seen.
+
 ## Unreleased
 
 **The command is `bay`, and the package is `bay-cli`.**

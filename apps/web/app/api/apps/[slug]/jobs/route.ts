@@ -12,6 +12,7 @@ async function getHandler(_req: Request, { params }: { params: { slug: string } 
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
   if (!uid || !(await ownsApp(slug, uid))) return Response.json({ jobs: [], error: "forbidden" }, { status: 403 });
+  // A gcloud failure is not a job list, and is not the caller's to read.
   try { return Response.json({ jobs: await listJobs(slug) }); }
   catch (e) { return Response.json({ jobs: [], error: msg(e) }); }
 }

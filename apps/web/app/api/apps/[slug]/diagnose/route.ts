@@ -11,6 +11,7 @@ import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { diagnoseError } from "@/lib/agent";
 import { getDeploy } from "@/lib/deploys";
+import { readLatestRunLines } from "@/lib/deploy-events";
 
 const ENV = { ...process.env, PATH: `/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}` } as NodeJS.ProcessEnv;
 
@@ -48,7 +49,34 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
       if (deploy?.status === "failed") {
         error = deploy.error || "the last deploy failed";
       } else if (deploy?.status === "building") {
-        return Response.json({ healthy: false, message: `${slug} is still deploying — nothing to diagnose until it lands` });
+        // HOW LONG, and whether anything has come out of it.
+        //
+        // "Still deploying" is true and useless after twelve minutes. A deploy
+        // report recorded two builds sitting at `reserved` for twelve and nine
+        // minutes, having emitted a single status echo between them, while this
+        // endpoint said the same seven words each time. The actionable fact is
+        // not that it is building — it is that it has been building for a quarter
+        // of an hour and has printed nothing, which is a stall and not progress.
+        // `updatedAt` is the only clock on the row, and during a STALL it is the
+        // right one: nothing is updating it, so it holds the moment progress
+        // stopped rather than the moment the deploy began. That is the number
+        // somebody wants — how long since anything happened.
+        const since = deploy.updatedAt ?? null;
+        const mins = since ? Math.floor((Date.now() - new Date(since).getTime()) / 60000) : null;
+        const lines = await readLatestRunLines(slug, 5).catch(() => []);
+        const stalled = mins !== null && mins >= 5 && lines.length <= 1;
+        return Response.json({
+          healthy: false,
+          message: stalled
+            ? `${slug} has been deploying for ${mins} minutes and its build has printed nothing` +
+              `${deploy.stage ? ` — stuck at "${deploy.stage}"` : ""}. That is a stall rather than a slow build:` +
+              ` nothing here will change by waiting. Ship again with --prebuilt to build on your machine and skip ours.`
+            : `${slug} is still deploying${mins !== null ? ` (${mins} min)` : ""}` +
+              `${deploy.stage ? ` — ${deploy.stage}` : ""} — nothing to diagnose until it lands`,
+          stalled,
+          minutes: mins,
+          stage: deploy.stage ?? null,
+        });
       } else {
         return Response.json({ healthy: true, message: "no production errors in the last 7 days — nothing to diagnose" });
       }

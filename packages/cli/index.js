@@ -444,10 +444,25 @@ async function diagnose(args) {
   const d = await api(`/api/apps/${app}/diagnose`, { method: "POST", body: { error: args.error } });
   if (args.json) return json(d);
   if (d.healthy) { print(green("✓ ") + d.message); return; }
+
+  // A DIAGNOSIS WITHOUT A PROMPT IS STILL A DIAGNOSIS.
+  //
+  // The server answers `{healthy:false, message:"… is still deploying — nothing
+  // to diagnose until it lands"}` for a build that has not finished, and this
+  // used to fall through to `(no prompt returned)` and throw the message away. A
+  // deploy report recorded exactly that: twelve minutes into a stalled build, the
+  // command whose job is to explain the failure printed an empty prompt and no
+  // reason.
+  if (!d.fixPrompt) {
+    if (d.message) { info(d.message); return; }
+    info("nothing to diagnose — no failure was recorded for this app");
+    return;
+  }
+
   info(dim("diagnosing: ") + (d.subject || d.error || "").slice(0, 200));
   print("");
   print(bold("Fix prompt (paste into your coding agent):"));
-  print(d.fixPrompt || "(no prompt returned)");
+  print(d.fixPrompt);
 }
 
 async function env(args) {
@@ -456,7 +471,10 @@ async function env(args) {
   if (!sub) {
     const d = await api(`/api/apps/${app}/env`);
     if (args.json) return json(d.keys || []);
-    if (!(d.keys || []).length) { info("no env vars set"); return; }
+    // The note, when there is one. "No env vars set" and "we could not read them"
+    // are opposite facts, and printing the first about the second is how a deploy
+    // report came to record a variable as missing that was actually there.
+    if (!(d.keys || []).length) { info(d.note || "no env vars set"); return; }
     for (const k of d.keys) print(k);
     return;
   }

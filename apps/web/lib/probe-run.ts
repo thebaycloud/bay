@@ -135,7 +135,24 @@ export async function probeApp(slug: string, ownerId: string): Promise<ProbeAnsw
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const ms = Date.now() - started;
-    result = { code: res.status, ms, contentType: res.headers.get("content-type") ?? undefined, body: await readHead(res) };
+    // WHOSE page this is, from the edge rather than from the status code.
+    //
+    // A building app is served OUR holding page with status 200, because that
+    // page is a page and it rendered. So a probe reading only the number reports
+    // an app as up while its build is still queued — which is exactly what
+    // happened: two stalled builds, an address answering 200 throughout, and a
+    // deploy report noting that "anyone treating a 200 as success would have
+    // reported this deploy as live".
+    //
+    // `x-bay-page` is set by `html()` in services/proxy on every page the
+    // platform generates, and by nothing the app serves.
+    result = {
+      code: res.status,
+      ms,
+      contentType: res.headers.get("content-type") ?? undefined,
+      platformPage: res.headers.get("x-bay-page") ?? undefined,
+      body: await readHead(res),
+    };
   } catch {
     // Timeout, DNS, connection refused: nothing answered. Code 0 is what
     // probeSummary reads as "no answer" rather than inventing a status.
