@@ -1,4 +1,14 @@
-import { BRAND, CONTACT_EMAIL, DOMAIN, SITE, SITE_NAME } from "@/lib/brand";
+import {
+  ADDRESS,
+  BRAND,
+  CONTACT_EMAIL,
+  GITHUB_URL,
+  HAS_ADDRESS,
+  LEGAL_NAME,
+  PKG,
+  SITE,
+  SITE_NAME,
+} from "@/lib/brand";
 
 /**
  * JSON-LD, so an AI reading the page can answer "what is this and who runs it"
@@ -14,7 +24,8 @@ import { BRAND, CONTACT_EMAIL, DOMAIN, SITE, SITE_NAME } from "@/lib/brand";
  * organization node in the same block.
  *
  * Everything here has to be true. Structured data that overstates the product is
- * worse than none, because it is the version a model quotes back.
+ * worse than none, because it is the version a model quotes back. Which is why
+ * the postal address is conditional rather than approximate: see lib/brand.ts.
  */
 export function StructuredData() {
   const graph = {
@@ -54,10 +65,14 @@ export function StructuredData() {
       {
         "@type": "Organization",
         "@id": `${SITE}/#organization`,
-        name: "Supersonic Software, Inc.",
+        name: LEGAL_NAME,
         alternateName: SITE_NAME,
         url: SITE,
         logo: `${SITE}/icon-512.png`,
+        // The profiles that are unambiguously this organization. sameAs is how a
+        // model resolves "Bay Cloud" to an entity rather than to a bay: the name
+        // is generic and these two are not.
+        sameAs: [GITHUB_URL, `https://www.npmjs.com/package/${PKG}`],
         contactPoint: [
           {
             "@type": "ContactPoint",
@@ -66,6 +81,20 @@ export function StructuredData() {
             url: `${SITE}/contact`,
           },
         ],
+        // Omitted entirely until every part is set; see lib/brand.ts for why a
+        // half-filled PostalAddress is worse than none.
+        ...(HAS_ADDRESS
+          ? {
+              address: {
+                "@type": "PostalAddress",
+                streetAddress: ADDRESS.street,
+                addressLocality: ADDRESS.locality,
+                ...(ADDRESS.region ? { addressRegion: ADDRESS.region } : {}),
+                ...(ADDRESS.postalCode ? { postalCode: ADDRESS.postalCode } : {}),
+                addressCountry: ADDRESS.country,
+              },
+            }
+          : {}),
       },
     ],
   };

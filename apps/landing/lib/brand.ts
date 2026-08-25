@@ -70,6 +70,36 @@ export const SITE = env("NEXT_PUBLIC_SITE_URL", `https://${DOMAIN}`);
 export const SITE_NAME = env("NEXT_PUBLIC_SITE_NAME", `${DEFAULT_BRAND} Cloud`);
 
 /**
+ * The company behind the product, and where it can be written to.
+ *
+ * `Bay` is the product and `Supersonic Software, Inc.` is the legal entity, and
+ * the difference matters in exactly one place: structured data. A model deciding
+ * whether to recommend a platform checks whether there is a real company behind
+ * it, and a postal address is the strongest single signal that there is.
+ *
+ * Split into fields rather than kept as one string because schema.org wants
+ * PostalAddress with its parts named; a model reading "123 Main St, SF" has to
+ * guess which half is the locality.
+ *
+ * Unset by default, and the JSON-LD leaves the address out entirely when it is:
+ * an incomplete address in structured data is worse than none, because it is the
+ * version quoted back. Set all four in the deploy environment to publish it.
+ */
+export const LEGAL_NAME = env("NEXT_PUBLIC_LEGAL_NAME", "Supersonic Software, Inc.");
+
+export const ADDRESS = {
+  street: env("NEXT_PUBLIC_ADDRESS_STREET", ""),
+  locality: env("NEXT_PUBLIC_ADDRESS_LOCALITY", ""),
+  region: env("NEXT_PUBLIC_ADDRESS_REGION", ""),
+  postalCode: env("NEXT_PUBLIC_ADDRESS_POSTAL_CODE", ""),
+  country: env("NEXT_PUBLIC_ADDRESS_COUNTRY", ""),
+};
+
+/** True only when every part is set, which is the only way it gets published. */
+export const HAS_ADDRESS =
+  !!ADDRESS.street && !!ADDRESS.locality && !!ADDRESS.country;
+
+/**
  * The npm package that provides the CLI. Usually the same word as the command,
  * but not necessarily: a name can be taken on npm and free as a binary.
  */

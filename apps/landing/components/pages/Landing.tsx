@@ -19,7 +19,7 @@ import { ArrowRight, Check, Copy, Lock, Terminal } from "lucide-react";
 import { Mark } from "@/components/Mark";
 import { cn } from "@/lib/utils";
 import { Dithering, MeshGradient } from "@paper-design/shaders-react";
-import { APP_URL, BRAND, CLI, CONTACT_EMAIL, DOMAIN, GITHUB_REPO, GITHUB_URL, PKG } from "@/lib/brand";
+import { APP_URL, BRAND, CLI, DOMAIN, GITHUB_REPO, GITHUB_URL, PKG } from "@/lib/brand";
 import { TEMPLATES } from "@/lib/templates";
 import { onboardPrompt, selfhostPrompt } from "@/lib/prompts";
 import { Stars } from "@/components/Stars";
@@ -925,6 +925,14 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
     <div className="bay bg-ground font-sans text-[16px] leading-[1.55] tracking-[-0.008em] text-ink antialiased">
       <SiteNav t={t} locale={locale} />
 
+      {/* Everything between the nav and the footer, named. The landmark is for
+          two readers at once: a screen reader gets a "skip to content" target,
+          and an agent extracting the page gets a boundary it does not have to
+          guess at. Without it the h1 sits in a bare <header> beside the nav's
+          own markup, and a reader looking for the main content of the document
+          has nothing to look inside. */}
+      <main id="content">
+
       {/* ── hero ─────────────────────────────────────────────────────── */}
 
       {/* Roughly 380px of content and then air. Both references leave more than
@@ -1269,6 +1277,8 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
         </div>
       </section>
 
+      </main>
+
       {/* ── footer ───────────────────────────────────────────────────── */}
 
       <footer className="border-t border-line pb-10 pt-12">
@@ -1291,6 +1301,7 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
             {
               head: t.footer.build,
               links: [
+                [t.footer.docs, "/docs"],
                 [t.footer.agentManual, "/llms.txt"],
                 [t.footer.shipAnApp, `${APP_URL}/new`],
                 [t.footer.signIn, APP_URL],
@@ -1298,8 +1309,15 @@ export default function Landing({ t, locale }: { t: Messages; locale: Locale }) 
             },
             {
               head: t.footer.company,
+              // The pages, not the mailto. /about, /contact and /privacy are
+              // what a person checks before they trust a platform with their
+              // code, and what a model checks before it will recommend one —
+              // and neither can check a page nothing links to. The contact
+              // page carries the address this used to open directly.
               links: [
-                [t.footer.contact, `mailto:${CONTACT_EMAIL}`],
+                [t.footer.about, "/about"],
+                [t.footer.contact, "/contact"],
+                [t.footer.privacy, "/privacy"],
                 [t.footer.github, GITHUB_URL],
               ],
             },

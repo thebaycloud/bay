@@ -46,7 +46,11 @@ function resourceItems(t: Messages): Item[] {
     // The changelog is English only and lives outside the locale tree, so this
     // link is deliberately not run through localePath.
     { label: t.nav.changelog, href: "/changelog" },
-    { label: t.nav.docs, href: "/llms.txt" },
+    // Was /llms.txt, which is the same document and the wrong end of it for
+    // somebody who clicked a menu item labelled Docs: a browser handed a
+    // markdown file renders it as one wall of unstyled text. /docs is that file
+    // as a page; the manual is still one click away from the bottom of it.
+    { label: t.nav.docs, href: "/docs" },
     // Issues, not Discussions. Discussions is switched off on the repo, so
     // /discussions is a 404, and a menu item that leads nowhere is worse than one
     // that leads somewhere plainer. Point this back at /discussions the day it is
