@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 // The TENANT instance, and its READ-ONLY pool: this browses an app's database,
 // and on that connection Postgres itself refuses to write. See lib/db.ts.
+import { forbiddenBody } from "@/lib/api-error";
 import { getTenantReadPool, dbNameForSlug } from "@/lib/db";
 import { allShapes, readStats, shapeOf } from "@/lib/db-catalog";
 import { memo } from "@/lib/memo";
@@ -226,7 +227,7 @@ async function readTable(db: string, name: string, limit: number, offset: number
 async function getHandler(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json(forbiddenBody(), { status: 403 });
 
   const url = new URL(req.url);
   const table = url.searchParams.get("table");
@@ -271,7 +272,7 @@ async function getHandler(req: Request, { params }: { params: { slug: string } }
 async function postHandler(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json(forbiddenBody(), { status: 403 });
   const body = await req.json().catch(() => ({}));
   const q = String(body.sql ?? "").trim().replace(/;+\s*$/, "");
   const db = dbNameForSlug(slug);

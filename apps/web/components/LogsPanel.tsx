@@ -8,6 +8,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FixPrompt } from "@/components/FixPrompt";
 import type { LogRow, Level, Source } from "@/lib/logs";
 
 /**
@@ -206,6 +207,20 @@ export function LogsPanel({ slug }: { slug: string }) {
 
   const empty = !loading && !err && rows.length === 0;
 
+  /**
+   * The newest error worth handing over.
+   *
+   * From what is ON SCREEN rather than from a second query, so it follows the
+   * filters: narrow to Requests and it offers the newest failing request, narrow
+   * to Backend and it offers what the app printed. A request line is excluded
+   * because `GET /x 503` is not an error a coding agent can act on — the app's own
+   * output is.
+   */
+  const newestError = useMemo(
+    () => rows.find((r) => r.level === "error" && !r.http && r.msg.trim().length > 8) ?? null,
+    [rows],
+  );
+
   return (
     <div className="flex flex-col gap-3">
       {/* ── the toolbar ───────────────────────────────────────────────── */}
@@ -293,6 +308,21 @@ export function LogsPanel({ slug }: { slug: string }) {
 
       {err ? (
         <div className="rounded-xl border border-border bg-card px-4 py-3 text-[13px] text-red">{err}</div>
+      ) : null}
+
+      {/* The newest error on screen, and a prompt for it.
+          Above the list, because somebody who arrived here from "a path has been
+          failing" came to act rather than to read — and below the filters,
+          because which error it offers follows what they have narrowed to.
+          Absent when nothing is failing: an app that is fine should not be shown
+          a fix button for it. */}
+      {newestError ? (
+        <div className="flex flex-col gap-2 rounded-xl border border-border bg-tint p-3.5">
+          <p className="font-mono text-[12.5px] leading-[1.5] text-ink">
+            {newestError.msg.slice(0, 300)}
+          </p>
+          <FixPrompt error={newestError.msg} slug={slug} />
+        </div>
       ) : null}
 
       {/* ── the list ──────────────────────────────────────────────────── */}

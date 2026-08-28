@@ -20,12 +20,13 @@ export const dynamic = "force-dynamic";
  * it is for is still refused by /api/deploy and /api/deploy/reserve, which is
  * where entitlement lives and where refusing means something to the user.
  */
+import { notAuthenticatedBody } from "@/lib/api-error";
 import { currentUserId } from "@/lib/session";
 import { signedSourceUpload } from "@/lib/deploy-runs";
 
 export async function POST() {
   const uid = await currentUserId();
-  if (!uid) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!uid) return Response.json(notAuthenticatedBody(), { status: 401 });
 
   const upload = await signedSourceUpload();
   if (!upload) {

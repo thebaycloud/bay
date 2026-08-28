@@ -40,10 +40,6 @@ const ALLOWED = new Map<string, string>([
   // fleet validates against this exact string, so changing it invalidates every
   // node token at once — a rename that takes the fleet down.
   ["lib/node-identity.ts", "NODE_AUDIENCE is a JWT audience, not a URL"],
-  // A real mailbox. Pointing Team-plan enquiries at an address that may not
-  // receive is worse than an old-looking one.
-  ["components/Paywall.tsx", "founders@ is a live mailbox"],
-  ["app/api/billing/checkout/route.ts", "founders@ is a live mailbox"],
 ]);
 
 const ROOTS = ["lib", "app", "components"];
@@ -151,4 +147,57 @@ test("the canonical root is FIRST in what the build bakes", () => {
     const value = re.exec(readFileSync(join(repo, file), "utf8"))![1];
     assert.equal(value.split(",")[0], "thebay.cloud", `${file} does not put the canonical root first`);
   }
+});
+
+/**
+ * The old name cannot be a STRING LITERAL either.
+ *
+ * The two tests above cover the seam (`productName()`) and the build args that
+ * feed it, and both passed while a Pro plan card offered to "Remove the
+ * Supersonic badge" — a hand-typed literal in a features array, sitting a few
+ * lines from the price. The badge it described had said "Runs on Bay" since
+ * PRODUCT_NAME was set on the edge, so the sentence selling the feature named a
+ * product that no longer exists, on the one screen where somebody is deciding
+ * whether to pay us.
+ *
+ * A seam is only worth having if nothing goes around it. This scans for the name
+ * inside quotes and backticks, which is where a user-visible one lives; the name
+ * in a comment is prose about our own history and is left alone (this block is
+ * full of it).
+ */
+test("no user-visible string literal says the retiring product name", () => {
+  const dirs = ["app", "components", "lib"];
+  /**
+   * `app/design` and `app/landing` are in-repo MOCKS of the marketing site, kept
+   * in the control plane as a design scratchpad, and `components/landing` is what
+   * they render. The shipped landing page is `apps/landing`, which has its own
+   * brand module and its own owner; duplicating the rename into a mock of it
+   * would be churn with no reader. Everything else in these trees is a real
+   * screen and is held to the seam.
+   */
+  const MOCKS = /^(app\/design|app\/landing|components\/landing)\//;
+  const offenders: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { if (e.name !== "node_modules") walk(p); continue; }
+      if (!/\.tsx?$/.test(e.name)) continue;
+      const text = readFileSync(p, "utf8");
+      text.split("\n").forEach((line, i) => {
+        // Strip line comments before looking, so prose about the rename is fine.
+        const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
+        // The name inside a quote or a backtick, which is how it reaches a screen.
+        if (/["'`][^"'`]*Supersonic/.test(code)) {
+          const rel = relative(join(__dirname, ".."), p);
+          if (!MOCKS.test(rel)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+        }
+      });
+    }
+  };
+  for (const d of dirs) walk(join(__dirname, "..", d));
+  assert.deepEqual(
+    offenders,
+    [],
+    `these are read by users and name the retiring product — use productName():\n${offenders.join("\n")}`,
+  );
 });

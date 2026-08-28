@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+import { forbiddenBody } from "@/lib/api-error";
 import { execCommand } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
@@ -12,7 +13,7 @@ import { deployTargetForApp } from "@/lib/deploy-target";
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json(forbiddenBody(), { status: 403 });
   const { command } = await req.json().catch(() => ({}));
   if (!command || typeof command !== "string") return Response.json({ error: "no command provided" }, { status: 400 });
   // `execCommand` deploys a one-off Cloud Run job from the app's image. For an

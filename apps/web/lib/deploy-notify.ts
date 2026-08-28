@@ -1,7 +1,7 @@
 import { getDeploy } from "./deploys";
 import { getAccount } from "./users";
-import { sendEmail } from "./email";
-import { appUrl } from "./brand";
+import { send } from "./email";
+import { appUrl, controlPlaneUrl } from "./brand";
 
 /**
  * Telling someone their deploy finished.
@@ -24,6 +24,8 @@ import { appUrl } from "./brand";
  */
 
 /** The recorded end of a deploy, as the row holds it. */
+import type { EmailContent } from "./email-template";
+
 export interface FinishedDeploy {
   slug: string;
   name?: string | null;
@@ -72,24 +74,32 @@ function brief(text: string, max = 600): string {
  * saying "your app is live" is the last place that could have been caught, and
  * it would have said it.
  */
-export function deployEmail(d: FinishedDeploy): { subject: string; text: string } | null {
+export function deployEmail(d: FinishedDeploy): { subject: string; content: EmailContent } | null {
   if (!FINISHED.has(d.status)) return null;
 
   const label = d.name || d.slug;
   const address = appUrl(d.slug);
+  // `bay`, not `supersonic`. Both binaries are aliased in the package so the old
+  // one still runs, but this is mail we send today and it named the product we
+  // stopped being. The literal guard in test/no-hardcoded-root.test.ts cannot see
+  // it: it matches capital-S "Supersonic", and a CLI command is lowercase.
+  const logsCmd = `bay logs ${d.slug}`;
 
   if (d.status === "failed") {
     const why = d.error ? brief(d.error) : "no reason was recorded, which is itself a bug — please tell us";
     return {
       subject: `✕ ${label} did not deploy`,
-      text: [
-        `Your deploy of ${label} (${d.slug}) failed.`,
-        "",
-        why,
-        "",
-        `Logs:  supersonic logs ${d.slug}`,
-        `A fix for your repo, if the agent found one:  supersonic patch ${d.slug} | git apply`,
-      ].join("\n"),
+      content: {
+        preheader: why.slice(0, 120),
+        heading: `${label} did not deploy`,
+        blocks: [
+          { p: `Your deploy of ${label} (${d.slug}) failed.` },
+          { code: why, label: "What went wrong" },
+          { code: `${logsCmd}\nbay patch ${d.slug} | git apply`, label: "From your terminal" },
+        ],
+        cta: { label: "Open the deploy log", url: `${controlPlaneUrl()}/apps/${encodeURIComponent(d.slug)}` },
+        footnote: "The second command applies a fix for your repo, if our agent found one.",
+      },
     };
   }
 
@@ -97,23 +107,31 @@ export function deployEmail(d: FinishedDeploy): { subject: string; text: string 
   if (partial) {
     return {
       subject: `${label} is live, but not all of it`,
-      text: [
-        `${label} (${d.slug}) deployed, and part of it is not being served.`,
-        "",
-        partial,
-        "",
-        `Requests to that path fall through to whatever answers "/", so the app can`,
-        `look healthy while half of it is missing.`,
-        "",
-        `Live at:  ${address}`,
-        `Logs:     supersonic logs ${d.slug}`,
-      ].join("\n"),
+      content: {
+        preheader: partial.slice(0, 120),
+        heading: `${label} is live, but not all of it`,
+        blocks: [
+          { p: `${label} (${d.slug}) deployed, and part of it is not being served.` },
+          { code: partial, label: "What is missing" },
+          { p: `Requests to that path fall through to whatever answers "/", so the app can look healthy while half of it is missing.` },
+          { facts: [{ key: "Live at", value: address }, { key: "Logs", value: logsCmd }] },
+        ],
+        cta: { label: `Open ${d.slug}`, url: address },
+      },
     };
   }
 
   return {
     subject: `${label} is live`,
-    text: [`${label} (${d.slug}) deployed.`, "", `Live at:  ${address}`].join("\n"),
+    content: {
+      preheader: address,
+      heading: `${label} is live`,
+      blocks: [
+        { p: `${label} (${d.slug}) deployed.` },
+        { facts: [{ key: "Live at", value: address }] },
+      ],
+      cta: { label: `Open ${d.slug}`, url: address },
+    },
   };
 }
 
@@ -133,7 +151,17 @@ export async function notifyDeployFinished(slug: string, ownerId: string | null 
     if (!msg) return;
     const account = await getAccount(ownerId);
     if (!account?.email) return;
-    const sent = await sendEmail({ to: account.email, subject: msg.subject, text: msg.text });
+    // Through the ledger, keyed on the app AND the recorded outcome: a `finally`
+    // that runs twice for one deploy — a retry, an overlapping lane — must not
+    // mail twice, and a genuinely NEW outcome for the same app must.
+    const sent = await send({
+      kind: "deploy_finished",
+      dedupeKey: `deploy_finished:${slug}:${row.status}:${(row as FinishedDeploy).stage ?? ""}:${String((row as { updatedAt?: unknown }).updatedAt ?? "")}`,
+      to: account.email,
+      userId: ownerId,
+      subject: msg.subject,
+      content: msg.content,
+    });
     if (!sent.ok) console.error(`deploy mail failed for ${slug}: ${sent.error}`);
   } catch (e) {
     console.error(`deploy mail failed for ${slug}:`, e instanceof Error ? e.message : String(e));

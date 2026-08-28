@@ -55,15 +55,6 @@ const ja: Messages = {
     },
   },
 
-  mock: {
-    files: "ファイル",
-    processes: "プロセス",
-    cacheAndQueues: "キャッシュとキュー",
-    live: "本番",
-    forYourAgent: "エージェント向け",
-    diagnosis:
-      "マイグレーションが実行されず、スキーマが空です。Web プロセスの開始前に実行するリリース手順を追加し、再デプロイしてください。",
-  },
 
   interfaces: {
     h2: "ダッシュボードではなく MCP と CLI",

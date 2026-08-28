@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import type { Plan } from "./entitlements";
+import type { Plan, SubStatus } from "./entitlements";
 import { controlPlaneUrl } from "./brand";
 
 // Everything Stripe is read from env and stays inert until the keys exist, so
@@ -46,4 +46,24 @@ export function planForPrice(priceId: string): Plan | null {
   if (priceId === PRICE_PRO) return "pro";
   if (PRICE_TEAM && priceId === PRICE_TEAM) return "team";
   return null;
+}
+
+/**
+ * Stripe's subscription status, collapsed into ours.
+ *
+ * Here rather than in the webhook route because a Next route file may only
+ * export HTTP verbs, so a helper defined there is unreachable by a test — the
+ * same reason `logs-query.ts` exists. This one had a bug worth a test.
+ */
+export function mapStatus(s: string): SubStatus {
+  if (s === "active" || s === "trialing") return "active";
+  // 'past_due' ONLY. `entitlement()` keeps every paid perk for any status that
+  // is not 'canceled', and the reason it gives is that "Stripe is still
+  // retrying the card" — which is exactly what past_due means and exactly what
+  // 'unpaid' does not. 'unpaid' is where Stripe puts a subscription once dunning
+  // is OVER and it has stopped trying, so folding the two together handed
+  // somebody unlimited apps, 500 builds and 100 agent runs a month, forever,
+  // after we had established we were never getting paid.
+  if (s === "past_due") return "past_due";
+  return "canceled";
 }

@@ -23,7 +23,12 @@ export type Page = {
 export const PAGES: Page[] = [
   { path: "/", priority: 1, changeFrequency: "weekly", index: true },
   { path: "/pricing", priority: 0.8, changeFrequency: "monthly", index: true },
-  { path: "/docs", priority: 0.8, changeFrequency: "weekly", index: true },
+  // A permanent redirect to the documentation site, not a page. It stays on
+  // this list because middleware asks "is this a page" — dropping it answered
+  // a terminal asking for /docs with a 404 for a URL that does redirect.
+  // `index: false` keeps it out of the sitemap, where a redirecting URL asks a
+  // crawler to index a hop.
+  { path: "/docs", priority: 0.8, changeFrequency: "weekly", index: false },
   { path: "/changelog", priority: 0.6, changeFrequency: "weekly", index: true },
   { path: "/about", priority: 0.5, changeFrequency: "monthly", index: true },
   { path: "/contact", priority: 0.5, changeFrequency: "monthly", index: true },

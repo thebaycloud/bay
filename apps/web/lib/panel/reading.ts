@@ -35,7 +35,27 @@ export type Ship = {
   url?: string | null;
 };
 
-type Alert = { kind: string; title: string; sub: string; act: string };
+/**
+ * The one thing wrong, and where to go to look at it.
+ *
+ * `to` exists because there are two of these and they are not the same problem.
+ * A deploy that never landed is explained by the build transcript; a path failing
+ * at the edge is explained by the log. Both used to route to the log list, so a
+ * failed ship dropped somebody on a stream of runtime lines from an app that had
+ * never started — the one place with nothing to say about it.
+ *
+ * `error` is the raw text a fix prompt is asked about, kept unabridged: `sub` is
+ * cut to 160 characters to fit a line, and a diagnosis made from a truncated
+ * stack is a diagnosis of the wrong thing.
+ */
+type Alert = {
+  kind: string;
+  title: string;
+  sub: string;
+  act: string;
+  to: "ships" | "logs";
+  error: string | null;
+};
 
 export type Reading = {
   slug: string;
@@ -306,7 +326,7 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
       ago: p.ago,
       brokenFor: p.brokenFor,
     })),
-    alert: null,
+    alert: null as Alert | null,
   };
 
   if (dep.deploy) {
@@ -333,6 +353,11 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
         title: "The last ship did not land",
         sub: String(dd.error).slice(0, 160),
         act: "Look at it",
+        // The transcript, not the log. A deploy that never landed has no runtime
+        // output to read — the account of what the build did is the only thing
+        // that can answer it.
+        to: "ships",
+        error: String(dd.error),
       };
     }
   }
@@ -347,6 +372,12 @@ export function deriveReading(slug: string, addr: string, raw: Raw): Reading {
       title: `${b.path} has been failing for ${dur(b.brokenFor)}`,
       sub: "The edge has seen no success there since.",
       act: "Look at it",
+      // The log, because this app deployed fine and is failing now: the lines it
+      // is printing are the evidence, and the build that produced it is not.
+      to: "logs",
+      // What the edge knows is a path and a status, not a stack. The Logs screen
+      // asks for the real error itself, from the newest error line it has.
+      error: null,
     };
   }
 

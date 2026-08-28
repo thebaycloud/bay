@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BRAND } from "@/lib/brand";
+import { BRAND, DOCS_URL } from "@/lib/brand";
 
 /**
  * The 404, written for both readers.
@@ -25,7 +25,7 @@ const WRAP = "mx-auto w-full max-w-[1040px] px-[22px] min-[900px]:px-10";
 
 const WAYS_BACK: { href: string; label: string; note: string }[] = [
   { href: "/llms.txt", label: "The manual", note: "every command, in markdown" },
-  { href: "/docs", label: "Documentation", note: "the same manual, as a page" },
+  { href: DOCS_URL, label: "Documentation", note: "guides, the CLI, the config" },
   { href: "/sitemap.xml", label: "Sitemap", note: "every page we publish" },
   { href: "/pricing", label: "Pricing", note: "what it costs" },
   { href: "/changelog", label: "Changelog", note: "what we shipped" },

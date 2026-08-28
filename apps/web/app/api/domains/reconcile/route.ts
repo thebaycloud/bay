@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { unsettledDomains } from "@/lib/domains";
 import { reconcileAll } from "@/lib/domain-attach";
+import { sweepOldWindows } from "@/lib/rate-limit";
 
 /**
  * One sweep over every domain that has not settled yet.
@@ -56,8 +57,26 @@ export async function POST(req: Request) {
   if (moved.length) {
     for (const d of moved) console.log(`domains: ${d.hostname} is now ${d.status}${d.detail ? ` (${d.detail})` : ""}`);
   }
+  // Housekeeping for lib/rate-limit.ts, which unlike usage_counters takes a
+  // write on every request to a protected route and so has no natural ceiling
+  // on its row count. A limiter that quietly fills the platform database is a
+  // worse outage than the one it was added to prevent.
+  //
+  // Deliberately not its own scheduler: this endpoint already runs on a
+  // schedule, is already idempotent and is already safe to overlap, which is
+  // the whole list of properties the sweep needs. A second Cloud Scheduler job
+  // for one DELETE would be another thing to notice had stopped.
+  //
+  // Caught here even though sweepOldWindows swallows its own errors. The two
+  // jobs share a request and nothing else, and this route existing at all is
+  // the consequence of one silent failure (`arsen.wtf`, above) — it should not
+  // become the site of the next one because a future edit let an error escape
+  // a function this caller merely trusts not to throw.
+  const swept = await sweepOldWindows().catch(() => 0);
+
   return Response.json({
     looked: before.length,
     moved: moved.map((d) => ({ hostname: d.hostname, status: d.status })),
+    swept,
   });
 }

@@ -41,12 +41,12 @@ export default function ChangelogIndex({ params }: { params: { locale: string } 
 
   return (
     <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-12 pt-[clamp(40px,5vw,72px)]`}>
+      <section className={`${WRAP} pb-12 pt-[clamp(40px,5vw,72px)]`}>
         <BackLink href="/" label={BRAND} />
         <h1 className="m-0 mt-8 font-sans text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
           Changelog
         </h1>
-      </header>
+      </section>
 
       <div className={WRAP}>
         {entries.map((e) => (

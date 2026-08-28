@@ -124,6 +124,18 @@ export const HAS_ADDRESS =
 export const PKG = env("NEXT_PUBLIC_CLI_PACKAGE", "@thebaycloud/cli");
 
 /**
+ * The long-form guides, which are not this codebase.
+ *
+ * `apps/docs` is published on Mintlify, and the host is theirs until the custom
+ * domain lands — which is why this is a constant and not a path: swapping to
+ * docs.thebay.cloud has to be one edit, not a search across a page, a manual and
+ * a footer. HOST is spelled separately because it is the visible label, and a
+ * label that says "https://" reads as a URL somebody pasted rather than a place.
+ */
+export const DOCS_HOST = env("NEXT_PUBLIC_DOCS_HOST", "bay.mintlify.app");
+export const DOCS_URL = `https://${DOCS_HOST}`;
+
+/**
  * The repo the star count and the community link read from.
  *
  * Ours, and public since 25 Aug. It was a placeholder pointing at somebody

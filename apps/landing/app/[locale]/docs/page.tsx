@@ -1,113 +1,42 @@
-import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { BRAND, CLI, GITHUB_URL, PKG, SITE_NAME } from "@/lib/brand";
-import { getMessages, localePath } from "@/lib/i18n";
-import { DEFAULT_LOCALE, LOCALES, isLocale } from "@/lib/i18n/locales";
-import { alternatesFor } from "@/lib/i18n/alternates";
-import { SiteChrome } from "@/components/SiteChrome";
-import { BackLink } from "@/components/BackLink";
-import { manual } from "@/lib/manual";
-import "../changelog/changelog.css";
+import { notFound, permanentRedirect } from "next/navigation";
+import { DOCS_URL } from "@/lib/brand";
+import { isLocale } from "@/lib/i18n/locales";
 
 /**
- * The developer documentation, at the address a person guesses first.
+ * /docs is where the documentation used to be rendered. It now points at where
+ * the documentation is.
  *
- * The manual was already written, complete, and served — at `/llms.txt`, to
- * agents and to terminals. What it was not, was findable. Somebody who has heard
- * of this product and wants to know how the CLI works types `/docs`, and until
- * now that was a 404: the documentation existed at a URL you had to already know
- * the convention for.
+ * This page was `content/manual.md` as a page — the same file `/llms.txt`
+ * serves, given an address a person would guess. That was the right answer for
+ * exactly as long as the manual was the only documentation there was.
  *
- * So this is not a second set of documentation. It is `content/manual.md`,
- * rendered — the same file, the same words, the same day. See lib/manual.ts.
+ * `apps/docs` is now published, and it is not the same document: twenty-two
+ * pages against one file, with a CLI reference derived from `bay help --all`
+ * and a configuration reference derived from the exported types the control
+ * plane actually parses. Keeping both meant two descriptions of one product,
+ * overlapping on install, ship, databases, secrets, domains and logs, drifting
+ * from the first edit that touched one and not the other.
  *
- * English only, like the changelog and the about page: a command reference that
- * is three releases out of date in five languages is worse than one that is
- * current in one.
+ * So the split is by reader rather than by document. A person gets the site. An
+ * agent gets `/llms.txt`, which is untouched and still reads `content/manual.md`
+ * — one file, one request, no navigation to crawl. Neither is a lesser copy of
+ * the other, which is what makes this survivable.
+ *
+ * Permanent, because the address is not coming back. `lib/pages.ts` still lists
+ * it with `index: false`: middleware asks "is this a page" before routing, so
+ * dropping the entry answered a terminal asking for /docs with a 404 for a URL
+ * that does redirect — while `index: false` keeps it out of the sitemap, where a
+ * redirecting URL asks a crawler to index a hop.
+ *
+ * Dynamic, and NOT prerendered, which is the part that has to be said. With
+ * `generateStaticParams` this page built to a 308 carrying no Location header at
+ * all: an external redirect cannot be baked into a static route, so every locale
+ * answered with a dead end that looked like a redirect in the status line. The
+ * redirect has to be computed per request for the header to exist.
  */
-const WRAP = "mx-auto w-full max-w-[860px] px-[22px] min-[900px]:px-10";
-
-export function generateStaticParams() {
-  return LOCALES.map((locale) => ({ locale }));
-}
-
-export function generateMetadata({ params }: { params: { locale: string } }): Metadata {
-  return {
-    // The product name is in the title on purpose. This is the page somebody
-    // reaches by searching the product's name and the word "docs", and a title
-    // that says only "Documentation" is a title that matches nothing.
-    title: `${SITE_NAME} documentation — the ${CLI} CLI, end to end`,
-    description: `Developer documentation for ${SITE_NAME}: install the ${CLI} CLI from ${PKG}, ship an app, attach a database, set secrets, add a custom domain, and read the logs when a deploy fails.`,
-    alternates: alternatesFor("/docs", params.locale),
-  };
-}
+export const dynamic = "force-dynamic";
 
 export default function Docs({ params }: { params: { locale: string } }) {
   if (!isLocale(params.locale)) notFound();
-  const locale = isLocale(params.locale) ? params.locale : DEFAULT_LOCALE;
-  const t = getMessages(locale);
-  const { html, sections } = manual();
-
-  return (
-    <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
-        <BackLink href={localePath(locale, "/")} label={BRAND} />
-        <h1 className="m-0 mt-8 font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
-          {SITE_NAME} documentation
-        </h1>
-        <p className="mt-4 max-w-[62ch] text-[17px] leading-[1.6] text-ink-2">
-          Everything {BRAND} can be told to do, from a terminal. This is the same
-          document an agent reads at{" "}
-          <a className="text-brand-ink hover:text-brand" href="/llms.txt">
-            /llms.txt
-          </a>
-          , rendered for a person — one source, so the two cannot drift.
-        </p>
-      </header>
-
-      {/* The section list is the table of contents and the machine-readable
-          outline at once: every h2 in the manual, linked by the id lib/manual.ts
-          gives it, so a section can be quoted by URL. */}
-      <nav className={`${WRAP} pt-8`} aria-label="On this page">
-        <ul className="m-0 flex list-none flex-wrap gap-x-5 gap-y-2 border-y border-line p-0 py-4 text-[14.5px] text-ink-2">
-          {sections.map((s) => (
-            <li key={s.id}>
-              <a className="hover:text-brand-ink" href={`#${s.id}`}>
-                {s.title}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
-
-      <section
-        className={`${WRAP} prose pb-10 pt-10`}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-
-      <section className={`${WRAP} pb-[clamp(72px,9vw,128px)]`}>
-        <div className="border-t border-line pt-6 text-[14.5px] text-ink-2">
-          <p className="m-0">
-            The same document in other shapes:{" "}
-            <a className="text-brand-ink hover:text-brand" href="/llms.txt">
-              /llms.txt
-            </a>{" "}
-            in markdown (also at <code>/agents.md</code>, <code>/AGENTS.md</code> and{" "}
-            <code>/cli.md</code>, and at the bare domain under <code>curl</code>),{" "}
-            <a className="text-brand-ink hover:text-brand" href={GITHUB_URL}>
-              the source on GitHub
-            </a>
-            , and{" "}
-            <a
-              className="text-brand-ink hover:text-brand"
-              href={`https://www.npmjs.com/package/${PKG}`}
-            >
-              {PKG}
-            </a>{" "}
-            on npm.
-          </p>
-        </div>
-      </section>
-    </SiteChrome>
-  );
+  permanentRedirect(DOCS_URL);
 }

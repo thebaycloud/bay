@@ -114,3 +114,19 @@ export async function markEmailVerified(email: string, provider: string): Promis
     [email.toLowerCase(), provider]
   );
 }
+
+/**
+ * Set a password hash. Used by the reset flow, which is the only way an existing
+ * account's password changes.
+ *
+ * Scoped to `provider='credentials'` so a reset can never write a password onto
+ * a Google or GitHub row. Those rows have no password by design, and giving one
+ * a `password_hash` would quietly create a second way into an account whose
+ * owner only ever consented to signing in with Google.
+ */
+export async function setPassword(userId: string, passwordHash: string): Promise<void> {
+  await getPool(DB).query(
+    `UPDATE users SET password_hash = $2 WHERE id = $1 AND provider = 'credentials'`,
+    [userId, passwordHash],
+  );
+}

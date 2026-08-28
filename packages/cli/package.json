@@ -1,7 +1,7 @@
 {
   "name": "@thebaycloud/cli",
-  "version": "1.0.0",
-  "description": "Ship & debug Bay apps from your coding agent — the agent-native CLI.",
+  "version": "1.1.0",
+  "description": "Ship & debug Bay apps from your coding agent \u2014 the agent-native CLI.",
   "bin": {
     "bay": "./index.js",
     "supersonic": "./index.js"
@@ -21,7 +21,7 @@
     "bundle-detector": "node scripts/bundle-detector.mjs",
     "bundle-resolver": "node scripts/bundle-resolver.mjs",
     "bundle": "npm run bundle-detector && npm run bundle-resolver",
-    "test": "node --test 'test/**/*.test.js'",
+    "test": "node --test",
     "prepublishOnly": "npm run bundle && npm test"
   },
   "keywords": [

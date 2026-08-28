@@ -34,12 +34,12 @@ export default function About({ params }: { params: { locale: string } }) {
 
   return (
     <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
+      <section className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
         <BackLink href={localePath(locale, "/")} label={BRAND} />
         <h1 className="m-0 mt-8 font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
           About {BRAND}
         </h1>
-      </header>
+      </section>
 
       <section className={`${WRAP} prose pb-[clamp(72px,9vw,128px)]`}>
         <p>

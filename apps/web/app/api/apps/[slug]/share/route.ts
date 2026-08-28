@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { forbiddenBody } from "@/lib/api-error";
 import {
   getAppBySlug, setVisibility,
   listGrants, addGrant, removeGrant,
@@ -9,7 +10,7 @@ import {
 } from "@/lib/apps";
 import { listPending, resolveRequest } from "@/lib/requests";
 import { profilesFor } from "@/lib/users";
-import { sendAccessGranted } from "@/lib/email";
+import { sendAccessGranted } from "@/lib/emails";
 import { currentUserId } from "@/lib/session";
 import { entitlement, countPublicApps } from "@/lib/entitlements";
 import { publicLimitMessage, noAccountMessage } from "@/lib/plan-copy";
@@ -76,7 +77,7 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
   const slug = decodeURIComponent(params.slug);
   const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
-  if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
+  if (!app) return Response.json(forbiddenBody(), { status: 403, headers: cors });
   return Response.json(await state(slug, app.visibility), { headers: cors });
 }
 
@@ -84,7 +85,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
   const slug = decodeURIComponent(params.slug);
   const cors = corsFor(req, slug);
   const app = await ownedApp(slug);
-  if (!app) return Response.json({ error: "forbidden" }, { status: 403, headers: cors });
+  if (!app) return Response.json(forbiddenBody(), { status: 403, headers: cors });
 
   const body = await req.json().catch(() => ({}));
 
@@ -145,7 +146,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
     // request and tell the person they're in.
     await addGrant(slug, email);
     await resolveRequest(slug, email, "approved");
-    await sendAccessGranted(email, slug);
+    await sendAccessGranted({ email, slug });
   }
   if (body.addDomain) {
     const domain = normalizeDomain(String(body.addDomain));

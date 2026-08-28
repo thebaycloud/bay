@@ -1,4 +1,5 @@
 import type { NextAuthConfig } from "next-auth";
+import { notAuthenticated } from "./lib/api-error";
 
 const PROD = process.env.NODE_ENV === "production";
 
@@ -52,6 +53,23 @@ export const authConfig = {
       const isPublic =
         p.startsWith("/login") || p.startsWith("/signup") ||
         p.startsWith("/api/auth") || p.startsWith("/api/signup") ||
+        // Password recovery, and it has to be here for the obvious reason: the
+        // person who needs it is by definition unable to sign in. Left off this
+        // list, /forgot 307s to /login — which is the page they just failed at —
+        // and the only route back into an account is a loop. Verified against
+        // production before it was fixed.
+        p.startsWith("/forgot") || p.startsWith("/reset") ||
+        // The confirmation link, clicked from a mail client that has no session
+        // and cannot get one. The token IS the credential here; it proves control
+        // of the mailbox, which is the whole point, so it needs no cookie.
+        p.startsWith("/verify") ||
+        // The error sweep, called by a scheduler with no cookie and never by a
+        // person — it authenticates itself with a shared secret in constant time,
+        // and answers 404 without one. Behind the cookie gate it would 307 and
+        // the sweep would simply never run: no error, no warning, no mail, which
+        // is the same silent failure this file already records for woff2 and
+        // /film.
+        p.startsWith("/api/internal/") ||
         // The design-block gallery. It renders no user data, but it is a
         // working surface rather than a product one, so it is reachable only
         // off production — in prod it stays behind the cookie gate like
@@ -64,9 +82,24 @@ export const authConfig = {
         // send, and the route verifies an HMAC over the raw body before it
         // touches anything. The rest of /api/github stays behind the gate —
         // those routes answer a person, and a person has a session.
-        p.startsWith("/api/github/webhook");
+        p.startsWith("/api/github/webhook") ||
+        // The API's own description. It documents the surface a client needs a
+        // token to use, and describes nothing that is not already public — and
+        // a description you must already be authenticated to read is a
+        // description nobody discovers. Behind the gate it 307s to /login and
+        // every client that went looking for it finds a sign-in page instead.
+        p === "/openapi.json";
       if (isPublic) return true;
-      return !!auth?.user;
+      if (auth?.user) return true;
+
+      // Everything under /api answers a program, and a program cannot read a
+      // sign-in page. Returning `false` here hands it a 307 to /login and an
+      // HTML body — which is indistinguishable, to anything parsing JSON, from
+      // the request having worked. next-auth uses a Response returned from this
+      // callback as the answer, so the gate can say what it means instead.
+      if (p.startsWith("/api/")) return notAuthenticated();
+
+      return false;
     },
     session({ session, token }) {
       if (token.sub && session.user) (session.user as { id?: string }).id = token.sub;

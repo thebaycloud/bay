@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { notAuthenticatedBody } from "@/lib/api-error";
 import { currentUserId } from "@/lib/session";
 import { getAccount, updateName } from "@/lib/users";
 import { entitlement, countOwnerApps, countPublicApps } from "@/lib/entitlements";
@@ -16,7 +17,7 @@ const cap = (n: number): number | null => (Number.isFinite(n) ? n : null);
 // so nothing counts down and `access` is 'active' for everyone with an account.
 export async function GET() {
   const uid = await currentUserId();
-  if (!uid) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!uid) return Response.json(notAuthenticatedBody(), { status: 401 });
   const account = await getAccount(uid);
   if (!account) return Response.json({ error: "not found" }, { status: 404 });
   const ent = await entitlement(uid);
@@ -57,7 +58,7 @@ export async function GET() {
 
 export async function PATCH(req: Request) {
   const uid = await currentUserId();
-  if (!uid) return Response.json({ error: "not signed in" }, { status: 401 });
+  if (!uid) return Response.json(notAuthenticatedBody(), { status: 401 });
   const body = await req.json().catch(() => ({}));
   if (typeof body.name !== "string") return Response.json({ error: "invalid name" }, { status: 400 });
   const name = body.name.slice(0, 120);

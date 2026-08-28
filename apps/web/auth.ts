@@ -2,9 +2,9 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
-import bcrypt from "bcryptjs";
 import { authConfig } from "./auth.config";
 import { findUserByEmailAndProvider, createUser, markEmailVerified } from "@/lib/users";
+import { authorizeCredentials } from "@/lib/credentials-login";
 import { resolveWorkspaceForEmail } from "@/lib/workspace";
 import { getPool } from "@/lib/db";
 
@@ -12,18 +12,13 @@ import { getPool } from "@/lib/db";
 const providers: any[] = [
   Credentials({
     credentials: { email: {}, password: {} },
-    async authorize(creds) {
-      const email = String(creds?.email ?? "").toLowerCase();
-      const password = String(creds?.password ?? "");
-      if (!email || !password) return null;
-      // Only the password account for this email — never an OAuth account that
-      // happens to share it (those have no password_hash anyway).
-      const user = await findUserByEmailAndProvider(email, "credentials");
-      if (!user?.password_hash) return null;
-      const ok = await bcrypt.compare(password, user.password_hash);
-      if (!ok) return null;
-      return { id: user.id, email: user.email, name: user.name ?? undefined };
-    },
+    // The logic lives in lib/credentials-login.ts, and the move was not
+    // tidying. This module exports only what NextAuth hands back, so a closure
+    // written here is unreachable from a test — which was survivable while it
+    // only compared a hash, and is not now that it also carries the
+    // brute-force gate. A protection nobody can test is a protection nobody can
+    // prove still works after the next edit to the file.
+    authorize: (creds, request) => authorizeCredentials(creds, request as Request),
   }),
 ];
 

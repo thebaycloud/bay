@@ -1,17 +1,12 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { stripe, WEBHOOK_SECRET, planForPrice } from "@/lib/stripe";
-import { setPlanByUser, setPlanByCustomer, setStatusByCustomer, type Plan, type SubStatus } from "@/lib/entitlements";
+import { stripe, WEBHOOK_SECRET, planForPrice, mapStatus } from "@/lib/stripe";
+import { setPlanByUser, setPlanByCustomer, setStatusByCustomer, userByStripeCustomer, type Plan } from "@/lib/entitlements";
+import { sendPaymentFailed, sendSubscriptionLapsed } from "@/lib/emails";
+import { controlPlaneUrl } from "@/lib/brand";
 import type Stripe from "stripe";
 
-// Collapse Stripe's subscription statuses into ours. active/trialing = usable;
-// past_due/unpaid = grace (Stripe is retrying); everything else = locked.
-function mapStatus(s: string): SubStatus {
-  if (s === "active" || s === "trialing") return "active";
-  if (s === "past_due" || s === "unpaid") return "past_due";
-  return "canceled";
-}
 
 // Stripe → our plan column. The signature is verified against the raw body, so
 // this must read req.text() (not req.json()). Unconfigured = 503; a bad
@@ -73,7 +68,54 @@ export async function POST(req: Request) {
         // app, custom domains, auto-fix and badge removal. Taking away access
         // to work somebody already deployed, because a card expired, is not a
         // thing we do — and it saves about a dollar a month.
-        if (customerId) await setPlanByCustomer(customerId, "free", "canceled", null);
+        if (customerId) {
+          await setPlanByCustomer(customerId, "free", "canceled", null);
+          // And SAY so. Everything above is invisible from the outside: the
+          // apps keep serving and then one day a deploy is refused and a badge
+          // is back, with nothing having announced why. Keyed on the
+          // subscription id, so a re-delivered webhook does not send twice.
+          const who = await userByStripeCustomer(customerId);
+          if (who) {
+            await sendSubscriptionLapsed({
+              userId: who.id,
+              email: who.email,
+              portalUrl: `${controlPlaneUrl()}/settings`,
+              subscriptionId: sub.id,
+            });
+          }
+        }
+        break;
+      }
+      case "invoice.payment_failed": {
+        // The gap that made yesterday's `unpaid` fix sharp: with dunning
+        // unhandled, a customer's card failed silently and they lost Pro without
+        // ever being told a payment had been attempted.
+        const inv = event.data.object as Stripe.Invoice;
+        const customerId = idOf(inv.customer);
+        if (!customerId) break;
+        const who = await userByStripeCustomer(customerId);
+        if (!who) break;
+        // `attempt_count` is what makes each retry its own email — Stripe tries a
+        // failing card about four times, and each attempt is genuinely new
+        // information, while a RE-DELIVERY of the same attempt is not. The
+        // dedupe key carries both, so one of those sends and the other does not.
+        const attempt = typeof inv.attempt_count === "number" ? inv.attempt_count : 1;
+        const amount =
+          typeof inv.amount_due === "number" && inv.currency
+            ? new Intl.NumberFormat("en-US", { style: "currency", currency: inv.currency.toUpperCase() }).format(inv.amount_due / 100)
+            : null;
+        // Stripe sends seconds; a missing next attempt is the last try, which is
+        // a different email and says so.
+        const next = typeof inv.next_payment_attempt === "number" ? new Date(inv.next_payment_attempt * 1000) : null;
+        await sendPaymentFailed({
+          userId: who.id,
+          email: who.email,
+          invoiceId: inv.id ?? `unknown:${event.id}`,
+          attempt,
+          amountDue: amount,
+          nextAttempt: next,
+          portalUrl: `${controlPlaneUrl()}/settings`,
+        });
         break;
       }
       default:

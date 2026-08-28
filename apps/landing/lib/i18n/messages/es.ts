@@ -55,15 +55,6 @@ const es: Messages = {
     },
   },
 
-  mock: {
-    files: "Archivos",
-    processes: "Procesos",
-    cacheAndQueues: "caché y colas",
-    live: "Producción",
-    forYourAgent: "Para tu agente",
-    diagnosis:
-      "Las migraciones no se ejecutaron y el esquema está vacío. Agrega un paso de publicación que las ejecute antes del proceso web y vuelve a desplegar.",
-  },
 
   interfaces: {
     h2: "MCP y CLI en lugar de un panel",

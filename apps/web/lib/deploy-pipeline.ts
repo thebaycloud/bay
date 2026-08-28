@@ -57,7 +57,7 @@ import { agentLimitMessage } from "@/lib/plan-copy";
 import { cachedBuildConfig, selectedBuilder, mountsBuildSecrets, laneForBuild, buildLogLine, CACHE_MISS_NOISE, appBuildTag, cloudBuildIdFrom } from "@/lib/build-config";
 import { CLOUD_RUN_DB, databaseUrlFor, proxyWait, type DbAddress } from "@/lib/db-address";
 import { databaseEnv, databaseEnvNames, DB_HOST, DB_PORT, withScale, choosePort, DEFAULT_PORT, type Lane, type Scale } from "@/lib/lanes";
-import { appHost, appUrl } from "@/lib/brand";
+import { appHost, appUrl, productName } from "@/lib/brand";
 import { rootDomains } from "@/lib/roots";
 import { verifyApp } from "@/lib/verify-app";
 import { ensureAppRole, DB_PASSWORD_SECRET } from "@/lib/pg-role";
@@ -323,8 +323,8 @@ function diagnose(errTail: string[]): string {
 // hand its own coding agent. This turns a raw deploy error into that prompt.
 function fixPrompt(slug: string, error: string): string {
   return [
-    "My deploy to Supersonic failed. Fix the code so it deploys cleanly, then",
-    "run `supersonic deploy` again from the project root.",
+    `My deploy to ${productName()} failed. Fix the code so it deploys cleanly, then`,
+    "run `bay deploy` again from the project root.",
     "",
     "Here is the exact error from the build/deploy:",
     "",

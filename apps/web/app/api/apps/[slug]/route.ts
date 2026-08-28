@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { forbiddenBody } from "@/lib/api-error";
 import { describeService } from "@/lib/gcloud";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
@@ -14,7 +15,7 @@ import { appUrl } from "@/lib/brand";
 export async function GET(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json(forbiddenBody(), { status: 403 });
   // "Ready or down" has no way to say "still coming", so an app mid-deploy was
   // reported as down — `○ down`, `revision —`, `env none` — while its build was
   // running normally and its URL was answering 200. Every one of those readings

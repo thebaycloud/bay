@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { currentUserId } from "@/lib/session";
 import { stripe, billingConfigured, priceForPlan, APP_URL } from "@/lib/stripe";
+import { CONTACT_EMAIL } from "@/lib/brand";
 import { getPool } from "@/lib/db";
 import type { Plan } from "@/lib/entitlements";
 
@@ -26,7 +27,7 @@ export async function POST(req: Request) {
     // Team with no configured price: hand-priced, on purpose, while we learn
     // what it should cost. Answered as an invitation rather than a failure.
     return Response.json(
-      { error: "Team plans are set up with us directly — email founders@supersonic.cv and we'll get you started.", contact: true },
+      { error: `Team plans are set up with us directly — email ${CONTACT_EMAIL} and we'll get you started.`, contact: true },
       { status: 503 }
     );
   }

@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { forbiddenBody } from "@/lib/api-error";
 import { currentUserId } from "@/lib/session";
 import { ownsApp } from "@/lib/ownership";
 import { previousReleaseId, releasesFor } from "@/lib/rollback";
@@ -26,7 +27,7 @@ import { deployTargetForApp } from "@/lib/deploy-target";
 export async function POST(_req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const uid = await currentUserId();
-  if (!uid || !(await ownsApp(slug, uid))) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!uid || !(await ownsApp(slug, uid))) return Response.json(forbiddenBody(), { status: 403 });
 
   // Asked of the target rather than re-derived here, which is what lib/deploy-target.ts
   // exists for. It answers no for a static app: that is files in a bucket, with

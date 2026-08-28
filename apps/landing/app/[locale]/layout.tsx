@@ -50,7 +50,14 @@ export const metadata: Metadata = {
   title: { default: TITLE, template: `%s - ${SITE_NAME}` },
   description: DESCRIPTION,
   // Each entry is its own drawing, not one file scaled, see docs/BRAND.md.
-  // SVG first: browsers that support it get the sharp one at every zoom level.
+  //
+  // The 16px is a cut-down bridge: the full mark has a tower, two cables, twenty
+  // hangers, a deck and sixteen rivets, and at 16px everything under about three
+  // device pixels turns to mush. Rendered and looked at rather than assumed. From
+  // 32px up the full drawing holds, so that is what the larger sizes carry.
+  //
+  // favicon.svg is the small drawing, not the full one, because a favicon is only
+  // ever shown at tab size.
   icons: {
     icon: [
       { url: "/favicon.svg", type: "image/svg+xml" },
@@ -95,6 +102,14 @@ export default function RootLayout({
       lang={locale}
       className={`${GeistSans.variable} ${GeistMono.variable} ${displaySerif.variable}`}
     >
+      <head>
+        {/* RFC 8631: where this site's API describes itself. It is the link
+            relation a client follows to find a description from a page, which
+            is the only path available to something that has the brand and not
+            the API. The file is the same one app.thebay.cloud serves; see
+            scripts/sync-openapi.mjs for why there are two copies. */}
+        <link rel="service-desc" type="application/openapi+json" href="/openapi.json" />
+      </head>
       <body>
         <StructuredData />
         {children}

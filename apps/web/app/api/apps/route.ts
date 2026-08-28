@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { notAuthenticatedBody } from "@/lib/api-error";
 import { listOwnedApps, sortOf } from "@/lib/apps";
 import { listActiveDeploys, lastDeploySummaries } from "@/lib/deploys";
 import { currentUserId } from "@/lib/session";
@@ -20,7 +21,7 @@ import { appUrl } from "@/lib/brand";
  */
 export async function GET(req: Request) {
   const uid = await currentUserId();
-  if (!uid) return Response.json({ apps: [], error: "not signed in" }, { status: 401 });
+  if (!uid) return Response.json({ apps: [], ...notAuthenticatedBody() }, { status: 401 });
   try {
     // The same three reads the server render does. This route is what the
     // dashboard polls while something is building, and it replaces the whole

@@ -38,13 +38,13 @@ export default function Pricing({ params }: { params: { locale: string } }) {
 
   return (
     <SiteChrome t={t} locale={locale}>
-      <header className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
+      <section className={`${WRAP} pb-2 pt-[clamp(40px,5vw,72px)]`}>
         <BackLink href={localePath(locale, "/")} label={BRAND} />
         <h1 className="m-0 mt-8 max-w-[26ch] font-sans text-balance text-[clamp(28px,3vw,38px)] font-normal leading-[1.14] tracking-[-0.024em]">
           {t.pricing.h1}
         </h1>
         <p className="mt-4 max-w-[54ch] text-[17px] leading-[1.6] text-ink-2">{t.pricing.p}</p>
-      </header>
+      </section>
 
       <section className={`${WRAP} pb-[clamp(72px,9vw,128px)]`}>
         <div className="mt-[clamp(36px,4.5vw,60px)] grid gap-5 min-[900px]:grid-cols-3">

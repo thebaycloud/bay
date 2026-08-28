@@ -53,7 +53,7 @@ import {
  * carries one live fact and pushes into a screen; the back affordance pops.
  *
  * The screens REUSE the panels that already exist rather than being rewritten.
- * DatabasePanel, StoragePanel, JobsPanel, IssuesPanel and DomainsPanel
+ * DatabasePanel, StoragePanel, LogsPanel, DeployLog and DomainsPanel
  * are roughly 570 working, shipped lines that answer the same questions these
  * screens ask. What Cockpit contributed was chrome — a brand bar, an app switcher,
  * a tab strip — and that is what the workbench already provides, which is why the
@@ -172,7 +172,17 @@ export function Dev({ slug, address }: { slug: string; address: string }) {
       {/* The alert stays a tinted card above the groups. It is the one thing here
           that must not look like the rows it sits over. */}
       {d.alert ? (
-        <AlertCell act={d.alert.act} onAct={() => setView("logs")} sub={d.alert.sub} title={d.alert.title} />
+        <AlertCell
+          act={d.alert.act}
+          // WHERE IT WENT WRONG, not one screen for both. A deploy that never
+          // landed is explained by the build transcript; a path failing at the
+          // edge is explained by the log. Both routed here to `logs`, so a failed
+          // ship dropped somebody on a stream of runtime lines from an app that
+          // had never started — the one place with nothing to say about it.
+          onAct={() => setView(d.alert!.to)}
+          sub={d.alert.sub}
+          title={d.alert.title}
+        />
       ) : null}
 
       {/* Overview is a group interrupted by a card, so its list breaks in two:
@@ -365,7 +375,7 @@ function ScreenBody({ d, slug, view }: { d: Reading; slug: string; view: View })
       {/* Why it did what it did. A build is bounded — read top to bottom, jump to
           the failure — which is a different shape from the log list next door and
           so a different screen. */}
-      <DeployLog slug={slug} />
+      <DeployLog error={d.ships[0]?.error ?? null} slug={slug} />
 
       {/* The repository, HERE and not under Access, which is where it was. "Every
           push to main ships this app" is a statement about deploys; it shared a

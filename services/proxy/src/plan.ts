@@ -1,7 +1,7 @@
 import { config } from "./config";
 
 /**
- * Whether an app must carry the "Runs on Supersonic" badge.
+ * Whether an app must carry the "Runs on <product>" badge — see config.productName.
  *
  * The second copy of a rule that lives in `apps/web/lib/entitlements.ts` as
  * `Limits.canRemoveBadge`, and it is a copy on purpose: the badge is decided in

@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { forbiddenBody } from "@/lib/api-error";
 import { getAppBySlug } from "@/lib/apps";
 import { currentUserId } from "@/lib/session";
 import { entitlement } from "@/lib/entitlements";
@@ -78,7 +79,7 @@ function dnsInstructions(slug: string) {
 export async function GET(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const app = await ownedApp(slug);
-  if (!app) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!app) return Response.json(forbiddenBody(), { status: 403 });
 
   // Reading the list is also what advances it. See lib/domain-attach.ts: there
   // is no worker, and `dueForCheck` keeps a page that polls from turning into a
@@ -108,7 +109,7 @@ export async function GET(req: Request, { params }: { params: { slug: string } }
 export async function POST(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const app = await ownedApp(slug);
-  if (!app) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!app) return Response.json(forbiddenBody(), { status: 403 });
 
   const ent = await entitlement(app.owner_id);
   if (!ent.limits.customDomains) {
@@ -169,7 +170,7 @@ export async function POST(req: Request, { params }: { params: { slug: string } 
 export async function DELETE(req: Request, { params }: { params: { slug: string } }) {
   const slug = decodeURIComponent(params.slug);
   const app = await ownedApp(slug);
-  if (!app) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!app) return Response.json(forbiddenBody(), { status: 403 });
 
   const hostname = normalizeHostname(new URL(req.url).searchParams.get("hostname") ?? "");
   if (!hostname) return Response.json({ error: "which domain?" }, { status: 400 });
