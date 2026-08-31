@@ -414,3 +414,64 @@ export async function oldestEventAt(): Promise<{ at: Date | null; error: string 
   const r = await attempt<{ at: Date | null }>({ source: "oldestEventAt", relation: "deploy_events" }, `SELECT min(at) AS at FROM deploy_events`);
   return { at: r.rows[0]?.at ?? null, error: r.error };
 }
+
+/**
+ * How accounts arrived: they came looking for us, or their agent chose us.
+ *
+ * `users.acquisition_kind` is written once per account, at a machine's first
+ * sign-in, from a verbatim quote of what the user asked their agent for — see
+ * lib/acquisition.ts and db/038. Aggregated in SQL rather than read as rows,
+ * because unlike everything else on this page there is no per-user question to
+ * ask of it and the raw column is a fragment of somebody's prompt.
+ *
+ * Windowed on `created_at`, so it answers "of the people who signed up in the
+ * last N days" — which is the only form of this number worth watching. All-time
+ * it is dominated by accounts that predate the column and can only go down.
+ */
+export interface AcquisitionRow {
+  kind: string;
+  users: number;
+}
+
+export async function acquisition(w: Window): Promise<Read<AcquisitionRow>> {
+  // COALESCE and not a filter: accounts created in the window with no value are
+  // the honest denominator. They are older CLIs that never sent one, and browser
+  // signups where no terminal was involved — leaving them out would turn a 12%
+  // coverage into a confident-looking 100%.
+  const r = await attempt<{ kind: string; users: string }>(
+    { source: "acquisition", relation: "users" },
+    `SELECT COALESCE(acquisition_kind, 'not asked') AS kind, count(*) AS users
+       FROM users
+      WHERE created_at >= $1 AND created_at <= $2
+      GROUP BY 1
+      ORDER BY 2 DESC`,
+    [w.from, w.to],
+  );
+  return { rows: r.rows.map((x) => ({ kind: x.kind, users: Number(x.users) })), error: r.error };
+}
+
+/**
+ * The requests we are winning, in the words of the people making them.
+ *
+ * Only `chosen` — a quote that already names Bay says nothing about how anybody
+ * found us. This is the actual product of the whole mechanism: the bit is a
+ * chart, but the sentences are what tells you which need to write the next page
+ * of documentation against.
+ */
+export interface AcquisitionQuoteRow {
+  via: string;
+  at: Date;
+}
+
+export async function acquisitionQuotes(w: Window, limit = 40): Promise<Read<AcquisitionQuoteRow>> {
+  const r = await attempt<{ via: string; at: Date }>(
+    { source: "acquisitionQuotes", relation: "users" },
+    `SELECT acquisition_via AS via, acquisition_at AS at
+       FROM users
+      WHERE acquisition_kind = 'chosen' AND created_at >= $1 AND created_at <= $2
+      ORDER BY acquisition_at DESC
+      LIMIT ${Number(limit) | 0}`,
+    [w.from, w.to],
+  );
+  return { rows: r.rows, error: r.error };
+}

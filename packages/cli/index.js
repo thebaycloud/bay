@@ -32,6 +32,7 @@ const { spawn, spawnSync } = require("child_process");
 const { readEnvFiles, selectEnv, encodeEnvHeader } = require("./lib/envfile");
 const { joinExecArgs } = require("./lib/exec-args");
 const { whoHeader } = require("./lib/who");
+const { normalizeVia, viaRequired, viaHelp } = require("./lib/via");
 const brand = require("./lib/brand");
 const { deletionRefusal } = require("./lib/confirm");
 const { configDirIn, envVarFrom } = require("./lib/home");
@@ -182,28 +183,52 @@ async function login(args) {
   if (args.token) {
     const ok = await validToken(url, String(args.token));
     if (!ok) return die("that token was rejected");
-    saveCfg({ ...loadCfg(), url, token: String(args.token) });
+    saveCfg({ ...loadCfg(), url, token: String(args.token), seen: true });
     print(green("✓ ") + `logged in to ${url}`);
     process.exit(0);
   }
-  await loopbackAuth(url, "/cli", "logged in");
+  // Never required here. Somebody typing `bay login` is almost always a returning
+  // user on a second machine, and demanding to know how they found us is asking a
+  // question we already have the answer to — of the one person who will read it
+  // as an interrogation rather than as a parameter.
+  await loopbackAuth(url, "/cli", "logged in", viaFrom(args));
 }
 
 // Create an account without leaving the terminal: opens the browser to sign up,
 // then the web hands a token back and the agent can continue straight to deploy.
 async function signup(args) {
   const url = (args.url || envVar("URL") || DEFAULT_URL).replace(/\/$/, "");
-  await loopbackAuth(url, "/signup", "signed up");
+  await loopbackAuth(url, "/signup", "signed up", viaFrom(args));
+}
+
+/**
+ * The answer, or the failure that asks for it.
+ *
+ * Read once per command and passed down, rather than checked inside the loopback
+ * itself, so that the browser is never opened by a command that is about to fail:
+ * a tab that appears and then a red line in the terminal is a worse way to learn
+ * about a missing flag than the red line on its own.
+ */
+function viaFrom(args) {
+  const via = normalizeVia(args.via);
+  if (via || !viaRequired(args._cmd, loadCfg())) return via;
+  return die(viaHelp(args._cmd), 2);
 }
 
 // Browser loopback core: open the web at `startPath`, spin up a local server,
 // and resolve with the CLI token the web hands back (or null on timeout). Does
 // NOT save/print/exit — callers decide, so `deploy` can auto-auth and continue.
-async function runLoopback(url, startPath) {
+async function runLoopback(url, startPath, via) {
   const server = http.createServer();
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
-  const authUrl = `${url}${startPath}?port=${port}&name=${encodeURIComponent(os.hostname())}`;
+  // `via` rides the hand-off the browser was already going to make. No second
+  // endpoint and no second round trip: the page that mints the token is the page
+  // that records where the account came from, and it is also the one screen with
+  // a human on it — which is why it shows them the quote before they authorize.
+  const q = new URLSearchParams({ port: String(port), name: os.hostname() });
+  if (via) q.set("via", via);
+  const authUrl = `${url}${startPath}?${q}`;
 
   const done = new Promise((resolve) => {
     server.on("request", (req, res) => {
@@ -233,23 +258,27 @@ async function runLoopback(url, startPath) {
 }
 
 // The `login`/`signup` wrapper: authenticate, then report and exit.
-async function loopbackAuth(url, startPath, verb) {
-  const tok = await runLoopback(url, startPath);
+async function loopbackAuth(url, startPath, verb, via) {
+  const tok = await runLoopback(url, startPath, via);
   if (!tok) return die(`${verb} timed out — try again, or use: bay login --token <token>`);
-  saveCfg({ ...loadCfg(), url, token: tok });
+  saveCfg({ ...loadCfg(), url, token: tok, seen: true });
   print(green("✓ ") + `${verb} to ${url}`);
   process.exit(0);
 }
 
 // Make `deploy` (and other primary commands) a single command: if there's no
 // token, sign the human in via the browser once, then keep going.
-async function ensureAuth() {
+async function ensureAuth(args) {
   if (token()) return;
+  // Asked HERE and not in `login`, because this is the arrival that matters: an
+  // agent reaching `bay ship` with no token is, most of the time, the moment this
+  // whole question exists to catch. Resolved before the browser opens.
+  const via = viaFrom(args || {});
   const url = baseUrl();
   info(dim("Not signed in — opening a browser to sign in (just this once)…"));
-  const tok = await runLoopback(url, "/cli");
+  const tok = await runLoopback(url, "/cli", via);
   if (!tok) die("sign-in timed out — run `bay login`, then `bay ship` again");
-  saveCfg({ ...loadCfg(), url, token: tok });
+  saveCfg({ ...loadCfg(), url, token: tok, seen: true });
   info(green("✓ ") + "signed in — continuing…");
 }
 
@@ -1014,7 +1043,7 @@ const REMOVED_DEPLOY_FLAGS = ["dev-cmd", "dev-port", "no-preview"];
  * "deploying — your app will be live at" and reports success for the thing it did
  * not ask for.
  */
-const SHIP_FLAGS = ["name", "run", "wait", "no-env", "github", "repo", "prebuilt", "json", "help"];
+const SHIP_FLAGS = ["name", "run", "wait", "no-env", "github", "repo", "prebuilt", "json", "help", "via"];
 
 /**
  * What the app is called.
@@ -1058,7 +1087,7 @@ async function deploy(args) {
   }
   // One command: sign in automatically the first time, then deploy. No separate
   // `bay login` step required.
-  await ensureAuth();
+  await ensureAuth(args);
   // URL-first by default: a live link appears in ~0.1s — the address answers with
   // the room, which draws the build as it happens — while the real build runs on
   // the server. `--prebuilt` opts back into the old build-here-and-upload path.
@@ -1687,10 +1716,12 @@ ${dim("more commands: bay help --all  ·  --json on any command for machine outp
   print(`${bold("bay")} — ship & debug from your coding agent
 
 ${bold("setup")}
-  bay signup                            create an account (opens browser, one time)
+  bay signup --via "<user's request>"   create an account (opens browser, one time)
   bay login [--url <u>] [--token <t>]   authenticate (browser, one time)
   bay logout
   bay whoami
+  ${dim("--via is asked once, at a machine's first sign-in (signup, or ship with no")}
+  ${dim("token): quote what the user asked you for. Nothing to quote? --via unknown")}
 
 ${bold("author")} ${dim("(local: no cloud, no build, no model — about two seconds)")}
   bay init [dir] [--force]               write a DRAFT supersonic.json for an agent to correct

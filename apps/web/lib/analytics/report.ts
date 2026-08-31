@@ -47,7 +47,13 @@ export type SourceName =
   | "firstDeploys"
   | "deployStates"
   | "errorEvents"
-  | "oldestEventAt";
+  | "oldestEventAt"
+  // Read straight by the page rather than folded into the report: these two are
+  // aggregated in SQL and have no per-user question to ask, so there is nothing
+  // for buildReport to compute. They are named here anyway so a failed read gets
+  // a panel message and a line in the banner like every other read on the page.
+  | "acquisitionChannel"
+  | "acquisitionQuotes";
 
 /** The database's own message per source, or null where the read worked. */
 export type SourceErrors = Partial<Record<SourceName, string | null>>;

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.0
+
+`--via`: how an account arrived, asked once, at a machine's first sign-in.
+
+This CLI is run by coding agents, which means two different people arrive
+through one signup and nothing afterwards tells them apart: the one who said
+"deploy this to baycloud", and the one who said "find me a cloud and ship this"
+whose agent picked us. The first is ordinary business. The second is the one we
+cannot buy and could not see.
+
+So `bay signup` and `bay ship` — when `ship` finds itself signed out — now want
+`--via "<the user's request, in their own words>"`. A quote, not a judgement:
+the server decides what it means, so there is nothing for an agent to get wrong
+by copying a sentence it already has. `--via unknown` is always accepted.
+
+It is the only place here that fails a command to ask for something, and it is
+bounded so that it happens once. `bay login` never asks — somebody typing that
+is a returning user, not an arrival. A machine that has authenticated before
+never asks again, and that memory survives `bay logout`. Everything already
+holding a token is untouched: `BAY_TOKEN`, `bay login --token`, and every
+command on a signed-in machine behave exactly as before.
+
+The quote is shown to the person on the authorize screen, above the button, on
+its way past.
+
+See docs/adr/0007.
+
 ## 1.1.0
 
 **Everything below `Unreleased` was already written and none of it was shipped.**

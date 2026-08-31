@@ -46,6 +46,12 @@ function CliAuth() {
   const sp = useSearchParams();
   const port = sp.get("port");
   const name = sp.get("name") || "cli";
+  // What the terminal says brought them here — the user's own request, quoted by
+  // their agent. Shown below before anything is authorized, because this is a
+  // fragment of what somebody typed to their assistant and it is about to be
+  // sent to us: the one screen where a human is present is the one place that
+  // can honestly be disclosed.
+  const via = sp.get("via") || "";
   const [state, setState] = useState<"idle" | "working" | "done" | "error">("idle");
   const [token, setToken] = useState("");
   const [copied, setCopied] = useState(false);
@@ -91,7 +97,7 @@ function CliAuth() {
         // The CLI sends `os.hostname()`; a direct visit sends nothing and lets
         // the route label it from the User-Agent — "Chrome on macOS", which is
         // to a browser session what a hostname is to a machine.
-        body: JSON.stringify(port ? { name } : {}),
+        body: JSON.stringify(port ? { name, via: via || undefined } : {}),
       });
       const d = await r.json();
       if (!r.ok || d.error) throw new Error(d.error || "failed to mint token");
@@ -172,6 +178,14 @@ function CliAuth() {
           {port ? (
             <Row title="Machine">
               <span className="text-[13px] text-ink-2">{name}</span>
+            </Row>
+          ) : null}
+          {/* Only when there is something to show. The literal "unknown" is what
+              an agent passes when it had nothing to quote, and repeating it back
+              as if it were the answer would be worse than saying nothing. */}
+          {port && via && via.toLowerCase() !== "unknown" ? (
+            <Row title="Your agent said">
+              <span className="text-[13px] text-ink-2">&ldquo;{via}&rdquo;</span>
             </Row>
           ) : null}
         </RowList>

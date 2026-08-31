@@ -57,7 +57,7 @@ export default async function AnalyticsPage({
 
   // Every read is attempted, whatever the others do: one broken query must cost
   // its own panel and nothing else.
-  const [users, apps, stages, firstDeploys, deployStates, errorEvents, oldest] = await Promise.all([
+  const [users, apps, stages, firstDeploys, deployStates, errorEvents, oldest, channel, quotes] = await Promise.all([
     q.users(),
     q.apps(),
     q.stages(window),
@@ -65,6 +65,8 @@ export default async function AnalyticsPage({
     q.deployStates(),
     q.errorEvents(window),
     q.oldestEventAt(),
+    q.acquisition(window),
+    q.acquisitionQuotes(window),
   ]);
 
   const slugOwners = new Map<string, string>();
@@ -91,8 +93,22 @@ export default async function AnalyticsPage({
       deployStates: deployStates.error,
       errorEvents: errorEvents.error,
       oldestEventAt: oldest.error,
+      acquisitionChannel: channel.error,
+      acquisitionQuotes: quotes.error,
     },
   });
+
+  // Named / chosen / not asked, as a share of the accounts created in this
+  // window. The denominator is every account in the window and not just the ones
+  // that answered — see queries.acquisition — so "not asked" shrinking is itself
+  // the coverage number, and neither of the other two can be read without it.
+  const channelTotal = channel.rows.reduce((n, x) => n + x.users, 0);
+  const CHANNEL_LABELS: Record<string, string> = {
+    named: "asked for Bay by name",
+    chosen: "their agent chose us",
+    unknown: "asked, could not say",
+    "not asked": "not asked (older CLI, or the browser)",
+  };
 
   /** The message for a panel whose data did not load, or null if it did. */
   const broken = (...names: SourceName[]) => panelError(r.sources, names);
@@ -191,6 +207,44 @@ export default async function AnalyticsPage({
                   before it as though they never got anywhere. &ldquo;Started a deploy&rdquo; means the app left a
                   row in <span className="mono">deploy_stages</span>; apps deployed before that table
                   existed are invisible here and drag this step down.
+                </Caveat>
+              </Panel>
+
+              {/* The question this window cannot answer any other way: the CLI is
+                  run by coding agents, so a signup says nothing about whether a
+                  person came looking for us or an agent picked us mid-task. Both
+                  land in the same funnel and they are not the same business. */}
+              <Panel title={<>How they arrived · {channelTotal} accounts in this window</>} error={broken("acquisitionChannel")}>
+                <RankedBars
+                  emptyText="No accounts created in this window."
+                  rows={channel.rows.map((x) => ({
+                    label: CHANNEL_LABELS[x.kind] ?? x.kind,
+                    value: x.users,
+                    display: `${x.users} · ${channelTotal ? Math.round((x.users / channelTotal) * 100) : 0}%`,
+                  }))}
+                />
+                <Caveat>
+                  Classified from a verbatim quote the agent passes at a machine&rsquo;s first
+                  sign-in, not from a label it chose — a request naming Bay (or Supersonic) is
+                  &ldquo;by name&rdquo;, anything else is &ldquo;their agent chose us&rdquo;. First touch
+                  per account, so a second machine cannot rewrite it. Read the
+                  &ldquo;not asked&rdquo; bar first: it is the share of this window the other bars
+                  say nothing about, and until it is small they are a sample rather than a split.
+                </Caveat>
+              </Panel>
+
+              <Panel title="What the user actually asked for" error={broken("acquisitionQuotes")}>
+                <Table
+                  columns={["the request", "when"]}
+                  rows={quotes.rows.map((x) => [x.via, x.at ? x.at.toLocaleDateString() : "—"])}
+                  emptyText="Nothing yet — no account in this window arrived through an agent that chose us."
+                />
+                <Caveat>
+                  Only the requests that did NOT name us: a quote that already says
+                  &ldquo;bay&rdquo; explains nothing about how they found us. These are the needs we
+                  are being picked for, in the words of the people with them, and they are the
+                  sentences to write the next page of documentation against. One line each, capped
+                  at 200 characters, shown to the user on the authorize screen before it is sent.
                 </Caveat>
               </Panel>
 

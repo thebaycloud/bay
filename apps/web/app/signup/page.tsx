@@ -28,16 +28,30 @@ function safeCallback(): string {
   return "";
 }
 
+/**
+ * The hand-off back to a waiting terminal, or "" if none is waiting.
+ *
+ * One function because there are two ways out of this page — an OAuth round trip
+ * and a submitted form — and they were building this URL separately. That is the
+ * shape of bug where a new parameter is carried by one path and dropped by the
+ * other, which is exactly what `via` would have done: signing up with Google
+ * would have recorded how you found us and signing up with a password would not,
+ * and the difference would show as a channel that mysteriously prefers Google.
+ */
+function cliHandoff(): string {
+  const params = new URLSearchParams(window.location.search);
+  const port = params.get("port");
+  if (!port) return "";
+  const q = new URLSearchParams({ port, name: params.get("name") || "cli" });
+  const via = params.get("via");
+  if (via) q.set("via", via);
+  return `/cli?${q}`;
+}
+
 // Where to land after auth: the CLI hand-off (if `supersonic signup` opened the
 // browser with ?port=) wins; then a shared-app callback; otherwise the dashboard.
 function oauthCallbackUrl(): string {
-  const params = new URLSearchParams(window.location.search);
-  const port = params.get("port");
-  if (port) {
-    const name = params.get("name") || "cli";
-    return `/cli?port=${encodeURIComponent(port)}&name=${encodeURIComponent(name)}`;
-  }
-  return safeCallback() || "/";
+  return cliHandoff() || safeCallback() || "/";
 }
 
 export default function Signup() {
@@ -58,13 +72,8 @@ export default function Signup() {
     if (res?.error) { setErr("account created — please sign in"); router.push("/login"); return; }
     // If a CLI is waiting (browser was opened by `supersonic signup`), hand off to
     // the authorize page, which mints a token and returns it to the terminal.
-    const params = new URLSearchParams(window.location.search);
-    const port = params.get("port");
-    if (port) {
-      const name = params.get("name") || "cli";
-      window.location.href = `/cli?port=${encodeURIComponent(port)}&name=${encodeURIComponent(name)}`;
-      return;
-    }
+    const handoff = cliHandoff();
+    if (handoff) { window.location.href = handoff; return; }
     // Came from a shared app? Go back to it. Otherwise the dashboard.
     const cb = safeCallback();
     if (cb) { window.location.href = cb; return; }
