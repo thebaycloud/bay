@@ -1,0 +1,13 @@
+[Unit]
+Description=Cloud SQL proxy to the Bay control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/cloud-sql-proxy --port 5433 supersonic-deploy-prod:us-central1:supersonic-platform-pg
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

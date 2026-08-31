@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# `bay` on a box.
+#
+# `preview` is the box's own verb and is handled here. Everything else is passed
+# to the real CLI if it is installed — so this shim adds a command rather than
+# standing in front of one, and `bay ship` on a box still ships.
+set -euo pipefail
+if [ "${1:-}" = "preview" ]; then shift; exec /usr/local/bin/bay-preview "$@"; fi
+if [ "${1:-}" = "task" ]; then shift; exec /usr/local/bin/bay-task "$@"; fi
+REAL="$(command -v bay.js 2>/dev/null || true)"
+for c in /usr/lib/node_modules/@thebaycloud/cli/index.js /usr/local/lib/node_modules/@thebaycloud/cli/index.js; do
+  [ -z "$REAL" ] && [ -f "$c" ] && REAL="$c"
+done
+if [ -n "$REAL" ]; then exec node "$REAL" "$@"; fi
+echo "bay: only 'preview' is available on this box (the full CLI is not installed)." >&2
+echo "     bay preview <port> [--as <name>]" >&2
+exit 1

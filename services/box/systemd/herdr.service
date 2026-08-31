@@ -1,0 +1,15 @@
+[Unit]
+Description=herdr server — the terminals that survive the lid closing
+After=network-online.target
+
+[Service]
+Type=simple
+User=rahatmustafin
+Environment=HOME=/home/rahatmustafin
+Environment=TERM=xterm-256color
+ExecStart=/home/rahatmustafin/.local/bin/herdr server --session main
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

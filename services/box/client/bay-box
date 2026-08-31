@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#
+# bay box — work on the box instead of on this laptop.
+#
+# Attaches this terminal to the herdr server running on box-1. The panes, the
+# agents and the dev servers are all over there, so closing the lid detaches a
+# client rather than killing the work. Run it again to come back.
+#
+#   bay box              attach
+#   bay box ssh [cmd]    a plain shell on the box
+#   bay box status       what is running over there
+set -euo pipefail
+TARGET="${BAY_BOX_SSH:-bay-box}"
+
+case "${1:-attach}" in
+  attach)
+    exec herdr --remote "$TARGET" --session main
+    ;;
+  ssh)
+    shift
+    if [ $# -gt 0 ]; then exec ssh "$TARGET" "$@"; else exec ssh "$TARGET"; fi
+    ;;
+  status)
+    ssh "$TARGET" '
+      set -a; . /srv/box/env 2>/dev/null; set +a
+      echo "services:"; systemctl is-active herdr box-router | paste -sd" " -
+      echo; echo "previews on this box:"
+      jq -r "to_entries[] | \"  https://\(.key).thebay.cloud  →  127.0.0.1:\(.value)\"" /srv/box/routes.json 2>/dev/null || echo "  (none yet)"
+      echo; echo "agents:"
+      # The server runs as a NAMED session, whose socket is not the default one
+      # the bare CLI looks at — without this the command answers
+      # "no herdr server is running" about a server that is running.
+      ~/.local/bin/herdr --session main agent list 2>/dev/null \
+        | jq -r ".result.agents[]? | \"  \(.name)  \(.agent)  \(.agent_status)\"" 2>/dev/null \
+        | grep . || echo "  (none running)"
+    '
+    ;;
+  *)
+    echo "usage: bay box [attach|ssh|status]" >&2; exit 1
+    ;;
+esac

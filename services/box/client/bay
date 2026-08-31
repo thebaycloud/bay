@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# `bay` on this laptop.
+#
+# `box` is handled here; everything else goes to the real CLI when it is
+# installed. So this adds a command rather than standing in front of one — and
+# `bay ship` keeps working the day @thebaycloud/cli lands on this machine.
+set -euo pipefail
+if [ "${1:-}" = "box" ]; then shift; exec "$HOME/.local/bin/bay-box" "$@"; fi
+REAL="$(command -v bay.js 2>/dev/null || true)"
+for c in /usr/local/lib/node_modules/@thebaycloud/cli/index.js \
+         /opt/homebrew/lib/node_modules/@thebaycloud/cli/index.js; do
+  [ -z "$REAL" ] && [ -f "$c" ] && REAL="$c"
+done
+[ -n "$REAL" ] && exec node "$REAL" "$@"
+echo "bay: only 'bay box' is available here (@thebaycloud/cli is not installed)." >&2
+echo "     bay box            attach to the box" >&2
+echo "     bay box status     what is running on it" >&2
+echo "     bay box ssh        a plain shell" >&2
+exit 1

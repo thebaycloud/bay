@@ -1,0 +1,16 @@
+[Unit]
+Description=Bay box router — serves this box previews at their Bay address
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/srv/box/router.env
+ExecStart=/usr/bin/node /srv/box/router.js
+Restart=always
+RestartSec=2
+# The routing table is world-readable and the secret is not; the router needs
+# both, so it runs as root and reads them from two files with two modes.
+User=root
+
+[Install]
+WantedBy=multi-user.target

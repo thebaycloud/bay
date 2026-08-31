@@ -1,0 +1,15 @@
+[Unit]
+Description=Bay box watcher — a dev server that starts gets an address
+After=bay-sql-proxy.service box-router.service
+Wants=bay-sql-proxy.service
+
+[Service]
+ExecStart=/usr/bin/node /srv/box/watch.js
+Restart=always
+RestartSec=3
+# Root, because it reads /proc/<pid>/cwd for processes it does not own — which
+# is the whole mechanism for learning which checkout a dev server belongs to.
+User=root
+
+[Install]
+WantedBy=multi-user.target

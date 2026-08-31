@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# bay task "<what to build>"    start a task, with everything it needs
+#
+# One command instead of five. It makes the worktree, opens a herdr workspace
+# for it, starts a coding agent on the task, starts the dev server beside it,
+# and tells you the address the result will be at.
+#
+# The address is NOT registered here. The watcher publishes whatever starts
+# listening (/srv/box/watch.js), so this prints what that WILL be rather than
+# racing it — and a dev server started any other way is published on exactly the
+# same terms.
+set -euo pipefail
+
+REPO="${BAY_REPO:-$PWD}"
+ROOT_DOMAIN=thebay.cloud
+KIND="${BAY_AGENT:-claude}"
+HERDR="$HOME/.local/bin/herdr --session main"
+
+die() { echo "error: $*" >&2; exit 1; }
+
+TASK=""; BRANCH=""; DEV="${BAY_DEV_CMD:-npm run dev}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --branch) BRANCH="${2:-}"; shift 2 ;;
+    --dev) DEV="${2:-}"; shift 2 ;;
+    --repo) REPO="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) TASK="${TASK:+$TASK }$1"; shift ;;
+  esac
+done
+[ -n "$TASK" ] || die 'usage: bay task "<what to build>" [--branch <name>] [--dev "<command>"]'
+
+git -c safe.directory='*' -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
+  || die "$REPO is not a git repository — run this inside one, or pass --repo"
+
+# The branch names the address, so it comes from the task when nobody names it.
+if [ -z "$BRANCH" ]; then
+  BRANCH="$(echo "$TASK" | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's#[^a-z0-9]#-#g' -e 's#-\{2,\}#-#g' -e 's#^-*##' -e 's#-*$##' | cut -c1-32)"
+fi
+[ -n "$BRANCH" ] || die "could not make a branch name out of \"$TASK\""
+SLUG="$(echo "$BRANCH" | sed -e 's#[^a-z0-9]#-#g' -e 's#-\{2,\}#-#g' -e 's#^-*##' -e 's#-*$##')"
+
+WT="$HOME/worktrees/$SLUG"
+if [ ! -d "$WT" ]; then
+  git -c safe.directory='*' -C "$REPO" worktree add -q -B "$BRANCH" "$WT" >/dev/null
+fi
+
+# One workspace per task: its own tab strip, so three tasks are three places
+# rather than six panes in one.
+WS_JSON="$($HERDR workspace create --label "$SLUG" --cwd "$WT" 2>/dev/null || true)"
+WS="$(echo "$WS_JSON" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null || true)"
+PANE="$(echo "$WS_JSON" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null || true)"
+[ -n "$PANE" ] || die "herdr did not open a workspace (is the server running? systemctl status herdr)"
+
+# Every task gets its OWN port, and this is the difference between one task at a
+# time and several.
+#
+# Three worktrees all run `npm run dev`, and every dev server defaults to 3000:
+# the second and third die with EADDRINUSE, so two of the three previews simply
+# never appear — and the pane where that happened is not the pane anybody is
+# looking at. Handing each task a free port in $PORT (which Next, Vite, CRA,
+# Rails and Django all read) is what makes three agents in parallel actually
+# produce three addresses.
+free_port() {
+  local p=$1
+  while [ "$p" -lt 9999 ]; do
+    if ! (echo > "/dev/tcp/127.0.0.1/$p") >/dev/null 2>&1; then echo "$p"; return; fi
+    p=$((p + 1))
+  done
+  echo "error: no free port between $1 and 9999" >&2; exit 1
+}
+PORT="$(free_port 3000)"
+
+# The dev server goes in its own pane, below, so the agent's pane stays readable.
+DEV_PANE="$($HERDR pane split --pane "$PANE" --direction down --cwd "$WT" --env "PORT=$PORT" --no-focus 2>/dev/null \
+  | jq -r '.result.pane.pane_id // empty')"
+if [ -n "$DEV_PANE" ]; then
+  # The command is typed into the pane's shell, as one string.
+  #
+  # NOT `pane run ... bash -lc "$DEV"`: `pane run` joins its COMMAND words with
+  # spaces before running them, so the quoting around `npm run dev` is lost and
+  # what executes is `bash -c npm` — which prints npm's help into the pane and
+  # starts no dev server. Typing it leaves the parsing to the shell that is
+  # already there, which is the one thing guaranteed to read it the way a person
+  # would have.
+  $HERDR pane run "$DEV_PANE" "$DEV" >/dev/null 2>&1 \
+    || $HERDR pane send-text "$DEV_PANE" "$DEV"$'\n' >/dev/null 2>&1 || true
+fi
+
+# The agent, in the pane the workspace opened with, holding the task.
+if ! $HERDR agent start "$SLUG" --kind "$KIND" --pane "$PANE" -- "$TASK" >/dev/null 2>&1; then
+  # Overwhelmingly the reason, and worth naming rather than shrugging at: an
+  # agent on a fresh box has never been signed in, and its first run is an
+  # onboarding screen rather than a prompt. `agent start` waits for interactive
+  # readiness that is not coming, and times out.
+  if [ ! -f "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "note: $KIND is not signed in on this box yet." >&2
+    echo "      Run \`$KIND\` once in any pane and finish the login." >&2
+    echo "      Every task after that starts it for you." >&2
+  else
+    echo "note: could not start $KIND — the pane is open at $WT, start it by hand" >&2
+  fi
+fi
+
+cat <<OUT
+
+  $TASK
+
+  branch    $BRANCH
+  worktree  $WT
+  port      $PORT
+  preview   https://$SLUG.$ROOT_DOMAIN
+
+  The address goes live on its own once the dev server is listening.
+
+OUT

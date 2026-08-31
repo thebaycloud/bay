@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# bay preview <port> [--as <name>]
+#
+# Put the dev server running on <port> at a real Bay address.
+#
+# Two writes and nothing else: this box's routing table, so the router knows
+# where to send the slug, and one row in `apps`, so the edge knows to send it
+# here at all. The row is deliberately `runtime = 'cloudrun'` — the fleet
+# reconciler selects on `runtime = 'fleet'` (apps/web/lib/reconcile.ts), so a
+# preview is invisible to it: nothing tries to place it, converge it, or take
+# it away. The proxy reads `run_url` and forwards. That is the whole mechanism.
+set -euo pipefail
+
+PROJECT=supersonic-deploy-prod
+PG_INSTANCE="$PROJECT:us-central1:supersonic-platform-pg"
+ROUTES=/srv/box/routes.json
+ROOT_DOMAIN=thebay.cloud
+
+die() { echo "error: $*" >&2; exit 1; }
+
+PORT=""; NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --as) NAME="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) [ -z "$PORT" ] && PORT="$1" && shift || die "unexpected argument: $1" ;;
+  esac
+done
+[ -n "$PORT" ] || die "usage: bay preview <port> [--as <name>]"
+case "$PORT" in (*[!0-9]*) die "port must be a number, got: $PORT" ;; esac
+
+# The name defaults to the git branch you are on, which is the whole point of
+# one-per-worktree: three agents on three branches get three addresses without
+# anybody naming anything.
+if [ -z "$NAME" ]; then
+  NAME="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [ -n "$NAME" ] && [ "$NAME" != "HEAD" ] || NAME="$(basename "$PWD")"
+fi
+# A slug is a hostname label: lowercase, no slashes (feat/login is a real branch
+# name and not a real subdomain), and never leading or trailing dashes.
+SLUG="$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's#[^a-z0-9]#-#g' -e 's#-\{2,\}#-#g' -e 's#^-*##' -e 's#-*$##' | cut -c1-40)"
+[ -n "$SLUG" ] || die "could not make a hostname out of \"$NAME\""
+
+BOX_IP="$(curl -sf -H 'Metadata-Flavor: Google' \
+  http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)" \
+  || die "no external IP on this box"
+
+# --- 1. this box's routing table -------------------------------------------
+sudo mkdir -p "$(dirname "$ROUTES")"
+[ -f "$ROUTES" ] || echo '{}' | sudo tee "$ROUTES" >/dev/null
+tmp="$(mktemp)"
+jq --arg s "$SLUG" --argjson p "$PORT" '.[$s] = $p' "$ROUTES" > "$tmp"
+sudo mv "$tmp" "$ROUTES"; sudo chmod 644 "$ROUTES"
+
+# --- 2. the app row the edge resolves --------------------------------------
+# Read from the box own identity file rather than the environment: a command
+# run over ssh, from a cron, or by an agent does not source ~/.bashrc, and
+# "unbound variable" is a poor way to learn that.
+[ -f /srv/box/env ] && { set -a; . /srv/box/env; set +a; }
+OWNER="${BAY_OWNER_ID:?BAY_OWNER_ID is not set — see /srv/box/env}"
+WORKSPACE="${BAY_WORKSPACE_ID:?BAY_WORKSPACE_ID is not set — see /srv/box/env}"
+
+# One proxy for the life of this command. Started on a port nobody else uses so
+# two `bay preview` calls in two panes cannot collide over it.
+PGPORT_LOCAL=$((5500 + RANDOM % 400))
+cloud-sql-proxy --port "$PGPORT_LOCAL" "$PG_INSTANCE" >/tmp/bay-preview-sqlproxy.log 2>&1 &
+SQLPID=$!
+trap 'kill $SQLPID 2>/dev/null || true' EXIT
+for _ in $(seq 1 30); do
+  (echo > "/dev/tcp/127.0.0.1/$PGPORT_LOCAL") >/dev/null 2>&1 && break
+  sleep 0.3
+done
+
+PGPASSWORD="$(gcloud secrets versions access latest --secret=supersonic-pg-password --project "$PROJECT" 2>/dev/null)"
+[ -n "$PGPASSWORD" ] || die "could not read the database password"
+export PGPASSWORD
+
+# Idempotent on the slug: previewing the same branch twice moves the address to
+# the new port instead of failing on a unique index or minting a second app.
+psql -h 127.0.0.1 -p "$PGPORT_LOCAL" -U postgres -d supersonic_platform -v ON_ERROR_STOP=1 -q <<SQL
+INSERT INTO apps (slug, workspace_id, owner_id, run_url, visibility, status, runtime, has_web)
+VALUES ('$SLUG', '$WORKSPACE', '$OWNER', 'http://$BOX_IP:8080', 'private', 'live', 'cloudrun', true)
+ON CONFLICT (slug) DO UPDATE
+   SET run_url = EXCLUDED.run_url,
+       status  = 'live',
+       has_web = true;
+SQL
+
+echo
+echo "  https://$SLUG.$ROOT_DOMAIN"
+echo
+echo "  serving  127.0.0.1:$PORT on this box"
+echo "  private  only you, signed in, can open it"
+echo
