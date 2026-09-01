@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "@google-cloud/storage": "^7.14.0",
-    "playwright-core": "1.49.0",
-    "tsx": "^4.19.1"
+    "playwright-core": "1.62.1",
+    "tsx": "^4.23.12"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",
