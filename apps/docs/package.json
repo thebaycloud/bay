@@ -8,6 +8,6 @@
     "check": "mint broken-links"
   },
   "devDependencies": {
-    "mint": "^4.2.20"
+    "mint": "^4.3.18"
   }
 }
